@@ -1,0 +1,28 @@
+name: Build and distribute APK
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  distribute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - run: flutter pub get
+
+      - run: flutter build apk --release
+
+      - name: Distribute to Firebase App Distribution
+        run: |
+          npx firebase-tools appdistribution:distribute \
+            build/app/outputs/flutter-apk/app-release.apk \
+            --app 1:1030524586097:android:c613df505800ff5ae7b3d0 \
+            --groups "testers" \
+            --release-notes "Build automático a partir do commit ${{ github.sha }}" \
+            --token "${{ secrets.FIREBASE_TOKEN }}"
