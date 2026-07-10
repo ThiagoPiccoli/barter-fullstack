@@ -39,6 +39,7 @@ dependencies:
   # nativo do arquivo gerado (printing).
   pdf: ^3.11.1
   printing: ^5.13.4
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_screen.dart';
@@ -63,14 +64,32 @@ class _SellerMainScreenState extends State<SellerMainScreen> {
   }
 }
 
-class _SellerDashboardTab extends StatelessWidget {
+class _SellerDashboardTab extends StatefulWidget {
   final UserModel seller;
   final Function(int) onNavigate;
   const _SellerDashboardTab({required this.seller, required this.onNavigate});
 
   @override
+  State<_SellerDashboardTab> createState() => _SellerDashboardTabState();
+}
+
+class _SellerDashboardTabState extends State<_SellerDashboardTab> {
+  UserModel get seller => widget.seller;
+  Function(int) get onNavigate => widget.onNavigate;
+
+  /// Puxar para atualizar: recarrega permutas/carteira da API.
+  Future<void> _refresh() async {
+    try {
+      await AppData.refreshAll();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final myBarters = mockBarters.where((b) => b.sellerId == seller.id).toList()
+    final myBarters = AppData.barters.where((b) => b.sellerId == seller.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final approved = myBarters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = myBarters.where((b) => b.status == BarterStatus.pending).length;
@@ -92,7 +111,10 @@ class _SellerDashboardTab extends StatelessWidget {
           ),
         ],
       ),
-      body: ListView(
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        color: AppColors.primary,
+        child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           DashboardHeader(
@@ -177,6 +199,7 @@ class _SellerDashboardTab extends StatelessWidget {
             ...myBarters.take(3).map((b) => MiniBarterCard(barter: b, isAdmin: false)),
           const SizedBox(height: 16),
         ],
+        ),
       ),
     );
   }
@@ -188,7 +211,7 @@ class _SellerProfileTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = mockBarters.where((b) => b.sellerId == seller.id).toList();
+    final myBarters = AppData.barters.where((b) => b.sellerId == seller.id).toList();
     return Scaffold(
       appBar: AppBar(
         title: const Text('Meu Perfil'),

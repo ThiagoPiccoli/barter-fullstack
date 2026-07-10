@@ -1,9 +1,23 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../screens/login_screen.dart';
 import '../screens/barter_detail_screen.dart';
+
+/// SnackBar padrão de erro do app (usada por todos os fluxos que chamam a
+/// API). [error] pode ser uma [ApiException] (mensagem legível do servidor)
+/// ou uma String.
+void showErrorSnack(BuildContext context, Object error) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Text(error.toString()),
+      backgroundColor: AppColors.denied,
+      behavior: SnackBarBehavior.floating,
+    ));
+}
 
 /// Formata um valor monetário no padrão brasileiro: R$ 1.234,56
 String formatCurrency(double v) {
@@ -322,7 +336,7 @@ class BarterLogo extends StatelessWidget {
           ),
           child: Center(
             child: Text(
-              'AP',
+              'BT',
               style: TextStyle(
                 color: AppColors.primary,
                 fontSize: size * 0.4,
@@ -394,6 +408,9 @@ Future<void> confirmLogout(BuildContext context) async {
   );
 
   if (shouldLogout == true && context.mounted) {
+    // Revoga o token e limpa o cache; a saída local nunca fica bloqueada.
+    await AppData.logout();
+    if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
@@ -615,8 +632,8 @@ class BarterLogItem extends StatelessWidget {
 }
 
 /// Diálogo único de revisão de permuta (aprovar/negar) com observação opcional.
-/// Atualiza o registro em [mockBarters] e devolve a permuta atualizada via
-/// [onReviewed], usado tanto na lista quanto no detalhe.
+/// A decisão é enviada à API (que grava o revisor e o momento) e a permuta
+/// atualizada volta via [onReviewed], usado tanto na lista quanto no detalhe.
 void reviewBarter(
   BuildContext context,
   BarterModel barter,
@@ -628,62 +645,69 @@ void reviewBarter(
     context: context,
     builder: (ctx) {
       final noteCtrl = TextEditingController();
-      return AlertDialog(
-        title: Text(approving ? 'Aprovar Permuta' : 'Negar Permuta'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Permuta: ${barter.id}',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-            const SizedBox(height: 12),
-            TextField(
-              controller: noteCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Observação (opcional)',
-                hintText: 'Adicione uma nota...',
+      var submitting = false;
+      return StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(approving ? 'Aprovar Permuta' : 'Negar Permuta'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Permuta: ${barter.id}',
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Observação (opcional)',
+                  hintText: 'Adicione uma nota...',
+                ),
+                maxLines: 2,
               ),
-              maxLines: 2,
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      setLocal(() => submitting = true);
+                      try {
+                        final updated = await AppData.reviewBarter(
+                            barter.id, newStatus, noteCtrl.text);
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        onReviewed(updated);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(approving
+                              ? 'Permuta aprovada com sucesso!'
+                              : 'Permuta negada.'),
+                          backgroundColor:
+                              approving ? AppColors.approved : AppColors.denied,
+                        ));
+                      } on ApiException catch (e) {
+                        if (!ctx.mounted) return;
+                        setLocal(() => submitting = false);
+                        showErrorSnack(ctx, e);
+                      }
+                    },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: approving ? AppColors.approved : AppColors.denied,
+              ),
+              child: submitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : Text(approving ? 'Confirmar Aprovação' : 'Confirmar Negação'),
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          ElevatedButton(
-            onPressed: () {
-              final idx = mockBarters.indexWhere((b) => b.id == barter.id);
-              var updated = barter;
-              if (idx != -1) {
-                updated = BarterModel(
-                  id: barter.id,
-                  sellerId: barter.sellerId,
-                  sellerName: barter.sellerName,
-                  sellerBranch: barter.sellerBranch,
-                  producerId: barter.producerId,
-                  producerName: barter.producerName,
-                  status: newStatus,
-                  grains: barter.grains,
-                  inputs: barter.inputs,
-                  createdAt: barter.createdAt,
-                  updatedAt: DateTime.now(),
-                  adminNote: noteCtrl.text.isNotEmpty ? noteCtrl.text : null,
-                  reviewedBy: 'Carlos Mendes',
-                );
-                mockBarters[idx] = updated;
-              }
-              Navigator.pop(ctx);
-              onReviewed(updated);
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text(approving ? 'Permuta aprovada com sucesso!' : 'Permuta negada.'),
-                backgroundColor: approving ? AppColors.approved : AppColors.denied,
-              ));
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: approving ? AppColors.approved : AppColors.denied,
-            ),
-            child: Text(approving ? 'Confirmar Aprovação' : 'Confirmar Negação'),
-          ),
-        ],
       );
     },
   );

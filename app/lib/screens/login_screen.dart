@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import 'admin_main_screen.dart';
 import 'seller_main_screen.dart';
@@ -18,29 +19,34 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscure = true;
   bool _loading = false;
 
-  void _login() async {
-    setState(() => _loading = true);
-    await Future.delayed(const Duration(milliseconds: 800));
-    setState(() => _loading = false);
-
+  /// Autentica na API e carrega todos os dados da sessão (catálogo, carteira,
+  /// permutas). Erros chegam com mensagem legível via [ApiException].
+  Future<void> _login() async {
     final email = _emailCtrl.text.trim();
-    UserModel? user;
-    if (email == 'admin@barter.com.br' || email.isEmpty) {
-      user = mockAdminUser;
-    } else {
-      user = mockSellers.firstWhere(
-        (s) => s.email == email,
-        orElse: () => mockSellerUser,
-      );
+    final password = _passCtrl.text;
+    if (email.isEmpty || password.isEmpty) {
+      showErrorSnack(context, 'Informe e-mail e senha para entrar.');
+      return;
     }
 
-    if (!mounted) return;
-    if (user.role == UserRole.admin) {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => AdminMainScreen(admin: user!)));
-    } else {
-      Navigator.pushReplacement(
-          context, MaterialPageRoute(builder: (_) => SellerMainScreen(seller: user!)));
+    setState(() => _loading = true);
+    try {
+      final user = await AppData.login(email, password);
+      if (!mounted) return;
+      if (user.role == UserRole.admin) {
+        Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => AdminMainScreen(admin: user)));
+      } else {
+        Navigator.pushReplacement(
+            context, MaterialPageRoute(builder: (_) => SellerMainScreen(seller: user)));
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        showErrorSnack(
+            context, e.statusCode == 400 ? 'E-mail ou senha inválidos.' : e.message);
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 

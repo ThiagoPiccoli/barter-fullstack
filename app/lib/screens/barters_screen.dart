@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 
@@ -31,8 +31,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
 
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
-        ? List<BarterModel>.from(mockBarters)
-        : mockBarters.where((b) => b.sellerId == widget.sellerId).toList();
+        ? List<BarterModel>.from(AppData.barters)
+        : AppData.barters.where((b) => b.sellerId == widget.sellerId).toList();
     if (status != null) list = list.where((b) => b.status == status).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();

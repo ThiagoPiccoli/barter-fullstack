@@ -4,19 +4,34 @@ import 'package:integration_test/integration_test.dart';
 
 import 'package:barter_app/main.dart' as app;
 
-/// Tour completo pelas duas regras novas:
+/// Tour de ponta a ponta contra a API REAL (exige o servidor no ar com o
+/// seed fresco: `cd api && node ace migration:fresh --seed && npm run dev`):
 /// 1. Carteira de produtores: cada vendedor só vê os próprios produtores na
 ///    Nova Permuta; o admin vê todos nos Cadastros (com o dono da carteira).
-/// 2. PDF de controle ao finalizar a permuta (e no detalhe de qualquer uma).
+/// 2. Permuta criada de verdade no servidor + PDF de controle na finalização.
+///
+/// Atenção: o teste grava a permuta PRM-2026-009 no banco de desenvolvimento;
+/// rode o migration:fresh --seed novamente para zerar.
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  /// Screenshot best-effort: funciona via `flutter drive` (iOS/Android, com o
+  /// test_driver salvando em build/verify_screenshots/); em desktop o canal
+  /// não existe e o passo é simplesmente ignorado.
+  Future<void> shot(String name) async {
+    try {
+      await binding.takeScreenshot(name);
+    } catch (_) {}
+  }
+
   Future<void> login(WidgetTester tester, String email) async {
     await tester.enterText(find.byType(TextField).first, email);
+    // Login real: a senha é obrigatória (todos os usuários do seed: 123456).
+    await tester.enterText(find.byType(TextField).at(1), '123456');
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Entrar'));
-    // _login simula 800ms de rede com um spinner que nunca "assenta".
+    // Aguarda a autenticação + carga inicial de dados da API.
     await tester.pump(const Duration(milliseconds: 1500));
     await tester.pumpAndSettle();
   }
@@ -61,7 +76,7 @@ void main() {
     expect(find.text('Helena Prado'), findsNothing);
     expect(find.text('Osmar Dutra'), findsNothing);
     expect(find.text('Vanessa Lopes'), findsNothing);
-    await binding.takeScreenshot('01-joao-carteira');
+    await shot('01-joao-carteira');
     await logout(tester);
 
     // ── Admin vê todos os produtores, com o dono de cada carteira ──────────
@@ -70,7 +85,7 @@ void main() {
     expect(find.textContaining('Carteira:'), findsWidgets);
     await scrollTo(tester, find.text('Osmar Dutra'));
     expect(find.text('Osmar Dutra'), findsOneWidget);
-    await binding.takeScreenshot('02-admin-cadastros');
+    await shot('02-admin-cadastros');
 
     // Perfil do vendedor mostra a carteira dele.
     await tester.tap(find.text('Vendedores'));
@@ -80,7 +95,7 @@ void main() {
     await scrollTo(tester, find.text('Carteira de Produtores (2)'));
     await scrollTo(tester, find.text('Antônio Carvalho'));
     expect(find.text('Sebastião Ramos'), findsOneWidget);
-    await binding.takeScreenshot('03-admin-perfil-vendedor-carteira');
+    await shot('03-admin-perfil-vendedor-carteira');
     await tester.pageBack();
     await tester.pumpAndSettle();
     await logout(tester);
@@ -91,7 +106,7 @@ void main() {
     expect(find.text('Helena Prado'), findsOneWidget);
     expect(find.text('Cláudia Nunes'), findsOneWidget);
     expect(find.text('Antônio Carvalho'), findsNothing);
-    await binding.takeScreenshot('04-ana-carteira');
+    await shot('04-ana-carteira');
 
     await tester.tap(find.text('Helena Prado'));
     await tester.pumpAndSettle();
@@ -107,7 +122,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Permuta Enviada!'), findsOneWidget);
     expect(find.text('Gerar PDF'), findsOneWidget);
-    await binding.takeScreenshot('05-permuta-enviada-com-pdf');
+    await shot('05-permuta-enviada-com-pdf');
 
     // Gera o PDF: abre a folha de compartilhamento nativa do iOS. O marcador
     // avisa o host para capturar a tela inteira via simctl (a folha é nativa,

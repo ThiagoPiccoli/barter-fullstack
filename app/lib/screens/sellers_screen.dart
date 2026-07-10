@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'seller_profile_admin_screen.dart';
 import 'vendor_profile_screen.dart';
@@ -52,14 +52,14 @@ class _SellersScreenState extends State<SellersScreen> {
     final q = _search.trim().toLowerCase();
     final isProducers = _tab == 0;
 
-    final producers = mockProducers
+    final producers = AppData.producers
         .where((p) =>
             q.isEmpty ||
             p.name.toLowerCase().contains(q) ||
             p.city.toLowerCase().contains(q) ||
             p.farmName.toLowerCase().contains(q))
         .toList();
-    final vendors = mockSellers
+    final vendors = AppData.sellers
         .where((v) =>
             q.isEmpty ||
             v.name.toLowerCase().contains(q) ||
@@ -83,8 +83,8 @@ class _SellersScreenState extends State<SellersScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
             child: _SegmentedToggle(
               tab: _tab,
-              producerCount: mockProducers.length,
-              vendorCount: mockSellers.length,
+              producerCount: AppData.producers.length,
+              vendorCount: AppData.sellers.length,
               onChanged: _setTab,
             ),
           ),
@@ -126,12 +126,15 @@ class _SellersScreenState extends State<SellersScreen> {
   Widget _buildProducerList(List<ProducerModel> list) {
     if (list.isEmpty) return const _EmptyState(label: 'Nenhum produtor encontrado');
     return ListView.builder(
+      // Chave própria: alternar Produtores↔Vendedores não pode herdar a
+      // rolagem da outra lista (o PageStorage compartilharia o offset).
+      key: const PageStorageKey('cadastros_produtores'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       itemCount: list.length,
       itemBuilder: (_, i) {
         final p = list[i];
-        final bs = mockBarters.where((b) => b.producerId == p.id).toList();
-        final owner = sellerById(p.sellerId);
+        final bs = AppData.barters.where((b) => b.producerId == p.id).toList();
+        final owner = AppData.sellerById(p.sellerId);
         return _PersonCard(
           initials: p.avatarInitials,
           name: p.name,
@@ -162,11 +165,12 @@ class _SellersScreenState extends State<SellersScreen> {
   Widget _buildVendorList(List<UserModel> list) {
     if (list.isEmpty) return const _EmptyState(label: 'Nenhum vendedor encontrado');
     return ListView.builder(
+      key: const PageStorageKey('cadastros_vendedores'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       itemCount: list.length,
       itemBuilder: (_, i) {
         final v = list[i];
-        final bs = mockBarters.where((b) => b.sellerId == v.id).toList();
+        final bs = AppData.barters.where((b) => b.sellerId == v.id).toList();
         return _PersonCard(
           initials: v.avatarInitials,
           name: v.name,

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../services/barter_pdf.dart';
 import '../widgets/common_widgets.dart';
 
@@ -40,7 +41,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   double get _inputCost {
     double t = 0;
     for (final e in _inputQty.entries) {
-      final p = mockInputs.firstWhere((i) => i.id == e.key);
+      final p = AppData.inputs.firstWhere((i) => i.id == e.key);
       t += p.currentPrice * e.value;
     }
     return t;
@@ -49,12 +50,12 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// Grão escolhido para pagamento (ou null se ainda não escolheu).
   ProductModel? get _paymentGrain {
     if (_paymentGrainId == null) return null;
-    return mockGrains.firstWhere((g) => g.id == _paymentGrainId);
+    return AppData.grains.firstWhere((g) => g.id == _paymentGrainId);
   }
 
   /// Produtor (cliente) designado para esta permuta (ou null).
   ProducerModel? get _producer =>
-      _producerId == null ? null : producerById(_producerId!);
+      _producerId == null ? null : AppData.producerById(_producerId!);
 
   /// Sacas do grão escolhido necessárias para cobrir o custo dos insumos.
   double get _sacksNeeded {
@@ -72,25 +73,25 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   double _minFor(String inputId) {
     final p = _producer;
     if (p == null) return 0;
-    final input = mockInputs.firstWhere((i) => i.id == inputId);
+    final input = AppData.inputs.firstWhere((i) => i.id == inputId);
     if (input.requiredPerHa <= 0) return 0;
     return double.parse((input.requiredPerHa * p.areaHa).toStringAsFixed(2));
   }
 
   /// Há algum insumo com exigência mínima por área para o produtor atual?
-  bool get _hasRequiredInputs => mockInputs.any((i) => _minFor(i.id) > 0);
+  bool get _hasRequiredInputs => AppData.inputs.any((i) => _minFor(i.id) > 0);
 
   /// Categorias ("pastas") que carregam uma regra de mínimo capaz de travar o
   /// envio da permuta.
   List<InputCategoryModel> get _ruledCategories =>
-      mockCategories.where((c) => c.hasRule).toList();
+      AppData.categories.where((c) => c.hasRule).toList();
 
   /// Custo (R$) dos insumos escolhidos que pertencem à categoria [categoryId].
   double _categorySpend(String categoryId) {
     double t = 0;
     for (final e in _inputQty.entries) {
       if (e.value <= 0) continue;
-      final p = mockInputs.firstWhere((i) => i.id == e.key);
+      final p = AppData.inputs.firstWhere((i) => i.id == e.key);
       if (p.categoryId == categoryId) t += p.currentPrice * e.value;
     }
     return t;
@@ -150,13 +151,13 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// Escolhe o produtor (primeira etapa). Pré-preenche os insumos exigidos por
   /// área com seus mínimos obrigatórios, calculados a partir da área dele.
   void _selectProducer(String id) {
-    final p = producerById(id);
+    final p = AppData.producerById(id);
     // Só aceita produtores da carteira do vendedor logado.
     if (p == null || p.sellerId != widget.seller.id) return;
     setState(() {
       _producerId = id;
       _searchQuery = '';
-      for (final i in mockInputs) {
+      for (final i in AppData.inputs) {
         if (i.requiredPerHa > 0) {
           _inputQty[i.id] = double.parse((i.requiredPerHa * p.areaHa).toStringAsFixed(2));
         }
@@ -175,14 +176,20 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     });
   }
 
+  bool _submitting = false;
+
   bool get _canSubmit =>
-      _producerId != null && _inputCost > 0 && _paymentGrainId != null && _categoriesOk;
+      !_submitting &&
+      _producerId != null &&
+      _inputCost > 0 &&
+      _paymentGrainId != null &&
+      _categoriesOk;
 
   /// O produtor já foi escolhido na primeira etapa; aqui só revisamos e enviamos.
   Future<void> _onSubmitPressed() async {
     if (_producerId == null) return;
     final confirmed = await _showSummaryDialog();
-    if (confirmed == true) _submit();
+    if (confirmed == true) await _submit();
   }
 
   /// Resumo completo da permuta antes de enviar: todos os insumos retirados,
@@ -193,7 +200,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     final producer = _producer;
     final sacks = _sacksNeeded;
     final inputs = _inputQty.entries.where((e) => e.value > 0).map((e) {
-      final p = mockInputs.firstWhere((i) => i.id == e.key);
+      final p = AppData.inputs.firstWhere((i) => i.id == e.key);
       return BarterItem(
         productId: p.id,
         productName: p.name,
@@ -282,25 +289,20 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     return '${formatQty(i.quantity)} ${i.unit}';
   }
 
-  void _submit() {
+  /// Envia a permuta para a API. O app mostra a prévia (sacas, mínimos), mas
+  /// quem precifica, valida os mínimos e calcula as sacas finais é o servidor
+  /// — a permuta exibida no diálogo de sucesso é a versão oficial devolvida.
+  Future<void> _submit() async {
     final grain = _paymentGrain;
     final producer = _producer;
-    final inputs = _inputQty.entries.where((e) => e.value > 0).map((e) {
-      final p = mockInputs.firstWhere((i) => i.id == e.key);
-      return BarterItem(
-        productId: p.id,
-        productName: p.name,
-        unit: p.unit,
-        quantity: e.value,
-        unitValue: p.currentPrice,
-      );
-    }).toList();
+    final chosen = Map<String, double>.from(_inputQty)
+      ..removeWhere((_, qty) => qty <= 0);
 
     if (producer == null) {
       _toast('Selecione o produtor desta permuta.');
       return;
     }
-    if (inputs.isEmpty) {
+    if (chosen.isEmpty) {
       _toast('Selecione ao menos um insumo para retirar.');
       return;
     }
@@ -314,35 +316,27 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       return;
     }
 
-    final sacks = _sacksNeeded;
+    setState(() => _submitting = true);
+    final BarterModel barter;
+    try {
+      barter = await AppData.createBarter(
+        producerId: producer.id,
+        grainId: grain.id,
+        inputQuantities: chosen,
+      );
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _submitting = false);
+        _toast(e.message);
+      }
+      return;
+    }
+    if (!mounted) return;
 
-    // O grão de pagamento entra como item único, com a quantidade de sacas
-    // calculada para cobrir exatamente o custo dos insumos.
-    final grains = [
-      BarterItem(
-        productId: grain.id,
-        productName: grain.name,
-        unit: grain.unit,
-        quantity: sacks,
-        unitValue: grain.currentPrice,
-      ),
-    ];
-
-    final barter = BarterModel(
-      id: 'PRM-2026-${(mockBarters.length + 1).toString().padLeft(3, '0')}',
-      sellerId: widget.seller.id,
-      sellerName: widget.seller.name,
-      sellerBranch: widget.seller.branch,
-      producerId: producer.id,
-      producerName: producer.name,
-      status: BarterStatus.pending,
-      grains: grains,
-      inputs: inputs,
-      createdAt: DateTime.now(),
-    );
-    mockBarters.add(barter);
+    final sacks = barter.sacksToDeliver;
 
     setState(() {
+      _submitting = false;
       _inputQty.clear();
       _paymentGrainId = null;
       _producerId = null;
@@ -376,11 +370,11 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               child: Column(
                 children: [
                   _DialogLine('Produtor', producer.name),
-                  _DialogLine('Insumos retirados', '${inputs.length} item(ns)'),
+                  _DialogLine('Insumos retirados', '${barter.inputs.length} item(ns)'),
                   const Divider(height: 14),
                   _DialogLine(
                     'Você vai entregar',
-                    '${formatSacks(sacks)} ${grain.name.toLowerCase()}',
+                    '${formatSacks(sacks)} ${barter.referenceGrainName.toLowerCase()}',
                     bold: true,
                   ),
                 ],
@@ -455,7 +449,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// A lista é a CARTEIRA do vendedor logado: ele nunca vê produtores dos
   /// colegas — só o admin enxerga todas as carteiras.
   Widget _buildProducerStep() {
-    final wallet = producersForSeller(widget.seller.id);
+    final wallet = AppData.producersForSeller(widget.seller.id);
     if (wallet.isEmpty) return _emptyWalletHint();
     final query = _searchQuery.trim().toLowerCase();
     final producers = query.isEmpty
@@ -622,8 +616,8 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   Widget _buildInputTab() {
     final query = _searchQuery.trim().toLowerCase();
     final inputs = query.isEmpty
-        ? mockInputs
-        : mockInputs.where((i) => i.name.toLowerCase().contains(query)).toList();
+        ? AppData.inputs
+        : AppData.inputs.where((i) => i.name.toLowerCase().contains(query)).toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
       children: [
@@ -663,8 +657,8 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     final hasInputs = _inputCost > 0;
     final query = _searchQuery.trim().toLowerCase();
     final grains = query.isEmpty
-        ? mockGrains
-        : mockGrains.where((g) => g.name.toLowerCase().contains(query)).toList();
+        ? AppData.grains
+        : AppData.grains.where((g) => g.name.toLowerCase().contains(query)).toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
       children: [
@@ -900,7 +894,7 @@ class _CategoryRuleTile extends StatelessWidget {
 /// Linha de um insumo nas etapas de montagem. Quando [minQty] > 0, o insumo é
 /// obrigatório para a área do produtor: vem pré-preenchido e não pode descer
 /// abaixo do mínimo.
-class _InputTile extends StatelessWidget {
+class _InputTile extends StatefulWidget {
   final ProductModel product;
   final double qty;
   final double minQty;
@@ -913,7 +907,41 @@ class _InputTile extends StatelessWidget {
     required this.onChanged,
   });
 
+  @override
+  State<_InputTile> createState() => _InputTileState();
+}
+
+class _InputTileState extends State<_InputTile> {
+  /// Controller próprio (com dispose) para o campo não perder foco/teclado a
+  /// cada rebuild — antes era recriado em todo build, com vazamento.
+  late final TextEditingController _qtyCtrl = TextEditingController(
+    text: widget.qty > 0 ? formatQty(widget.qty) : '',
+  );
+
+  ProductModel get product => widget.product;
+  double get qty => widget.qty;
+  double get minQty => widget.minQty;
+  ValueChanged<double> get onChanged => widget.onChanged;
+
   bool get _required => minQty > 0;
+
+  @override
+  void didUpdateWidget(_InputTile old) {
+    super.didUpdateWidget(old);
+    // Sincroniza o texto apenas quando a mudança veio de fora (botões +/-,
+    // pré-preenchimento do mínimo), sem brigar com a digitação do usuário.
+    final typed = double.tryParse(_qtyCtrl.text.replaceAll(',', '.')) ?? 0;
+    if ((widget.qty - typed).abs() > 0.004) {
+      _qtyCtrl.text = widget.qty > 0 ? formatQty(widget.qty) : '';
+      _qtyCtrl.selection = TextSelection.collapsed(offset: _qtyCtrl.text.length);
+    }
+  }
+
+  @override
+  void dispose() {
+    _qtyCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -978,8 +1006,7 @@ class _InputTile extends StatelessWidget {
                 SizedBox(
                   width: 64,
                   child: TextField(
-                    key: ValueKey('${product.id}_$qty'),
-                    controller: TextEditingController(text: qty > 0 ? formatQty(qty) : ''),
+                    controller: _qtyCtrl,
                     keyboardType: const TextInputType.numberWithOptions(decimal: true),
                     textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),

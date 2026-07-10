@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'edit_forms.dart';
 import 'seller_profile_admin_screen.dart';
@@ -32,18 +32,19 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
       context,
       title: 'Excluir Vendedor',
       name: vendor.name,
-      barterCount: mockBarters.where((b) => b.sellerId == vendor.id).length,
-      onConfirm: () {
-        mockSellers.removeWhere((v) => v.id == vendor.id);
-        Navigator.pop(context);
+      barterCount: AppData.barters.where((b) => b.sellerId == vendor.id).length,
+      onConfirm: () async {
+        // O servidor deixa a carteira sem dono e preserva o histórico.
+        await AppData.deleteSeller(vendor.id);
+        if (mounted) Navigator.pop(context);
       },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final wallet = producersForSeller(vendor.id);
-    final barters = mockBarters.where((b) => b.sellerId == vendor.id).toList()
+    final wallet = AppData.producersForSeller(vendor.id);
+    final barters = AppData.barters.where((b) => b.sellerId == vendor.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;

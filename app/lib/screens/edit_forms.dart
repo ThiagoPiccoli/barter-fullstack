@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
+import '../widgets/common_widgets.dart';
 
-/// Iniciais (até 2 letras) a partir do nome, para o avatar. Recalculadas sempre
-/// que o nome é editado para manterem-se coerentes.
+/// Iniciais (até 2 letras) a partir do nome, para o avatar do rascunho local;
+/// o valor definitivo vem do servidor junto com o registro salvo.
 String initialsFrom(String name) {
   final words = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
   if (words.isEmpty) return '?';
@@ -15,19 +17,8 @@ String initialsFrom(String name) {
   return (words.first[0] + words.last[0]).toUpperCase();
 }
 
-/// Próximo id sequencial (ex.: "p007") a partir do maior número já usado nos
-/// [existing], evitando colisões mesmo após exclusões.
-String nextId(String prefix, Iterable<String> existing) {
-  int max = 0;
-  for (final id in existing) {
-    final n = int.tryParse(id.replaceAll(RegExp(r'\D'), ''));
-    if (n != null && n > max) max = n;
-  }
-  return '$prefix${(max + 1).toString().padLeft(3, '0')}';
-}
-
 /// Cadastro/edição de um PRODUTOR (cliente). Quando [producer] é null, cria um
-/// novo registro; caso contrário, edita o existente. Salva em [mockProducers] e
+/// novo registro; caso contrário, edita o existente. Salva em [AppData.producers] e
 /// devolve o produtor resultante via Navigator.pop.
 class EditProducerScreen extends StatefulWidget {
   final ProducerModel? producer;
@@ -57,7 +48,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     super.initState();
     final p = widget.producer;
     // Se o vendedor da carteira foi excluído, força o admin a escolher outro.
-    _sellerId = p != null && sellerById(p.sellerId) != null ? p.sellerId : null;
+    _sellerId = p != null && AppData.sellerById(p.sellerId) != null ? p.sellerId : null;
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
     _phone = TextEditingController(text: p?.phone ?? '');
@@ -83,12 +74,13 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     super.dispose();
   }
 
-  void _save() {
+  /// Envia o cadastro à API e devolve o registro salvo (com id do servidor).
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final old = widget.producer;
     final name = _name.text.trim();
-    final updated = ProducerModel(
-      id: old?.id ?? nextId('p', mockProducers.map((p) => p.id)),
+    final draft = ProducerModel(
+      id: old?.id ?? '',
       name: name,
       sellerId: _sellerId!,
       document: _document.text.trim(),
@@ -99,13 +91,12 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
     );
-    if (_isNew) {
-      mockProducers.add(updated);
-    } else {
-      final idx = mockProducers.indexWhere((p) => p.id == old!.id);
-      if (idx != -1) mockProducers[idx] = updated;
+    try {
+      final saved = await AppData.saveProducer(draft, isNew: _isNew);
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
     }
-    Navigator.pop(context, updated);
   }
 
   @override
@@ -125,7 +116,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
                   labelText: 'Carteira do vendedor',
                   prefixIcon: Icon(Icons.badge_outlined, size: 20),
                 ),
-                items: mockSellers
+                items: AppData.sellers
                     .map((s) => DropdownMenuItem(
                           value: s.id,
                           child: Text('${s.name} • ${s.branch}',
@@ -175,7 +166,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
 }
 
 /// Cadastro/edição de um VENDEDOR. Quando [vendor] é null, cria um novo; caso
-/// contrário, edita o existente. Salva em [mockSellers] e devolve o resultado.
+/// contrário, edita o existente. Salva em [AppData.sellers] e devolve o resultado.
 class EditVendorScreen extends StatefulWidget {
   final UserModel? vendor;
   const EditVendorScreen({super.key, this.vendor});
@@ -212,12 +203,14 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
     super.dispose();
   }
 
-  void _save() {
+  /// Envia o cadastro à API. Vendedor novo nasce com a senha padrão (123456)
+  /// definida no servidor.
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final old = widget.vendor;
     final name = _name.text.trim();
-    final updated = UserModel(
-      id: old?.id ?? nextId('u', mockSellers.map((v) => v.id)),
+    final draft = UserModel(
+      id: old?.id ?? '',
       name: name,
       email: _email.text.trim(),
       phone: _phone.text.trim(),
@@ -225,16 +218,13 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
       role: old?.role ?? UserRole.seller,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
-      totalBarters: old?.totalBarters ?? 0,
-      totalSacks: old?.totalSacks ?? 0,
     );
-    if (_isNew) {
-      mockSellers.add(updated);
-    } else {
-      final idx = mockSellers.indexWhere((v) => v.id == old!.id);
-      if (idx != -1) mockSellers[idx] = updated;
+    try {
+      final saved = await AppData.saveSeller(draft, isNew: _isNew);
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
     }
-    Navigator.pop(context, updated);
   }
 
   @override
@@ -278,7 +268,7 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
 
 /// Cadastro/edição de uma CATEGORIA ("pasta") de insumos e sua regra de mínimo.
 /// Quando [category] é null, cria uma nova; caso contrário, edita a existente.
-/// Salva em [mockCategories] e devolve o resultado via Navigator.pop.
+/// Salva em [AppData.categories] e devolve o resultado via Navigator.pop.
 class EditCategoryScreen extends StatefulWidget {
   final InputCategoryModel? category;
   const EditCategoryScreen({super.key, this.category});
@@ -323,25 +313,24 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
       ? 'Valor mínimo por hectare (R\$)'
       : 'Percentual mínimo do total (%)';
 
-  void _save() {
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final old = widget.category;
     final value = _needsValue
         ? (double.tryParse(_value.text.trim().replaceAll(',', '.')) ?? 0)
         : 0.0;
-    final updated = InputCategoryModel(
-      id: old?.id ?? nextId('c', mockCategories.map((c) => c.id)),
+    final draft = InputCategoryModel(
+      id: old?.id ?? '',
       name: _name.text.trim(),
       ruleType: _ruleType,
       ruleValue: value,
     );
-    if (_isNew) {
-      mockCategories.add(updated);
-    } else {
-      final idx = mockCategories.indexWhere((c) => c.id == old!.id);
-      if (idx != -1) mockCategories[idx] = updated;
+    try {
+      final saved = await AppData.saveCategory(draft, isNew: _isNew);
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
     }
-    Navigator.pop(context, updated);
   }
 
   @override
@@ -433,15 +422,15 @@ class _RuleOption extends StatelessWidget {
   }
 }
 
-/// Confirma e executa a exclusão de um cadastro. Remove de [list] o item com o
-/// [id] dado e, ao confirmar, fecha a tela de perfil (pop). As permutas antigas
-/// não são afetadas: elas guardam o nome no próprio registro.
+/// Confirma e executa a exclusão de um cadastro via API. As permutas antigas
+/// não são afetadas: elas guardam o nome no próprio registro (snapshot no
+/// servidor). Erros da API viram SnackBar de erro.
 Future<void> confirmDeleteRegistration(
   BuildContext context, {
   required String title,
   required String name,
   required int barterCount,
-  required VoidCallback onConfirm,
+  required Future<void> Function() onConfirm,
 }) async {
   final ok = await showDialog<bool>(
     context: context,
@@ -473,7 +462,12 @@ Future<void> confirmDeleteRegistration(
       ],
     ),
   );
-  if (ok == true) onConfirm();
+  if (ok != true) return;
+  try {
+    await onConfirm();
+  } on ApiException catch (e) {
+    if (context.mounted) showErrorSnack(context, e);
+  }
 }
 
 /// Campo de texto padrão das telas de edição (ícone + validação opcional).

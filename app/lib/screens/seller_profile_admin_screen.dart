@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'edit_forms.dart';
 
@@ -29,17 +29,17 @@ class _SellerProfileAdminScreenState extends State<SellerProfileAdminScreen> {
       context,
       title: 'Excluir Produtor',
       name: producer.name,
-      barterCount: mockBarters.where((b) => b.producerId == producer.id).length,
-      onConfirm: () {
-        mockProducers.removeWhere((p) => p.id == producer.id);
-        Navigator.pop(context);
+      barterCount: AppData.barters.where((b) => b.producerId == producer.id).length,
+      onConfirm: () async {
+        await AppData.deleteProducer(producer.id);
+        if (mounted) Navigator.pop(context);
       },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final barters = mockBarters.where((b) => b.producerId == producer.id).toList()
+    final barters = AppData.barters.where((b) => b.producerId == producer.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;
@@ -82,7 +82,7 @@ class _SellerProfileAdminScreenState extends State<SellerProfileAdminScreen> {
                 InfoTile(
                   icon: Icons.work_outline,
                   label: 'Carteira do vendedor',
-                  value: sellerById(producer.sellerId)?.name ?? 'Sem vendedor vinculado',
+                  value: AppData.sellerById(producer.sellerId)?.name ?? 'Sem vendedor vinculado',
                 ),
                 const Divider(height: 1),
                 InfoTile(icon: Icons.badge_outlined, label: 'Documento', value: producer.document),

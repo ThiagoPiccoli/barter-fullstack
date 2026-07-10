@@ -1,5 +1,12 @@
 enum UserRole { admin, seller }
 
+/// Conversões defensivas do JSON da API: números podem chegar como int/double
+/// e ids são expostos como String para o restante do app.
+double _asDouble(dynamic v) => v == null ? 0 : (v as num).toDouble();
+String _asId(dynamic v) => v == null ? '' : v.toString();
+DateTime _asDate(dynamic v) => DateTime.parse(v as String).toLocal();
+DateTime? _asDateOrNull(dynamic v) => v == null ? null : _asDate(v);
+
 class UserModel {
   final String id;
   final String name;
@@ -24,6 +31,17 @@ class UserModel {
     this.totalBarters = 0,
     this.totalSacks = 0,
   });
+
+  factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
+        id: _asId(json['id']),
+        name: (json['fullName'] ?? json['email']) as String,
+        email: json['email'] as String,
+        phone: (json['phone'] ?? '') as String,
+        branch: (json['branch'] ?? '') as String,
+        role: json['role'] == 'admin' ? UserRole.admin : UserRole.seller,
+        avatarInitials: (json['initials'] ?? '?') as String,
+        createdAt: _asDate(json['createdAt']),
+      );
 }
 
 /// Produtor (cliente) designado a uma permuta. NÃO loga no app — é cadastrado
@@ -68,6 +86,20 @@ class ProducerModel {
     required this.createdAt,
   });
 
+  factory ProducerModel.fromJson(Map<String, dynamic> json) => ProducerModel(
+        id: _asId(json['id']),
+        name: json['name'] as String,
+        // '' quando o vendedor da carteira foi excluído (aguarda realocação).
+        sellerId: _asId(json['sellerId']),
+        document: json['document'] as String,
+        phone: (json['phone'] ?? '') as String,
+        farmName: json['farmName'] as String,
+        city: json['city'] as String,
+        areaHa: _asDouble(json['areaHa']),
+        avatarInitials: (json['initials'] ?? '?') as String,
+        createdAt: _asDate(json['createdAt']),
+      );
+
   /// Localização resumida (ex.: "Fazenda Boa Vista – Maringá/PR").
   String get location => '$farmName – $city';
 
@@ -105,6 +137,14 @@ class BarterItem {
     required this.quantity,
     required this.unitValue,
   });
+
+  factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
+        productId: _asId(json['productId']),
+        productName: json['productName'] as String,
+        unit: json['unit'] as String,
+        quantity: _asDouble(json['quantity']),
+        unitValue: _asDouble(json['unitValue']),
+      );
 
   /// Valor total de troca deste item (R$).
   double get total => quantity * unitValue;
@@ -145,6 +185,34 @@ class BarterModel {
     this.adminNote,
     this.reviewedBy,
   });
+
+  /// O `id` exibido no app é o código público da permuta (ex.: PRM-2026-001);
+  /// os itens chegam numa lista única e são separados aqui por tipo.
+  factory BarterModel.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List? ?? const [])
+        .cast<Map<String, dynamic>>();
+    return BarterModel(
+      id: json['code'] as String,
+      sellerId: _asId(json['sellerId']),
+      sellerName: json['sellerName'] as String,
+      sellerBranch: (json['sellerBranch'] ?? '') as String,
+      producerId: _asId(json['producerId']),
+      producerName: json['producerName'] as String,
+      status: BarterStatus.values.byName(json['status'] as String),
+      grains: items
+          .where((i) => i['kind'] == 'grain')
+          .map(BarterItem.fromJson)
+          .toList(),
+      inputs: items
+          .where((i) => i['kind'] == 'input')
+          .map(BarterItem.fromJson)
+          .toList(),
+      createdAt: _asDate(json['createdAt']),
+      updatedAt: _asDateOrNull(json['reviewedAt']),
+      adminNote: json['adminNote'] as String?,
+      reviewedBy: json['reviewedBy'] as String?,
+    );
+  }
 
   /// Custo dos insumos retirados (R$) — é o valor que a permuta precisa pagar.
   double get inputCost => inputs.fold(0.0, (sum, i) => sum + i.total);
@@ -240,6 +308,20 @@ class ProductModel {
     this.requiredPerHa = 0,
     this.categoryId,
   });
+
+  factory ProductModel.fromJson(Map<String, dynamic> json) => ProductModel(
+        id: _asId(json['id']),
+        name: json['name'] as String,
+        unit: json['unit'] as String,
+        currentPrice: _asDouble(json['currentPrice']),
+        type: json['type'] == 'grain' ? ProductType.grain : ProductType.input,
+        priceHistory: (json['priceHistory'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(PriceHistoryEntry.fromJson)
+            .toList(),
+        requiredPerHa: _asDouble(json['requiredPerHa']),
+        categoryId: json['categoryId'] == null ? null : _asId(json['categoryId']),
+      );
 }
 
 /// Como a exigência mínima de uma categoria de insumos é calculada.
@@ -280,6 +362,14 @@ class InputCategoryModel {
     this.ruleValue = 0,
   });
 
+  factory InputCategoryModel.fromJson(Map<String, dynamic> json) =>
+      InputCategoryModel(
+        id: _asId(json['id']),
+        name: json['name'] as String,
+        ruleType: CategoryRuleType.values.byName(json['ruleType'] as String),
+        ruleValue: _asDouble(json['ruleValue']),
+      );
+
   /// A categoria tem uma exigência ativa que pode travar o envio da permuta.
   bool get hasRule => ruleType != CategoryRuleType.none && ruleValue > 0;
 
@@ -313,4 +403,11 @@ class PriceHistoryEntry {
     required this.changedAt,
     required this.changedBy,
   });
+
+  factory PriceHistoryEntry.fromJson(Map<String, dynamic> json) =>
+      PriceHistoryEntry(
+        price: _asDouble(json['price']),
+        changedAt: _asDate(json['changedAt']),
+        changedBy: json['changedBy'] as String,
+      );
 }

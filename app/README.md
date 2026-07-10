@@ -1,17 +1,39 @@
-# barter_app
+# Barter App (Flutter)
 
-A new Flutter project.
+App do Barter (permuta de grãos por insumos) integrado à API AdonisJS deste
+repositório (`../api`). Ver o [README raiz](../README.md) para subir tudo e o
+[docs/frontend-review.md](../docs/frontend-review.md) para a revisão de
+arquitetura.
 
-## Getting Started
+## Rodando
 
-This project is a starting point for a Flutter application.
+```bash
+# 1) API no ar (noutro terminal):
+cd ../api && node ace migration:fresh --seed && npm run dev
 
-A few resources to get you started if this is your first Flutter project:
+# 2) App:
+flutter run                                              # simulador/desktop (localhost)
+flutter run --dart-define=API_URL=http://192.168.0.10:3333  # aparelho físico (IP da máquina)
+flutter run --dart-define=API_URL=http://10.0.2.2:3333      # emulador Android
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Login de demonstração: `admin@barter.com.br` / `123456` (admin) ou
+`joao.silva@barter.com.br` / `123456` (vendedor).
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Camadas
+
+- `lib/services/api/api_client.dart` — HTTP + token + erros (`ApiException`)
+- `lib/repositories/` — um repositório por recurso (HTTP → modelos)
+- `lib/data/app_data.dart` — cache em memória carregado no login; telas leem
+  de forma síncrona e toda mutação passa pela API
+- `lib/screens/`, `lib/widgets/`, `lib/theme/` — UI
+
+## Testes
+
+```bash
+flutter test                                             # widgets
+flutter test integration_test/app_flow_test.dart -d macos  # E2E (exige API + seed fresco)
+```
+
+O teste E2E percorre login de 3 usuários, o escopo das carteiras e cria uma
+permuta real no servidor (PRM-2026-009) — re-rode o seed para zerar o banco.

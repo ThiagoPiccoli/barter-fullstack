@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
 import '../services/barter_pdf.dart';
 import '../widgets/common_widgets.dart';
 
@@ -37,7 +37,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final producer = producerById(_barter.producerId);
+    final producer = AppData.producerById(_barter.producerId);
     return Scaffold(
       appBar: AppBar(
         title: Text(_barter.id),

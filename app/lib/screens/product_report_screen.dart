@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/price_chart.dart';
 
@@ -27,7 +28,7 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
   _Period _period = _Period.all;
 
   ProductModel get _product {
-    final list = widget.type == ProductType.grain ? mockGrains : mockInputs;
+    final list = widget.type == ProductType.grain ? AppData.grains : AppData.inputs;
     return list.firstWhere((p) => p.id == widget.productId);
   }
 
@@ -437,32 +438,23 @@ Future<void> showUpdateValueDialog(BuildContext context, ProductModel product, V
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
         ElevatedButton(
-          onPressed: () {
+          onPressed: () async {
             final newPrice = double.tryParse(ctrl.text.replaceAll(',', '.'));
-            if (newPrice != null && newPrice > 0) {
-              final listRef = product.type == ProductType.grain ? mockGrains : mockInputs;
-              final idx = listRef.indexWhere((p) => p.id == product.id);
-              if (idx != -1) {
-                listRef[idx] = ProductModel(
-                  id: product.id,
-                  name: product.name,
-                  unit: product.unit,
-                  currentPrice: newPrice,
-                  type: product.type,
-                  priceHistory: [
-                    ...product.priceHistory,
-                    PriceHistoryEntry(price: newPrice, changedAt: DateTime.now(), changedBy: 'Carlos Mendes'),
-                  ],
-                  requiredPerHa: product.requiredPerHa,
-                  categoryId: product.categoryId,
-                );
-              }
+            if (newPrice == null || newPrice <= 0) return;
+            try {
+              // O servidor reajusta e acrescenta o ponto na linha do tempo,
+              // registrando quem alterou (usuário logado).
+              await AppData.updatePrice(product, newPrice);
+              if (!ctx.mounted) return;
               Navigator.pop(ctx);
               onUpdated();
+              if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                 content: Text('Valor atualizado com sucesso!'),
                 backgroundColor: AppColors.approved,
               ));
+            } on ApiException catch (e) {
+              if (ctx.mounted) showErrorSnack(ctx, e);
             }
           },
           child: const Text('Salvar'),
@@ -497,7 +489,7 @@ Future<void> showCategoryAssignDialog(BuildContext context, ProductModel product
               ),
               items: [
                 const DropdownMenuItem<String?>(value: null, child: Text('Sem categoria')),
-                ...mockCategories.map((c) => DropdownMenuItem<String?>(
+                ...AppData.categories.map((c) => DropdownMenuItem<String?>(
                       value: c.id,
                       child: Text(c.name, overflow: TextOverflow.ellipsis),
                     )),
@@ -515,26 +507,22 @@ Future<void> showCategoryAssignDialog(BuildContext context, ProductModel product
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
           ElevatedButton(
-            onPressed: () {
-              final idx = mockInputs.indexWhere((p) => p.id == product.id);
-              if (idx != -1) {
-                mockInputs[idx] = ProductModel(
-                  id: product.id,
-                  name: product.name,
-                  unit: product.unit,
-                  currentPrice: product.currentPrice,
-                  type: product.type,
-                  priceHistory: product.priceHistory,
-                  requiredPerHa: product.requiredPerHa,
-                  categoryId: selected,
-                );
+            onPressed: () async {
+              try {
+                await AppData.updateProductFields(product, {
+                  'categoryId': selected == null ? null : int.parse(selected!),
+                });
+                if (!ctx.mounted) return;
+                Navigator.pop(ctx);
+                onUpdated();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Categoria atualizada!'),
+                  backgroundColor: AppColors.approved,
+                ));
+              } on ApiException catch (e) {
+                if (ctx.mounted) showErrorSnack(ctx, e);
               }
-              Navigator.pop(ctx);
-              onUpdated();
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Categoria atualizada!'),
-                backgroundColor: AppColors.approved,
-              ));
             },
             child: const Text('Salvar'),
           ),
@@ -583,27 +571,23 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
       actions: [
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
         ElevatedButton(
-          onPressed: () {
+          onPressed: () async {
             final value = double.tryParse(ctrl.text.replaceAll(',', '.')) ?? 0;
-            final idx = mockInputs.indexWhere((p) => p.id == product.id);
-            if (idx != -1) {
-              mockInputs[idx] = ProductModel(
-                id: product.id,
-                name: product.name,
-                unit: product.unit,
-                currentPrice: product.currentPrice,
-                type: product.type,
-                priceHistory: product.priceHistory,
-                requiredPerHa: value < 0 ? 0 : value,
-                categoryId: product.categoryId,
-              );
+            try {
+              await AppData.updateProductFields(product, {
+                'requiredPerHa': value < 0 ? 0 : value,
+              });
+              if (!ctx.mounted) return;
+              Navigator.pop(ctx);
+              onUpdated();
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('Exigência por hectare atualizada!'),
+                backgroundColor: AppColors.approved,
+              ));
+            } on ApiException catch (e) {
+              if (ctx.mounted) showErrorSnack(ctx, e);
             }
-            Navigator.pop(ctx);
-            onUpdated();
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('Exigência por hectare atualizada!'),
-              backgroundColor: AppColors.approved,
-            ));
           },
           child: const Text('Salvar'),
         ),

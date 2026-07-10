@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
@@ -54,20 +55,38 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
   }
 }
 
-class _AdminDashboardTab extends StatelessWidget {
+class _AdminDashboardTab extends StatefulWidget {
   final UserModel admin;
   final Function(int) onNavigate;
   const _AdminDashboardTab({required this.admin, required this.onNavigate});
 
   @override
+  State<_AdminDashboardTab> createState() => _AdminDashboardTabState();
+}
+
+class _AdminDashboardTabState extends State<_AdminDashboardTab> {
+  UserModel get admin => widget.admin;
+  Function(int) get onNavigate => widget.onNavigate;
+
+  /// Puxar para atualizar: recarrega tudo da API e redesenha o painel.
+  Future<void> _refresh() async {
+    try {
+      await AppData.refreshAll();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final approvedList = mockBarters.where((b) => b.status == BarterStatus.approved).toList();
+    final approvedList = AppData.barters.where((b) => b.status == BarterStatus.approved).toList();
     // Pendentes da mais antiga para a mais nova: são a fila de "ação necessária".
-    final pendingList = mockBarters.where((b) => b.status == BarterStatus.pending).toList()
+    final pendingList = AppData.barters.where((b) => b.status == BarterStatus.pending).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
     final approved = approvedList.length;
     final pending = pendingList.length;
-    final denied = mockBarters.where((b) => b.status == BarterStatus.denied).length;
+    final denied = AppData.barters.where((b) => b.status == BarterStatus.denied).length;
 
     // Sacas a receber: o grão que os produtores entregarão pelas permutas
     // aprovadas — o "a receber" da empresa, em saca, na colheita.
@@ -126,7 +145,7 @@ class _AdminDashboardTab extends StatelessWidget {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async => await Future.delayed(const Duration(seconds: 1)),
+        onRefresh: _refresh,
         color: AppColors.primary,
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -210,7 +229,7 @@ class _AdminDashboardTab extends StatelessWidget {
             const Text('Atividade Recente',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),
-            ...mockBarters
+            ...AppData.barters
                 .where((b) => b.status != BarterStatus.pending)
                 .take(3)
                 .map((b) => MiniBarterCard(barter: b, isAdmin: true)),

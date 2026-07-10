@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
-import '../data/mock_data.dart';
+import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'product_report_screen.dart';
 import 'edit_forms.dart';
@@ -68,8 +68,8 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
             child: TabBarView(
               controller: _tabController,
               children: [
-                _ProductPriceList(products: mockGrains, query: q, onUpdate: () => setState(() {})),
-                _ProductPriceList(products: mockInputs, query: q, onUpdate: () => setState(() {})),
+                _ProductPriceList(products: AppData.grains, query: q, onUpdate: () => setState(() {})),
+                _ProductPriceList(products: AppData.inputs, query: q, onUpdate: () => setState(() {})),
                 _CategoryList(query: q, onUpdate: () => setState(() {})),
               ],
             ),
@@ -212,7 +212,7 @@ class _PriceCard extends StatelessWidget {
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        'Categoria: ${categoryById(product.categoryId)?.name ?? 'sem categoria'}',
+                        'Categoria: ${AppData.categoryById(product.categoryId)?.name ?? 'sem categoria'}',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -289,7 +289,7 @@ class _CategoryList extends StatelessWidget {
 
   /// Quantos insumos estão classificados nesta pasta.
   int _inputCount(String categoryId) =>
-      mockInputs.where((i) => i.categoryId == categoryId).length;
+      AppData.inputs.where((i) => i.categoryId == categoryId).length;
 
   void _delete(BuildContext context, InputCategoryModel category) {
     final count = _inputCount(category.id);
@@ -298,25 +298,11 @@ class _CategoryList extends StatelessWidget {
       title: 'Excluir categoria',
       name: category.name,
       barterCount: 0,
-      onConfirm: () {
-        // Desvincula os insumos antes de remover a pasta, preservando o resto.
-        for (var i = 0; i < mockInputs.length; i++) {
-          final p = mockInputs[i];
-          if (p.categoryId == category.id) {
-            mockInputs[i] = ProductModel(
-              id: p.id,
-              name: p.name,
-              unit: p.unit,
-              currentPrice: p.currentPrice,
-              type: p.type,
-              priceHistory: p.priceHistory,
-              requiredPerHa: p.requiredPerHa,
-              categoryId: null,
-            );
-          }
-        }
-        mockCategories.removeWhere((c) => c.id == category.id);
+      onConfirm: () async {
+        // O servidor desvincula os insumos da pasta antes de removê-la.
+        await AppData.deleteCategory(category.id);
         onUpdate();
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(count > 0
               ? 'Categoria excluída. $count insumo(s) ficaram sem categoria.'
@@ -330,8 +316,8 @@ class _CategoryList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final filtered = query.isEmpty
-        ? mockCategories
-        : mockCategories.where((c) => c.name.toLowerCase().contains(query)).toList();
+        ? AppData.categories
+        : AppData.categories.where((c) => c.name.toLowerCase().contains(query)).toList();
 
     return ListView(
       padding: const EdgeInsets.all(12),
