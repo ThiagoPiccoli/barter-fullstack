@@ -1,0 +1,178 @@
+import type { INestApplication } from '@nestjs/common';
+import request from 'supertest';
+import { ADMIN, JOAO, createTestApp, loginAs, resetDb } from './utils';
+
+/**
+ * Payload válido para o Antônio Carvalho (120 ha, carteira do João).
+ * Mínimos por hectare: 48 sacos NPK (0.4/ha), 300 L glifosato (2.5/ha),
+ * 18 L lambda (0.15/ha). Custo: 48×115 + 300×18.9 + 18×42 = R$ 11.946,00.
+ */
+const validPayload = {
+  producerId: 1,
+  grainId: 1, // Soja a R$ 148,50
+  inputs: [
+    { productId: 5, quantity: 48 },
+    { productId: 6, quantity: 300 },
+    { productId: 7, quantity: 18 },
+  ],
+};
+
+describe('Barters (e2e)', () => {
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    app = await createTestApp();
+  });
+  beforeEach(() => resetDb(app));
+  afterAll(() => app.close());
+
+  const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
+
+  it('listagem é escopada: vendedor vê as suas, admin vê todas', async () => {
+    const asJoao = await request(app.getHttpServer())
+      .get('/api/v1/barters')
+      .set('Authorization', await asUser(JOAO));
+    expect(asJoao.status).toBe(200);
+    expect(asJoao.body.data.map((b: { code: string }) => b.code).sort()).toEqual([
+      'PRM-2026-001',
+      'PRM-2026-005',
+    ]);
+
+    const admin = await asUser(ADMIN);
+    const asAdmin = await request(app.getHttpServer())
+      .get('/api/v1/barters')
+      .set('Authorization', admin);
+    expect(asAdmin.body.data).toHaveLength(8);
+
+    const pending = await request(app.getHttpServer())
+      .get('/api/v1/barters?status=pending')
+      .set('Authorization', admin);
+    expect(pending.body.data).toHaveLength(3);
+  });
+
+  it('vendedor não abre permuta de outro vendedor', async () => {
+    // PRM-2026-002 é da Ana.
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-002')
+      .set('Authorization', await asUser(JOAO));
+    expect(response.status).toBe(403);
+  });
+
+  it('servidor calcula as sacas para cobrir o custo dos insumos', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(JOAO))
+      .send(validPayload);
+
+    expect(response.status).toBe(201);
+    const barter = response.body.data;
+    expect(barter.code).toBe('PRM-2026-009');
+    expect(barter.status).toBe('pending');
+    expect(barter.producerName).toBe('Antônio Carvalho');
+
+    const grains = barter.items.filter((i: { kind: string }) => i.kind === 'grain');
+    expect(grains).toHaveLength(1);
+    // 11946 / 148.5 = 80.4444 sacas de soja
+    expect(grains[0].quantity).toBe(80.4444);
+    expect(grains[0].unitValue).toBe(148.5);
+  });
+
+  it('preço enviado pelo cliente é ignorado: quem precifica é o banco', async () => {
+    const adulterado = {
+      ...validPayload,
+      inputs: validPayload.inputs.map((i) => ({ ...i, unitValue: 0.01 })),
+    };
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(JOAO))
+      .send(adulterado);
+
+    expect(response.status).toBe(201);
+    const npk = response.body.data.items.find((i: { productId: number }) => i.productId === 5);
+    expect(npk.unitValue).toBe(115.0);
+  });
+
+  it('insumo obrigatório por hectare não pode faltar nem ficar abaixo do mínimo', async () => {
+    const joao = await asUser(JOAO);
+
+    // Sem o NPK (obrigatório: 48 para 120 ha)
+    const faltando = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', joao)
+      .send({ ...validPayload, inputs: validPayload.inputs.slice(1) });
+    expect(faltando.status).toBe(422);
+
+    // NPK abaixo do mínimo
+    const abaixo = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', joao)
+      .send({
+        ...validPayload,
+        inputs: [{ productId: 5, quantity: 10 }, ...validPayload.inputs.slice(1)],
+      });
+    expect(abaixo.status).toBe(422);
+  });
+
+  it('regra de mínimo da categoria trava o envio', async () => {
+    // Adicionando 30 sacos de semente (R$ 9.600, pasta sem regra), o custo
+    // total vai a R$ 21.546 e Fertilizantes cai para 25,6% — abaixo dos 30%.
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(JOAO))
+      .send({
+        ...validPayload,
+        inputs: [...validPayload.inputs, { productId: 9, quantity: 30 }],
+      });
+
+    expect(response.status).toBe(422);
+    expect(response.body.message).toContain('Fertilizantes');
+  });
+
+  it('produtor precisa pertencer à carteira de quem registra', async () => {
+    // Helena Prado (id 2) é da carteira da Ana.
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(JOAO))
+      .send({ ...validPayload, producerId: 2 });
+    expect(response.status).toBe(403);
+  });
+
+  it('admin não registra permuta (ato do vendedor da carteira)', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(ADMIN))
+      .send(validPayload);
+    expect(response.status).toBe(403);
+  });
+
+  it('admin aprova pendente com observação e snapshot do revisor', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters/PRM-2026-002/review')
+      .set('Authorization', await asUser(ADMIN))
+      .send({ status: 'approved', note: 'Tudo certo com o estoque.' });
+
+    expect(response.status).toBe(200);
+    const barter = response.body.data;
+    expect(barter.status).toBe('approved');
+    expect(barter.reviewedBy).toBe('Carlos Mendes');
+    expect(barter.adminNote).toBe('Tudo certo com o estoque.');
+    expect(barter.reviewedAt).toBeTruthy();
+  });
+
+  it('permuta já revisada não pode ser revisada de novo', async () => {
+    // PRM-2026-001 já está aprovada no dataset.
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters/PRM-2026-001/review')
+      .set('Authorization', await asUser(ADMIN))
+      .send({ status: 'denied' });
+    expect(response.status).toBe(422);
+  });
+
+  it('vendedor não revisa permuta', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters/PRM-2026-005/review')
+      .set('Authorization', await asUser(JOAO))
+      .send({ status: 'approved' });
+    expect(response.status).toBe(403);
+  });
+});

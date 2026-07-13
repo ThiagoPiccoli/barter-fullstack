@@ -1,17 +1,18 @@
 # Barter API
 
-Backend do Barter (permuta de grãos por insumos) em **AdonisJS** com SQLite em
-desenvolvimento/teste e configuração pronta para Postgres em produção.
+Backend do Barter (permuta de grãos por insumos) em **NestJS 11** + **Prisma
+7**, com SQLite em desenvolvimento/teste e schema pronto para trocar de banco
+em produção.
 
 ## Comandos
 
 ```bash
-npm install                        # dependências
-node ace migration:fresh --seed    # (re)cria o banco + dataset de demonstração
-npm run dev                        # dev server com HMR em http://localhost:3333
-npm test                           # 38 testes (unit + funcionais)
-npm run typecheck                  # tsc --noEmit
-node ace list:routes               # tabela de rotas
+npm install              # dependências
+npm run db:seed          # (re)carrega o banco com o dataset de demonstração
+npm run start:dev        # dev server com watch em http://localhost:3333
+npm test                 # 7 testes de unidade (matemática da permuta)
+npm run test:e2e         # 33 testes funcionais (contra um banco de teste próprio)
+npm run build            # compila para dist/
 ```
 
 ## Papéis e regra de acesso
@@ -48,11 +49,12 @@ senha padrão `123456`).
 | POST | `/barters` | vendedor | Registra permuta (ver regras abaixo) |
 | POST | `/barters/:code/review` | admin | Aprova/nega pendente com observação |
 
-Respostas usam o envelope `{ "data": ... }`. Erros: `{ "message": ... }`
-(regras de negócio, HTTP 422/403) ou `{ "errors": [{ "message": ... }] }`
-(validação de payload).
+Respostas usam o envelope `{ "data": ... }` (via `EnvelopeInterceptor`). Erros
+de negócio: `{ "message": "..." }` (403/404/422); erros de validação de
+payload também caem em `{ "message": "<primeira mensagem>" }` — uma string
+única, que é o que o app exibe.
 
-## O coração do escambo (`app/services/barter_service.ts`)
+## O coração do escambo (`src/barters/barters.service.ts`)
 
 `POST /barters` recebe **apenas produtos e quantidades**:
 
@@ -74,39 +76,57 @@ O servidor então:
    produtor (payload sem um insumo obrigatório é rejeitado);
 3. valida as regras de mínimo das pastas (`% do custo total` ou `R$/ha`);
 4. **precifica com os valores vigentes do banco** (preço enviado pelo cliente
-   é ignorado), calcula as sacas do grão (`custo ÷ preço da saca`, 4 casas) e
-   cria o item de grão;
-5. gera o código sequencial `PRM-<ano>-NNN` dentro de uma transação.
+   é descartado pelo `whitelist` do `ValidationPipe`), calcula as sacas do
+   grão (`custo ÷ preço da saca`, 4 casas) e cria o item de grão;
+5. gera o código sequencial `PRM-<ano>-NNN` dentro de uma transação Prisma.
 
 Itens guardam *snapshot* de nome/unidade/preço; permutas antigas não mudam
-quando o admin reajusta valores ou exclui cadastros (FKs `SET NULL` +
-nomes desnormalizados). A matemática pura fica em
-`app/services/barter_math.ts`, coberta por testes unitários.
+quando o admin reajusta valores ou exclui cadastros (FKs `SetNull` + nomes
+desnormalizados no schema). A matemática pura fica em
+`src/barters/barter-math.ts`, coberta por testes unitários (Jest).
 
 ## Estrutura
 
 ```
-app/
-├── controllers/   # finos: validam payload e delegam
-├── services/      # regras de negócio (barter_service, barter_math)
-├── models/        # Lucid, estendem as classes geradas de database/schema.ts
-├── transformers/  # serialização por recurso (shape da API)
-├── validators/    # VineJS na borda de entrada
-├── middleware/    # auth (token) + admin (papel)
-└── exceptions/    # BusinessException (422, mensagem pt-BR p/ o app)
-database/
-├── migrations/    # fonte da verdade do schema (gera database/schema.ts)
-└── seeders/       # dataset de demonstração (mesmos números do mock do app)
-tests/
-├── unit/          # matemática da permuta
-└── functional/    # auth, escopo de carteira, regras, revisão, catálogo
+src/
+├── auth/          # login/logout por token opaco (hash SHA-256 no banco),
+│                  # hash de senha (scrypt), guard global + @Public()
+├── common/        # AdminGuard, @CurrentUser(), EnvelopeInterceptor, ValidationPipe
+├── prisma/        # PrismaService (driver adapter better-sqlite3) como provider global
+├── producers/      services/products/categories/barters/  # um módulo por recurso:
+│                  # controller fino → service com a regra → PrismaService
+prisma/
+├── schema.prisma  # fonte da verdade do schema (gera o client tipado)
+├── migrations/
+└── seed-data.ts   # dataset de demonstração (mesmos números do mock do app);
+                   # seed.ts (CLI) e test/utils.ts (e2e) reaproveitam esta função
+test/
+├── *.e2e-spec.ts  # sobem a aplicação real (Test.createTestingModule) contra
+│                  # um banco de teste próprio (.env.test); cada teste chama
+│                  # resetDb() para voltar ao dataset limpo
 ```
+
+## Decisões específicas do NestJS
+
+- **Prisma 7** move a `DATABASE_URL` do `schema.prisma` para `prisma.config.ts`
+  e exige um *driver adapter* explícito (`@prisma/adapter-better-sqlite3`) — daí
+  o `PrismaService` construir o `PrismaClient` com esse adapter.
+- **Tokens de acesso** são opacos: o valor cru vai ao cliente, o banco guarda
+  só o SHA-256 (`AccessToken.hash`). Logout apaga a linha — revogação real.
+- **Senha**: `scrypt` do próprio Node (`src/auth/password.util.ts`), sem
+  dependência nativa adicional (equivalente ao hash do Adonis).
+- **Testes e2e usam banco próprio** (`.env.test`, `prisma/test.db`) e resetam
+  os ids de autoincrement do SQLite a cada teste (`DELETE FROM
+  sqlite_sequence`) — sem isso, `deleteMany()` não reinicia o contador e os
+  testes que fixam ids do seed quebrariam a partir do segundo teste.
 
 ## Produção
 
-- Troque para Postgres: `npm i pg` e descomente a conexão em
-  `config/database.ts` (migrations são portáveis).
-- Gere um `APP_KEY` novo (`node ace generate:key`) e configure CORS
-  (`config/cors.ts`) com a origem real.
+- Troque para Postgres: mude `provider` em `prisma/schema.prisma`, troque o
+  driver adapter em `src/prisma/prisma.service.ts` (ex.:
+  `@prisma/adapter-pg`) e rode `prisma migrate dev`.
+- Gere segredos de produção via variáveis de ambiente (nenhum hoje além de
+  `DATABASE_URL`/`PORT`) e configure CORS explicitamente em
+  `src/app.setup.ts` (`enableCors()` hoje libera tudo, adequado só para dev).
 - Sirva atrás de HTTPS — o app remove as exceções de HTTP quando a API tiver
   TLS.

@@ -1,6 +1,6 @@
 # Barter App (Flutter)
 
-App do Barter (permuta de grãos por insumos) integrado à API AdonisJS deste
+App do Barter (permuta de grãos por insumos) integrado à API NestJS deste
 repositório (`../api`). Ver o [README raiz](../README.md) para subir tudo e o
 [docs/frontend-review.md](../docs/frontend-review.md) para a revisão de
 arquitetura.
@@ -9,7 +9,7 @@ arquitetura.
 
 ```bash
 # 1) API no ar (noutro terminal):
-cd ../api && node ace migration:fresh --seed && npm run dev
+cd ../api && npm run db:seed && npm run start:dev
 
 # 2) App:
 flutter run                                              # simulador/desktop (localhost)

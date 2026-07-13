@@ -1,0 +1,138 @@
+// Schema do Barter — permuta de grãos por insumos.
+//
+// Observações de domínio (mesmas regras da versão anterior):
+// - Enums viram String (SQLite não tem enum): role admin|seller,
+//   type grain|input, kind grain|input, status pending|approved|denied,
+//   ruleType none|percentOfTotal|valuePerHa.
+// - Permuta é registro HISTÓRICO: nomes/preços ficam desnormalizados
+//   (snapshots) e os FKs usam SetNull para o histórico sobreviver a exclusões.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+/// Usuário que loga no app: admin (gerencia e revisa) ou seller (vendedor,
+/// registra permutas para a própria carteira). Produtor NÃO é usuário.
+model User {
+  id        Int      @id @default(autoincrement())
+  fullName  String
+  email     String   @unique
+  password  String
+  role      String   @default("seller")
+  phone     String?
+  branch    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tokens  AccessToken[]
+  wallet  Producer[]
+  barters Barter[]      @relation("SellerBarters")
+}
+
+/// Token de acesso opaco (guardamos só o SHA-256; o valor cru vai ao cliente).
+/// Logout apaga a linha — revogação real no servidor.
+model AccessToken {
+  id        Int      @id @default(autoincrement())
+  hash      String   @unique
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+/// Produtor (cliente) designado nas permutas; pertence à CARTEIRA de um
+/// vendedor. sellerId vira NULL se o vendedor for excluído (aguarda realocação).
+model Producer {
+  id        Int      @id @default(autoincrement())
+  name      String
+  sellerId  Int?
+  seller    User?    @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  document  String
+  phone     String?
+  farmName  String
+  city      String
+  /// Área cultivável (ha): base das exigências mínimas por hectare.
+  areaHa    Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  barters Barter[]
+}
+
+/// "Pasta" de insumos; a regra de mínimo vigente trava o envio da permuta:
+/// percentOfTotal (>= ruleValue % do custo) ou valuePerHa (>= R$ × área).
+model InputCategory {
+  id        Int    @id @default(autoincrement())
+  name      String
+  ruleType  String @default("none")
+  ruleValue Float  @default(0)
+
+  products Product[]
+}
+
+/// type=input: insumo retirado (forma o custo). type=grain: grão de pagamento.
+/// currentPrice é o valor de referência do admin — a "taxa de câmbio".
+model Product {
+  id            Int            @id @default(autoincrement())
+  name          String
+  unit          String
+  type          String
+  currentPrice  Float
+  requiredPerHa Float          @default(0)
+  categoryId    Int?
+  category      InputCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  priceHistory PriceHistoryEntry[]
+  items        BarterItem[]
+}
+
+/// Linha do tempo dos reajustes. changedBy desnormalizado: o histórico
+/// sobrevive à exclusão do usuário.
+model PriceHistoryEntry {
+  id          Int      @id @default(autoincrement())
+  productId   Int
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price       Float
+  changedBy   String
+  changedById Int?
+  changedAt   DateTime
+}
+
+/// Permuta: insumos retirados formam um custo, pago com UM grão cujas sacas
+/// são calculadas pelo servidor. `code` (PRM-AAAA-NNN) é o id público.
+model Barter {
+  id           Int       @id @default(autoincrement())
+  code         String    @unique
+  sellerId     Int?
+  seller       User?     @relation("SellerBarters", fields: [sellerId], references: [id], onDelete: SetNull)
+  producerId   Int?
+  producer     Producer? @relation(fields: [producerId], references: [id], onDelete: SetNull)
+  sellerName   String
+  sellerBranch String    @default("")
+  producerName String
+  status       String    @default("pending")
+  adminNote    String?
+  reviewedBy   String?
+  reviewedById Int?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  items BarterItem[]
+}
+
+/// Item da permuta com snapshots imutáveis de nome/unidade/preço.
+model BarterItem {
+  id          Int      @id @default(autoincrement())
+  barterId    Int
+  barter      Barter   @relation(fields: [barterId], references: [id], onDelete: Cascade)
+  productId   Int?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  kind        String
+  productName String
+  unit        String
+  quantity    Float
+  unitValue   Float
+}
