@@ -19,6 +19,10 @@ class UserModel {
   final int totalBarters;
   final double totalSacks;
 
+  /// Entrou com a senha provisória dada pelo admin: precisa definir a própria
+  /// antes de usar o app. O servidor é quem decide isso.
+  final bool mustChangePassword;
+
   const UserModel({
     required this.id,
     required this.name,
@@ -30,6 +34,7 @@ class UserModel {
     required this.createdAt,
     this.totalBarters = 0,
     this.totalSacks = 0,
+    this.mustChangePassword = false,
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
@@ -41,6 +46,7 @@ class UserModel {
         role: json['role'] == 'admin' ? UserRole.admin : UserRole.seller,
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
+        mustChangePassword: json['mustChangePassword'] == true,
       );
 }
 

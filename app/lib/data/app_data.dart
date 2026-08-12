@@ -43,12 +43,52 @@ class AppData {
   static Future<UserModel> login(String email, String password) async {
     final user = await _auth.login(email, password);
     currentUser = user;
-    await refreshAll();
+    await _hydrateIfCleared(user);
     return user;
+  }
+
+  /// Carrega o cache só para quem já pode usar o app. Com a senha ainda
+  /// provisória o servidor recusa as rotas de negócio (403) — pedir as listas
+  /// aqui só produziria erro na cara de quem ainda vai definir a senha. A
+  /// hidratação acontece depois da troca, ao entrar de fato.
+  static Future<void> _hydrateIfCleared(UserModel user) async {
+    if (user.mustChangePassword) return;
+    await refreshAll();
+  }
+
+  /// Retoma a sessão guardada no aparelho e hidrata o cache. Devolve null
+  /// quando não há o que retomar (nunca logou, ou o token já foi revogado no
+  /// servidor). Falhas de rede sobem como [ApiException] para a tela de
+  /// abertura oferecer nova tentativa, sem descartar a sessão.
+  static Future<UserModel?> restoreSession() async {
+    final user = await _auth.restore();
+    if (user == null) return null;
+    currentUser = user;
+    await _hydrateIfCleared(user);
+    return user;
+  }
+
+  /// Troca a senha do usuário logado e atualiza [currentUser] — é o que apaga
+  /// o aviso de senha provisória e libera o painel.
+  static Future<UserModel> changePassword(String current, String next) async {
+    final updated = await _auth.changePassword(current, next);
+    currentUser = updated;
+    return updated;
   }
 
   static Future<void> logout() async {
     await _auth.logout();
+    _clearCache();
+  }
+
+  /// Encerra a sessão local sem falar com o servidor — usado quando o próprio
+  /// servidor já rejeitou o token (401).
+  static Future<void> discardSession() async {
+    await _auth.forget();
+    _clearCache();
+  }
+
+  static void _clearCache() {
     currentUser = null;
     sellers = [];
     producers = [];

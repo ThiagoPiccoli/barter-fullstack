@@ -3,15 +3,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
 import 'package:barter_app/main.dart' as app;
+import 'package:barter_app/services/token_storage.dart';
 
 /// Tour de ponta a ponta contra a API REAL (exige o servidor no ar com o
-/// seed fresco: `cd api && node ace migration:fresh --seed && npm run dev`):
+/// seed fresco: `cd api && npm run db:reset && npm run start:dev`):
 /// 1. Carteira de produtores: cada vendedor só vê os próprios produtores na
 ///    Nova Permuta; o admin vê todos nos Cadastros (com o dono da carteira).
 /// 2. Permuta criada de verdade no servidor + PDF de controle na finalização.
 ///
 /// Atenção: o teste grava a permuta PRM-2026-009 no banco de desenvolvimento;
-/// rode o migration:fresh --seed novamente para zerar.
+/// rode o db:reset novamente para zerar.
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -65,6 +66,9 @@ void main() {
   }
 
   testWidgets('carteira por vendedor + PDF na finalização', (tester) async {
+    // O app agora retoma a sessão guardada no aparelho; o tour começa do zero,
+    // senão a sessão deixada por uma execução anterior pularia o login.
+    await TokenStorage.clear();
     app.main();
     await tester.pumpAndSettle();
 

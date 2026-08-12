@@ -1,11 +1,9 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
-import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
-import 'admin_main_screen.dart';
-import 'seller_main_screen.dart';
+import 'destination.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -33,13 +31,10 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final user = await AppData.login(email, password);
       if (!mounted) return;
-      if (user.role == UserRole.admin) {
-        Navigator.pushReplacement(
-            context, MaterialPageRoute(builder: (_) => AdminMainScreen(admin: user)));
-      } else {
-        Navigator.pushReplacement(
-            context, MaterialPageRoute(builder: (_) => SellerMainScreen(seller: user)));
-      }
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => destinationFor(user)),
+      );
     } on ApiException catch (e) {
       if (mounted) {
         showErrorSnack(
@@ -48,6 +43,30 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  /// Não há recuperação por e-mail: quem provisiona e redefine senhas é o
+  /// administrador. Melhor dizer isso do que deixar um botão que não faz nada.
+  void _showPasswordHelp() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.support_agent, color: AppColors.primary, size: 40),
+        title: const Text('Esqueceu a senha?'),
+        content: const Text(
+          'Peça ao administrador da cooperativa para cadastrar uma senha provisória '
+          'para você. Ao entrar com ela, o app pede que você defina uma senha só sua.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, color: AppColors.textMedium),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendi'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -119,7 +138,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     Align(
                       alignment: Alignment.centerRight,
                       child: TextButton(
-                        onPressed: () {},
+                        onPressed: _showPasswordHelp,
                         child: const Text('Esqueci minha senha',
                             style: TextStyle(color: AppColors.primaryMedium, fontSize: 12)),
                       ),

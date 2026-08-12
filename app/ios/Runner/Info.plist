@@ -50,9 +50,12 @@
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<!-- Desenvolvimento: API local via http://. Remova quando a API tiver HTTPS. -->
+	<!-- http:// continua bloqueado para a internet; liberado apenas na rede
+	     local, onde roda a API de desenvolvimento (localhost e o notebook na
+	     mesma rede). Com um servidor https:// nada aqui precisa mudar. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
+		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>UILaunchStoryboardName</key>

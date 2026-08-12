@@ -10,5 +10,10 @@
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
+	<!-- Keychain: onde o token de acesso fica guardado entre execuções. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.barter.barterApp</string>
+	</array>
 </dict>
 </plist>

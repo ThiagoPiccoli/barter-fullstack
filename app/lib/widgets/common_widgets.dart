@@ -5,15 +5,22 @@ import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../screens/login_screen.dart';
 import '../screens/barter_detail_screen.dart';
+import '../screens/change_password_screen.dart';
 
 /// SnackBar padrão de erro do app (usada por todos os fluxos que chamam a
 /// API). [error] pode ser uma [ApiException] (mensagem legível do servidor)
 /// ou uma String.
-void showErrorSnack(BuildContext context, Object error) {
-  ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
+void showErrorSnack(BuildContext context, Object error) =>
+    showErrorOn(ScaffoldMessenger.of(context), error.toString());
+
+/// Mesma SnackBar de erro, a partir de um messenger já resolvido — para os
+/// avisos que nascem fora da árvore de widgets (ex.: a sessão expirada
+/// detectada na camada de dados, que não tem BuildContext à mão).
+void showErrorOn(ScaffoldMessengerState? messenger, String message) {
+  messenger
+    ?..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(
-      content: Text(error.toString()),
+      content: Text(message),
       backgroundColor: AppColors.denied,
       behavior: SnackBarBehavior.floating,
     ));
@@ -414,6 +421,30 @@ Future<void> confirmLogout(BuildContext context) async {
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginScreen()),
       (route) => false,
+    );
+  }
+}
+
+/// Abre a troca de senha voluntária do usuário logado. Diferente da troca
+/// obrigatória (primeira entrada), aqui dá para desistir e voltar.
+void openChangePassword(BuildContext context) {
+  final user = AppData.currentUser;
+  if (user == null) return;
+  Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => ChangePasswordScreen(user: user)),
+  );
+}
+
+/// Botão de "Alterar senha" para a AppBar das telas de nível principal.
+class ChangePasswordButton extends StatelessWidget {
+  const ChangePasswordButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(Icons.lock_reset),
+      tooltip: 'Alterar senha',
+      onPressed: () => openChangePassword(context),
     );
   }
 }

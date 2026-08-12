@@ -288,6 +288,16 @@ class _SellerProfileTab extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           OutlinedButton.icon(
+            onPressed: () => openChangePassword(context),
+            icon: const Icon(Icons.lock_reset, color: AppColors.primary),
+            label: const Text('Alterar senha', style: TextStyle(color: AppColors.primary)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: AppColors.primary),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
             onPressed: () => confirmLogout(context),
             icon: const Icon(Icons.logout, color: AppColors.denied),
             label: const Text('Sair', style: TextStyle(color: AppColors.denied)),

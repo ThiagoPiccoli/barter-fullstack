@@ -132,6 +132,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
       appBar: AppBar(
         title: const BarterLogo(size: 32),
         actions: [
+          const ChangePasswordButton(),
           const LogoutButton(),
           Padding(
             padding: const EdgeInsets.only(right: 12),

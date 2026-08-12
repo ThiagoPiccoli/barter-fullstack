@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'theme/app_theme.dart';
-import 'screens/login_screen.dart';
+import 'services/session.dart';
+import 'screens/bootstrap_screen.dart';
 
 void main() {
+  // Liga o cliente HTTP à navegação antes de qualquer requisição: um token
+  // rejeitado precisa achar o caminho de volta ao login desde a abertura.
+  installSessionExpiryHandler();
   runApp(const BarterApp());
 }
 
@@ -15,7 +19,11 @@ class BarterApp extends StatelessWidget {
       title: 'Barter App – Permuta de Grãos',
       theme: AppTheme.theme,
       debugShowCheckedModeBanner: false,
-      home: const LoginScreen(),
+      // Chaves globais: a expiração de sessão é detectada na camada de dados,
+      // que navega e avisa sem ter um BuildContext em mãos.
+      navigatorKey: appNavigatorKey,
+      scaffoldMessengerKey: appMessengerKey,
+      home: const BootstrapScreen(),
     );
   }
 }

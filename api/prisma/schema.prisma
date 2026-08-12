@@ -28,6 +28,11 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Senha provisória: o vendedor recém-provisionado pelo admin precisa
+  /// trocá-la antes de usar o app. O seed de demonstração nasce com false
+  /// para o acesso rápido continuar direto.
+  mustChangePassword Boolean @default(false)
+
   tokens  AccessToken[]
   wallet  Producer[]
   barters Barter[]      @relation("SellerBarters")
@@ -41,6 +46,13 @@ model AccessToken {
   userId    Int
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
+
+  /// Validade da sessão. O app guarda o token no aparelho entre aberturas,
+  /// então ele precisa morrer sozinho: um token roubado vale no máximo até
+  /// aqui, mesmo que ninguém faça logout. Ver TOKEN_TTL_DAYS.
+  expiresAt DateTime
+
+  @@index([expiresAt])
 }
 
 /// Produtor (cliente) designado nas permutas; pertence à CARTEIRA de um

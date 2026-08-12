@@ -32,6 +32,9 @@ export function toUserJson(user: User) {
     branch: user.branch,
     createdAt: user.createdAt,
     initials: initialsOf(user.fullName),
+    // O app usa isto para exigir a troca da senha provisória antes de deixar
+    // o vendedor entrar no painel.
+    mustChangePassword: user.mustChangePassword,
   };
 }
 

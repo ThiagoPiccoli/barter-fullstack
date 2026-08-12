@@ -5,10 +5,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateSellerDto, UpdateSellerDto } from './dto/seller.dto';
 
 /**
- * Senha padrão de primeira entrada quando o admin não define uma na criação.
- * Deve ser trocada pelo vendedor (fluxo futuro de troca de senha).
+ * Senha de primeira entrada quando o admin não define uma na criação. Vale
+ * uma única vez: o vendedor cai direto na troca de senha ao entrar com ela
+ * (ver mustChangePassword em create). Pode ser trocada por SELLER_DEFAULT_PASSWORD.
+ *
+ * Lida na hora de criar, e não numa constante de topo de módulo: este arquivo
+ * é importado antes do ConfigModule carregar o .env, então uma constante
+ * congelaria o padrão e ignoraria a variável em silêncio — justamente no
+ * ponto em que ela existe para tirar o '123456' do caminho.
  */
-const DEFAULT_PASSWORD = '123456';
+function defaultPassword(): string {
+  return process.env.SELLER_DEFAULT_PASSWORD || '123456';
+}
 
 /** Gestão de VENDEDORES pelo admin — não existe signup público. */
 @Injectable()
@@ -24,9 +32,17 @@ export class SellersService {
     if (emailTaken) {
       throw new UnprocessableEntityException('Este e-mail já está em uso por outro usuário');
     }
+    // A senha definida aqui é PROVISÓRIA: quem entra com ela é obrigado a
+    // trocá-la antes de usar o app (mustChangePassword), então ela nunca vira
+    // a senha permanente de ninguém.
     const { password, ...data } = dto;
     return this.prisma.user.create({
-      data: { ...data, password: await hashPassword(password ?? DEFAULT_PASSWORD), role: 'seller' },
+      data: {
+        ...data,
+        password: await hashPassword(password ?? defaultPassword()),
+        role: 'seller',
+        mustChangePassword: true,
+      },
     });
   }
 
