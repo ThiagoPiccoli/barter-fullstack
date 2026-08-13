@@ -37,7 +37,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
   const admin = await mkUser({
     fullName: 'Carlos Mendes',
-    email: 'admin@barter.com.br',
+    email: 'admin@agrobarter.com.br',
     role: 'admin',
     phone: '(44) 99999-0001',
     branch: 'Matriz',
@@ -45,7 +45,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const joao = await mkUser({
     fullName: 'João Silva',
-    email: 'joao.silva@barter.com.br',
+    email: 'joao.silva@agrobarter.com.br',
     role: 'consultant',
     phone: '(44) 99999-0002',
     branch: 'Filial 02 – Gran. Santa T.',
@@ -53,7 +53,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const ana = await mkUser({
     fullName: 'Ana Paula Ferreira',
-    email: 'ana.ferreira@barter.com.br',
+    email: 'ana.ferreira@agrobarter.com.br',
     role: 'consultant',
     phone: '(44) 99999-0003',
     branch: 'Filial 04 – Gran. Inharap.',
@@ -61,7 +61,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const roberto = await mkUser({
     fullName: 'Roberto Souza',
-    email: 'roberto.souza@barter.com.br',
+    email: 'roberto.souza@agrobarter.com.br',
     role: 'consultant',
     phone: '(44) 99999-0004',
     branch: 'Filial 34 – Gran. Jari',
@@ -69,7 +69,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const maria = await mkUser({
     fullName: 'Maria Oliveira',
-    email: 'maria.oliveira@barter.com.br',
+    email: 'maria.oliveira@agrobarter.com.br',
     role: 'consultant',
     phone: '(44) 99999-0005',
     branch: 'Filial 24 – Gran. Oliveira',
@@ -77,7 +77,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const lucas = await mkUser({
     fullName: 'Lucas Barros',
-    email: 'lucas.barros@barter.com.br',
+    email: 'lucas.barros@agrobarter.com.br',
     role: 'consultant',
     phone: '(44) 99999-0006',
     branch: 'Filial 18 – Gran. São Joa.',

@@ -16,12 +16,12 @@
 // tela nenhuma, só o contrato de dados.
 import 'dart:io';
 
-import 'package:barter_app/models/models.dart';
-import 'package:barter_app/repositories/barter_repository.dart';
-import 'package:barter_app/repositories/catalog_repository.dart';
-import 'package:barter_app/repositories/consultant_repository.dart';
-import 'package:barter_app/repositories/producer_repository.dart';
-import 'package:barter_app/services/api/api_client.dart';
+import 'package:agrobarter_app/models/models.dart';
+import 'package:agrobarter_app/repositories/barter_repository.dart';
+import 'package:agrobarter_app/repositories/catalog_repository.dart';
+import 'package:agrobarter_app/repositories/consultant_repository.dart';
+import 'package:agrobarter_app/repositories/producer_repository.dart';
+import 'package:agrobarter_app/services/api/api_client.dart';
 
 int _failures = 0;
 
@@ -52,7 +52,7 @@ Future<void> main() async {
 Future<void> _run() async {
   /* ── Sessão ───────────────────────────────────────────────────────── */
   final login = await api.post('/auth/login', body: {
-    'email': 'admin@barter.com.br',
+    'email': 'admin@agrobarter.com.br',
     'password': '123456',
   }) as Map<String, dynamic>;
   api.token = login['token'] as String;
@@ -102,7 +102,7 @@ Future<void> _run() async {
 
   /* ── Provisionamento de consultor ─────────────────────────────────── */
   final consultants = ConsultantRepository();
-  final email = 'verificacao.${DateTime.now().millisecondsSinceEpoch}@barter.com.br';
+  final email = 'verificacao.${DateTime.now().millisecondsSinceEpoch}@agrobarter.com.br';
   final provisioned = await consultants.create(UserModel(
     id: '',
     name: 'Consultor de Verificação',

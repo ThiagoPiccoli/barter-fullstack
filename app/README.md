@@ -1,6 +1,6 @@
-# Barter App (Flutter)
+# agroBarter (Flutter)
 
-App do Barter (permuta de grãos por insumos) integrado à API NestJS deste
+App do agroBarter (permuta de grãos por insumos) integrado à API NestJS deste
 repositório (`../api`). Ver o [README raiz](../README.md) para subir tudo e o
 [docs/frontend-review.md](../docs/frontend-review.md) para a revisão de
 arquitetura.
@@ -17,8 +17,8 @@ flutter run --dart-define=API_URL=http://192.168.0.10:3333  # aparelho físico (
 flutter run --dart-define=API_URL=http://10.0.2.2:3333      # emulador Android
 ```
 
-Login de demonstração: `admin@barter.com.br` / `123456` (admin) ou
-`joao.silva@barter.com.br` / `123456` (consultor).
+Login de demonstração: `admin@agrobarter.com.br` / `123456` (admin) ou
+`joao.silva@agrobarter.com.br` / `123456` (consultor).
 
 ## Camadas
 

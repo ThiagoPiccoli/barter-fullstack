@@ -4,9 +4,13 @@
   daqui por TLS. A exceção abaixo cobre a API rodando na máquina do
   desenvolvedor, que não tem certificado.
 
-  Rodando em APARELHO FÍSICO apontado para o seu notebook (por exemplo
-  --dart-define=API_URL=http://192.168.0.10:3333), acrescente esse IP como um
-  <domain> aqui: esta lista casa por host exato, não aceita faixa de IP.
+  Rodando em APARELHO FÍSICO apontado para o seu notebook (passando
+  API_URL=http://192.168.0.10:3333 via dart-define), acrescente esse IP como
+  um <domain> aqui: esta lista casa por host exato, não aceita faixa de IP.
+
+  Atenção ao editar: comentário XML não aceita hífen duplo, então o nome do
+  flag do Flutter não pode ser escrito por extenso aqui — o build do Android
+  falha na hora de parsear este arquivo.
 
   Para um servidor de verdade, use https:// — nada precisa ser mudado aqui.
 -->

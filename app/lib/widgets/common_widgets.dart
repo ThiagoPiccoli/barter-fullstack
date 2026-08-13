@@ -147,25 +147,25 @@ class SearchField extends StatelessWidget {
       style: const TextStyle(fontSize: 14),
       decoration: InputDecoration(
         hintText: hint,
-        prefixIcon: const Icon(Icons.search, size: 20, color: AppColors.textMedium),
+        prefixIcon: Icon(Icons.search, size: 20, color: AppColors.textMedium),
         suffixIcon: controller.text.isNotEmpty
             ? IconButton(icon: const Icon(Icons.close, size: 18), onPressed: onClear)
             : null,
         isDense: true,
         filled: true,
-        fillColor: AppColors.white,
+        fillColor: AppColors.surface,
         contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+          borderSide: BorderSide(color: AppColors.borderSubtle),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+          borderSide: BorderSide(color: AppColors.borderSubtle),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+          borderSide: BorderSide(color: AppColors.primary, width: 1.5),
         ),
       ),
     );
@@ -224,38 +224,38 @@ class BarterBalanceBar extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(hasGrain ? 'Você precisa entregar' : (showValue ? 'Custo dos insumos' : 'Pagamento em grãos'),
-                        style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+                        style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 12)),
                     const SizedBox(height: 2),
                     if (hasGrain)
                       Text.rich(
                         TextSpan(children: [
                           TextSpan(
                             text: formatSacks(sacks),
-                            style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800),
+                            style: TextStyle(color: AppColors.onPrimary, fontSize: 28, fontWeight: FontWeight.w800),
                           ),
                           TextSpan(
                             text: grainLabel,
-                            style: const TextStyle(color: Color(0xDDFFFFFF), fontSize: 15, fontWeight: FontWeight.w600),
+                            style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 15, fontWeight: FontWeight.w600),
                           ),
                         ]),
                       )
                     else if (showValue)
                       Text(formatCurrency(inputCost),
-                          style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800))
+                          style: TextStyle(color: AppColors.onPrimary, fontSize: 28, fontWeight: FontWeight.w800))
                     else
-                      const Text('—',
-                          style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800)),
+                      Text('—',
+                          style: TextStyle(color: AppColors.onPrimary, fontSize: 28, fontWeight: FontWeight.w800)),
                     const SizedBox(height: 2),
                     Text(
                       hasGrain
                           ? (showValue ? '≈ ${formatCurrency(inputCost)} em insumos' : 'para cobrir os insumos retirados')
                           : 'Escolha o grão de pagamento para ver as sacas',
-                      style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 12),
+                      style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.swap_horiz, color: Color(0x55FFFFFF), size: 36),
+              Icon(Icons.swap_horiz, color: AppColors.onPrimaryFaint, size: 36),
             ],
           ),
           if (showValue) ...[
@@ -270,7 +270,7 @@ class BarterBalanceBar extends StatelessWidget {
                     icon: Icons.science_outlined,
                   ),
                 ),
-                Container(width: 1, height: 34, color: const Color(0x33FFFFFF)),
+                Container(width: 1, height: 34, color: AppColors.onPrimaryOverlay),
                 Expanded(
                   child: _MiniStat(
                     label: 'Paga com',
@@ -311,74 +311,14 @@ class _MiniStat extends StatelessWidget {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 12, color: const Color(0xCCFFFFFF)),
+            Icon(icon, size: 12, color: AppColors.onPrimaryMuted),
             const SizedBox(width: 4),
-            Text(label, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 10)),
+            Text(label, style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 10)),
           ],
         ),
         const SizedBox(height: 2),
-        Text(value, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-        Text(sub, style: const TextStyle(color: Color(0x99FFFFFF), fontSize: 10)),
-      ],
-    );
-  }
-}
-
-class BarterLogo extends StatelessWidget {
-  final double size;
-  final bool showText;
-  const BarterLogo({super.key, this.size = 40, this.showText = true});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            color: AppColors.white,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Center(
-            child: Text(
-              'BT',
-              style: TextStyle(
-                color: AppColors.primary,
-                fontSize: size * 0.4,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 1,
-              ),
-            ),
-          ),
-        ),
-        if (showText) ...[
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'BARTER',
-                style: TextStyle(
-                  color: AppColors.white,
-                  fontSize: size * 0.45,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2,
-                ),
-              ),
-              Text(
-                'Permuta de Grãos',
-                style: TextStyle(
-                  color: const Color(0xCCFFFFFF),
-                  fontSize: size * 0.24,
-                  letterSpacing: 1,
-                ),
-              ),
-            ],
-          ),
-        ],
+        Text(value, style: TextStyle(color: AppColors.onPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
+        Text(sub, style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 10)),
       ],
     );
   }
@@ -391,9 +331,9 @@ Future<void> confirmLogout(BuildContext context) async {
   final shouldLogout = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      icon: const Icon(Icons.logout, color: AppColors.denied, size: 40),
+      icon: Icon(Icons.logout, color: AppColors.denied, size: 40),
       title: const Text('Sair da conta'),
-      content: const Text(
+      content: Text(
         'Deseja encerrar a sessão e voltar à tela de login?',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 14, color: AppColors.textMedium),
@@ -489,9 +429,9 @@ class InfoTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       leading: Icon(icon, color: AppColors.primary, size: 20),
-      title: Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+      title: Text(label, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
       subtitle: Text(value,
-          style: const TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
+          style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
     );
   }
 }
@@ -526,17 +466,17 @@ class DashboardHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Olá, $greetingName!',
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                    style: TextStyle(color: AppColors.onPrimary, fontSize: 18, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                Text(subtitle, style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 12)),
+                Text(subtitle, style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 12)),
                 if (caption != null) ...[
                   const SizedBox(height: 2),
-                  Text(caption!, style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 11)),
+                  Text(caption!, style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11)),
                 ],
               ],
             ),
           ),
-          Icon(icon, color: const Color(0x44FFFFFF), size: 48),
+          Icon(icon, color: AppColors.onPrimaryFaint, size: 48),
         ],
       ),
     );
@@ -564,17 +504,17 @@ class MiniBarterCard extends StatelessWidget {
           child: isAdmin
               ? Text(
                   barter.consultantName.split(' ').map((e) => e[0]).take(2).join(),
-                  style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.bold),
+                  style: TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.bold),
                 )
-              : const Icon(Icons.swap_horiz, color: AppColors.primary, size: 20),
+              : Icon(Icons.swap_horiz, color: AppColors.primary, size: 20),
         ),
         title: Text(barter.id,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
         subtitle: Text(
             isAdmin
                 ? '${barter.consultantName} • ${barter.inputs.length} insumo(s)'
                 : '${barter.inputs.length} insumo(s) • ${barter.producerName}',
-            style: const TextStyle(fontSize: 11, color: AppColors.textMedium),
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
             overflow: TextOverflow.ellipsis),
         trailing: Column(
           mainAxisSize: MainAxisSize.min,
@@ -586,7 +526,7 @@ class MiniBarterCard extends StatelessWidget {
                 barter.referenceValue > 0
                     ? '${formatSacks(barter.sacksToDeliver)} ${barter.referenceGrainName.toLowerCase()}'
                     : '—',
-                style: const TextStyle(fontSize: 10, color: AppColors.textMedium)),
+                style: TextStyle(fontSize: 10, color: AppColors.textMedium)),
           ],
         ),
       ),
@@ -628,7 +568,7 @@ class BarterLogItem extends StatelessWidget {
                     Row(
                       children: [
                         Text(barter.id,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                         const Spacer(),
                         StatusBadge(status: barter.status),
                       ],
@@ -638,7 +578,7 @@ class BarterLogItem extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(subtitle,
-                              style: const TextStyle(fontSize: 11, color: AppColors.textLight),
+                              style: TextStyle(fontSize: 11, color: AppColors.textLight),
                               overflow: TextOverflow.ellipsis),
                         ),
                         const SizedBox(width: 8),
@@ -646,14 +586,14 @@ class BarterLogItem extends StatelessWidget {
                             barter.referenceValue > 0
                                 ? '${formatSacks(barter.sacksToDeliver)} ${barter.referenceGrainName.toLowerCase()}'
                                 : '—',
-                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
                       ],
                     ),
                   ],
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
+              Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
             ],
           ),
         ),
@@ -731,10 +671,10 @@ void reviewBarter(
                 backgroundColor: approving ? AppColors.approved : AppColors.denied,
               ),
               child: submitting
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                      child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
                   : Text(approving ? 'Confirmar Aprovação' : 'Confirmar Negação'),
             ),
           ],
@@ -780,12 +720,12 @@ class SummaryCard extends StatelessWidget {
             Text(value,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.textDark)),
             const SizedBox(height: 2),
-            Text(title, style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+            Text(title, style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
             if (subtitle != null) ...[
               const SizedBox(height: 2),
-              Text(subtitle!, style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+              Text(subtitle!, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
             ],
           ],
         ),

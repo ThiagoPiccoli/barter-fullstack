@@ -66,7 +66,7 @@ Todas as rotas (menos o login) exigem um token no header
 ```bash
 curl -X POST http://localhost:3333/api/v1/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"email":"admin@barter.com.br","password":"123456"}'
+  -d '{"email":"admin@agrobarter.com.br","password":"123456"}'
 ```
 
 Resposta: `{"data":{"token":"oat_...","user":{...}}}`. Copie o `token`.
@@ -99,7 +99,7 @@ curl -X POST http://localhost:3333/api/v1/barters \
 ```
 
 > Dica: use o admin para revisar (`POST /barters/:code/review`) e um consultor
-> (ex.: `joao.silva@barter.com.br`) para criar. Ver a tabela de rotas abaixo.
+> (ex.: `joao.silva@agrobarter.com.br`) para criar. Ver a tabela de rotas abaixo.
 
 ---
 
@@ -107,12 +107,12 @@ curl -X POST http://localhost:3333/api/v1/barters \
 
 | Papel | E-mail | Carteira de produtores |
 |---|---|---|
-| **Admin** | `admin@barter.com.br` | — (enxerga tudo) |
-| Consultor | `joao.silva@barter.com.br` | Antônio Carvalho, Sebastião Ramos |
-| Consultor | `ana.ferreira@barter.com.br` | Helena Prado, Cláudia Nunes |
-| Consultor | `roberto.souza@barter.com.br` | Joaquim Tavares |
-| Consultor | `maria.oliveira@barter.com.br` | Osmar Dutra |
-| Consultor | `lucas.barros@barter.com.br` | Vanessa Lopes |
+| **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo) |
+| Consultor | `joao.silva@agrobarter.com.br` | Antônio Carvalho, Sebastião Ramos |
+| Consultor | `ana.ferreira@agrobarter.com.br` | Helena Prado, Cláudia Nunes |
+| Consultor | `roberto.souza@agrobarter.com.br` | Joaquim Tavares |
+| Consultor | `maria.oliveira@agrobarter.com.br` | Osmar Dutra |
+| Consultor | `lucas.barros@agrobarter.com.br` | Vanessa Lopes |
 
 Além disso, o dataset traz **9 produtos** (4 grãos + 5 insumos, cada um com 7
 meses de histórico de preço), **3 categorias** de insumo com regras de mínimo, e

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -51,7 +52,9 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isAdmin ? 'Permutas' : 'Minhas Permutas'),
+        title: Text(widget.isAdmin
+            ? brand.copy.barterPluralTitle
+            : 'Minhas ${brand.copy.barterPluralTitle}'),
         actions: const [LogoutButton()],
         bottom: TabBar(
           controller: _tabController,
@@ -109,9 +112,9 @@ class _BarterList extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.swap_horiz, size: 64, color: Colors.grey.shade300),
+            Icon(Icons.swap_horiz, size: 64, color: AppColors.divider),
             const SizedBox(height: 12),
-            const Text('Nenhuma permuta encontrada', style: TextStyle(color: AppColors.textLight)),
+            Text('Nenhuma ${brand.copy.barter} encontrada', style: TextStyle(color: AppColors.textLight)),
           ],
         ),
       );
@@ -152,7 +155,7 @@ class _BarterCard extends StatelessWidget {
               Row(
                 children: [
                   Text(barter.id,
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                   const Spacer(),
                   StatusBadge(status: barter.status),
                 ],
@@ -161,14 +164,14 @@ class _BarterCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Row(
                   children: [
-                    const Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
+                    Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
                     const SizedBox(width: 4),
                     Text(barter.producerName,
-                        style: const TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600)),
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600)),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text('Vend.: ${barter.consultantName}',
-                          style: const TextStyle(fontSize: 11, color: AppColors.textLight),
+                          style: TextStyle(fontSize: 11, color: AppColors.textLight),
                           overflow: TextOverflow.ellipsis),
                     ),
                   ],
@@ -188,7 +191,7 @@ class _BarterCard extends StatelessWidget {
                           : '${barter.inputs.length} item(ns)',
                     ),
                   ),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(horizontal: 6),
                     child: Icon(Icons.arrow_forward, size: 16, color: AppColors.textLight),
                   ),
@@ -205,10 +208,10 @@ class _BarterCard extends StatelessWidget {
               const SizedBox(height: 10),
               Row(
                 children: [
-                  const Icon(Icons.calendar_today_outlined, size: 13, color: AppColors.textLight),
+                  Icon(Icons.calendar_today_outlined, size: 13, color: AppColors.textLight),
                   const SizedBox(width: 4),
                   Text(_formatDate(barter.createdAt),
-                      style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                 ],
               ),
               if (isAdmin && barter.status == BarterStatus.pending) ...[
@@ -223,7 +226,7 @@ class _BarterCard extends StatelessWidget {
                         label: const Text('Negar', style: TextStyle(fontSize: 13)),
                         style: OutlinedButton.styleFrom(
                           foregroundColor: AppColors.denied,
-                          side: const BorderSide(color: AppColors.denied),
+                          side: BorderSide(color: AppColors.denied),
                           padding: const EdgeInsets.symmetric(vertical: 10),
                         ),
                       ),
@@ -279,7 +282,7 @@ class _SidePill extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title,
-                    style: const TextStyle(fontSize: 11, color: AppColors.textMedium),
+                    style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                     overflow: TextOverflow.ellipsis),
                 Text(value,
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: accent)),

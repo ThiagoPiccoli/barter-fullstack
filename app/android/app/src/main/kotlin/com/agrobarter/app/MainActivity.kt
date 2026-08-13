@@ -1,4 +1,4 @@
-package com.barter.barter_app
+package com.agrobarter.app
 
 import io.flutter.embedding.android.FlutterActivity
 

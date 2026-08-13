@@ -3,7 +3,7 @@
          em res/xml/network_security_config.xml. -->
     <application
         android:networkSecurityConfig="@xml/network_security_config"
-        android:label="Barter App"
+        android:label="agroBarter"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

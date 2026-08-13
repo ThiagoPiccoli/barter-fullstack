@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -64,13 +65,13 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
                   backgroundColor: AppColors.primary,
                   radius: 40,
                   child: Text(producer.avatarInitials,
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                      style: TextStyle(color: AppColors.onPrimary, fontSize: 24, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
                 Text(producer.name,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 Text(producer.location,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textMedium), textAlign: TextAlign.center),
+                    style: TextStyle(fontSize: 13, color: AppColors.textMedium), textAlign: TextAlign.center),
               ],
             ),
           ),
@@ -105,7 +106,7 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
           ),
           const SizedBox(height: 16),
 
-          const Text('Estatísticas',
+          Text('Estatísticas',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
           GridView(
@@ -119,7 +120,7 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
             physics: const NeverScrollableScrollPhysics(),
             children: [
               SummaryCard(
-                title: 'Total Permutas',
+                title: 'Total ${brand.copy.barterPluralTitle}',
                 value: barters.length.toString(),
                 icon: Icons.swap_horiz,
                 color: AppColors.primary,
@@ -147,15 +148,15 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
           if (denied > 0) ...[
             const SizedBox(height: 8),
             Text('$denied permuta(s) negada(s)',
-                style: const TextStyle(fontSize: 12, color: AppColors.denied)),
+                style: TextStyle(fontSize: 12, color: AppColors.denied)),
           ],
           const SizedBox(height: 20),
 
-          const Text('Log de Permutas',
+          Text('Log de ${brand.copy.barterPluralTitle}',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
           if (barters.isEmpty)
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text('Nenhuma permuta registrada', style: TextStyle(color: AppColors.textLight)),
@@ -169,10 +170,10 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
           const SizedBox(height: 24),
           OutlinedButton.icon(
             onPressed: _delete,
-            icon: const Icon(Icons.delete_outline, color: AppColors.denied),
-            label: const Text('Excluir produtor', style: TextStyle(color: AppColors.denied)),
+            icon: Icon(Icons.delete_outline, color: AppColors.denied),
+            label: Text('Excluir produtor', style: TextStyle(color: AppColors.denied)),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppColors.denied),
+              side: BorderSide(color: AppColors.denied),
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),

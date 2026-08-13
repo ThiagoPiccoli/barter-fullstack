@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
+import '../branding/brand_wordmark.dart';
 import 'barters_screen.dart';
 import 'barter_screen.dart';
 
@@ -53,10 +55,10 @@ class _ConsultantMainScreenState extends State<ConsultantMainScreen> {
         unselectedItemColor: AppColors.textLight,
         selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: const [
+        items: [
           BottomNavigationBarItem(icon: Icon(Icons.home_outlined), activeIcon: Icon(Icons.home), label: 'Início'),
-          BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: Icon(Icons.swap_horiz), label: 'Permutas'),
-          BottomNavigationBarItem(icon: Icon(Icons.add_circle_outline), activeIcon: Icon(Icons.add_circle), label: 'Nova Permuta'),
+          BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: const Icon(Icons.swap_horiz), label: brand.copy.barterPluralTitle),
+          BottomNavigationBarItem(icon: Icon(Icons.add_circle_outline), activeIcon: const Icon(Icons.add_circle), label: 'Nova ${brand.copy.barterTitle}'),
           BottomNavigationBarItem(icon: Icon(Icons.person_outlined), activeIcon: Icon(Icons.person), label: 'Perfil'),
         ],
       ),
@@ -97,7 +99,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BarterLogo(size: 32),
+        title: const BrandWordmark(size: 32, showTagline: false),
         actions: [
           const LogoutButton(),
           Padding(
@@ -106,7 +108,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
               backgroundColor: AppColors.primaryAccent,
               radius: 18,
               child: Text(consultant.avatarInitials,
-                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                  style: TextStyle(color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.bold)),
             ),
           ),
         ],
@@ -135,7 +137,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             physics: const NeverScrollableScrollPhysics(),
             children: [
               SummaryCard(
-                title: 'Minhas Permutas',
+                title: 'Minhas ${brand.copy.barterPluralTitle}',
                 value: myBarters.length.toString(),
                 icon: Icons.swap_horiz,
                 color: AppColors.primary,
@@ -167,7 +169,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             child: ElevatedButton.icon(
               onPressed: () => onNavigate(2),
               icon: const Icon(Icons.swap_horiz),
-              label: const Text('Nova Permuta'),
+              label: Text('Nova ${brand.copy.barterTitle}'),
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
@@ -179,17 +181,17 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Últimas Permutas',
+              Text('Últimas Permutas',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               TextButton(
                 onPressed: () => onNavigate(1),
-                child: const Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
+                child: Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
               ),
             ],
           ),
           const SizedBox(height: 8),
           if (myBarters.isEmpty)
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text('Nenhuma permuta ainda', style: TextStyle(color: AppColors.textLight)),
@@ -227,13 +229,13 @@ class _ConsultantProfileTab extends StatelessWidget {
                   backgroundColor: AppColors.primary,
                   radius: 40,
                   child: Text(consultant.avatarInitials,
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                      style: TextStyle(color: AppColors.onPrimary, fontSize: 24, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
                 Text(consultant.name,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 Text(consultant.branch,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textMedium)),
+                    style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
                 const SizedBox(height: 4),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -241,7 +243,7 @@ class _ConsultantProfileTab extends StatelessWidget {
                     color: AppColors.primarySurface,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Text('Consultor',
+                  child: Text('Consultor',
                       style: TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w600)),
                 ),
               ],
@@ -266,13 +268,13 @@ class _ConsultantProfileTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Meu Histórico',
+          Text('Meu Histórico',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
           Row(
             children: [
               Expanded(child: SummaryCard(
-                title: 'Total Permutas',
+                title: 'Total ${brand.copy.barterPluralTitle}',
                 value: myBarters.length.toString(),
                 icon: Icons.swap_horiz,
                 color: AppColors.primary,
@@ -289,20 +291,20 @@ class _ConsultantProfileTab extends StatelessWidget {
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: () => openChangePassword(context),
-            icon: const Icon(Icons.lock_reset, color: AppColors.primary),
-            label: const Text('Alterar senha', style: TextStyle(color: AppColors.primary)),
+            icon: Icon(Icons.lock_reset, color: AppColors.primary),
+            label: Text('Alterar senha', style: TextStyle(color: AppColors.primary)),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppColors.primary),
+              side: BorderSide(color: AppColors.primary),
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
             onPressed: () => confirmLogout(context),
-            icon: const Icon(Icons.logout, color: AppColors.denied),
-            label: const Text('Sair', style: TextStyle(color: AppColors.denied)),
+            icon: Icon(Icons.logout, color: AppColors.denied),
+            label: Text('Sair', style: TextStyle(color: AppColors.denied)),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppColors.denied),
+              side: BorderSide(color: AppColors.denied),
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),

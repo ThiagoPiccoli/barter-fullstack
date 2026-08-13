@@ -55,7 +55,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
     }
     if (!mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('Senha alterada com sucesso!'),
       backgroundColor: AppColors.approved,
       behavior: SnackBarBehavior.floating,
@@ -102,7 +102,7 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: AppColors.pending.withValues(alpha: 0.4)),
                   ),
-                  child: const Row(
+                  child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(Icons.lock_reset, color: AppColors.pending, size: 22),
@@ -151,15 +151,15 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                 child: ElevatedButton(
                   onPressed: _saving ? null : _save,
                   child: _saving
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 22,
                           height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
                       : const Text('Salvar senha'),
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 'As outras sessões abertas nesta conta serão encerradas.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textLight),

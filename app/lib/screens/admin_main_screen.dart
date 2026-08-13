@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
+import '../branding/brand_wordmark.dart';
 import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
 import 'prices_screen.dart';
@@ -44,9 +46,9 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
         unselectedItemColor: AppColors.textLight,
         selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
         unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: const [
+        items: [
           BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), activeIcon: Icon(Icons.dashboard), label: 'Dashboard'),
-          BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: Icon(Icons.swap_horiz), label: 'Permutas'),
+          BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: const Icon(Icons.swap_horiz), label: brand.copy.barterPluralTitle),
           BottomNavigationBarItem(icon: Icon(Icons.price_change_outlined), activeIcon: Icon(Icons.price_change), label: 'Valores'),
           BottomNavigationBarItem(icon: Icon(Icons.groups_outlined), activeIcon: Icon(Icons.groups), label: 'Cadastros'),
         ],
@@ -130,7 +132,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BarterLogo(size: 32),
+        title: const BrandWordmark(size: 32, showTagline: false),
         actions: [
           const ChangePasswordButton(),
           const LogoutButton(),
@@ -140,7 +142,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
               backgroundColor: AppColors.primaryAccent,
               radius: 18,
               child: Text(admin.avatarInitials,
-                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                  style: TextStyle(color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.bold)),
             ),
           ),
         ],
@@ -153,7 +155,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
           children: [
             DashboardHeader(
               greetingName: admin.name.split(' ')[0],
-              subtitle: 'Central de Permutas • ${_todayDate()}',
+              subtitle: 'Central de ${brand.copy.barterPluralTitle} • ${_todayDate()}',
               icon: Icons.admin_panel_settings,
             ),
             const SizedBox(height: 16),
@@ -177,7 +179,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             const SizedBox(height: 20),
 
             if (topInputs.isNotEmpty) ...[
-              const Text('Insumos Mais Retirados',
+              Text('${brand.copy.inputPluralTitle} Mais Retirados',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               const SizedBox(height: 12),
               _RankingBars(entries: topInputs, formatValue: formatCurrency, color: AppColors.input),
@@ -185,14 +187,14 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             ],
 
             if (grainEntries.isNotEmpty) ...[
-              const Text('Sacas a Receber por Grão',
+              Text('Sacas a Receber por ${brand.copy.grainTitle}',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               const SizedBox(height: 12),
               _GrainBreakdownCard(entries: grainEntries, total: sacksReceivable),
               const SizedBox(height: 20),
             ],
 
-            const Text('Permutas por Status',
+            Text('${brand.copy.barterPluralTitle} por Status',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),
             _StatusBreakdownCard(approved: approved, pending: pending, denied: denied),
@@ -201,11 +203,11 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Pendentes – Ação Necessária',
+                Text('Pendentes – Ação Necessária',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 TextButton(
                   onPressed: () => onNavigate(1),
-                  child: const Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
+                  child: Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
                 ),
               ],
             ),
@@ -220,14 +222,14 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             const SizedBox(height: 20),
 
             if (branchEntries.isNotEmpty) ...[
-              const Text('Volume por Filial',
+              Text('Volume por Filial',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               const SizedBox(height: 12),
               _RankingBars(entries: branchEntries, formatValue: formatSacks, color: AppColors.primaryAccent),
               const SizedBox(height: 20),
             ],
 
-            const Text('Atividade Recente',
+            Text('Atividade Recente',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),
             ...AppData.barters
@@ -248,17 +250,10 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
   }
 }
 
-/// Paleta dos grãos no painel (soja, milho, trigo, aveia...). Cíclica para
-/// suportar qualquer grão cadastrado sem prender o app à soja.
-const List<Color> _grainPalette = [
-  Color(0xFFE65100), // laranja terra (soja)
-  Color(0xFFF9A825), // amarelo (milho)
-  Color(0xFF8D6E63), // marrom (trigo)
-  Color(0xFF6D4C41), // marrom escuro (aveia)
-  Color(0xFF455A64), // azul ardósia (demais)
-];
-
-Color _grainColor(int i) => _grainPalette[i % _grainPalette.length];
+/// Cor do grão [i] no painel (soja, milho, trigo, aveia...). A série vem da
+/// marca ativa e é cíclica, então qualquer grão cadastrado ganha cor sem
+/// prender o app à soja — e sem prender o painel à paleta de um cliente.
+Color _grainColor(int i) => AppColors.series(i);
 
 /// Cartão-herói: as sacas a receber (compromisso de entrega das permutas
 /// aprovadas) como número-estrela, com o valor em R$ e o potencial em análise.
@@ -291,17 +286,17 @@ class _ReceivableHero extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Text('Sacas a Receber',
-                  style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 13, fontWeight: FontWeight.w600)),
+              Text('Sacas a Receber',
+                  style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 13, fontWeight: FontWeight.w600)),
               const Spacer(),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0x22FFFFFF),
+                  color: AppColors.onPrimaryOverlay,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text('$approvedCount aprovadas',
-                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+                    style: TextStyle(color: AppColors.onPrimary, fontSize: 11, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
@@ -310,12 +305,12 @@ class _ReceivableHero extends StatelessWidget {
             TextSpan(children: [
               TextSpan(
                 text: formatSacks(sacks),
-                style: const TextStyle(color: Colors.white, fontSize: 34, fontWeight: FontWeight.w800),
+                style: TextStyle(color: AppColors.onPrimary, fontSize: 34, fontWeight: FontWeight.w800),
               ),
             ]),
           ),
           Text('≈ ${formatCurrency(value)} em grãos na colheita',
-              style: const TextStyle(color: Color(0xAAFFFFFF), fontSize: 12)),
+              style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12)),
           const SizedBox(height: 14),
           InkWell(
             onTap: onTapPending,
@@ -323,22 +318,22 @@ class _ReceivableHero extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: const Color(0x1AFFFFFF),
+                color: AppColors.onPrimaryOverlay,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.hourglass_top, color: Color(0xDDFFFFFF), size: 18),
+                  Icon(Icons.hourglass_top, color: AppColors.onPrimaryMuted, size: 18),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       pendingCount > 0
                           ? '$pendingCount em análise • +${formatSacks(pendingSacks)} se aprovadas'
                           : 'Nenhuma permuta aguardando revisão',
-                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w500),
+                      style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
                   ),
-                  const Icon(Icons.chevron_right, color: Color(0xAAFFFFFF), size: 18),
+                  Icon(Icons.chevron_right, color: AppColors.onPrimarySubtle, size: 18),
                 ],
               ),
             ),
@@ -387,17 +382,17 @@ class _GrainBreakdownCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(entries[i].key,
-                        style: const TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
+                        style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
                   ),
                   Text(formatSacks(entries[i].value),
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                   const SizedBox(width: 8),
                   SizedBox(
                     width: 42,
                     child: Text(
                       total > 0 ? '${(entries[i].value / total * 100).round()}%' : '—',
                       textAlign: TextAlign.end,
-                      style: const TextStyle(fontSize: 12, color: AppColors.textLight),
+                      style: TextStyle(fontSize: 12, color: AppColors.textLight),
                     ),
                   ),
                 ],
@@ -490,12 +485,12 @@ class _StripCell extends StatelessWidget {
           fit: BoxFit.scaleDown,
           child: Text(value,
               maxLines: 1,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
         ),
         const SizedBox(height: 2),
         Text(label,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 11, color: AppColors.textMedium)),
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
       ],
     );
   }
@@ -528,11 +523,11 @@ class _RankingBars extends StatelessWidget {
                         child: Text(entries[i].key,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                            style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                       ),
                       const SizedBox(width: 8),
                       Text(formatValue(entries[i].value),
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                     ],
                   ),
                   const SizedBox(height: 5),
@@ -596,7 +591,7 @@ class _PendingActionCard extends StatelessWidget {
                     Row(
                       children: [
                         Text(barter.id,
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -620,7 +615,7 @@ class _PendingActionCard extends StatelessWidget {
                     Text('${barter.consultantName} • ${barter.producerName}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, color: AppColors.textMedium)),
+                        style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
                   ],
                 ),
               ),
@@ -632,12 +627,12 @@ class _PendingActionCard extends StatelessWidget {
                       barter.referenceValue > 0
                           ? formatSacks(barter.sacksToDeliver)
                           : '—',
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),
                   Text(barter.referenceGrainName.toLowerCase(),
-                      style: const TextStyle(fontSize: 10, color: AppColors.textLight)),
+                      style: TextStyle(fontSize: 10, color: AppColors.textLight)),
                 ],
               ),
-              const Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
+              Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
             ],
           ),
         ),
@@ -662,7 +657,7 @@ class _EmptyHint extends StatelessWidget {
             Icon(icon, color: AppColors.approved, size: 22),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(text, style: const TextStyle(fontSize: 13, color: AppColors.textMedium)),
+              child: Text(text, style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
             ),
           ],
         ),
@@ -724,7 +719,7 @@ class _LegendItem extends StatelessWidget {
         Row(children: [
           Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 4),
-          Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textMedium)),
+          Text(label, style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
         ]),
         const SizedBox(height: 4),
         Text('$count', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),

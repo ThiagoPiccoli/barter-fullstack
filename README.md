@@ -1,6 +1,6 @@
-# Barter — Permuta de Grãos por Insumos (fullstack)
+# agroBarter — Permuta de Grãos por Insumos (fullstack)
 
-Monorepo com o app e o backend do Barter:
+Monorepo com o app e o backend do agroBarter:
 
 ```
 barter-fullstack/
@@ -50,9 +50,9 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333       # emulador Android
 
 | Papel    | E-mail                      | Senha  |
 |----------|-----------------------------|--------|
-| Admin    | admin@barter.com.br         | 123456 |
-| Consultor | joao.silva@barter.com.br    | 123456 |
-| Consultor | ana.ferreira@barter.com.br  | 123456 |
+| Admin    | admin@agrobarter.com.br         | 123456 |
+| Consultor | joao.silva@agrobarter.com.br    | 123456 |
+| Consultor | ana.ferreira@agrobarter.com.br  | 123456 |
 
 (Os demais consultores do dataset também logam com `123456`.)
 

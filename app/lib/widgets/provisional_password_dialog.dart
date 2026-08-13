@@ -38,7 +38,7 @@ class _ProvisionalPasswordDialog extends StatelessWidget {
     final name = provisioned.consultant.name.split(' ').first;
 
     return AlertDialog(
-      icon: const Icon(Icons.key_outlined, color: AppColors.primary, size: 40),
+      icon: Icon(Icons.key_outlined, color: AppColors.primary, size: 40),
       title: Text(isReset ? 'Senha redefinida' : 'Consultor cadastrado'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -48,7 +48,7 @@ class _ProvisionalPasswordDialog extends StatelessWidget {
                 ? 'Passe esta senha para $name. As sessões abertas na conta dele foram encerradas.'
                 : 'Passe esta senha para $name entrar pela primeira vez.',
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 14, color: AppColors.textMedium),
+            style: TextStyle(fontSize: 14, color: AppColors.textMedium),
           ),
           const SizedBox(height: 16),
           _PasswordBox(password: provisioned.provisionalPassword),
@@ -60,7 +60,7 @@ class _ProvisionalPasswordDialog extends StatelessWidget {
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: AppColors.pending.withValues(alpha: 0.4)),
             ),
-            child: const Row(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.info_outline, size: 18, color: AppColors.pending),
@@ -124,7 +124,7 @@ class _PasswordBoxState extends State<_PasswordBox> {
             SelectableText(
               widget.password,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.w700,
                 fontFamily: 'monospace',
@@ -140,7 +140,7 @@ class _PasswordBoxState extends State<_PasswordBox> {
                 const SizedBox(width: 4),
                 Text(
                   _copied ? 'Copiada' : 'Toque para copiar',
-                  style: const TextStyle(fontSize: 12, color: AppColors.primaryMedium),
+                  style: TextStyle(fontSize: 12, color: AppColors.primaryMedium),
                 ),
               ],
             ),

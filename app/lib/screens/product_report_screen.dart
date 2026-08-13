@@ -79,11 +79,11 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
                       children: [
                         Icon(Icons.show_chart, size: 18, color: _accent),
                         const SizedBox(width: 6),
-                        const Text('Evolução do valor',
+                        Text('Evolução do valor',
                             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                         const Spacer(),
                         Text('R\$ / ${product.unit}',
-                            style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+                            style: TextStyle(fontSize: 11, color: AppColors.textLight)),
                       ],
                     ),
                   ),
@@ -120,11 +120,11 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
             children: [
               Icon(Icons.history, size: 18, color: _accent),
               const SizedBox(width: 6),
-              const Text('Linha do Tempo',
+              Text('Linha do Tempo',
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               const Spacer(),
               Text('${product.priceHistory.length} registros',
-                  style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+                  style: TextStyle(fontSize: 11, color: AppColors.textLight)),
             ],
           ),
           const SizedBox(height: 12),
@@ -176,8 +176,8 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(product.name,
-                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
-                    Text(product.unit, style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                    Text(product.unit, style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   ],
                 ),
               ),
@@ -191,9 +191,9 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Valor atual', style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+                  Text('Valor atual', style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
                   Text(formatCurrency(product.currentPrice),
-                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                      style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: AppColors.primary)),
                 ],
               ),
               const Spacer(),
@@ -247,7 +247,7 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
-                  color: selected ? Colors.white : _accent,
+                  color: selected ? AppColors.onPrimary : _accent,
                 )),
           ),
         ),
@@ -297,7 +297,7 @@ class _StatChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.divider.withValues(alpha: 0.4)),
       ),
@@ -308,9 +308,9 @@ class _StatChip extends StatelessWidget {
           Text(value,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textDark)),
           const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+          Text(label, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
         ],
       ),
     );
@@ -352,7 +352,7 @@ class _TimelineRow extends StatelessWidget {
                   width: 12,
                   height: 12,
                   decoration: BoxDecoration(
-                    color: isFirst ? accent : Colors.white,
+                    color: isFirst ? accent : AppColors.surface,
                     shape: BoxShape.circle,
                     border: Border.all(color: accent, width: 2),
                   ),
@@ -371,9 +371,9 @@ class _TimelineRow extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(formatCurrency(entry.price),
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                         Text('${_monthsFull[entry.changedAt.month]} ${entry.changedAt.year} • ${entry.changedBy}',
-                            style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+                            style: TextStyle(fontSize: 11, color: AppColors.textLight)),
                       ],
                     ),
                   ),
@@ -422,7 +422,7 @@ Future<void> showUpdateValueDialog(BuildContext context, ProductModel product, V
         children: [
           Text(product.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
           Text('Valor atual: ${formatCurrency(product.currentPrice)}',
-              style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
           const SizedBox(height: 16),
           TextField(
             controller: ctrl,
@@ -431,7 +431,7 @@ Future<void> showUpdateValueDialog(BuildContext context, ProductModel product, V
             autofocus: true,
           ),
           const SizedBox(height: 8),
-          const Text('Este valor será usado como taxa de troca em todas as novas permutas.',
+          Text('Este valor será usado como taxa de troca em todas as novas permutas.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight)),
         ],
       ),
@@ -449,7 +449,7 @@ Future<void> showUpdateValueDialog(BuildContext context, ProductModel product, V
               Navigator.pop(ctx);
               onUpdated();
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 content: Text('Valor atualizado com sucesso!'),
                 backgroundColor: AppColors.approved,
               ));
@@ -497,7 +497,7 @@ Future<void> showCategoryAssignDialog(BuildContext context, ProductModel product
               onChanged: (v) => setLocal(() => selected = v),
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'A pasta agrupa insumos e pode exigir um mínimo (% do total ou R\$/ha) '
               'para que a permuta possa ser enviada.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
@@ -516,7 +516,7 @@ Future<void> showCategoryAssignDialog(BuildContext context, ProductModel product
                 Navigator.pop(ctx);
                 onUpdated();
                 if (!context.mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                   content: Text('Categoria atualizada!'),
                   backgroundColor: AppColors.approved,
                 ));
@@ -548,7 +548,7 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
         children: [
           Text(product.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
           Text('Medido em ${product.unit}',
-              style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
           const SizedBox(height: 16),
           TextField(
             controller: ctrl,
@@ -561,7 +561,7 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
             autofocus: true,
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Cada permuta exigirá no mínimo esta quantidade × a área (ha) do '
             'produtor. Deixe vazio ou 0 para não exigir este insumo.',
             style: TextStyle(fontSize: 11, color: AppColors.textLight),
@@ -581,7 +581,7 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
               Navigator.pop(ctx);
               onUpdated();
               if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 content: Text('Exigência por hectare atualizada!'),
                 backgroundColor: AppColors.approved,
               ));

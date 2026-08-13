@@ -84,7 +84,22 @@
       "Bash(node -e \"const D=require\\('better-sqlite3'\\);const d=new D\\('prisma/dev.db'\\);console.log\\(' journal:',d.pragma\\('journal_mode',{simple:true}\\),'| tabelas:',d.prepare\\(\\\\\"SELECT count\\(*\\) c FROM sqlite_master WHERE type='table'\\\\\"\\).get\\(\\).c\\);d.close\\(\\)\")",
       "Bash(node -e \"const D=require\\('better-sqlite3'\\);const d=new D\\('prisma/dev.db'\\);d.pragma\\('journal_mode = WAL'\\);console.log\\('  journal:',d.pragma\\('journal_mode',{simple:true}\\)\\);d.close\\(\\)\")",
       "Bash(node -e \"const D=require\\('better-sqlite3'\\);const d=new D\\('prisma/dev.db'\\);d.pragma\\('journal_mode = WAL'\\);console.log\\('journal:',d.pragma\\('journal_mode',{simple:true}\\)\\);d.close\\(\\)\")",
-      "Bash(node -e \"const D=require\\('better-sqlite3'\\);const d=new D\\('prisma/dev.db'\\);d.pragma\\('journal_mode = WAL'\\);d.close\\(\\)\")"
+      "Bash(node -e \"const D=require\\('better-sqlite3'\\);const d=new D\\('prisma/dev.db'\\);d.pragma\\('journal_mode = WAL'\\);d.close\\(\\)\")",
+      "Bash(flutter --version)",
+      "Bash(python3 /private/tmp/claude-501/-Users-thiagopiccoli-Projects-barter-fullstack/6468c05d-56e7-419e-a460-5f01ec7bd358/scratchpad/deconst.py)",
+      "Bash(dart fix *)",
+      "Bash(plutil -lint ios/Runner/Info.plist)",
+      "Bash(xmllint --noout android/app/src/main/AndroidManifest.xml)",
+      "Bash(python3 -c \"import json;json.load\\(open\\('web/manifest.json'\\)\\);print\\('web/manifest.json: OK'\\)\")",
+      "Bash(python3 -c \"import json,sys; print\\(json.dumps\\(json.load\\(sys.stdin\\)['scripts'], indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(curl -sf http://localhost:3333/api/v1/docs -o /dev/null)",
+      "Bash(curl -s -X POST http://localhost:3333/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@agrobarter.com.br\",\"password\":\"123456\"}')",
+      "Bash(curl -s -X POST http://localhost:3333/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"joao.silva@agrobarter.com.br\",\"password\":\"123456\"}')",
+      "Bash(git mv *)",
+      "Bash(flutter build *)",
+      "Bash(/Users/thiagopiccoli/Library/Android/sdk/build-tools/*/aapt2 dump *)",
+      "Bash(unzip -p build/app/outputs/flutter-apk/app-debug.apk AndroidManifest.xml)",
+      "Bash(xmllint --noout android/app/src/main/res/xml/network_security_config.xml)"
     ],
     "additionalDirectories": [
       "/tmp",

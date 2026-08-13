@@ -4,6 +4,8 @@ import '../theme/app_theme.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
+import '../branding/active_brand.dart';
+import '../branding/brand_wordmark.dart';
 import 'destination.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -52,9 +54,9 @@ class _LoginScreenState extends State<LoginScreen> {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.support_agent, color: AppColors.primary, size: 40),
+        icon: Icon(Icons.support_agent, color: AppColors.primary, size: 40),
         title: const Text('Esqueceu a senha?'),
-        content: const Text(
+        content: Text(
           'Peça ao administrador da cooperativa para cadastrar uma senha provisória '
           'para você. Ao entrar com ela, o app pede que você defina uma senha só sua.',
           textAlign: TextAlign.center,
@@ -79,22 +81,22 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             children: [
               const SizedBox(height: 60),
-              const BarterLogo(size: 60),
-              const SizedBox(height: 8),
-              const Text(
-                'Permuta de Grãos por Insumos',
-                style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 14, letterSpacing: 1),
+              const BrandWordmark(size: 60, showTagline: false),
+              const SizedBox(height: 10),
+              Text(
+                brand.identity.tagline,
+                style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 14, letterSpacing: 0.8),
               ),
               const SizedBox(height: 50),
               Container(
                 margin: const EdgeInsets.symmetric(horizontal: 24),
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: AppColors.white,
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.15),
+                      color: AppColors.cardShadow,
                       blurRadius: 20,
                       offset: const Offset(0, 8),
                     )
@@ -103,12 +105,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text(
+                    Text(
                       'Bem-vindo',
                       style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.textDark),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Acesse sua conta para continuar',
                       style: TextStyle(fontSize: 13, color: AppColors.textMedium),
                     ),
@@ -116,10 +118,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     TextField(
                       controller: _emailCtrl,
                       keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'E-mail',
-                        prefixIcon: Icon(Icons.email_outlined),
-                        hintText: 'admin@barter.com.br',
+                        prefixIcon: const Icon(Icons.email_outlined),
+                        hintText: 'admin@${brand.identity.emailDomain}',
                       ),
                     ),
                     const SizedBox(height: 16),
@@ -140,7 +142,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       alignment: Alignment.centerRight,
                       child: TextButton(
                         onPressed: _showPasswordHelp,
-                        child: const Text('Esqueci minha senha',
+                        child: Text('Esqueci minha senha',
                             style: TextStyle(color: AppColors.primaryMedium, fontSize: 12)),
                       ),
                     ),
@@ -150,9 +152,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: ElevatedButton(
                         onPressed: _loading ? null : _login,
                         child: _loading
-                            ? const SizedBox(
+                            ? SizedBox(
                                 width: 22, height: 22,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
                             : const Text('Entrar'),
                       ),
                     ),
@@ -164,7 +166,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 16),
                       const Divider(),
                       const SizedBox(height: 12),
-                      const Text(
+                      Text(
                         'Acesso rápido (demonstração):',
                         style: TextStyle(fontSize: 11, color: AppColors.textLight),
                         textAlign: TextAlign.center,
@@ -175,14 +177,14 @@ class _LoginScreenState extends State<LoginScreen> {
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: () {
-                                _emailCtrl.text = 'admin@barter.com.br';
+                                _emailCtrl.text = 'admin@${brand.identity.emailDomain}';
                                 _passCtrl.text = '123456';
                               },
                               icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
                               label: const Text('Admin', style: TextStyle(fontSize: 12)),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: AppColors.primary,
-                                side: const BorderSide(color: AppColors.primary),
+                                side: BorderSide(color: AppColors.primary),
                                 padding: const EdgeInsets.symmetric(vertical: 10),
                               ),
                             ),
@@ -191,14 +193,14 @@ class _LoginScreenState extends State<LoginScreen> {
                           Expanded(
                             child: OutlinedButton.icon(
                               onPressed: () {
-                                _emailCtrl.text = 'joao.silva@barter.com.br';
+                                _emailCtrl.text = 'joao.silva@${brand.identity.emailDomain}';
                                 _passCtrl.text = '123456';
                               },
                               icon: const Icon(Icons.person_outlined, size: 16),
                               label: const Text('Consultor', style: TextStyle(fontSize: 12)),
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: AppColors.primaryMedium,
-                                side: const BorderSide(color: AppColors.primaryMedium),
+                                side: BorderSide(color: AppColors.primaryMedium),
                                 padding: const EdgeInsets.symmetric(vertical: 10),
                               ),
                             ),
@@ -210,9 +212,9 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 40),
-              const Text(
-                'v1.0.0 – Barter App © 2026',
-                style: TextStyle(color: Color(0x88FFFFFF), fontSize: 11),
+              Text(
+                'v1.0.0 – ${brand.identity.legalName} © 2026',
+                style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11),
               ),
             ],
           ),

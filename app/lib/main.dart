@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'branding/active_brand.dart';
 import 'theme/app_theme.dart';
 import 'services/session.dart';
 import 'screens/bootstrap_screen.dart';
@@ -16,7 +17,7 @@ class BarterApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Barter App – Permuta de Grãos',
+      title: brand.identity.appTitle,
       theme: AppTheme.theme,
       debugShowCheckedModeBanner: false,
       // Chaves globais: a expiração de sessão é detectada na camada de dados,

@@ -151,7 +151,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
               },
             ),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'A área define os insumos obrigatórios e a quantidade mínima de cada '
               'um nas novas permutas deste produtor. O produtor só aparece para o '
               'consultor dono da carteira escolhida acima.',
@@ -400,13 +400,13 @@ class _NewProductScreenState extends State<NewProductScreen> {
                   return null;
                 },
               ),
-              const Text(
+              Text(
                 'Com exigência por hectare, este insumo passa a ser obrigatório em toda '
                 'permuta nova, no mínimo taxa × área do produtor.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ] else
-              const Text(
+              Text(
                 'O valor de referência é a taxa de câmbio da permuta: é ele que converte '
                 'o custo dos insumos em sacas deste grão.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
@@ -418,10 +418,10 @@ class _NewProductScreenState extends State<NewProductScreen> {
               child: ElevatedButton.icon(
                 onPressed: _saving ? null : _save,
                 icon: _saving
-                    ? const SizedBox(
+                    ? SizedBox(
                         width: 16,
                         height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary),
                       )
                     : const Icon(Icons.add, size: 18),
                 label: Text('Cadastrar $_label'),
@@ -512,7 +512,7 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
           children: [
             _EditField(controller: _name, label: 'Nome da pasta', icon: Icons.folder_outlined, required: true),
             const SizedBox(height: 6),
-            const Text('Regra de mínimo',
+            Text('Regra de mínimo',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 8),
             RadioGroup<CategoryRuleType>(
@@ -557,7 +557,7 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
               ),
             ],
             const SizedBox(height: 4),
-            const Text(
+            Text(
               'Enquanto o mínimo da pasta não for atingido, o consultor não consegue '
               'enviar a permuta. Edite o valor sempre que o período mudar.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
@@ -585,7 +585,7 @@ class _RuleOption extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       dense: true,
       title: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-      subtitle: Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+      subtitle: Text(subtitle, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
     );
   }
 }
@@ -603,18 +603,18 @@ Future<void> confirmDeleteRegistration(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      icon: const Icon(Icons.delete_outline, color: AppColors.denied, size: 40),
+      icon: Icon(Icons.delete_outline, color: AppColors.denied, size: 40),
       title: Text(title),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text('Excluir "$name"? Esta ação não pode ser desfeita.',
-              textAlign: TextAlign.center, style: const TextStyle(fontSize: 14, color: AppColors.textMedium)),
+              textAlign: TextAlign.center, style: TextStyle(fontSize: 14, color: AppColors.textMedium)),
           if (barterCount > 0) ...[
             const SizedBox(height: 8),
             Text('As $barterCount permuta(s) já registradas serão mantidas no histórico.',
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12, color: AppColors.textLight)),
+                style: TextStyle(fontSize: 12, color: AppColors.textLight)),
           ],
         ],
       ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -41,8 +42,8 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
         actions: const [LogoutButton()],
         bottom: TabBar(
           controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.grass_outlined, size: 18), text: 'Grãos'),
+          tabs: [
+            Tab(icon: const Icon(Icons.grass_outlined, size: 18), text: brand.copy.grainPluralTitle),
             Tab(icon: Icon(Icons.science_outlined, size: 18), text: 'Insumos'),
             Tab(icon: Icon(Icons.folder_outlined, size: 18), text: 'Categorias'),
           ],
@@ -127,7 +128,7 @@ class _ProductPriceList extends StatelessWidget {
           child: OutlinedButton.icon(
             onPressed: () => _create(context),
             icon: Icon(_isGrain ? Icons.grass : Icons.science_outlined, size: 18),
-            label: Text(_isGrain ? 'Novo grão' : 'Novo insumo'),
+            label: Text(_isGrain ? 'Novo ${brand.copy.grain}' : 'Novo ${brand.copy.input}'),
             style: OutlinedButton.styleFrom(
               foregroundColor: _isGrain ? AppColors.grain : AppColors.input,
               side: BorderSide(color: _isGrain ? AppColors.grain : AppColors.input),
@@ -137,7 +138,7 @@ class _ProductPriceList extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         if (filtered.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
             child: Center(
               child: Column(
@@ -175,7 +176,9 @@ class _PriceCard extends StatelessWidget {
   void _delete(BuildContext context) {
     confirmDeleteRegistration(
       context,
-      title: product.type == ProductType.grain ? 'Excluir grão' : 'Excluir insumo',
+      title: product.type == ProductType.grain
+          ? 'Excluir ${brand.copy.grain}'
+          : 'Excluir ${brand.copy.input}',
       name: product.name,
       barterCount: _barterCount(),
       onConfirm: () async {
@@ -227,8 +230,8 @@ class _PriceCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(product.name,
-                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        Text(product.unit, style: const TextStyle(fontSize: 12, color: AppColors.textLight)),
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                        Text(product.unit, style: TextStyle(fontSize: 12, color: AppColors.textLight)),
                       ],
                     ),
                   ),
@@ -236,7 +239,7 @@ class _PriceCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(formatCurrency(product.currentPrice),
-                          style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                          style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppColors.primary)),
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -255,7 +258,7 @@ class _PriceCard extends StatelessWidget {
                   ),
                   IconButton(
                     onPressed: () => _delete(context),
-                    icon: const Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
+                    icon: Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
                     tooltip: 'Excluir do catálogo',
                     visualDensity: VisualDensity.compact,
                   ),
@@ -280,7 +283,7 @@ class _PriceCard extends StatelessWidget {
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                   ),
-                  const Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
+                  Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
                 ],
               ),
               if (product.type == ProductType.input) ...[
@@ -409,14 +412,14 @@ class _CategoryList extends StatelessWidget {
             label: const Text('Nova categoria'),
             style: OutlinedButton.styleFrom(
               foregroundColor: AppColors.input,
-              side: const BorderSide(color: AppColors.input),
+              side: BorderSide(color: AppColors.input),
               padding: const EdgeInsets.symmetric(vertical: 12),
             ),
           ),
         ),
         const SizedBox(height: 8),
         if (filtered.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 32),
             child: Center(
               child: Text('Nenhuma categoria encontrada', style: TextStyle(color: AppColors.textLight)),
@@ -464,7 +467,7 @@ class _CategoryCard extends StatelessWidget {
                     width: 38,
                     height: 38,
                     decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
-                    child: const Icon(Icons.folder, color: AppColors.input, size: 20),
+                    child: Icon(Icons.folder, color: AppColors.input, size: 20),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -472,15 +475,15 @@ class _CategoryCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(category.name,
-                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                         Text('$inputCount insumo(s)',
-                            style: const TextStyle(fontSize: 12, color: AppColors.textLight)),
+                            style: TextStyle(fontSize: 12, color: AppColors.textLight)),
                       ],
                     ),
                   ),
                   IconButton(
                     onPressed: onDelete,
-                    icon: const Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
+                    icon: Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
                     tooltip: 'Excluir',
                     visualDensity: VisualDensity.compact,
                   ),

@@ -33,14 +33,14 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
       .set('Authorization', await asUser(ADMIN))
       .send({
         fullName: 'Novo Consultor',
-        email: 'novo.consultor@barter.com.br',
+        email: 'novo.consultor@agrobarter.com.br',
         branch: 'Filial 99',
       });
     expect(created.status).toBe(201);
     expect(created.body.data.role).toBe('consultant');
 
     const login = await request(app.getHttpServer()).post('/api/v1/auth/login').send({
-      email: 'novo.consultor@barter.com.br',
+      email: 'novo.consultor@agrobarter.com.br',
       password: created.body.data.provisionalPassword,
     });
     expect(login.status).toBe(200);
@@ -56,7 +56,7 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
     await request(app.getHttpServer())
       .post('/api/v1/consultants')
       .set('Authorization', admin)
-      .send({ fullName: 'Efêmero', email: 'efemero@barter.com.br', branch: 'F1' })
+      .send({ fullName: 'Efêmero', email: 'efemero@agrobarter.com.br', branch: 'F1' })
       .expect(201);
 
     const list = await request(app.getHttpServer())
@@ -71,7 +71,7 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
     const updated = await request(app.getHttpServer())
       .put('/api/v1/consultants/2')
       .set('Authorization', admin)
-      .send({ fullName: 'João Silva', email: 'joao.silva@barter.com.br', branch: 'Filial 02' })
+      .send({ fullName: 'João Silva', email: 'joao.silva@agrobarter.com.br', branch: 'Filial 02' })
       .expect(200);
     expect(updated.body.data.provisionalPassword).toBeUndefined();
   });

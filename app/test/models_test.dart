@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:barter_app/models/models.dart';
+import 'package:agrobarter_app/models/models.dart';
 
 /// O parse do JSON da API é o ponto em que uma mudança no servidor chega ao
 /// app já instalado no aparelho de alguém. Um campo novo é inofensivo; um
@@ -84,7 +84,7 @@ void main() {
       final provisioned = ProvisionedConsultant.fromJson({
         'id': 7,
         'fullName': 'Nova Consultora',
-        'email': 'nova@barter.com.br',
+        'email': 'nova@agrobarter.com.br',
         'role': 'consultant',
         'branch': 'Filial 03',
         'createdAt': '2026-08-13T10:00:00.000Z',

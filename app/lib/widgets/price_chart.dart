@@ -146,7 +146,7 @@ class _ChartPainter extends CustomPainter {
     if (!mini) {
       for (int i = 0; i < visibleCount && i < n; i++) {
         final p = fullPoints[i];
-        canvas.drawCircle(p, 3.5, Paint()..color = Colors.white);
+        canvas.drawCircle(p, 3.5, Paint()..color = AppColors.surface);
         canvas.drawCircle(p, 3.5, Paint()..color = color..style = PaintingStyle.stroke..strokeWidth = 2);
       }
     }
@@ -155,7 +155,7 @@ class _ChartPainter extends CustomPainter {
     if (progress > 0.985) {
       final last = fullPoints.last;
       canvas.drawCircle(last, mini ? 3 : 5.5, Paint()..color = color);
-      canvas.drawCircle(last, mini ? 3 : 5.5, Paint()..color = Colors.white..style = PaintingStyle.stroke..strokeWidth = 2);
+      canvas.drawCircle(last, mini ? 3 : 5.5, Paint()..color = AppColors.surface..style = PaintingStyle.stroke..strokeWidth = 2);
       if (!mini) {
         canvas.drawCircle(last, 9, Paint()..color = color.withValues(alpha: 0.18));
       }

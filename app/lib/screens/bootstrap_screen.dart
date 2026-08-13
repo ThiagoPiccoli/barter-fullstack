@@ -3,7 +3,8 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
-import '../widgets/common_widgets.dart';
+import '../branding/active_brand.dart';
+import '../branding/brand_wordmark.dart';
 import 'destination.dart';
 import 'login_screen.dart';
 
@@ -61,15 +62,15 @@ class _BootstrapScreenState extends State<BootstrapScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const BarterLogo(size: 60),
-                const SizedBox(height: 8),
-                const Text(
-                  'Permuta de Grãos por Insumos',
-                  style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 14, letterSpacing: 1),
+                const BrandWordmark(size: 60, showTagline: false),
+                const SizedBox(height: 10),
+                Text(
+                  brand.identity.tagline,
+                  style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 14, letterSpacing: 0.8),
                 ),
                 const SizedBox(height: 44),
                 if (_error == null)
-                  const CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                  CircularProgressIndicator(color: AppColors.onPrimary, strokeWidth: 2)
                 else
                   _RetryBlock(message: _error!, onRetry: _resume),
               ],
@@ -93,12 +94,12 @@ class _RetryBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        const Icon(Icons.cloud_off_outlined, color: Color(0xAAFFFFFF), size: 40),
+        Icon(Icons.cloud_off_outlined, color: AppColors.onPrimarySubtle, size: 40),
         const SizedBox(height: 12),
         Text(
           message,
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Colors.white, fontSize: 14),
+          style: TextStyle(color: AppColors.onPrimary, fontSize: 14),
         ),
         const SizedBox(height: 24),
         SizedBox(
@@ -109,7 +110,7 @@ class _RetryBlock extends StatelessWidget {
             icon: const Icon(Icons.refresh, size: 18),
             label: const Text('Tentar novamente'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.white,
+              backgroundColor: AppColors.onPrimary,
               foregroundColor: AppColors.primary,
             ),
           ),
@@ -119,9 +120,9 @@ class _RetryBlock extends StatelessWidget {
           onPressed: () => Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const LoginScreen()),
           ),
-          child: const Text(
+          child: Text(
             'Entrar com outra conta',
-            style: TextStyle(color: Color(0xAAFFFFFF), fontSize: 13),
+            style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 13),
           ),
         ),
       ],

@@ -110,7 +110,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 isProducers
                     ? '${producers.length} produtor(es)'
                     : '${consultants.length} consultor(es)',
-                style: const TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
+                style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
               ),
             ),
           ),
@@ -217,7 +217,7 @@ class _SegmentedToggle extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: const Color(0xFFEDEDED),
+        color: AppColors.disabledBg,
         borderRadius: BorderRadius.circular(14),
       ),
       child: Row(
@@ -272,7 +272,7 @@ class _SegmentedToggle extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 16, color: selected ? Colors.white : AppColors.textMedium),
+            Icon(icon, size: 16, color: selected ? AppColors.onPrimary : AppColors.textMedium),
             const SizedBox(width: 6),
             Flexible(
               child: Text(label,
@@ -280,21 +280,21 @@ class _SegmentedToggle extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
-                    color: selected ? Colors.white : AppColors.textMedium,
+                    color: selected ? AppColors.onPrimary : AppColors.textMedium,
                   )),
             ),
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
               decoration: BoxDecoration(
-                color: selected ? Colors.white.withValues(alpha: 0.25) : AppColors.textLight.withValues(alpha: 0.20),
+                color: selected ? AppColors.onPrimary.withValues(alpha: 0.25) : AppColors.textLight.withValues(alpha: 0.20),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Text('$count',
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    color: selected ? Colors.white : AppColors.textMedium,
+                    color: selected ? AppColors.onPrimary : AppColors.textMedium,
                   )),
             ),
           ],
@@ -338,14 +338,14 @@ class _PersonCard extends StatelessWidget {
                     backgroundColor: accent,
                     radius: 24,
                     child: Text(initials,
-                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                        style: TextStyle(color: AppColors.onPrimary, fontSize: 14, fontWeight: FontWeight.bold)),
                   ),
                   Positioned(
                     bottom: -2,
                     right: -2,
                     child: Container(
                       padding: const EdgeInsets.all(3),
-                      decoration: const BoxDecoration(color: AppColors.white, shape: BoxShape.circle),
+                      decoration: BoxDecoration(color: AppColors.surface, shape: BoxShape.circle),
                       child: Icon(badgeIcon, size: 12, color: accent),
                     ),
                   ),
@@ -357,17 +357,17 @@ class _PersonCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(name,
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                     const SizedBox(height: 2),
                     Text(subtitle,
-                        style: const TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                         overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 8),
                     Wrap(spacing: 6, runSpacing: 4, children: chips),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: AppColors.textLight),
+              Icon(Icons.chevron_right, color: AppColors.textLight),
             ],
           ),
         ),
@@ -404,9 +404,9 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.search_off, size: 48, color: AppColors.textLight),
+          Icon(Icons.search_off, size: 48, color: AppColors.textLight),
           const SizedBox(height: 8),
-          Text(label, style: const TextStyle(color: AppColors.textLight)),
+          Text(label, style: TextStyle(color: AppColors.textLight)),
         ],
       ),
     );

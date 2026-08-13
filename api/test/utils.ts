@@ -42,6 +42,6 @@ export async function loginAs(app: INestApplication, email: string): Promise<str
   return response.body.data.token as string;
 }
 
-export const ADMIN = 'admin@barter.com.br';
-export const JOAO = 'joao.silva@barter.com.br';
-export const ANA = 'ana.ferreira@barter.com.br';
+export const ADMIN = 'admin@agrobarter.com.br';
+export const JOAO = 'joao.silva@agrobarter.com.br';
+export const ANA = 'ana.ferreira@agrobarter.com.br';

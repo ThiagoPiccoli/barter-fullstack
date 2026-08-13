@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:barter_app/services/barter_math.dart';
+import 'package:agrobarter_app/services/barter_math.dart';
 
 /// ESPELHO de `api/src/barters/barter-math.spec.ts`.
 ///

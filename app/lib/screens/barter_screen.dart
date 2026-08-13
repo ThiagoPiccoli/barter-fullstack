@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -215,8 +216,8 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.fact_check_outlined, color: AppColors.primary, size: 40),
-        title: const Text('Confirmar Permuta'),
+        icon: Icon(Icons.fact_check_outlined, color: AppColors.primary, size: 40),
+        title: Text('Confirmar ${brand.copy.barterTitle}'),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
@@ -226,7 +227,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               children: [
                 _DialogLine('Produtor', producer.name),
                 const SizedBox(height: 8),
-                const Text('Insumos retirados',
+                Text('Insumos retirados',
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 const SizedBox(height: 4),
                 Container(
@@ -347,15 +348,15 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.swap_horiz, color: AppColors.approved, size: 48),
-        title: const Text('Permuta Enviada!'),
+        icon: Icon(Icons.swap_horiz, color: AppColors.approved, size: 48),
+        title: Text('${brand.copy.barterTitle} Enviada!'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('Permuta ${barter.id} registrada com sucesso.',
                 textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               'Sua proposta de troca foi enviada para análise do administrador.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
@@ -427,7 +428,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Nova Permuta'),
+        title: Text('Nova ${brand.copy.barterTitle}'),
         actions: const [LogoutButton()],
         bottom: producer == null
             ? null
@@ -576,7 +577,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
             radius: 18,
             backgroundColor: AppColors.primary,
             child: Text(p.avatarInitials,
-                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.bold)),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -584,14 +585,14 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(p.name,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark),
                     overflow: TextOverflow.ellipsis),
                 Row(
                   children: [
-                    const Icon(Icons.straighten, size: 12, color: AppColors.primary),
+                    Icon(Icons.straighten, size: 12, color: AppColors.primary),
                     const SizedBox(width: 3),
                     Text('${p.areaLabel} • ${p.city}',
-                        style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   ],
                 ),
               ],
@@ -687,7 +688,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
         padding: const EdgeInsets.symmetric(vertical: 24),
         child: Center(
           child: Text('Nenhum item encontrado para "$_searchQuery"',
-              style: const TextStyle(fontSize: 13, color: AppColors.textLight)),
+              style: TextStyle(fontSize: 13, color: AppColors.textLight)),
         ),
       );
 
@@ -699,13 +700,13 @@ class _NewBarterScreenState extends State<NewBarterScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.group_off_outlined, size: 56, color: AppColors.textLight),
+              Icon(Icons.group_off_outlined, size: 56, color: AppColors.textLight),
               const SizedBox(height: 12),
-              const Text('Sua carteira de produtores está vazia',
+              Text('Sua carteira de produtores está vazia',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               const SizedBox(height: 6),
-              const Text(
+              Text(
                 'Peça ao administrador para cadastrar produtores na sua carteira '
                 'antes de registrar uma permuta.',
                 textAlign: TextAlign.center,
@@ -723,9 +724,9 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
       decoration: BoxDecoration(
-        color: AppColors.white,
+        color: AppColors.surface,
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.08), blurRadius: 10, offset: const Offset(0, -4)),
+          BoxShadow(color: AppColors.cardShadow, blurRadius: 10, offset: const Offset(0, -4)),
         ],
       ),
       child: SafeArea(
@@ -736,12 +737,12 @@ class _NewBarterScreenState extends State<NewBarterScreen>
             if (_unmetCategories.isNotEmpty) ...[
               Row(
                 children: [
-                  const Icon(Icons.lock_outline, size: 14, color: AppColors.pending),
+                  Icon(Icons.lock_outline, size: 14, color: AppColors.pending),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       'Mínimo não atingido: ${_unmetCategories.map((c) => c.name).join(', ')}',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending),
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -751,13 +752,13 @@ class _NewBarterScreenState extends State<NewBarterScreen>
             ],
             Row(
               children: [
-                const Icon(Icons.local_shipping_outlined, size: 14, color: AppColors.textMedium),
+                Icon(Icons.local_shipping_outlined, size: 14, color: AppColors.textMedium),
                 const SizedBox(width: 6),
                 Text(
                   grain != null
                       ? 'Entregar: ${formatSacks(sacks)} ${grain.name.toLowerCase()} • $inputCount insumo(s)'
                       : 'Escolha insumos e grão para continuar',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
                   overflow: TextOverflow.ellipsis,
                 ),
               ],
@@ -769,7 +770,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               child: ElevatedButton.icon(
                 onPressed: _canSubmit ? _onSubmitPressed : null,
                 icon: const Icon(Icons.swap_horiz, size: 18),
-                label: const Text('Enviar Permuta'),
+                label: Text('Enviar ${brand.copy.barterTitle}'),
               ),
             ),
           ],
@@ -866,7 +867,7 @@ class _CategoryRuleTile extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(name,
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               ),
               Text('${(progress * 100).round()}%',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: color)),
@@ -884,7 +885,7 @@ class _CategoryRuleTile extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(met ? 'Exigência atingida • $detail' : 'Exigência: $detail',
-              style: const TextStyle(fontSize: 11, color: AppColors.textMedium)),
+              style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
         ],
       ),
     );
@@ -958,7 +959,7 @@ class _InputTileState extends State<_InputTile> {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
-                  child: const Icon(Icons.science_outlined, color: AppColors.input, size: 20),
+                  child: Icon(Icons.science_outlined, color: AppColors.input, size: 20),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -969,7 +970,7 @@ class _InputTileState extends State<_InputTile> {
                         children: [
                           Flexible(
                             child: Text(product.name,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                           ),
                           if (_required) ...[
@@ -981,14 +982,14 @@ class _InputTileState extends State<_InputTile> {
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Text('mín. ${formatQty(minQty)} ${product.unit}',
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                       fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.input)),
                             ),
                           ],
                         ],
                       ),
                       Text(_required ? 'Obrigatório • medido em ${product.unit}' : 'Medido em ${product.unit}',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textLight)),
+                          style: TextStyle(fontSize: 12, color: AppColors.textLight)),
                     ],
                   ),
                 ),
@@ -1029,7 +1030,7 @@ class _InputTileState extends State<_InputTile> {
                 if (qty > 0)
                   Text(
                     '${formatQty(qty)} ${product.unit}',
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.input),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.input),
                   ),
               ],
             ),
@@ -1081,7 +1082,7 @@ class _GrainChoiceTile extends StatelessWidget {
                   width: 38,
                   height: 38,
                   decoration: BoxDecoration(color: AppColors.grainBg, borderRadius: BorderRadius.circular(10)),
-                  child: const Icon(Icons.grass, color: AppColors.grain, size: 20),
+                  child: Icon(Icons.grass, color: AppColors.grain, size: 20),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -1089,13 +1090,13 @@ class _GrainChoiceTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(product.name,
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                       Text('Pago em ${product.unit}',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textLight)),
+                          style: TextStyle(fontSize: 12, color: AppColors.textLight)),
                       if (enabled) ...[
                         const SizedBox(height: 2),
                         Text('≈ ${formatSacks(sacksNeeded)} para pagar os insumos',
-                            style: const TextStyle(fontSize: 11, color: AppColors.grain, fontWeight: FontWeight.w600)),
+                            style: TextStyle(fontSize: 11, color: AppColors.grain, fontWeight: FontWeight.w600)),
                       ],
                     ],
                   ),
@@ -1137,7 +1138,7 @@ class _ProducerChoiceTile extends StatelessWidget {
                 radius: 22,
                 backgroundColor: AppColors.primarySurface,
                 child: Text(producer.avatarInitials,
-                    style: const TextStyle(color: AppColors.primary, fontSize: 14, fontWeight: FontWeight.bold)),
+                    style: TextStyle(color: AppColors.primary, fontSize: 14, fontWeight: FontWeight.bold)),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -1145,10 +1146,10 @@ class _ProducerChoiceTile extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(producer.name,
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                     const SizedBox(height: 2),
                     Text(producer.location,
-                        style: const TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                         overflow: TextOverflow.ellipsis),
                     const SizedBox(height: 6),
                     Container(
@@ -1160,10 +1161,10 @@ class _ProducerChoiceTile extends StatelessWidget {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.straighten, size: 12, color: AppColors.primary),
+                          Icon(Icons.straighten, size: 12, color: AppColors.primary),
                           const SizedBox(width: 4),
                           Text('Área: ${producer.areaLabel}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.primary)),
                         ],
                       ),
@@ -1171,7 +1172,7 @@ class _ProducerChoiceTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right, color: AppColors.textLight),
+              Icon(Icons.chevron_right, color: AppColors.textLight),
             ],
           ),
         ),
@@ -1195,11 +1196,11 @@ class _StepBtn extends StatelessWidget {
         width: 32,
         height: 32,
         decoration: BoxDecoration(
-          color: enabled ? color.withValues(alpha: 0.12) : Colors.grey.shade100,
+          color: enabled ? color.withValues(alpha: 0.12) : AppColors.disabledBg,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: enabled ? color : Colors.grey.shade300),
+          border: Border.all(color: enabled ? color : AppColors.divider),
         ),
-        child: Icon(icon, size: 16, color: enabled ? color : Colors.grey.shade400),
+        child: Icon(icon, size: 16, color: enabled ? color : AppColors.disabledFg),
       ),
     );
   }

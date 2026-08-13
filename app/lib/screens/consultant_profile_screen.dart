@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -39,14 +40,14 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.lock_reset, color: AppColors.pending, size: 40),
+        icon: Icon(Icons.lock_reset, color: AppColors.pending, size: 40),
         title: const Text('Redefinir senha?'),
         content: Text(
           'Uma nova senha provisória será gerada para ${consultant.name.split(' ').first}, '
           'e a senha atual deixa de valer.\n\n'
           'Qualquer sessão aberta nesta conta será encerrada — inclusive no aparelho dele.',
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 14, color: AppColors.textMedium),
+          style: TextStyle(fontSize: 14, color: AppColors.textMedium),
         ),
         actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
@@ -113,18 +114,18 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                   backgroundColor: AppColors.input,
                   radius: 40,
                   child: Text(consultant.avatarInitials,
-                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                      style: TextStyle(color: AppColors.onPrimary, fontSize: 24, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
                 Text(consultant.name,
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 Text(consultant.branch,
-                    style: const TextStyle(fontSize: 13, color: AppColors.textMedium), textAlign: TextAlign.center),
+                    style: TextStyle(fontSize: 13, color: AppColors.textMedium), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                   decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(20)),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(Icons.badge_outlined, size: 13, color: AppColors.input),
@@ -156,7 +157,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          const Text('Desempenho',
+          Text('Desempenho',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
           GridView(
@@ -170,7 +171,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
             physics: const NeverScrollableScrollPhysics(),
             children: [
               SummaryCard(
-                title: 'Permutas Criadas',
+                title: '${brand.copy.barterPluralTitle} Criadas',
                 value: barters.length.toString(),
                 icon: Icons.swap_horiz,
                 color: AppColors.primary,
@@ -198,15 +199,15 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
           if (denied > 0) ...[
             const SizedBox(height: 8),
             Text('$denied permuta(s) negada(s)',
-                style: const TextStyle(fontSize: 12, color: AppColors.denied)),
+                style: TextStyle(fontSize: 12, color: AppColors.denied)),
           ],
           const SizedBox(height: 20),
           // Carteira de produtores: os clientes que só este consultor atende.
           Text('Carteira de Produtores (${wallet.length})',
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
           if (wallet.isEmpty)
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text('Nenhum produtor na carteira', style: TextStyle(color: AppColors.textLight)),
@@ -226,23 +227,23 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                     leading: CircleAvatar(
                       backgroundColor: AppColors.primarySurface,
                       child: Text(p.avatarInitials,
-                          style: const TextStyle(
+                          style: TextStyle(
                               color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.bold)),
                     ),
                     title: Text(p.name,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
                     subtitle: Text('${p.location} • ${p.areaLabel}',
-                        style: const TextStyle(fontSize: 11, color: AppColors.textMedium),
+                        style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                         overflow: TextOverflow.ellipsis),
-                    trailing: const Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
+                    trailing: Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
                   ),
                 )),
           const SizedBox(height: 20),
-          const Text('Permutas Registradas',
+          Text('${brand.copy.barterPluralTitle} Registradas',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
           if (barters.isEmpty)
-            const Center(
+            Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text('Nenhuma permuta registrada', style: TextStyle(color: AppColors.textLight)),
@@ -259,16 +260,16 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
           // caso comum sem tocar em nada disso.
           OutlinedButton.icon(
             onPressed: _resetPassword,
-            icon: const Icon(Icons.lock_reset, color: AppColors.pending),
-            label: const Text('Redefinir senha', style: TextStyle(color: AppColors.pending)),
+            icon: Icon(Icons.lock_reset, color: AppColors.pending),
+            label: Text('Redefinir senha', style: TextStyle(color: AppColors.pending)),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppColors.pending),
+              side: BorderSide(color: AppColors.pending),
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),
           if (consultant.mustChangePassword) ...[
             const SizedBox(height: 8),
-            const Row(
+            Row(
               children: [
                 Icon(Icons.hourglass_top, size: 14, color: AppColors.textLight),
                 SizedBox(width: 6),
@@ -284,10 +285,10 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: _delete,
-            icon: const Icon(Icons.delete_outline, color: AppColors.denied),
-            label: const Text('Excluir consultor', style: TextStyle(color: AppColors.denied)),
+            icon: Icon(Icons.delete_outline, color: AppColors.denied),
+            label: Text('Excluir consultor', style: TextStyle(color: AppColors.denied)),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: AppColors.denied),
+              side: BorderSide(color: AppColors.denied),
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
           ),

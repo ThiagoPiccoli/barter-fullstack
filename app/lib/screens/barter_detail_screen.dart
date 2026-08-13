@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -90,17 +91,17 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Icon(Icons.comment_outlined, size: 16, color: AppColors.textLight),
+                        Icon(Icons.comment_outlined, size: 16, color: AppColors.textLight),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Observação do Administrador',
+                              Text('Observação do Administrador',
                                   style: TextStyle(fontSize: 11, color: AppColors.textLight)),
                               const SizedBox(height: 2),
                               Text(_barter.adminNote!,
-                                  style: const TextStyle(fontSize: 13, color: AppColors.textDark)),
+                                  style: TextStyle(fontSize: 13, color: AppColors.textDark)),
                             ],
                           ),
                         ),
@@ -128,7 +129,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           const SizedBox(height: 16),
 
           _ItemsSection(
-            title: 'Pagamento em Grãos',
+            title: 'Pagamento em ${brand.copy.grainPluralTitle}',
             subtitle: 'Sacas a entregar para cobrir os insumos',
             icon: Icons.grass,
             accent: AppColors.grain,
@@ -149,7 +150,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text('TOTAL A ENTREGAR',
+                  Text('TOTAL A ENTREGAR',
                       style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textDark)),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
@@ -158,13 +159,13 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                         _barter.referenceValue > 0
                             ? '${formatSacks(_barter.sacksToDeliver)} ${_barter.referenceGrainName.toLowerCase()}'
                             : '0 sc',
-                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.primary),
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.primary),
                       ),
                       Text(
                           widget.isAdmin
                               ? '≈ ${formatCurrency(_barter.inputCost)} em insumos'
                               : 'para ${_barter.inputs.length} insumo(s) retirado(s)',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                          style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                     ],
                   ),
                 ],
@@ -174,7 +175,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           const SizedBox(height: 20),
 
           if (widget.isAdmin && _barter.status == BarterStatus.pending) ...[
-            const Text('Ação do Administrador',
+            Text('Ação do Administrador',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),
             Row(
@@ -187,7 +188,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                     label: const Text('Negar'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.denied,
-                      side: const BorderSide(color: AppColors.denied),
+                      side: BorderSide(color: AppColors.denied),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
                   ),
@@ -261,8 +262,8 @@ class _ItemsSection extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(title,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                Text(subtitle, style: const TextStyle(fontSize: 11, color: AppColors.textLight)),
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                Text(subtitle, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
               ],
             ),
           ],
@@ -292,7 +293,7 @@ class _ItemsSection extends StatelessWidget {
                                   showValue
                                       ? '${formatQty(item.quantity)} ${item.unit} × ${formatCurrency(item.unitValue)}'
                                       : '${formatQty(item.quantity)} ${item.unit}',
-                                  style: const TextStyle(fontSize: 12, color: AppColors.textMedium),
+                                  style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                                 ),
                               ],
                             ),
@@ -308,7 +309,7 @@ class _ItemsSection extends StatelessWidget {
                               ),
                               if (referenceValue > 0 && showValue)
                                 Text('≈ ${formatCurrency(item.total)}',
-                                    style: const TextStyle(fontSize: 10, color: AppColors.textLight)),
+                                    style: TextStyle(fontSize: 10, color: AppColors.textLight)),
                             ],
                           ),
                         ],
@@ -324,7 +325,7 @@ class _ItemsSection extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(totalLabel,
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -336,7 +337,7 @@ class _ItemsSection extends StatelessWidget {
                         ),
                         if (referenceValue > 0 && showValue)
                           Text('≈ ${formatCurrency(total)}',
-                              style: const TextStyle(fontSize: 10, color: AppColors.textLight)),
+                              style: TextStyle(fontSize: 10, color: AppColors.textLight)),
                       ],
                     ),
                   ],
@@ -363,11 +364,11 @@ class _InfoRow extends StatelessWidget {
         children: [
           SizedBox(
             width: 110,
-            child: Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textLight)),
+            child: Text(label, style: TextStyle(fontSize: 12, color: AppColors.textLight)),
           ),
           Expanded(
             child: Text(value,
-                style: const TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
+                style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
           ),
         ],
       ),

@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-import 'package:barter_app/main.dart' as app;
-import 'package:barter_app/services/token_storage.dart';
+import 'package:agrobarter_app/main.dart' as app;
+import 'package:agrobarter_app/services/token_storage.dart';
 
 /// Tour de ponta a ponta contra a API REAL (exige o servidor no ar com o
 /// seed fresco: `cd api && npm run db:reset && npm run start:dev`):
@@ -73,7 +73,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // ── João (u002) só vê a própria carteira na Nova Permuta ──────────────
-    await login(tester, 'joao.silva@barter.com.br');
+    await login(tester, 'joao.silva@agrobarter.com.br');
     await goToTab(tester, 'Nova Permuta');
     expect(find.text('Antônio Carvalho'), findsOneWidget);
     expect(find.text('Sebastião Ramos'), findsOneWidget);
@@ -84,7 +84,7 @@ void main() {
     await logout(tester);
 
     // ── Admin vê todos os produtores, com o dono de cada carteira ──────────
-    await login(tester, 'admin@barter.com.br');
+    await login(tester, 'admin@agrobarter.com.br');
     await goToTab(tester, 'Cadastros');
     expect(find.textContaining('Carteira:'), findsWidgets);
     await scrollTo(tester, find.text('Osmar Dutra'));
@@ -105,7 +105,7 @@ void main() {
     await logout(tester);
 
     // ── Ana (u003) vê outra carteira e finaliza uma permuta com PDF ────────
-    await login(tester, 'ana.ferreira@barter.com.br');
+    await login(tester, 'ana.ferreira@agrobarter.com.br');
     await goToTab(tester, 'Nova Permuta');
     expect(find.text('Helena Prado'), findsOneWidget);
     expect(find.text('Cláudia Nunes'), findsOneWidget);

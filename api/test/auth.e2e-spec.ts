@@ -48,7 +48,7 @@ describe('Auth (e2e)', () => {
   it('não existe signup público', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/auth/signup')
-      .send({ email: 'intruso@barter.com.br', password: '12345678' });
+      .send({ email: 'intruso@agrobarter.com.br', password: '12345678' });
     expect(response.status).toBe(404);
   });
 
@@ -114,7 +114,7 @@ describe('Auth (e2e)', () => {
     const created = await request(app.getHttpServer())
       .post('/api/v1/consultants')
       .set({ Authorization: `Bearer ${adminToken}` })
-      .send({ fullName: 'Novo Consultor', email: 'novo@barter.com.br', branch: 'Filial 99' })
+      .send({ fullName: 'Novo Consultor', email: 'novo@agrobarter.com.br', branch: 'Filial 99' })
       .expect(201);
     expect(created.body.data.mustChangePassword).toBe(true);
 
@@ -127,7 +127,7 @@ describe('Auth (e2e)', () => {
     // Entra com a senha provisória e o app recebe o aviso de troca obrigatória.
     const login = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: 'novo@barter.com.br', password: provisional })
+      .send({ email: 'novo@agrobarter.com.br', password: provisional })
       .expect(200);
     expect(login.body.data.user.mustChangePassword).toBe(true);
 
@@ -161,13 +161,13 @@ describe('Auth (e2e)', () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/consultants')
         .set({ Authorization: `Bearer ${adminToken}` })
-        .send({ fullName: 'Recém Provisionado', email: 'recem@barter.com.br', branch: 'Filial 7' })
+        .send({ fullName: 'Recém Provisionado', email: 'recem@agrobarter.com.br', branch: 'Filial 7' })
         .expect(201);
       const password = created.body.data.provisionalPassword as string;
 
       const login = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email: 'recem@barter.com.br', password })
+        .send({ email: 'recem@agrobarter.com.br', password })
         .expect(200);
       return { token: login.body.data.token as string, password };
     }
@@ -241,8 +241,8 @@ describe('Auth (e2e)', () => {
 
     it('cada consultor nasce com uma senha provisória diferente e imprevisível', async () => {
       const adminToken = await loginAs(app, ADMIN);
-      const first = await provision('um@barter.com.br', adminToken);
-      const second = await provision('dois@barter.com.br', adminToken);
+      const first = await provision('um@agrobarter.com.br', adminToken);
+      const second = await provision('dois@agrobarter.com.br', adminToken);
 
       expect(first).not.toBe(second);
 
@@ -250,29 +250,29 @@ describe('Auth (e2e)', () => {
       for (const guess of ['123456', 'senha', first.toLowerCase()]) {
         await request(app.getHttpServer())
           .post('/api/v1/auth/login')
-          .send({ email: 'dois@barter.com.br', password: guess })
+          .send({ email: 'dois@agrobarter.com.br', password: guess })
           .expect(400);
       }
       await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email: 'dois@barter.com.br', password: second })
+        .send({ email: 'dois@agrobarter.com.br', password: second })
         .expect(200);
     });
 
     it('o admin retoma a conta perdida com um reset — e derruba quem estava dentro', async () => {
       const adminToken = await loginAs(app, ADMIN);
-      const provisional = await provision('perdida@barter.com.br', adminToken);
+      const provisional = await provision('perdida@agrobarter.com.br', adminToken);
       const consultantId = (
         await request(app.getHttpServer())
           .get('/api/v1/consultants')
           .set({ Authorization: `Bearer ${adminToken}` })
-      ).body.data.find((c: { email: string }) => c.email === 'perdida@barter.com.br').id as number;
+      ).body.data.find((c: { email: string }) => c.email === 'perdida@agrobarter.com.br').id as number;
 
       // Alguém entra com a provisória e define a senha definitiva: a conta
       // está, para todos os efeitos, nas mãos dessa pessoa.
       const intruder = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email: 'perdida@barter.com.br', password: provisional })
+        .send({ email: 'perdida@agrobarter.com.br', password: provisional })
         .expect(200);
       await request(app.getHttpServer())
         .post('/api/v1/auth/password')
@@ -292,7 +292,7 @@ describe('Auth (e2e)', () => {
       // ...invalida a senha que o invasor tinha definido...
       await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email: 'perdida@barter.com.br', password: 'senha-do-invasor' })
+        .send({ email: 'perdida@agrobarter.com.br', password: 'senha-do-invasor' })
         .expect(400);
 
       // ...e derruba a sessão que ele já tinha aberta. Sem isto o reset não
@@ -305,7 +305,7 @@ describe('Auth (e2e)', () => {
       // O consultor legítimo entra com a nova provisória.
       await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email: 'perdida@barter.com.br', password: novaProvisoria })
+        .send({ email: 'perdida@agrobarter.com.br', password: novaProvisoria })
         .expect(200);
     });
 

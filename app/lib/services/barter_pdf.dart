@@ -1,10 +1,13 @@
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart' show Color;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
+import '../branding/active_brand.dart';
 import '../models/models.dart';
+import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart' show formatCurrency, formatQty, formatSacks;
 
 /// Comprovante de permuta em PDF, para controle e assinatura das partes.
@@ -16,12 +19,22 @@ import '../widgets/common_widgets.dart' show formatCurrency, formatQty, formatSa
 class BarterPdf {
   BarterPdf._();
 
-  static final PdfColor _green = PdfColor.fromInt(0xFF1B5E20);
-  static final PdfColor _greenSurface = PdfColor.fromInt(0xFFE8F5E9);
-  static final PdfColor _grain = PdfColor.fromInt(0xFFE65100);
-  static final PdfColor _input = PdfColor.fromInt(0xFF00695C);
-  static final PdfColor _textMedium = PdfColor.fromInt(0xFF616161);
-  static final PdfColor _line = PdfColor.fromInt(0xFFBDBDBD);
+  /// Converte uma cor da marca para o espaço de cor do PDF.
+  ///
+  /// O comprovante é uma superfície da marca como qualquer tela: sem esta
+  /// ponte ele guardaria uma segunda paleta, que sobreviveria intacta ao
+  /// reskin do app — e o cliente novo receberia o PDF do cliente antigo.
+  static PdfColor _c(Color color) => PdfColor.fromInt(color.toARGB32());
+
+  static PdfColor get _primary => _c(AppColors.primary);
+  static PdfColor get _primarySurface => _c(AppColors.primarySurface);
+  static PdfColor get _grain => _c(AppColors.grain);
+  static PdfColor get _input => _c(AppColors.input);
+  static PdfColor get _textMedium => _c(AppColors.textMedium);
+  static PdfColor get _line => _c(AppColors.divider);
+  static PdfColor get _onPrimary => _c(AppColors.onPrimary);
+  static PdfColor get _onPrimaryMuted => _c(AppColors.onPrimaryMuted);
+  static PdfColor get _zebra => _c(AppColors.background);
 
   /// Gera o PDF e abre a folha de compartilhamento nativa (salvar, enviar por
   /// WhatsApp/e-mail, imprimir...). Nome do arquivo: permuta-PRM-2026-001.pdf.
@@ -45,7 +58,7 @@ class BarterPdf {
   }) async {
     final doc = pw.Document(
       title: 'Comprovante de Permuta ${barter.id}',
-      author: 'Barter - Permuta de Graos',
+      author: '${brand.identity.wordmark} - ${brand.identity.tagline}',
     );
 
     doc.addPage(
@@ -93,7 +106,7 @@ class BarterPdf {
     return pw.Container(
       padding: const pw.EdgeInsets.all(14),
       decoration: pw.BoxDecoration(
-        color: _green,
+        color: _primary,
         borderRadius: pw.BorderRadius.circular(8),
       ),
       child: pw.Row(
@@ -102,15 +115,30 @@ class BarterPdf {
           pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              pw.Text('BARTER',
-                  style: pw.TextStyle(
-                    color: PdfColors.white,
-                    fontSize: 20,
-                    fontWeight: pw.FontWeight.bold,
-                    letterSpacing: 2,
-                  )),
-              pw.Text('Permuta de Grãos por Insumos',
-                  style: const pw.TextStyle(color: PdfColor.fromInt(0xCCFFFFFF), fontSize: 9)),
+              // Mesma quebra de cor do logotipo na tela: o prefixo sai no
+              // acento e o sufixo no tom de conteúdo.
+              pw.RichText(
+                text: pw.TextSpan(children: [
+                  pw.TextSpan(
+                    text: brand.identity.wordmarkPrefix,
+                    style: pw.TextStyle(
+                      color: _c(AppColors.primaryAccent),
+                      fontSize: 20,
+                      fontWeight: pw.FontWeight.normal,
+                    ),
+                  ),
+                  pw.TextSpan(
+                    text: brand.identity.wordmarkSuffix,
+                    style: pw.TextStyle(
+                      color: _onPrimary,
+                      fontSize: 20,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
+                ]),
+              ),
+              pw.Text(brand.identity.tagline,
+                  style: pw.TextStyle(color: _onPrimaryMuted, fontSize: 9)),
             ],
           ),
           pw.Spacer(),
@@ -119,13 +147,13 @@ class BarterPdf {
             children: [
               pw.Text('COMPROVANTE DE PERMUTA',
                   style: pw.TextStyle(
-                    color: PdfColors.white,
+                    color: _onPrimary,
                     fontSize: 11,
                     fontWeight: pw.FontWeight.bold,
                   )),
               pw.SizedBox(height: 2),
               pw.Text(barter.id,
-                  style: const pw.TextStyle(color: PdfColors.white, fontSize: 10)),
+                  style: pw.TextStyle(color: _onPrimary, fontSize: 10)),
               pw.SizedBox(height: 4),
               _statusChip(barter),
             ],
@@ -139,20 +167,20 @@ class BarterPdf {
     final PdfColor color;
     switch (barter.status) {
       case BarterStatus.approved:
-        color = PdfColor.fromInt(0xFFA5D6A7);
+        color = _c(AppColors.approvedBg);
         break;
       case BarterStatus.denied:
-        color = PdfColor.fromInt(0xFFEF9A9A);
+        color = _c(AppColors.deniedBg);
         break;
       case BarterStatus.pending:
-        color = PdfColor.fromInt(0xFFFFE082);
+        color = _c(AppColors.pendingBg);
         break;
     }
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: pw.BoxDecoration(color: color, borderRadius: pw.BorderRadius.circular(8)),
       child: pw.Text(barter.statusLabel,
-          style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _green)),
+          style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _primary)),
     );
   }
 
@@ -310,7 +338,7 @@ class BarterPdf {
     return pw.TableHelper.fromTextArray(
       headers: headers,
       data: rows,
-      headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+      headerStyle: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _onPrimary),
       headerDecoration: pw.BoxDecoration(color: accent),
       cellStyle: const pw.TextStyle(fontSize: 9),
       cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -318,7 +346,7 @@ class BarterPdf {
       cellAlignments: {
         for (var i = 1; i < headers.length; i++) i: pw.Alignment.centerRight,
       },
-      oddRowDecoration: const pw.BoxDecoration(color: PdfColor.fromInt(0xFFF5F5F5)),
+      oddRowDecoration: pw.BoxDecoration(color: _zebra),
     );
   }
 
@@ -329,9 +357,9 @@ class BarterPdf {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(
-        color: _greenSurface,
+        color: _primarySurface,
         borderRadius: pw.BorderRadius.circular(8),
-        border: pw.Border.all(color: _green, width: 0.8),
+        border: pw.Border.all(color: _primary, width: 0.8),
       ),
       child: pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.center,
@@ -347,7 +375,7 @@ class BarterPdf {
                 hasRef
                     ? '${formatSacks(barter.sacksToDeliver)} de ${barter.referenceGrainName.toLowerCase()}'
                     : '-',
-                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: _green),
+                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: _primary),
               ),
               pw.Text(
                 showValues
@@ -387,7 +415,7 @@ class BarterPdf {
     pw.Widget line(String role, String name) => pw.Expanded(
           child: pw.Column(
             children: [
-              pw.Container(height: 0.8, color: PdfColors.black),
+              pw.Container(height: 0.8, color: _c(AppColors.textDark)),
               pw.SizedBox(height: 4),
               pw.Text(_s(name), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
               pw.Text(role, style: pw.TextStyle(fontSize: 8, color: _textMedium)),
@@ -409,7 +437,7 @@ class BarterPdf {
         pw.Divider(color: _line, thickness: 0.5),
         pw.Row(
           children: [
-            pw.Text('Documento gerado em ${_date(DateTime.now())} - Barter App',
+            pw.Text('Documento gerado em ${_date(DateTime.now())} - ${brand.identity.wordmark}',
                 style: pw.TextStyle(fontSize: 7, color: _textMedium)),
             pw.Spacer(),
             pw.Text('Página ${ctx.pageNumber} de ${ctx.pagesCount}',
