@@ -71,3 +71,16 @@ export class UpdatePriceDto {
   @IsPositive()
   price!: number;
 }
+
+/**
+ * Filtro do catálogo. Um `type` desconhecido é recusado: ignorá-lo devolvia
+ * grãos e insumos misturados quando o cliente pediu só um dos dois.
+ *
+ * O catálogo NÃO é paginado de propósito — ele é limitado pelo tamanho da
+ * operação e o app precisa dele inteiro para montar a permuta.
+ */
+export class ListProductsQuery {
+  @IsOptional()
+  @IsIn(['grain', 'input'], { message: 'Filtro de tipo inválido: use grain ou input' })
+  type?: 'grain' | 'input';
+}

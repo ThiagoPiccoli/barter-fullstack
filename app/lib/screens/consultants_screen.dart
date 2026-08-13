@@ -3,20 +3,20 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
-import 'seller_profile_admin_screen.dart';
-import 'vendor_profile_screen.dart';
+import 'producer_profile_screen.dart';
+import 'consultant_profile_screen.dart';
 import 'edit_forms.dart';
 
 /// Aba de cadastros do admin: alterna entre PRODUTORES (clientes designados) e
-/// VENDEDORES (usuários que registram permutas), com busca em cada lista.
-class SellersScreen extends StatefulWidget {
-  const SellersScreen({super.key});
+/// CONSULTORES (usuários que registram permutas), com busca em cada lista.
+class ConsultantsScreen extends StatefulWidget {
+  const ConsultantsScreen({super.key});
   @override
-  State<SellersScreen> createState() => _SellersScreenState();
+  State<ConsultantsScreen> createState() => _ConsultantsScreenState();
 }
 
-class _SellersScreenState extends State<SellersScreen> {
-  int _tab = 0; // 0 = produtores, 1 = vendedores
+class _ConsultantsScreenState extends State<ConsultantsScreen> {
+  int _tab = 0; // 0 = produtores, 1 = consultores
   String _search = '';
   final _searchCtrl = TextEditingController();
 
@@ -35,13 +35,13 @@ class _SellersScreenState extends State<SellersScreen> {
     });
   }
 
-  /// Abre o cadastro de um novo produtor ou vendedor, conforme a aba ativa.
+  /// Abre o cadastro de um novo produtor ou consultor, conforme a aba ativa.
   Future<void> _createNew() async {
     final isProducers = _tab == 0;
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => isProducers ? const EditProducerScreen() : const EditVendorScreen(),
+        builder: (_) => isProducers ? const EditProducerScreen() : const EditConsultantScreen(),
       ),
     );
     if (mounted) setState(() {});
@@ -59,7 +59,7 @@ class _SellersScreenState extends State<SellersScreen> {
             p.city.toLowerCase().contains(q) ||
             p.farmName.toLowerCase().contains(q))
         .toList();
-    final vendors = AppData.sellers
+    final consultants = AppData.consultants
         .where((v) =>
             q.isEmpty ||
             v.name.toLowerCase().contains(q) ||
@@ -75,7 +75,7 @@ class _SellersScreenState extends State<SellersScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNew,
         icon: const Icon(Icons.add),
-        label: Text(isProducers ? 'Novo produtor' : 'Novo vendedor'),
+        label: Text(isProducers ? 'Novo produtor' : 'Novo consultor'),
       ),
       body: Column(
         children: [
@@ -84,7 +84,7 @@ class _SellersScreenState extends State<SellersScreen> {
             child: _SegmentedToggle(
               tab: _tab,
               producerCount: AppData.producers.length,
-              vendorCount: AppData.sellers.length,
+              consultantCount: AppData.consultants.length,
               onChanged: _setTab,
             ),
           ),
@@ -94,7 +94,7 @@ class _SellersScreenState extends State<SellersScreen> {
               controller: _searchCtrl,
               hint: isProducers
                   ? 'Buscar produtor, fazenda ou cidade...'
-                  : 'Buscar vendedor, filial ou e-mail...',
+                  : 'Buscar consultor, filial ou e-mail...',
               onChanged: (v) => setState(() => _search = v),
               onClear: () => setState(() {
                 _search = '';
@@ -109,14 +109,14 @@ class _SellersScreenState extends State<SellersScreen> {
               child: Text(
                 isProducers
                     ? '${producers.length} produtor(es)'
-                    : '${vendors.length} vendedor(es)',
+                    : '${consultants.length} consultor(es)',
                 style: const TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
               ),
             ),
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: isProducers ? _buildProducerList(producers) : _buildVendorList(vendors),
+            child: isProducers ? _buildProducerList(producers) : _buildConsultantList(consultants),
           ),
         ],
       ),
@@ -126,7 +126,7 @@ class _SellersScreenState extends State<SellersScreen> {
   Widget _buildProducerList(List<ProducerModel> list) {
     if (list.isEmpty) return const _EmptyState(label: 'Nenhum produtor encontrado');
     return ListView.builder(
-      // Chave própria: alternar Produtores↔Vendedores não pode herdar a
+      // Chave própria: alternar Produtores↔Consultores não pode herdar a
       // rolagem da outra lista (o PageStorage compartilharia o offset).
       key: const PageStorageKey('cadastros_produtores'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -134,7 +134,7 @@ class _SellersScreenState extends State<SellersScreen> {
       itemBuilder: (_, i) {
         final p = list[i];
         final bs = AppData.barters.where((b) => b.producerId == p.id).toList();
-        final owner = AppData.sellerById(p.sellerId);
+        final owner = AppData.consultantById(p.consultantId);
         return _PersonCard(
           initials: p.avatarInitials,
           name: p.name,
@@ -143,9 +143,9 @@ class _SellersScreenState extends State<SellersScreen> {
           badgeIcon: Icons.agriculture,
           chips: [
             // Dono da carteira: só o admin vê esta lista completa, então o
-            // vínculo produtor → vendedor precisa estar visível aqui.
+            // vínculo produtor → consultor precisa estar visível aqui.
             _StatChip(
-              label: 'Carteira: ${owner?.name.split(' ').first ?? 'sem vendedor'}',
+              label: 'Carteira: ${owner?.name.split(' ').first ?? 'sem consultor'}',
               color: AppColors.input,
             ),
             ..._statChips(bs),
@@ -153,7 +153,7 @@ class _SellersScreenState extends State<SellersScreen> {
           onTap: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => SellerProfileAdminScreen(producer: p)),
+              MaterialPageRoute(builder: (_) => ProducerProfileScreen(producer: p)),
             );
             if (mounted) setState(() {});
           },
@@ -162,15 +162,15 @@ class _SellersScreenState extends State<SellersScreen> {
     );
   }
 
-  Widget _buildVendorList(List<UserModel> list) {
-    if (list.isEmpty) return const _EmptyState(label: 'Nenhum vendedor encontrado');
+  Widget _buildConsultantList(List<UserModel> list) {
+    if (list.isEmpty) return const _EmptyState(label: 'Nenhum consultor encontrado');
     return ListView.builder(
-      key: const PageStorageKey('cadastros_vendedores'),
+      key: const PageStorageKey('cadastros_consultores'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
       itemCount: list.length,
       itemBuilder: (_, i) {
         final v = list[i];
-        final bs = AppData.barters.where((b) => b.sellerId == v.id).toList();
+        final bs = AppData.barters.where((b) => b.consultantId == v.id).toList();
         return _PersonCard(
           initials: v.avatarInitials,
           name: v.name,
@@ -181,7 +181,7 @@ class _SellersScreenState extends State<SellersScreen> {
           onTap: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => VendorProfileScreen(vendor: v)),
+              MaterialPageRoute(builder: (_) => ConsultantProfileScreen(consultant: v)),
             );
             if (mounted) setState(() {});
           },
@@ -203,12 +203,12 @@ List<Widget> _statChips(List<BarterModel> bs) {
 
 class _SegmentedToggle extends StatelessWidget {
   final int tab;
-  final int producerCount, vendorCount;
+  final int producerCount, consultantCount;
   final ValueChanged<int> onChanged;
   const _SegmentedToggle({
     required this.tab,
     required this.producerCount,
-    required this.vendorCount,
+    required this.consultantCount,
     required this.onChanged,
   });
 
@@ -234,9 +234,9 @@ class _SegmentedToggle extends StatelessWidget {
           ),
           Expanded(
             child: _seg(
-              label: 'Vendedores',
+              label: 'Consultores',
               icon: Icons.badge,
-              count: vendorCount,
+              count: consultantCount,
               selected: tab == 1,
               accent: AppColors.input,
               onTap: () => onChanged(1),

@@ -15,7 +15,8 @@ import {
   sacksToCover,
   type PricedInput,
 } from './barter-math';
-import { CreateBarterDto, ReviewBarterDto } from './dto/barter.dto';
+import { Paginated, windowOf } from '../common/pagination';
+import { CreateBarterDto, ListBartersQuery, ReviewBarterDto } from './dto/barter.dto';
 
 type BarterWithItems = Barter & { items: BarterItem[] };
 
@@ -29,18 +30,32 @@ export class BartersService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Permutas visíveis para o usuário: vendedor enxerga apenas as próprias;
+   * Permutas visíveis para o usuário: consultor enxerga apenas as próprias;
    * admin enxerga todas. Regra de acesso central do domínio.
+   *
+   * O `id` desempata a ordenação por data. Sem ele, permutas criadas no mesmo
+   * instante sairiam em ordem arbitrária a cada consulta e a paginação
+   * repetiria umas e pularia outras entre uma página e a seguinte.
    */
-  async listFor(user: User, status?: string): Promise<BarterWithItems[]> {
-    return this.prisma.barter.findMany({
-      where: {
-        ...(user.role === 'admin' ? {} : { sellerId: user.id }),
-        ...(status && ['pending', 'approved', 'denied'].includes(status) ? { status } : {}),
-      },
-      include: { items: true },
-      orderBy: { createdAt: 'desc' },
-    });
+  async listFor(user: User, query: ListBartersQuery): Promise<Paginated<BarterWithItems>> {
+    const { take, skip } = windowOf(query);
+    const where = {
+      ...(user.role === 'admin' ? {} : { consultantId: user.id }),
+      ...(query.status ? { status: query.status } : {}),
+    };
+
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.barter.findMany({
+        where,
+        include: { items: true },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take,
+        skip,
+      }),
+      this.prisma.barter.count({ where }),
+    ]);
+
+    return new Paginated(items, total, take, skip);
   }
 
   /** Uma permuta pelo código público, respeitando o escopo do usuário. */
@@ -50,14 +65,14 @@ export class BartersService {
       include: { items: true },
     });
     if (!barter) throw new NotFoundException('Registro não encontrado.');
-    if (user.role !== 'admin' && barter.sellerId !== user.id) {
+    if (user.role !== 'admin' && barter.consultantId !== user.id) {
       throw new ForbiddenException('Você não tem acesso a esta permuta');
     }
     return barter;
   }
 
   /**
-   * Registra uma permuta para um produtor da carteira do vendedor. Fluxo:
+   * Registra uma permuta para um produtor da carteira do consultor. Fluxo:
    * 1. produtor precisa pertencer à carteira de quem registra;
    * 2. todo insumo com exigência por hectare é obrigatório, no mínimo
    *    `taxa × área` (o app pré-preenche, o servidor confere);
@@ -65,16 +80,16 @@ export class BartersService {
    * 4. o custo é precificado com os valores vigentes do banco e convertido em
    *    sacas do grão de pagamento — o item de grão é criado pelo servidor.
    */
-  async create(seller: User, dto: CreateBarterDto): Promise<BarterWithItems> {
-    if (seller.role === 'admin') {
-      throw new ForbiddenException('Permutas são registradas pelo vendedor da carteira');
+  async create(consultant: User, dto: CreateBarterDto): Promise<BarterWithItems> {
+    if (consultant.role === 'admin') {
+      throw new ForbiddenException('Permutas são registradas pelo consultor da carteira');
     }
 
     const producer = await this.prisma.producer.findUnique({ where: { id: dto.producerId } });
     if (!producer) {
       throw new UnprocessableEntityException('Produtor não encontrado');
     }
-    if (producer.sellerId !== seller.id) {
+    if (producer.consultantId !== consultant.id) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
 
@@ -146,40 +161,72 @@ export class BartersService {
     // 4. Converte o custo em sacas do grão — o coração do escambo.
     const sacks = sacksToCover(totalCost, grain.currentPrice);
 
-    return this.prisma.$transaction(async (tx) => {
-      return tx.barter.create({
-        data: {
-          code: await this.nextCode(tx),
-          sellerId: seller.id,
-          sellerName: seller.fullName,
-          sellerBranch: seller.branch ?? '',
-          producerId: producer.id,
-          producerName: producer.name,
-          status: 'pending',
-          items: {
-            create: [
-              {
-                productId: grain.id,
-                kind: 'grain',
-                productName: grain.name,
-                unit: grain.unit,
-                quantity: sacks,
-                unitValue: grain.currentPrice,
-              },
-              ...products.map((product) => ({
-                productId: product.id,
-                kind: 'input',
-                productName: product.name,
-                unit: product.unit,
-                quantity: quantities.get(product.id)!,
-                unitValue: product.currentPrice,
-              })),
-            ],
-          },
-        },
-        include: { items: true },
-      });
+    const items = [
+      {
+        productId: grain.id,
+        kind: 'grain',
+        productName: grain.name,
+        unit: grain.unit,
+        quantity: sacks,
+        unitValue: grain.currentPrice,
+      },
+      ...products.map((product) => ({
+        productId: product.id,
+        kind: 'input',
+        productName: product.name,
+        unit: product.unit,
+        quantity: quantities.get(product.id)!,
+        unitValue: product.currentPrice,
+      })),
+    ];
+
+    return this.createWithCode({
+      consultantId: consultant.id,
+      consultantName: consultant.fullName,
+      consultantBranch: consultant.branch ?? '',
+      producerId: producer.id,
+      producerName: producer.name,
+      status: 'pending',
+      items: { create: items },
     });
+  }
+
+  /**
+   * Grava a permuta reservando o próximo código público.
+   *
+   * O código é decidido lendo o maior já usado e somando um, e entre a leitura
+   * e a gravação existe uma fresta: dois registros simultâneos podem escolher
+   * o mesmo número. Hoje isso não acontece porque o SQLite serializa as
+   * escritas dentro do processo, mas essa é uma garantia do BANCO ATUAL, não
+   * do código — bastaria uma segunda instância, ou uma troca para Postgres,
+   * para a corrida aparecer. O índice único em `code` transforma a colisão
+   * numa falha limpa, e aqui ela vira simplesmente "pegue o próximo".
+   */
+  private async createWithCode(
+    data: Omit<Prisma.BarterUncheckedCreateInput, 'code'>,
+  ): Promise<BarterWithItems> {
+    const MAX_ATTEMPTS = 5;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.prisma.$transaction(async (tx) =>
+          tx.barter.create({
+            data: { ...data, code: await this.nextCode(tx) },
+            include: { items: true },
+          }),
+        );
+      } catch (error) {
+        if (attempt >= MAX_ATTEMPTS || !this.isDuplicateCode(error)) throw error;
+      }
+    }
+  }
+
+  /** Violação do índice único de `code` (P2002) — outra permuta chegou antes. */
+  private isDuplicateCode(error: unknown): boolean {
+    const known = error as { code?: string; meta?: { target?: unknown } };
+    if (known?.code !== 'P2002') return false;
+    const target = known.meta?.target;
+    const fields = Array.isArray(target) ? target : [target];
+    return fields.some((field) => typeof field === 'string' && field.includes('code'));
   }
 
   /**

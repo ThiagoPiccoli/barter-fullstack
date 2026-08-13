@@ -14,6 +14,31 @@ class CatalogRepository {
     return data.cast<Map<String, dynamic>>().map(InputCategoryModel.fromJson).toList();
   }
 
+  /// Cadastra um grão ou insumo. O servidor abre a linha do tempo de valores
+  /// com o preço informado — todo produto nasce com um primeiro ponto.
+  Future<ProductModel> createProduct({
+    required String name,
+    required String unit,
+    required ProductType type,
+    required double currentPrice,
+    double requiredPerHa = 0,
+    String? categoryId,
+  }) async {
+    final data = await api.post('/products', body: {
+      'name': name,
+      'unit': unit,
+      'type': type.name,
+      'currentPrice': currentPrice,
+      'requiredPerHa': requiredPerHa,
+      if (categoryId != null) 'categoryId': int.parse(categoryId),
+    });
+    return ProductModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Tira o produto do catálogo. As permutas já registradas não mudam: elas
+  /// guardam nome, unidade e preço no próprio item.
+  Future<void> deleteProduct(String id) => api.delete('/products/$id');
+
   /// Reajusta o valor de referência; o servidor acrescenta o ponto na linha
   /// do tempo e devolve o produto atualizado.
   Future<ProductModel> updatePrice(String productId, double price) async {

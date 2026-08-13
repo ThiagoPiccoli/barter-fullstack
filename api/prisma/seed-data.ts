@@ -1,5 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/auth/password.util';
+import { documentDigitsOf } from '../src/producers/document';
 
 /**
  * Dataset de demonstração — reproduz o mock original do app (mesmos números
@@ -28,7 +29,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const mkUser = (data: {
     fullName: string;
     email: string;
-    role: 'admin' | 'seller';
+    role: 'admin' | 'consultant';
     phone: string;
     branch: string;
     createdAt: Date;
@@ -45,7 +46,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const joao = await mkUser({
     fullName: 'João Silva',
     email: 'joao.silva@barter.com.br',
-    role: 'seller',
+    role: 'consultant',
     phone: '(44) 99999-0002',
     branch: 'Filial 02 – Gran. Santa T.',
     createdAt: at(2021, 3, 15),
@@ -53,7 +54,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const ana = await mkUser({
     fullName: 'Ana Paula Ferreira',
     email: 'ana.ferreira@barter.com.br',
-    role: 'seller',
+    role: 'consultant',
     phone: '(44) 99999-0003',
     branch: 'Filial 04 – Gran. Inharap.',
     createdAt: at(2021, 6, 20),
@@ -61,7 +62,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const roberto = await mkUser({
     fullName: 'Roberto Souza',
     email: 'roberto.souza@barter.com.br',
-    role: 'seller',
+    role: 'consultant',
     phone: '(44) 99999-0004',
     branch: 'Filial 34 – Gran. Jari',
     createdAt: at(2022, 2, 8),
@@ -69,7 +70,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const maria = await mkUser({
     fullName: 'Maria Oliveira',
     email: 'maria.oliveira@barter.com.br',
-    role: 'seller',
+    role: 'consultant',
     phone: '(44) 99999-0005',
     branch: 'Filial 24 – Gran. Oliveira',
     createdAt: at(2022, 9, 1),
@@ -77,19 +78,24 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const lucas = await mkUser({
     fullName: 'Lucas Barros',
     email: 'lucas.barros@barter.com.br',
-    role: 'seller',
+    role: 'consultant',
     phone: '(44) 99999-0006',
     branch: 'Filial 18 – Gran. São Joa.',
     createdAt: at(2023, 1, 15),
   });
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */
-  const mkProducer = (data: Parameters<typeof prisma.producer.create>[0]['data']) =>
-    prisma.producer.create({ data });
+  // `documentDigits` (a forma canônica que garante a unicidade) é derivada
+  // aqui para o dataset não precisar repetir o documento duas vezes.
+  type ProducerSeed = Omit<Prisma.ProducerUncheckedCreateInput, 'documentDigits'>;
+  const mkProducer = (data: ProducerSeed) =>
+    prisma.producer.create({
+      data: { ...data, documentDigits: documentDigitsOf(data.document) },
+    });
 
   const antonio = await mkProducer({
     name: 'Antônio Carvalho',
-    sellerId: joao.id,
+    consultantId: joao.id,
     document: 'CPF 123.456.789-00',
     phone: '(44) 99800-1001',
     farmName: 'Fazenda Boa Vista',
@@ -99,7 +105,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const helena = await mkProducer({
     name: 'Helena Prado',
-    sellerId: ana.id,
+    consultantId: ana.id,
     document: 'CPF 234.567.890-11',
     phone: '(44) 99800-1002',
     farmName: 'Sítio das Águas',
@@ -109,7 +115,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const joaquim = await mkProducer({
     name: 'Joaquim Tavares',
-    sellerId: roberto.id,
+    consultantId: roberto.id,
     document: 'CNPJ 12.345.678/0001-90',
     phone: '(44) 99800-1003',
     farmName: 'Fazenda Santa Rita',
@@ -119,7 +125,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const claudia = await mkProducer({
     name: 'Cláudia Nunes',
-    sellerId: ana.id,
+    consultantId: ana.id,
     document: 'CPF 345.678.901-22',
     phone: '(44) 99800-1004',
     farmName: 'Fazenda Recanto',
@@ -129,7 +135,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const sebastiao = await mkProducer({
     name: 'Sebastião Ramos',
-    sellerId: joao.id,
+    consultantId: joao.id,
     document: 'CPF 456.789.012-33',
     phone: '(44) 99800-1005',
     farmName: 'Sítio Bela Vista',
@@ -139,7 +145,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const vanessa = await mkProducer({
     name: 'Vanessa Lopes',
-    sellerId: lucas.id,
+    consultantId: lucas.id,
     document: 'CNPJ 23.456.789/0001-01',
     phone: '(44) 99800-1006',
     farmName: 'Fazenda Três Irmãos',
@@ -149,7 +155,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const osmar = await mkProducer({
     name: 'Osmar Dutra',
-    sellerId: maria.id,
+    consultantId: maria.id,
     document: 'CPF 567.890.123-44',
     phone: '(44) 99800-1007',
     farmName: 'Fazenda Alto da Serra',
@@ -188,10 +194,30 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     requiredPerHa?: number;
     categoryId?: number;
   }[] = [
-    { name: 'Soja', unit: 'saca 60kg', type: 'grain', prices: [142.0, 144.5, 145.0, 147.2, 146.8, 149.3, 148.5] },
-    { name: 'Milho', unit: 'saca 60kg', type: 'grain', prices: [58.0, 59.5, 60.0, 61.2, 63.0, 62.8, 62.3] },
-    { name: 'Trigo', unit: 'saca 60kg', type: 'grain', prices: [80.0, 81.5, 82.5, 84.0, 83.2, 86.1, 85.0] },
-    { name: 'Aveia', unit: 'saca 40kg', type: 'grain', prices: [43.0, 43.8, 44.5, 45.2, 44.9, 46.1, 45.8] },
+    {
+      name: 'Soja',
+      unit: 'saca 60kg',
+      type: 'grain',
+      prices: [142.0, 144.5, 145.0, 147.2, 146.8, 149.3, 148.5],
+    },
+    {
+      name: 'Milho',
+      unit: 'saca 60kg',
+      type: 'grain',
+      prices: [58.0, 59.5, 60.0, 61.2, 63.0, 62.8, 62.3],
+    },
+    {
+      name: 'Trigo',
+      unit: 'saca 60kg',
+      type: 'grain',
+      prices: [80.0, 81.5, 82.5, 84.0, 83.2, 86.1, 85.0],
+    },
+    {
+      name: 'Aveia',
+      unit: 'saca 40kg',
+      type: 'grain',
+      prices: [43.0, 43.8, 44.5, 45.2, 44.9, 46.1, 45.8],
+    },
     {
       name: 'Fertilizante NPK 04-14-08',
       unit: 'saco 50kg',
@@ -284,25 +310,33 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const barters = [
     {
       code: 'PRM-2026-001',
-      seller: joao,
+      consultant: joao,
       producer: antonio,
       status: 'approved',
       createdAt: at(2026, 1, 10, 9, 30),
       reviewedAt: at(2026, 1, 11, 14, 0),
       adminNote: 'Permuta aprovada. Entrega dos grãos confirmada no armazém.',
-      items: [grainItem(soja, 251.4142, 148.5), inputItem(npk, 300, 115.0), inputItem(glifosato, 150, 18.9)],
+      items: [
+        grainItem(soja, 251.4142, 148.5),
+        inputItem(npk, 300, 115.0),
+        inputItem(glifosato, 150, 18.9),
+      ],
     },
     {
       code: 'PRM-2026-002',
-      seller: ana,
+      consultant: ana,
       producer: helena,
       status: 'pending',
       createdAt: at(2026, 4, 22, 11, 15),
-      items: [grainItem(soja, 154.8822, 148.5), inputItem(semente, 50, 320.0), inputItem(fungicida, 80, 87.5)],
+      items: [
+        grainItem(soja, 154.8822, 148.5),
+        inputItem(semente, 50, 320.0),
+        inputItem(fungicida, 80, 87.5),
+      ],
     },
     {
       code: 'PRM-2026-003',
-      seller: roberto,
+      consultant: roberto,
       producer: joaquim,
       status: 'denied',
       createdAt: at(2026, 2, 5, 8, 0),
@@ -312,7 +346,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-004',
-      seller: ana,
+      consultant: ana,
       producer: claudia,
       status: 'approved',
       createdAt: at(2026, 3, 1, 10, 0),
@@ -327,39 +361,55 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-005',
-      seller: joao,
+      consultant: joao,
       producer: sebastiao,
       status: 'pending',
       createdAt: at(2026, 5, 8, 14, 20),
-      items: [grainItem(soja, 166.6667, 148.5), inputItem(semente, 50, 320.0), inputItem(fungicida, 100, 87.5)],
+      items: [
+        grainItem(soja, 166.6667, 148.5),
+        inputItem(semente, 50, 320.0),
+        inputItem(fungicida, 100, 87.5),
+      ],
     },
     {
       code: 'PRM-2026-006',
-      seller: maria,
+      consultant: maria,
       producer: osmar,
       status: 'approved',
       createdAt: at(2026, 4, 10, 9, 0),
       reviewedAt: at(2026, 4, 11, 11, 0),
       adminNote: 'Aprovada com prioridade.',
-      items: [grainItem(soja, 134.0068, 148.5), inputItem(lambda, 200, 42.0), inputItem(npk, 100, 115.0)],
+      items: [
+        grainItem(soja, 134.0068, 148.5),
+        inputItem(lambda, 200, 42.0),
+        inputItem(npk, 100, 115.0),
+      ],
     },
     {
       code: 'PRM-2026-007',
-      seller: lucas,
+      consultant: lucas,
       producer: vanessa,
       status: 'pending',
       createdAt: at(2026, 5, 11, 16, 0),
-      items: [grainItem(milho, 245.2649, 62.3), inputItem(npk, 100, 115.0), inputItem(glifosato, 200, 18.9)],
+      items: [
+        grainItem(milho, 245.2649, 62.3),
+        inputItem(npk, 100, 115.0),
+        inputItem(glifosato, 200, 18.9),
+      ],
     },
     {
       code: 'PRM-2026-008',
-      seller: roberto,
+      consultant: roberto,
       producer: joaquim,
       status: 'approved',
       createdAt: at(2026, 3, 20, 10, 45),
       reviewedAt: at(2026, 3, 21, 8, 30),
       adminNote: 'Aprovada.',
-      items: [grainItem(trigo, 172.9412, 85.0), inputItem(glifosato, 500, 18.9), inputItem(fungicida, 60, 87.5)],
+      items: [
+        grainItem(trigo, 172.9412, 85.0),
+        inputItem(glifosato, 500, 18.9),
+        inputItem(fungicida, 60, 87.5),
+      ],
     },
   ];
 
@@ -367,9 +417,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     await prisma.barter.create({
       data: {
         code: entry.code,
-        sellerId: entry.seller.id,
-        sellerName: entry.seller.fullName,
-        sellerBranch: entry.seller.branch ?? '',
+        consultantId: entry.consultant.id,
+        consultantName: entry.consultant.fullName,
+        consultantBranch: entry.consultant.branch ?? '',
         producerId: entry.producer.id,
         producerName: entry.producer.name,
         status: entry.status,

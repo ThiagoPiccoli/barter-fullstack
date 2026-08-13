@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../services/barter_math.dart';
 import '../services/barter_pdf.dart';
 import '../widgets/common_widgets.dart';
 
@@ -10,8 +11,8 @@ import '../widgets/common_widgets.dart';
 /// (eles formam um custo) e depois escolhe UM grão de pagamento — o app calcula
 /// quantas sacas desse grão são necessárias para cobrir o custo dos insumos.
 class NewBarterScreen extends StatefulWidget {
-  final UserModel seller;
-  const NewBarterScreen({super.key, required this.seller});
+  final UserModel consultant;
+  const NewBarterScreen({super.key, required this.consultant});
   @override
   State<NewBarterScreen> createState() => _NewBarterScreenState();
 }
@@ -37,15 +38,24 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     super.dispose();
   }
 
+  /// Os insumos escolhidos, já precificados — a entrada da matemática da
+  /// permuta (services/barter_math.dart, espelho do cálculo do servidor).
+  List<PricedInput> get _pricedInputs => [
+        for (final e in _inputQty.entries)
+          if (e.value > 0)
+            () {
+              final p = AppData.inputs.firstWhere((i) => i.id == e.key);
+              return PricedInput(
+                productId: p.id,
+                quantity: e.value,
+                unitPrice: p.currentPrice,
+                categoryId: p.categoryId,
+              );
+            }(),
+      ];
+
   /// Custo total dos insumos escolhidos (R$) — o valor que a permuta paga.
-  double get _inputCost {
-    double t = 0;
-    for (final e in _inputQty.entries) {
-      final p = AppData.inputs.firstWhere((i) => i.id == e.key);
-      t += p.currentPrice * e.value;
-    }
-    return t;
-  }
+  double get _inputCost => inputCost(_pricedInputs);
 
   /// Grão escolhido para pagamento (ou null se ainda não escolheu).
   ProductModel? get _paymentGrain {
@@ -58,15 +68,14 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       _producerId == null ? null : AppData.producerById(_producerId!);
 
   /// Sacas do grão escolhido necessárias para cobrir o custo dos insumos.
+  /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
   double get _sacksNeeded {
     final g = _paymentGrain;
-    if (g == null || g.currentPrice <= 0) return 0;
-    return _inputCost / g.currentPrice;
+    return g == null ? 0 : sacksToCover(_inputCost, g.currentPrice);
   }
 
   /// Quantas sacas de [grain] cobririam o custo atual dos insumos.
-  double _sacksFor(ProductModel grain) =>
-      grain.currentPrice > 0 ? _inputCost / grain.currentPrice : 0;
+  double _sacksFor(ProductModel grain) => sacksToCover(_inputCost, grain.currentPrice);
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
   /// taxa por hectare × área da propriedade. 0 se não há produtor ou exigência.
@@ -74,8 +83,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     final p = _producer;
     if (p == null) return 0;
     final input = AppData.inputs.firstWhere((i) => i.id == inputId);
-    if (input.requiredPerHa <= 0) return 0;
-    return double.parse((input.requiredPerHa * p.areaHa).toStringAsFixed(2));
+    return minQuantityFor(input.requiredPerHa, p.areaHa);
   }
 
   /// Há algum insumo com exigência mínima por área para o produtor atual?
@@ -87,38 +95,31 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       AppData.categories.where((c) => c.hasRule).toList();
 
   /// Custo (R$) dos insumos escolhidos que pertencem à categoria [categoryId].
-  double _categorySpend(String categoryId) {
-    double t = 0;
-    for (final e in _inputQty.entries) {
-      if (e.value <= 0) continue;
-      final p = AppData.inputs.firstWhere((i) => i.id == e.key);
-      if (p.categoryId == categoryId) t += p.currentPrice * e.value;
-    }
-    return t;
-  }
+  double _categorySpend(String categoryId) => categorySpend(_pricedInputs, categoryId);
 
   /// Mínimo (R$) exigido por uma categoria, dado o estado atual da permuta:
   /// percentual do custo total, ou valor por hectare × área do produtor.
   double _categoryRequired(InputCategoryModel c) {
-    switch (c.ruleType) {
-      case CategoryRuleType.percentOfTotal:
-        return _inputCost * c.ruleValue / 100;
-      case CategoryRuleType.valuePerHa:
-        final p = _producer;
-        return p == null ? 0 : c.ruleValue * p.areaHa;
-      case CategoryRuleType.none:
-        return 0;
-    }
+    final p = _producer;
+    // Sem produtor escolhido não há área, e a regra por hectare não tem base
+    // de cálculo — o servidor sempre tem, porque a permuta chega com produtor.
+    if (p == null && c.ruleType == CategoryRuleType.valuePerHa) return 0;
+    return categoryRequired(
+      CategoryRule.values.byName(c.ruleType.name),
+      c.ruleValue,
+      totalCost: _inputCost,
+      areaHa: p?.areaHa ?? 0,
+    );
   }
 
   /// O mínimo da categoria foi atingido? (tolerância de centavos)
   bool _categoryMet(InputCategoryModel c) {
     final req = _categoryRequired(c);
     if (req <= 0) return true;
-    return _categorySpend(c.id) >= req - 0.01;
+    return _categorySpend(c.id) >= req - moneyEpsilon;
   }
 
-  /// Progresso (0–1) rumo ao mínimo da categoria. Usado na barra do vendedor —
+  /// Progresso (0–1) rumo ao mínimo da categoria. Usado na barra do consultor —
   /// é proporção, nunca expõe R\$.
   double _categoryProgress(InputCategoryModel c) {
     final req = _categoryRequired(c);
@@ -129,7 +130,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// Todas as exigências de categoria foram cumpridas?
   bool get _categoriesOk => _ruledCategories.every(_categoryMet);
 
-  /// Categorias ainda abaixo do mínimo (para avisar o vendedor).
+  /// Categorias ainda abaixo do mínimo (para avisar o consultor).
   List<InputCategoryModel> get _unmetCategories =>
       _ruledCategories.where((c) => !_categoryMet(c)).toList();
 
@@ -141,7 +142,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       if (v <= 0) {
         _inputQty.remove(id);
       } else {
-        _inputQty[id] = double.parse(v.toStringAsFixed(2));
+        _inputQty[id] = roundQuantity(v);
       }
     });
   }
@@ -152,15 +153,14 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// área com seus mínimos obrigatórios, calculados a partir da área dele.
   void _selectProducer(String id) {
     final p = AppData.producerById(id);
-    // Só aceita produtores da carteira do vendedor logado.
-    if (p == null || p.sellerId != widget.seller.id) return;
+    // Só aceita produtores da carteira do consultor logado.
+    if (p == null || p.consultantId != widget.consultant.id) return;
     setState(() {
       _producerId = id;
       _searchQuery = '';
       for (final i in AppData.inputs) {
-        if (i.requiredPerHa > 0) {
-          _inputQty[i.id] = double.parse((i.requiredPerHa * p.areaHa).toStringAsFixed(2));
-        }
+        final min = minQuantityFor(i.requiredPerHa, p.areaHa);
+        if (min > 0) _inputQty[i.id] = min;
       }
     });
   }
@@ -193,7 +193,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   }
 
   /// Resumo completo da permuta antes de enviar: todos os insumos retirados,
-  /// o grão de pagamento e o total de sacas a entregar — para o vendedor
+  /// o grão de pagamento e o total de sacas a entregar — para o consultor
   /// revisar antes de finalizar.
   Future<bool?> _showSummaryDialog() {
     final grain = _paymentGrain;
@@ -384,7 +384,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
         ),
         actionsAlignment: MainAxisAlignment.spaceBetween,
         actions: [
-          // Comprovante para controle: PDF do vendedor, sem valores em R$.
+          // Comprovante para controle: PDF do consultor, sem valores em R$.
           OutlinedButton.icon(
             onPressed: () => _sharePdf(barter, producer),
             icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
@@ -446,10 +446,10 @@ class _NewBarterScreenState extends State<NewBarterScreen>
 
   /// Etapa 1: escolher o produtor da permuta. Vem antes de tudo porque a área
   /// dele define quais insumos são obrigatórios e em que quantidade mínima.
-  /// A lista é a CARTEIRA do vendedor logado: ele nunca vê produtores dos
+  /// A lista é a CARTEIRA do consultor logado: ele nunca vê produtores dos
   /// colegas — só o admin enxerga todas as carteiras.
   Widget _buildProducerStep() {
-    final wallet = AppData.producersForSeller(widget.seller.id);
+    final wallet = AppData.producersForConsultant(widget.consultant.id);
     if (wallet.isEmpty) return _emptyWalletHint();
     final query = _searchQuery.trim().toLowerCase();
     final producers = query.isEmpty
@@ -691,7 +691,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
         ),
       );
 
-  /// Aviso para o vendedor sem produtores na carteira: sem carteira não há
+  /// Aviso para o consultor sem produtores na carteira: sem carteira não há
   /// permuta, e quem cadastra/atribui produtores é o administrador.
   Widget _emptyWalletHint() => Center(
         child: Padding(
@@ -831,7 +831,7 @@ class _DialogLine extends StatelessWidget {
   }
 }
 
-/// Barra de progresso de uma regra de categoria, para o vendedor. Mostra o
+/// Barra de progresso de uma regra de categoria, para o consultor. Mostra o
 /// quanto falta para liberar o envio SEM expor valores em R\$ — só proporção.
 class _CategoryRuleTile extends StatelessWidget {
   final String name;

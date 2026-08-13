@@ -11,6 +11,7 @@ import {
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+import { PaginationQuery } from '../../common/pagination';
 
 export class BarterInputDto {
   @IsInt()
@@ -51,4 +52,17 @@ export class ReviewBarterDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+}
+
+/**
+ * Filtros da listagem. Um status desconhecido é RECUSADO em vez de ignorado:
+ * ignorar devolvia a base inteira com cara de lista filtrada, e quem estivesse
+ * olhando não teria como perceber.
+ */
+export class ListBartersQuery extends PaginationQuery {
+  @IsOptional()
+  @IsIn(['pending', 'approved', 'denied'], {
+    message: 'Filtro de status inválido: use pending, approved ou denied',
+  })
+  status?: 'pending' | 'approved' | 'denied';
 }

@@ -17,7 +17,7 @@ final GlobalKey<ScaffoldMessengerState> appMessengerKey =
 ///
 /// Sem isso o usuário fica preso — o app segue nas telas internas mostrando
 /// "Sessão expirada" a cada toque, sem caminho de volta. Acontece de verdade
-/// quando o admin exclui um vendedor logado: a exclusão apaga os tokens dele
+/// quando o admin exclui um consultor logado: a exclusão apaga os tokens dele
 /// em cascata e o aparelho ainda está na tela de permutas.
 void installSessionExpiryHandler() {
   api.onSessionExpired = () {

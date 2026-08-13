@@ -7,7 +7,7 @@ import 'package:barter_app/services/token_storage.dart';
 
 /// Tour de ponta a ponta contra a API REAL (exige o servidor no ar com o
 /// seed fresco: `cd api && npm run db:reset && npm run start:dev`):
-/// 1. Carteira de produtores: cada vendedor só vê os próprios produtores na
+/// 1. Carteira de produtores: cada consultor só vê os próprios produtores na
 ///    Nova Permuta; o admin vê todos nos Cadastros (com o dono da carteira).
 /// 2. Permuta criada de verdade no servidor + PDF de controle na finalização.
 ///
@@ -65,7 +65,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('carteira por vendedor + PDF na finalização', (tester) async {
+  testWidgets('carteira por consultor + PDF na finalização', (tester) async {
     // O app agora retoma a sessão guardada no aparelho; o tour começa do zero,
     // senão a sessão deixada por uma execução anterior pularia o login.
     await TokenStorage.clear();
@@ -91,15 +91,15 @@ void main() {
     expect(find.text('Osmar Dutra'), findsOneWidget);
     await shot('02-admin-cadastros');
 
-    // Perfil do vendedor mostra a carteira dele.
-    await tester.tap(find.text('Vendedores'));
+    // Perfil do consultor mostra a carteira dele.
+    await tester.tap(find.text('Consultores'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('João Silva'));
     await tester.pumpAndSettle();
     await scrollTo(tester, find.text('Carteira de Produtores (2)'));
     await scrollTo(tester, find.text('Antônio Carvalho'));
     expect(find.text('Sebastião Ramos'), findsOneWidget);
-    await shot('03-admin-perfil-vendedor-carteira');
+    await shot('03-admin-perfil-consultor-carteira');
     await tester.pageBack();
     await tester.pumpAndSettle();
     await logout(tester);

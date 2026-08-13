@@ -28,7 +28,7 @@ describe('Barters (e2e)', () => {
 
   const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
 
-  it('listagem é escopada: vendedor vê as suas, admin vê todas', async () => {
+  it('listagem é escopada: consultor vê as suas, admin vê todas', async () => {
     const asJoao = await request(app.getHttpServer())
       .get('/api/v1/barters')
       .set('Authorization', await asUser(JOAO));
@@ -50,7 +50,7 @@ describe('Barters (e2e)', () => {
     expect(pending.body.data).toHaveLength(3);
   });
 
-  it('vendedor não abre permuta de outro vendedor', async () => {
+  it('consultor não abre permuta de outro consultor', async () => {
     // PRM-2026-002 é da Ana.
     const response = await request(app.getHttpServer())
       .get('/api/v1/barters/PRM-2026-002')
@@ -137,7 +137,7 @@ describe('Barters (e2e)', () => {
     expect(response.status).toBe(403);
   });
 
-  it('admin não registra permuta (ato do vendedor da carteira)', async () => {
+  it('admin não registra permuta (ato do consultor da carteira)', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters')
       .set('Authorization', await asUser(ADMIN))
@@ -168,11 +168,52 @@ describe('Barters (e2e)', () => {
     expect(response.status).toBe(422);
   });
 
-  it('vendedor não revisa permuta', async () => {
+  it('consultor não revisa permuta', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-005/review')
       .set('Authorization', await asUser(JOAO))
       .send({ status: 'approved' });
     expect(response.status).toBe(403);
+  });
+
+  describe('filtros e paginação da listagem', () => {
+    const list = async (query: string) =>
+      request(app.getHttpServer())
+        .get(`/api/v1/barters${query}`)
+        .set('Authorization', await asUser(ADMIN));
+
+    /**
+     * Um status desconhecido sumia do `where` e a resposta trazia TODAS as
+     * permutas — indistinguível, para quem olhava, de "nenhuma permuta tem
+     * esse status" ou de uma lista corretamente filtrada.
+     */
+    it('status desconhecido é recusado em vez de devolver tudo', async () => {
+      const response = await list('?status=lixo');
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('status');
+    });
+
+    it('página traz meta.total e não repete registros entre páginas', async () => {
+      const first = await list('?limit=3');
+      expect(first.body.data).toHaveLength(3);
+      expect(first.body.meta).toEqual({ total: 8, limit: 3, offset: 0 });
+
+      const second = await list('?limit=3&offset=3');
+      const third = await list('?limit=3&offset=6');
+      const codes = [...first.body.data, ...second.body.data, ...third.body.data].map(
+        (b: { code: string }) => b.code,
+      );
+
+      // As três páginas somadas reconstroem a coleção inteira, sem repetição.
+      expect(codes).toHaveLength(8);
+      expect(new Set(codes).size).toBe(8);
+    });
+
+    it('o filtro de status também conta certo no meta', async () => {
+      const response = await list('?status=pending&limit=1');
+      expect(response.body.data).toHaveLength(1);
+      expect(response.body.meta.total).toBe(3);
+      expect(response.body.data[0].status).toBe('pending');
+    });
   });
 });

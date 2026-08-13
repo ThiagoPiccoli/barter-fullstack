@@ -1,13 +1,18 @@
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { bootstrapAdmin } from '../prisma/bootstrap-admin';
 import { seedIfEmpty } from '../prisma/seed-if-empty';
 import { AppModule } from './app.module';
 import { setupApp } from './app.setup';
 import { PrismaService } from './prisma/prisma.service';
+import { setupSwagger, swaggerEnabled } from './swagger';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const logger = new Logger('Bootstrap');
+  // O parser de corpo é registrado no setupApp, com limite explícito.
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
   setupApp(app);
+  if (swaggerEnabled()) setupSwagger(app);
 
   const prisma = app.get(PrismaService);
   if (process.env.NODE_ENV === 'production') {
@@ -15,9 +20,11 @@ async function bootstrap() {
     // senha pública num servidor exposto. O primeiro admin vem do ambiente.
     const result = await bootstrapAdmin(prisma);
     if (result === 'created') {
-      console.log(`Admin inicial criado (${process.env.ADMIN_EMAIL}) — troque a senha no primeiro login.`);
+      logger.log(
+        `Admin inicial criado (${process.env.ADMIN_EMAIL}) — troque a senha no primeiro login.`,
+      );
     } else if (result === 'missing-env') {
-      console.warn(
+      logger.warn(
         'Banco vazio e sem ADMIN_EMAIL/ADMIN_PASSWORD definidos: nenhum usuário foi criado. ' +
           'Defina as duas variáveis e reinicie para provisionar o primeiro acesso.',
       );
@@ -27,11 +34,13 @@ async function bootstrap() {
     // demonstração automaticamente. Bancos já populados não são tocados.
     const seeded = await seedIfEmpty(prisma);
     if (seeded) {
-      console.log('Banco vazio — dataset de demonstração carregado (senha: 123456).');
+      logger.log('Banco vazio — dataset de demonstração carregado (senha: 123456).');
     }
   }
 
   await app.listen(process.env.PORT ?? 3333);
-  console.log(`Barter API no ar: ${await app.getUrl()}`);
+  const url = await app.getUrl();
+  logger.log(`Barter API no ar: ${url}`);
+  if (swaggerEnabled()) logger.log(`Documentação: ${url}/api/v1/docs`);
 }
 void bootstrap();

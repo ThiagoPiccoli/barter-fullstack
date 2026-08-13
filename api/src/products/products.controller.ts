@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   ParseIntPipe,
   Post,
@@ -13,7 +15,12 @@ import type { User } from '@prisma/client';
 import { AdminGuard } from '../common/admin.guard';
 import { CurrentUser } from '../common/decorators';
 import { toProductJson } from '../common/serializers';
-import { CreateProductDto, UpdatePriceDto, UpdateProductDto } from './dto/product.dto';
+import {
+  CreateProductDto,
+  ListProductsQuery,
+  UpdatePriceDto,
+  UpdateProductDto,
+} from './dto/product.dto';
 import { ProductsService } from './products.service';
 
 @Controller('products')
@@ -22,8 +29,8 @@ export class ProductsController {
 
   /** Catálogo com histórico de valores; filtro opcional ?type=grain|input. */
   @Get()
-  async index(@Query('type') type?: string) {
-    return (await this.productsService.list(type)).map(toProductJson);
+  async index(@Query() query: ListProductsQuery) {
+    return (await this.productsService.list(query)).map(toProductJson);
   }
 
   @Get(':id')
@@ -51,5 +58,16 @@ export class ProductsController {
     @Body() dto: UpdatePriceDto,
   ) {
     return toProductJson(await this.productsService.updatePrice(admin, id, dto.price));
+  }
+
+  /**
+   * Retira o produto do catálogo. As permutas já registradas continuam
+   * inteiras (guardam snapshot de nome/unidade/preço nos itens).
+   */
+  @Delete(':id')
+  @UseGuards(AdminGuard)
+  @HttpCode(204)
+  async destroy(@Param('id', ParseIntPipe) id: number) {
+    await this.productsService.delete(id);
   }
 }

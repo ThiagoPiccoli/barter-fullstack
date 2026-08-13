@@ -2,40 +2,84 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/provisional_password_dialog.dart';
 import 'edit_forms.dart';
-import 'seller_profile_admin_screen.dart';
+import 'producer_profile_screen.dart';
 
-/// Perfil de um vendedor visto pelo admin: dados, desempenho e as permutas que
-/// ele registrou (filtradas por sellerId).
-class VendorProfileScreen extends StatefulWidget {
-  final UserModel vendor;
-  const VendorProfileScreen({super.key, required this.vendor});
+/// Perfil de um consultor visto pelo admin: dados, desempenho e as permutas que
+/// ele registrou (filtradas por consultantId).
+class ConsultantProfileScreen extends StatefulWidget {
+  final UserModel consultant;
+  const ConsultantProfileScreen({super.key, required this.consultant});
 
   @override
-  State<VendorProfileScreen> createState() => _VendorProfileScreenState();
+  State<ConsultantProfileScreen> createState() => _ConsultantProfileScreenState();
 }
 
-class _VendorProfileScreenState extends State<VendorProfileScreen> {
-  late UserModel vendor = widget.vendor;
+class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
+  late UserModel consultant = widget.consultant;
 
   Future<void> _edit() async {
     final updated = await Navigator.push<UserModel>(
       context,
-      MaterialPageRoute(builder: (_) => EditVendorScreen(vendor: vendor)),
+      MaterialPageRoute(builder: (_) => EditConsultantScreen(consultant: consultant)),
     );
-    if (updated != null) setState(() => vendor = updated);
+    if (updated != null) setState(() => consultant = updated);
+  }
+
+  /// Sorteia uma nova senha de primeira entrada para este consultor.
+  ///
+  /// É o caminho para os dois casos que acontecem de verdade: o consultor
+  /// esqueceu a senha (não existe recuperação por e-mail — quem provisiona é o
+  /// admin) ou a conta ficou com quem não devia. Nos dois, o reset derruba as
+  /// sessões abertas, então a confirmação avisa isso antes.
+  Future<void> _resetPassword() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.lock_reset, color: AppColors.pending, size: 40),
+        title: const Text('Redefinir senha?'),
+        content: Text(
+          'Uma nova senha provisória será gerada para ${consultant.name.split(' ').first}, '
+          'e a senha atual deixa de valer.\n\n'
+          'Qualquer sessão aberta nesta conta será encerrada — inclusive no aparelho dele.',
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: AppColors.textMedium),
+        ),
+        actionsAlignment: MainAxisAlignment.spaceBetween,
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.lock_reset, size: 18),
+            label: const Text('Redefinir'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    try {
+      final provisioned = await AppData.resetConsultantPassword(consultant.id);
+      if (!mounted) return;
+      setState(() => consultant = provisioned.consultant);
+      await showProvisionalPassword(context, provisioned, isReset: true);
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
   }
 
   void _delete() {
     confirmDeleteRegistration(
       context,
-      title: 'Excluir Vendedor',
-      name: vendor.name,
-      barterCount: AppData.barters.where((b) => b.sellerId == vendor.id).length,
+      title: 'Excluir Consultor',
+      name: consultant.name,
+      barterCount: AppData.barters.where((b) => b.consultantId == consultant.id).length,
       onConfirm: () async {
         // O servidor deixa a carteira sem dono e preserva o histórico.
-        await AppData.deleteSeller(vendor.id);
+        await AppData.deleteConsultant(consultant.id);
         if (mounted) Navigator.pop(context);
       },
     );
@@ -43,8 +87,8 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final wallet = AppData.producersForSeller(vendor.id);
-    final barters = AppData.barters.where((b) => b.sellerId == vendor.id).toList()
+    final wallet = AppData.producersForConsultant(consultant.id);
+    final barters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;
@@ -54,7 +98,7 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Vendedor – ${vendor.name.split(' ')[0]}'),
+        title: Text('Consultor – ${consultant.name.split(' ')[0]}'),
         actions: [
           IconButton(icon: const Icon(Icons.edit_outlined), tooltip: 'Editar', onPressed: _edit),
         ],
@@ -68,13 +112,13 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
                 CircleAvatar(
                   backgroundColor: AppColors.input,
                   radius: 40,
-                  child: Text(vendor.avatarInitials,
+                  child: Text(consultant.avatarInitials,
                       style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
-                Text(vendor.name,
+                Text(consultant.name,
                     style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                Text(vendor.branch,
+                Text(consultant.branch,
                     style: const TextStyle(fontSize: 13, color: AppColors.textMedium), textAlign: TextAlign.center),
                 const SizedBox(height: 6),
                 Container(
@@ -85,7 +129,7 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
                     children: [
                       Icon(Icons.badge_outlined, size: 13, color: AppColors.input),
                       SizedBox(width: 4),
-                      Text('Vendedor',
+                      Text('Consultor',
                           style: TextStyle(fontSize: 12, color: AppColors.input, fontWeight: FontWeight.w600)),
                     ],
                   ),
@@ -97,16 +141,16 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
           Card(
             child: Column(
               children: [
-                InfoTile(icon: Icons.email_outlined, label: 'E-mail', value: vendor.email),
+                InfoTile(icon: Icons.email_outlined, label: 'E-mail', value: consultant.email),
                 const Divider(height: 1),
-                InfoTile(icon: Icons.phone_outlined, label: 'Telefone', value: vendor.phone),
+                InfoTile(icon: Icons.phone_outlined, label: 'Telefone', value: consultant.phone),
                 const Divider(height: 1),
-                InfoTile(icon: Icons.store_outlined, label: 'Filial', value: vendor.branch),
+                InfoTile(icon: Icons.store_outlined, label: 'Filial', value: consultant.branch),
                 const Divider(height: 1),
                 InfoTile(
                   icon: Icons.calendar_today_outlined,
                   label: 'Na empresa desde',
-                  value: '${vendor.createdAt.month.toString().padLeft(2, '0')}/${vendor.createdAt.year}',
+                  value: '${consultant.createdAt.month.toString().padLeft(2, '0')}/${consultant.createdAt.year}',
                 ),
               ],
             ),
@@ -157,7 +201,7 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
                 style: const TextStyle(fontSize: 12, color: AppColors.denied)),
           ],
           const SizedBox(height: 20),
-          // Carteira de produtores: os clientes que só este vendedor atende.
+          // Carteira de produtores: os clientes que só este consultor atende.
           Text('Carteira de Produtores (${wallet.length})',
               style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),
@@ -175,7 +219,7 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
                     onTap: () async {
                       await Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => SellerProfileAdminScreen(producer: p)),
+                        MaterialPageRoute(builder: (_) => ProducerProfileScreen(producer: p)),
                       );
                       if (mounted) setState(() {});
                     },
@@ -210,10 +254,38 @@ class _VendorProfileScreenState extends State<VendorProfileScreen> {
                   subtitle: 'Produtor: ${b.producerName}',
                 )),
           const SizedBox(height: 24),
+          // Antes de excluir: quase sempre o problema é acesso, não cadastro.
+          // Excluir desfaz a carteira inteira; redefinir a senha resolve o
+          // caso comum sem tocar em nada disso.
+          OutlinedButton.icon(
+            onPressed: _resetPassword,
+            icon: const Icon(Icons.lock_reset, color: AppColors.pending),
+            label: const Text('Redefinir senha', style: TextStyle(color: AppColors.pending)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: AppColors.pending),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+          if (consultant.mustChangePassword) ...[
+            const SizedBox(height: 8),
+            const Row(
+              children: [
+                Icon(Icons.hourglass_top, size: 14, color: AppColors.textLight),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Ainda está com a senha provisória: vai defini-la ao entrar.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: _delete,
             icon: const Icon(Icons.delete_outline, color: AppColors.denied),
-            label: const Text('Excluir vendedor', style: TextStyle(color: AppColors.denied)),
+            label: const Text('Excluir consultor', style: TextStyle(color: AppColors.denied)),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: AppColors.denied),
               padding: const EdgeInsets.symmetric(vertical: 14),

@@ -8,7 +8,7 @@ import 'bootstrap_screen.dart';
 
 /// Definição da própria senha. Aparece de dois jeitos:
 ///
-/// - OBRIGATÓRIA ([forced]): o vendedor entrou com a senha provisória que o
+/// - OBRIGATÓRIA ([forced]): o consultor entrou com a senha provisória que o
 ///   admin cadastrou. Não dá para voltar nem pular — é o passo que garante que
 ///   a senha do provisionamento não vira a senha definitiva de ninguém. Ao
 ///   final, entra direto no painel.

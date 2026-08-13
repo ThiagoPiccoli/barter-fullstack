@@ -1,5 +1,21 @@
-import type { INestApplication } from '@nestjs/common';
-import type { Application } from 'express';
+import {
+  BadRequestException,
+  Logger,
+  PayloadTooLargeException,
+  type INestApplication,
+} from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import type { Application, ErrorRequestHandler, RequestHandler } from 'express';
+import helmet from 'helmet';
+import { passwordCostWarning } from './auth/password.util';
+
+/**
+ * Teto do corpo da requisição. A maior chamada da API é uma permuta com
+ * algumas dezenas de insumos — alguns KB. O limite é explícito para não
+ * depender do padrão do Express: uma requisição gigante não deve nem chegar a
+ * ser interpretada.
+ */
+const BODY_LIMIT = '256kb';
 
 /**
  * Origens permitidas no CORS. Em desenvolvimento fica liberado (o app roda de
@@ -47,13 +63,74 @@ function trustProxySetting(): number | boolean | string {
 }
 
 /**
+ * Traduz as falhas do parser de corpo antes que elas virem outra coisa.
+ *
+ * Corpo grande demais e JSON malformado são erros do CLIENTE, mas nascem no
+ * middleware — fora do alcance normal do filtro de exceção. Sem este passo,
+ * um deles chegava como 500 ("bug do servidor", registrado como tal) e o
+ * outro vazava a mensagem crua do motor de JSON, em inglês, na cara do
+ * usuário: "Expected property name or '}' in JSON at position 1".
+ *
+ * Registrado logo depois dos parsers e ANTES das rotas: pela forma como o
+ * Express encadeia tratadores de erro, isto alcança só o que quebra até aqui —
+ * erros das rotas seguem para o filtro global, como devem.
+ */
+function bodyParserErrors(): ErrorRequestHandler {
+  return (error: Error & { type?: string }, _request, _response, next) => {
+    if (error?.type === 'entity.too.large') {
+      return next(new PayloadTooLargeException('O conteúdo enviado é grande demais.'));
+    }
+    if (error?.type === 'entity.parse.failed') {
+      return next(new BadRequestException('O conteúdo enviado não é um JSON válido.'));
+    }
+    return next(error);
+  };
+}
+
+/**
+ * Uma linha por requisição: método, rota, status e duração. Sem isto não há
+ * como responder "o que aconteceu às 14h20?" depois que aconteceu. Nos testes
+ * o logger do Nest está desligado, então nada é impresso.
+ */
+function requestLogger(): RequestHandler {
+  const logger = new Logger('HTTP');
+  return (request, response, next) => {
+    const started = Date.now();
+    response.on('finish', () => {
+      const line = `${request.method} ${request.originalUrl} ${response.statusCode} — ${Date.now() - started}ms`;
+      if (response.statusCode >= 500) logger.error(line);
+      else if (response.statusCode >= 400) logger.warn(line);
+      else logger.log(line);
+    });
+    next();
+  };
+}
+
+/**
  * Configuração de app compartilhada entre o main.ts e os testes e2e, para o
- * servidor de teste se comportar exatamente como o real. Pipes, guard e
- * interceptor globais são providers do AppModule (valem nos dois contextos).
+ * servidor de teste se comportar exatamente como o real. Pipes, guard, filtro
+ * e interceptor globais são providers do AppModule (valem nos dois contextos).
+ *
+ * Os dois criadores de app passam `bodyParser: false`; o parser é registrado
+ * aqui, com limite explícito.
  */
 export function setupApp(app: INestApplication): void {
+  const express = app as NestExpressApplication;
+  express.useBodyParser('json', { limit: BODY_LIMIT });
+  express.useBodyParser('urlencoded', { extended: true, limit: BODY_LIMIT });
+  app.use(bodyParserErrors());
+
+  // Cabeçalhos de segurança. `contentSecurityPolicy` fica de fora: a API só
+  // devolve JSON (uma CSP não protege nada aqui) e a política padrão do helmet
+  // quebraria a página de documentação, que é HTML com estilo embutido.
+  app.use(helmet({ contentSecurityPolicy: false }));
+  app.use(requestLogger());
+
   app.setGlobalPrefix('api/v1', { exclude: ['/'] });
   app.enableCors(corsOptions());
   const server = app.getHttpAdapter().getInstance() as Application;
   server.set('trust proxy', trustProxySetting());
+
+  const warning = passwordCostWarning();
+  if (warning) new Logger('Auth').warn(warning);
 }

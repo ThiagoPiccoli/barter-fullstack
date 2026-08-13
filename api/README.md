@@ -76,7 +76,7 @@ Resposta: `{"data":{"token":"oat_...","user":{...}}}`. Copie o `token`.
 ```bash
 TOKEN="cole-o-token-aqui"
 
-# Listar produtores (admin vê todos; vendedor vê só a própria carteira)
+# Listar produtores (admin vê todos; consultor vê só a própria carteira)
 curl http://localhost:3333/api/v1/producers -H "Authorization: Bearer $TOKEN"
 
 # Listar permutas
@@ -86,7 +86,7 @@ curl http://localhost:3333/api/v1/barters -H "Authorization: Bearer $TOKEN"
 curl http://localhost:3333/api/v1/products -H "Authorization: Bearer $TOKEN"
 ```
 
-**3. Registrar uma permuta** (logado como um vendedor — o servidor calcula as
+**3. Registrar uma permuta** (logado como um consultor — o servidor calcula as
 sacas do grão a partir do custo dos insumos):
 
 ```bash
@@ -98,7 +98,7 @@ curl -X POST http://localhost:3333/api/v1/barters \
         {"productId":7,"quantity":18}]}'
 ```
 
-> Dica: use o admin para revisar (`POST /barters/:code/review`) e um vendedor
+> Dica: use o admin para revisar (`POST /barters/:code/review`) e um consultor
 > (ex.: `joao.silva@barter.com.br`) para criar. Ver a tabela de rotas abaixo.
 
 ---
@@ -108,11 +108,11 @@ curl -X POST http://localhost:3333/api/v1/barters \
 | Papel | E-mail | Carteira de produtores |
 |---|---|---|
 | **Admin** | `admin@barter.com.br` | — (enxerga tudo) |
-| Vendedor | `joao.silva@barter.com.br` | Antônio Carvalho, Sebastião Ramos |
-| Vendedor | `ana.ferreira@barter.com.br` | Helena Prado, Cláudia Nunes |
-| Vendedor | `roberto.souza@barter.com.br` | Joaquim Tavares |
-| Vendedor | `maria.oliveira@barter.com.br` | Osmar Dutra |
-| Vendedor | `lucas.barros@barter.com.br` | Vanessa Lopes |
+| Consultor | `joao.silva@barter.com.br` | Antônio Carvalho, Sebastião Ramos |
+| Consultor | `ana.ferreira@barter.com.br` | Helena Prado, Cláudia Nunes |
+| Consultor | `roberto.souza@barter.com.br` | Joaquim Tavares |
+| Consultor | `maria.oliveira@barter.com.br` | Osmar Dutra |
+| Consultor | `lucas.barros@barter.com.br` | Vanessa Lopes |
 
 Além disso, o dataset traz **9 produtos** (4 grãos + 5 insumos, cada um com 7
 meses de histórico de preço), **3 categorias** de insumo com regras de mínimo, e
@@ -137,26 +137,56 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333      # emulador Android
 ## Comandos
 
 ```bash
-npm run start:dev    # dev server com watch em http://localhost:3333 (auto-seed se vazio)
-npm run db:seed      # (re)carrega o banco com o dataset de demonstração (apaga tudo antes)
-npm test             # 7 testes de unidade (matemática da permuta)
-npm run test:e2e     # 33 testes funcionais (contra um banco de teste próprio)
-npm run build        # compila para dist/
-npm run start:prod   # roda o build compilado
+npm run start:dev      # dev server com watch em http://localhost:3333 (auto-seed se vazio)
+npm run db:seed        # (re)carrega o banco com o dataset de demonstração (apaga tudo antes)
+npm run db:reset       # apaga o banco, reaplica as migrations do zero e semeia
+npm test               # 30 testes de unidade (matemática, throttling, setup, filtro de erro)
+npm run test:e2e       # 65 testes funcionais (contra um banco de teste próprio)
+npm run lint           # ESLint + Prettier
+npm run build          # compila para dist/
+npm run start:prod     # roda o build compilado
+npm run password:reset # redefine a senha de qualquer conta (saída de emergência do admin)
 ```
 
 ---
 
 ## Papéis e regra de acesso
 
-- **admin** — gerencia cadastros (vendedores, produtores), valores de
+- **admin** — gerencia cadastros (consultores, produtores), valores de
   referência e pastas de insumos; revisa (aprova/nega) permutas. Enxerga tudo.
-- **seller (vendedor)** — loga no app e registra permutas **apenas para os
+- **consultant (consultor)** — loga no app e registra permutas **apenas para os
   produtores da própria carteira**; nunca vê as carteiras dos colegas.
-- **produtor** — não loga: é um cadastro designado pelo vendedor nas permutas.
+- **produtor** — não loga: é um cadastro designado pelo consultor nas permutas.
 
-Não há signup público: vendedores são provisionados pelo admin (nascem com a
-senha padrão `123456`).
+Não há signup público: consultores são provisionados pelo admin.
+
+### Senha de primeira entrada
+
+Ao criar um consultor, o servidor **sorteia uma senha só dele** e a devolve
+**uma única vez**, no corpo da resposta (`provisionalPassword`, algo como
+`K7NP-4TQX`). O admin dita esse valor para o consultor; depois disso ele não
+pode mais ser lido — o banco guarda apenas o hash.
+
+A aleatoriedade não é capricho. Enquanto essa senha foi um valor fixo igual
+para todos, quem soubesse o e-mail de um consultor recém-cadastrado podia
+entrar antes dele, definir a senha definitiva e ficar com a conta — sem
+nenhuma forma de o admin retomá-la.
+
+Perdeu-se a senha (ou a conta caiu em mãos erradas)? `POST
+/consultants/:id/reset-password` sorteia outra e **encerra todas as sessões
+abertas** daquela conta.
+
+### E se o próprio admin perder a senha?
+
+O admin não tem ninguém acima dele, e o provisionamento inicial só roda com o
+banco vazio. A saída é pela linha de comando, no servidor:
+
+```bash
+npm run password:reset                        # lista as contas cadastradas
+npm run password:reset -- admin@empresa.com   # sorteia uma senha provisória
+```
+
+A senha definida por aí também é provisória: exige troca no primeiro login.
 
 ## Rotas (prefixo `/api/v1`)
 
@@ -165,26 +195,54 @@ senha padrão `123456`).
 | POST | `/auth/login` | público | E-mail + senha → token (Bearer) |
 | POST | `/auth/logout` | autenticado | Revoga o token atual |
 | GET | `/me` | autenticado | Perfil do usuário logado |
-| GET | `/producers` | autenticado | Carteira do vendedor; admin vê todas (`?sellerId=`) |
+| POST | `/auth/password` | autenticado | Troca da própria senha (derruba as outras sessões) |
+| GET | `/producers` | autenticado | Carteira do consultor; admin vê todas (`?consultantId=`) |
 | GET | `/producers/:id` | autenticado | Detalhe (escopado por carteira) |
 | POST/PUT/DELETE | `/producers[/:id]` | admin | CRUD de produtores |
 | GET | `/products` | autenticado | Catálogo com histórico de valores (`?type=grain\|input`) |
 | GET | `/products/:id` | autenticado | Produto + linha do tempo |
 | POST/PUT | `/products[/:id]` | admin | Criação/edição de cadastro |
 | PUT | `/products/:id/price` | admin | Reajuste (gera ponto no histórico) |
+| DELETE | `/products/:id` | admin | Tira do catálogo (permutas antigas intactas) |
 | GET | `/categories` | autenticado | Pastas de insumos e regras vigentes |
 | POST/PUT/DELETE | `/categories[/:id]` | admin | CRUD de pastas |
-| GET | `/sellers` | admin | Vendedores |
-| POST/PUT/DELETE | `/sellers[/:id]` | admin | CRUD de vendedores |
+| GET | `/consultants` | admin | Consultores |
+| POST/PUT/DELETE | `/consultants[/:id]` | admin | CRUD de consultores |
+| POST | `/consultants/:id/reset-password` | admin | Nova senha provisória; encerra as sessões dele |
 | GET | `/barters` | autenticado | Escopado por papel (`?status=`) |
 | GET | `/barters/:code` | autenticado | Detalhe pelo código público (PRM-AAAA-NNN) |
-| POST | `/barters` | vendedor | Registra permuta (ver regras abaixo) |
+| POST | `/barters` | consultor | Registra permuta (ver regras abaixo) |
 | POST | `/barters/:code/review` | admin | Aprova/nega pendente com observação |
 
-Respostas usam o envelope `{ "data": ... }` (via `EnvelopeInterceptor`). Erros
-de negócio: `{ "message": "..." }` (403/404/422); erros de validação de
-payload também caem em `{ "message": "<primeira mensagem>" }` — uma string
-única, que é o que o app exibe.
+Documentação navegável em **`/api/v1/docs`** (Swagger). Fica aberta fora de
+produção; em produção, só com `SWAGGER=on`.
+
+### Formato das respostas
+
+Sucesso vem no envelope `{ "data": ... }` (via `EnvelopeInterceptor`). As
+listas que crescem com o uso — `/barters` e `/producers` — são **paginadas** e
+trazem um `meta` ao lado:
+
+```json
+{ "data": [ ... ], "meta": { "total": 842, "limit": 100, "offset": 0 } }
+```
+
+Aceitam `?limit=` (padrão 100, máximo 500) e `?offset=`. `data` continua sendo
+o array puro, então quem já lia a lista não muda nada — o `meta` diz o que
+existe além da página. O catálogo (`/products`, `/categories`) e
+`/consultants` não são paginados de propósito: são limitados pelo tamanho da
+operação, e o app precisa deles inteiros para montar a tela de permuta.
+
+**Todo** erro sai como `{ "message": "<frase em pt-BR>", "statusCode": N }` —
+uma string única, que é o que o app exibe direto ao usuário. Vale para regra de
+negócio (403/404/422), validação de payload, corpo malformado (400), corpo
+grande demais (413) e excesso de tentativas (429). Erros inesperados (500) não
+carregam detalhe interno: devolvem um `requestId` que aparece no log do
+servidor junto com a pilha.
+
+**Filtro que a API não entende é RECUSADO com 422**, nunca ignorado
+(`?status=lixo`, `?consultantId=abc`). Ignorar devolvia a base inteira com
+aparência de lista filtrada.
 
 ## O coração do escambo (`src/barters/barters.service.ts`)
 
@@ -203,7 +261,7 @@ payload também caem em `{ "message": "<primeira mensagem>" }` — uma string
 
 O servidor então:
 
-1. confere que o produtor pertence à carteira do vendedor autenticado;
+1. confere que o produtor pertence à carteira do consultor autenticado;
 2. exige todo insumo com taxa por hectare em pelo menos `taxa × área` do
    produtor (payload sem um insumo obrigatório é rejeitado);
 3. valida as regras de mínimo das pastas (`% do custo total` ou `R$/ha`);
@@ -247,7 +305,18 @@ test/
 - **Tokens de acesso** são opacos: o valor cru vai ao cliente, o banco guarda
   só o SHA-256 (`AccessToken.hash`). Logout apaga a linha — revogação real.
 - **Senha**: `scrypt` do próprio Node (`src/auth/password.util.ts`), sem
-  dependência nativa adicional.
+  dependência nativa adicional. O hash guarda os PARÂMETROS de custo junto
+  (`scrypt:N:r:p:salt:hash`) — é o que permite encarecer o cálculo mais tarde
+  sem invalidar as senhas já cadastradas: quem entra com um hash antigo sai com
+  um hash no custo de hoje, sem precisar trocar de senha. Ajustável por
+  `PASSWORD_COST` (padrão 16, ~170ms); os testes baixam para a suíte caber, e o
+  servidor avisa na subida se encontrar valor abaixo do padrão.
+- **Login não denuncia quem existe**: e-mail desconhecido paga o mesmo custo de
+  scrypt de uma verificação real. Sem isso a resposta voltaria rápido demais e
+  o tempo diria o que a mensagem genérica esconde.
+- **SQLite em WAL** com `busy_timeout` (ver `PrismaService`): leitura e escrita
+  deixam de se bloquear, e uma escrita concorrente espera pelo lock em vez de
+  devolver "database is locked" na cara do usuário.
 - **Testes e2e usam banco próprio** (`.env.test`, `prisma/test.db`) e resetam
   os ids de autoincrement do SQLite a cada teste (`DELETE FROM
   sqlite_sequence`) — sem isso, `deleteMany()` não reinicia o contador e os
@@ -255,8 +324,31 @@ test/
 
 ## Produção
 
-- Troque para Postgres: mude `provider` em `prisma/schema.prisma`, troque o
-  driver adapter em `src/prisma/prisma.service.ts` (ex.: `@prisma/adapter-pg`)
-  e rode `prisma migrate dev`.
-- Configure CORS explicitamente em `src/app.setup.ts` (`enableCors()` hoje
-  libera tudo, adequado só para dev) e sirva atrás de HTTPS.
+Copie `.env.example` para `.env` — ele documenta cada variável. O essencial:
+
+| Variável | Para quê |
+|---|---|
+| `NODE_ENV=production` | Desliga o dataset de demonstração (ele criaria contas com senha pública) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Primeiro acesso, criado só se o banco estiver vazio |
+| `CORS_ORIGINS` | Origens liberadas. Sem ela, nenhuma origem externa passa (o app mobile não depende disso) |
+| `TRUST_PROXY` | **Obrigatório atrás de nginx/Cloudflare/PaaS.** Sem isto o limite por IP conta o IP do proxy e todos os usuários somados disputam as mesmas 10 tentativas de login por minuto |
+| `PASSWORD_COST` | Custo do scrypt (padrão 16). Nunca abaixe em produção |
+| `SWAGGER=on` | Abre a documentação, que em produção fica fechada por padrão |
+
+Já vem resolvido: cabeçalhos de segurança (helmet), limite de corpo (256kb),
+CORS fechado por padrão em produção, limite de requisições por IP, log de uma
+linha por requisição e filtro global de erro que não vaza detalhe interno.
+
+### Uma instância só
+
+O SQLite via `better-sqlite3` roda **dentro do processo**: duas instâncias da
+API sobre o mesmo arquivo não se coordenam. Para uma cooperativa isso é
+suficiente e simplifica a operação — mas é uma decisão consciente, não um
+descuido. O código não depende dela: a geração do código público da permuta,
+por exemplo, já trata a colisão de corrida que só apareceria com mais de um
+processo (ver `createWithCode` em `barters.service.ts`).
+
+Para escalar horizontalmente, troque para Postgres: mude `provider` em
+`prisma/schema.prisma`, troque o driver adapter em
+`src/prisma/prisma.service.ts` (ex.: `@prisma/adapter-pg`) e rode
+`prisma migrate dev`. Os services não mudam.

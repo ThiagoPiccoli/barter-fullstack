@@ -11,33 +11,48 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AdminGuard } from '../common/admin.guard';
-import { toUserJson } from '../common/serializers';
-import { CreateSellerDto, UpdateSellerDto } from './dto/seller.dto';
-import { SellersService } from './sellers.service';
+import { toProvisionedConsultantJson, toUserJson } from '../common/serializers';
+import { CreateConsultantDto, UpdateConsultantDto } from './dto/consultant.dto';
+import { ConsultantsService } from './consultants.service';
 
-@Controller('sellers')
+@Controller('consultants')
 @UseGuards(AdminGuard)
-export class SellersController {
-  constructor(private readonly sellersService: SellersService) {}
+export class ConsultantsController {
+  constructor(private readonly consultantsService: ConsultantsService) {}
 
   @Get()
   async index() {
-    return (await this.sellersService.list()).map(toUserJson);
+    return (await this.consultantsService.list()).map(toUserJson);
   }
 
+  /**
+   * Provisiona o consultor. A resposta traz `provisionalPassword` UMA ÚNICA
+   * VEZ — é o que o admin dita para o consultor entrar. Não há como recuperar
+   * esse valor depois; o caminho para isso é o reset abaixo.
+   */
   @Post()
-  async store(@Body() dto: CreateSellerDto) {
-    return toUserJson(await this.sellersService.create(dto));
+  async store(@Body() dto: CreateConsultantDto) {
+    return toProvisionedConsultantJson(await this.consultantsService.create(dto));
   }
 
   @Put(':id')
-  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateSellerDto) {
-    return toUserJson(await this.sellersService.update(id, dto));
+  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateConsultantDto) {
+    return toUserJson(await this.consultantsService.update(id, dto));
+  }
+
+  /**
+   * Nova senha provisória para um consultor que perdeu o acesso — ou cuja
+   * conta caiu em mãos erradas. Encerra todas as sessões abertas dele.
+   */
+  @Post(':id/reset-password')
+  @HttpCode(200)
+  async resetPassword(@Param('id', ParseIntPipe) id: number) {
+    return toProvisionedConsultantJson(await this.consultantsService.resetPassword(id));
   }
 
   @Delete(':id')
   @HttpCode(204)
   async destroy(@Param('id', ParseIntPipe) id: number) {
-    await this.sellersService.delete(id);
+    await this.consultantsService.delete(id);
   }
 }

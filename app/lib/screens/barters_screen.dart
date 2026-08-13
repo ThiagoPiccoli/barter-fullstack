@@ -7,8 +7,8 @@ import 'barter_detail_screen.dart';
 
 class BartersScreen extends StatefulWidget {
   final bool isAdmin;
-  final String? sellerId;
-  const BartersScreen({super.key, required this.isAdmin, required this.sellerId});
+  final String? consultantId;
+  const BartersScreen({super.key, required this.isAdmin, required this.consultantId});
   @override
   State<BartersScreen> createState() => _BartersScreenState();
 }
@@ -32,7 +32,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
         ? List<BarterModel>.from(AppData.barters)
-        : AppData.barters.where((b) => b.sellerId == widget.sellerId).toList();
+        : AppData.barters.where((b) => b.consultantId == widget.consultantId).toList();
     if (status != null) list = list.where((b) => b.status == status).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
@@ -40,7 +40,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           .where((b) =>
               b.id.toLowerCase().contains(q) ||
               b.producerName.toLowerCase().contains(q) ||
-              b.sellerName.toLowerCase().contains(q))
+              b.consultantName.toLowerCase().contains(q))
           .toList();
     }
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -167,7 +167,7 @@ class _BarterCard extends StatelessWidget {
                         style: const TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600)),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text('Vend.: ${barter.sellerName}',
+                      child: Text('Vend.: ${barter.consultantName}',
                           style: const TextStyle(fontSize: 11, color: AppColors.textLight),
                           overflow: TextOverflow.ellipsis),
                     ),

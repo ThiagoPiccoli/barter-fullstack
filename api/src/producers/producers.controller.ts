@@ -15,20 +15,17 @@ import type { User } from '@prisma/client';
 import { AdminGuard } from '../common/admin.guard';
 import { CurrentUser } from '../common/decorators';
 import { toProducerJson } from '../common/serializers';
-import { ProducerDto } from './dto/producer.dto';
+import { ListProducersQuery, ProducerDto } from './dto/producer.dto';
 import { ProducersService } from './producers.service';
 
 @Controller('producers')
 export class ProducersController {
   constructor(private readonly producersService: ProducersService) {}
 
+  /** Carteira escopada. Aceita ?consultantId= (admin), ?limit= e ?offset=. */
   @Get()
-  async index(@CurrentUser() user: User, @Query('sellerId') sellerId?: string) {
-    const producers = await this.producersService.listFor(
-      user,
-      sellerId ? Number(sellerId) : undefined,
-    );
-    return producers.map(toProducerJson);
+  async index(@CurrentUser() user: User, @Query() query: ListProducersQuery) {
+    return (await this.producersService.listFor(user, query)).map(toProducerJson);
   }
 
   @Get(':id')

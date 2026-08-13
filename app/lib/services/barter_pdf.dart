@@ -10,7 +10,7 @@ import '../widgets/common_widgets.dart' show formatCurrency, formatQty, formatSa
 /// Comprovante de permuta em PDF, para controle e assinatura das partes.
 ///
 /// [showValues] segue a mesma regra de privacidade das telas: o ADMIN vê os
-/// valores em R$ (custo dos insumos, valor de referência do grão); o VENDEDOR
+/// valores em R$ (custo dos insumos, valor de referência do grão); o CONSULTOR
 /// vê apenas quantidades e sacas — para ele a permuta é "insumos retirados
 /// viram sacas do grão", sem dinheiro envolvido.
 class BarterPdf {
@@ -156,7 +156,7 @@ class BarterPdf {
     );
   }
 
-  /// Bloco com as duas partes da permuta (vendedor e produtor) e as datas.
+  /// Bloco com as duas partes da permuta (consultor e produtor) e as datas.
   static pw.Widget _parties(BarterModel barter, ProducerModel? producer) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
@@ -174,9 +174,9 @@ class BarterPdf {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    _partyLabel('VENDEDOR'),
-                    _kv('Nome', barter.sellerName),
-                    _kv('Filial', barter.sellerBranch),
+                    _partyLabel('CONSULTOR'),
+                    _kv('Nome', barter.consultantName),
+                    _kv('Filial', barter.consultantBranch),
                   ],
                 ),
               ),
@@ -398,7 +398,7 @@ class BarterPdf {
       children: [
         line('Produtor', barter.producerName),
         pw.SizedBox(width: 40),
-        line('Vendedor', barter.sellerName),
+        line('Consultor', barter.consultantName),
       ],
     );
   }

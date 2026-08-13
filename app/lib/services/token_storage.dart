@@ -1,7 +1,7 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Guarda o token de acesso entre execuções do app (Keychain no iOS/macOS,
-/// armazenamento criptografado no Android). É o que permite o vendedor abrir o
+/// armazenamento criptografado no Android). É o que permite o consultor abrir o
 /// app e continuar logado — sem isso, cada abertura exigiria login de novo.
 ///
 /// O token é opaco e revogável no servidor: guardá-lo aqui não decide nada

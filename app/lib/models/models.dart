@@ -1,4 +1,4 @@
-enum UserRole { admin, seller }
+enum UserRole { admin, consultant }
 
 /// Conversões defensivas do JSON da API: números podem chegar como int/double
 /// e ids são expostos como String para o restante do app.
@@ -43,24 +43,44 @@ class UserModel {
         email: json['email'] as String,
         phone: (json['phone'] ?? '') as String,
         branch: (json['branch'] ?? '') as String,
-        role: json['role'] == 'admin' ? UserRole.admin : UserRole.seller,
+        role: json['role'] == 'admin' ? UserRole.admin : UserRole.consultant,
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
         mustChangePassword: json['mustChangePassword'] == true,
       );
 }
 
+/// Consultor recém-provisionado, com a senha de primeira entrada que o
+/// servidor sorteou. Chega UMA ÚNICA VEZ — na criação do cadastro ou num
+/// reset — e nunca mais pode ser lida de volta: daí em diante o servidor só
+/// guarda o hash. É o valor que o admin dita para o consultor.
+class ProvisionedConsultant {
+  final UserModel consultant;
+  final String provisionalPassword;
+
+  const ProvisionedConsultant({
+    required this.consultant,
+    required this.provisionalPassword,
+  });
+
+  factory ProvisionedConsultant.fromJson(Map<String, dynamic> json) =>
+      ProvisionedConsultant(
+        consultant: UserModel.fromJson(json),
+        provisionalPassword: (json['provisionalPassword'] ?? '') as String,
+      );
+}
+
 /// Produtor (cliente) designado a uma permuta. NÃO loga no app — é cadastrado
-/// e selecionado pelo vendedor ao registrar cada permuta. É o dono dos grãos
+/// e selecionado pelo consultor ao registrar cada permuta. É o dono dos grãos
 /// que pagarão os insumos.
 class ProducerModel {
   final String id;
   final String name;
 
-  /// Vendedor dono da CARTEIRA a que este produtor pertence. Cada produtor
-  /// pertence a exatamente um vendedor: o vendedor só vê (e permuta com) os
+  /// Consultor dono da CARTEIRA a que este produtor pertence. Cada produtor
+  /// pertence a exatamente um consultor: o consultor só vê (e permuta com) os
   /// produtores da própria carteira; o admin vê todas as carteiras.
-  final String sellerId;
+  final String consultantId;
 
   /// CPF ou CNPJ.
   final String document;
@@ -82,7 +102,7 @@ class ProducerModel {
   const ProducerModel({
     required this.id,
     required this.name,
-    required this.sellerId,
+    required this.consultantId,
     required this.document,
     required this.phone,
     required this.farmName,
@@ -95,8 +115,8 @@ class ProducerModel {
   factory ProducerModel.fromJson(Map<String, dynamic> json) => ProducerModel(
         id: _asId(json['id']),
         name: json['name'] as String,
-        // '' quando o vendedor da carteira foi excluído (aguarda realocação).
-        sellerId: _asId(json['sellerId']),
+        // '' quando o consultor da carteira foi excluído (aguarda realocação).
+        consultantId: _asId(json['consultantId']),
         document: json['document'] as String,
         phone: (json['phone'] ?? '') as String,
         farmName: json['farmName'] as String,
@@ -125,6 +145,23 @@ class ProducerModel {
 enum ProductType { grain, input }
 
 enum BarterStatus { pending, approved, denied }
+
+/// Status vindo do servidor, tolerante ao desconhecido.
+///
+/// `BarterStatus.values.byName` LANÇA num nome que não existe: bastaria o
+/// servidor ganhar um status novo (uma permuta cancelada, por exemplo) para a
+/// lista inteira parar de carregar nas versões do app já instaladas — uma tela
+/// vazia no lugar de todas as permutas.
+///
+/// Um status que o app não conhece cai em "em análise": o registro continua
+/// visível, e quem decide se ele aceita ação continua sendo o servidor, que
+/// recusa revisar o que não está pendente.
+BarterStatus _asStatus(dynamic v) {
+  for (final status in BarterStatus.values) {
+    if (status.name == v) return status;
+  }
+  return BarterStatus.pending;
+}
 
 /// Item de uma permuta. Serve tanto para o grão entregue quanto para o
 /// insumo retirado. [unitValue] é o valor de referência (R$) por unidade no
@@ -161,11 +198,11 @@ class BarterItem {
 /// quantas sacas do grão escolhido cobrem esse custo — esse é o coração do escambo.
 class BarterModel {
   final String id;
-  // Vendedor: usuário que registrou a permuta (loga no app).
-  final String sellerId;
-  final String sellerName;
-  final String sellerBranch;
-  // Produtor: cliente designado pelo vendedor, dono dos grãos que pagam.
+  // Consultor: usuário que registrou a permuta (loga no app).
+  final String consultantId;
+  final String consultantName;
+  final String consultantBranch;
+  // Produtor: cliente designado pelo consultor, dono dos grãos que pagam.
   final String producerId;
   final String producerName;
   final BarterStatus status;
@@ -178,9 +215,9 @@ class BarterModel {
 
   const BarterModel({
     required this.id,
-    required this.sellerId,
-    required this.sellerName,
-    required this.sellerBranch,
+    required this.consultantId,
+    required this.consultantName,
+    required this.consultantBranch,
     required this.producerId,
     required this.producerName,
     required this.status,
@@ -199,12 +236,12 @@ class BarterModel {
         .cast<Map<String, dynamic>>();
     return BarterModel(
       id: json['code'] as String,
-      sellerId: _asId(json['sellerId']),
-      sellerName: json['sellerName'] as String,
-      sellerBranch: (json['sellerBranch'] ?? '') as String,
+      consultantId: _asId(json['consultantId']),
+      consultantName: json['consultantName'] as String,
+      consultantBranch: (json['consultantBranch'] ?? '') as String,
       producerId: _asId(json['producerId']),
       producerName: json['producerName'] as String,
-      status: BarterStatus.values.byName(json['status'] as String),
+      status: _asStatus(json['status']),
       grains: items
           .where((i) => i['kind'] == 'grain')
           .map(BarterItem.fromJson)
@@ -346,7 +383,7 @@ enum CategoryRuleType {
 
 /// "Pasta" de insumos (ex.: Defensivos, Fertilizantes). Agrupa produtos e pode
 /// carregar uma regra de mínimo que funciona como gatilho para fechar a permuta:
-/// enquanto o mínimo da pasta não é atingido, o vendedor não consegue enviar.
+/// enquanto o mínimo da pasta não é atingido, o consultor não consegue enviar.
 ///
 /// A regra é o percentual/valor VIGENTE, editável pelo admin a cada período
 /// (ex.: 2% numa semana, 3% na outra). Não há calendário: o admin troca o valor
@@ -372,14 +409,20 @@ class InputCategoryModel {
       InputCategoryModel(
         id: _asId(json['id']),
         name: json['name'] as String,
-        ruleType: CategoryRuleType.values.byName(json['ruleType'] as String),
+        // Mesmo cuidado do status: uma regra que o app não conhece não pode
+        // derrubar o catálogo inteiro. Sem exigência é o padrão seguro — o
+        // servidor valida os mínimos de novo no envio da permuta.
+        ruleType: CategoryRuleType.values.firstWhere(
+          (r) => r.name == json['ruleType'],
+          orElse: () => CategoryRuleType.none,
+        ),
         ruleValue: _asDouble(json['ruleValue']),
       );
 
   /// A categoria tem uma exigência ativa que pode travar o envio da permuta.
   bool get hasRule => ruleType != CategoryRuleType.none && ruleValue > 0;
 
-  /// Descrição da regra para o ADMIN (pode citar R$, diferente do vendedor).
+  /// Descrição da regra para o ADMIN (pode citar R$, diferente do consultor).
   String get ruleLabelAdmin {
     switch (ruleType) {
       case CategoryRuleType.none:

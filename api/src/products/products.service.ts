@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import type { PriceHistoryEntry, Product, User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateProductDto, UpdateProductDto } from './dto/product.dto';
+import { CreateProductDto, ListProductsQuery, UpdateProductDto } from './dto/product.dto';
 
 type ProductWithHistory = Product & { priceHistory: PriceHistoryEntry[] };
 
@@ -14,9 +14,9 @@ const withHistory = {
 export class ProductsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(type?: string): Promise<ProductWithHistory[]> {
+  async list(query: ListProductsQuery): Promise<ProductWithHistory[]> {
     return this.prisma.product.findMany({
-      where: type === 'grain' || type === 'input' ? { type } : {},
+      where: query.type ? { type: query.type } : {},
       include: withHistory,
       orderBy: { id: 'asc' },
     });
@@ -67,24 +67,35 @@ export class ProductsService {
    */
   async updatePrice(admin: User, id: number, price: number): Promise<ProductWithHistory> {
     await this.find(id);
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.product.update({
-        where: { id },
-        data: {
-          currentPrice: price,
-          priceHistory: {
-            create: {
-              price,
-              changedBy: admin.fullName,
-              changedById: admin.id,
-              changedAt: new Date(),
-            },
+    return this.prisma.product.update({
+      where: { id },
+      data: {
+        currentPrice: price,
+        priceHistory: {
+          create: {
+            price,
+            changedBy: admin.fullName,
+            changedById: admin.id,
+            changedAt: new Date(),
           },
         },
-        include: withHistory,
-      }),
-    ]);
-    return updated;
+      },
+      include: withHistory,
+    });
+  }
+
+  /**
+   * Tira o produto do catálogo. O HISTÓRICO sobrevive: os itens das permutas
+   * já registradas guardam nome, unidade e preço no próprio registro, e o FK
+   * apenas vira NULL (SetNull no schema). Ou seja, apagar um insumo descontinuado
+   * não reescreve nenhuma permuta antiga — só impede novas.
+   *
+   * A linha do tempo de PREÇOS, essa sim, vai junto (Cascade): ela só faz
+   * sentido enquanto o produto existe.
+   */
+  async delete(id: number): Promise<void> {
+    await this.find(id);
+    await this.prisma.product.delete({ where: { id } });
   }
 
   private async ensureCategory(categoryId: number | null, type: string): Promise<void> {

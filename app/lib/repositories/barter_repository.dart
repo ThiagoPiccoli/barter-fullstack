@@ -4,9 +4,12 @@ import '../services/api/api_client.dart';
 /// Permutas. O payload de criação leva apenas produtos e quantidades — quem
 /// precifica, valida mínimos e calcula as sacas do grão é o servidor.
 class BarterRepository {
+  /// Todas as permutas visíveis para o usuário. A rota é paginada no servidor
+  /// (ver ApiClient.getAll): o cache do app continua completo, e a API deixa
+  /// de precisar montar a coleção inteira numa resposta só.
   Future<List<BarterModel>> list() async {
-    final data = await api.get('/barters') as List;
-    return data.cast<Map<String, dynamic>>().map(BarterModel.fromJson).toList();
+    final data = await api.getAll('/barters');
+    return data.map(BarterModel.fromJson).toList();
   }
 
   Future<BarterModel> create({

@@ -23,7 +23,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
   }
 
   /// Comprovante em PDF para controle. Segue a regra das telas: o admin recebe
-  /// o documento com valores em R$; o vendedor, só quantidades e sacas.
+  /// o documento com valores em R$; o consultor, só quantidades e sacas.
   Future<void> _sharePdf(ProducerModel? producer) async {
     try {
       await BarterPdf.share(_barter, producer: producer, showValues: widget.isAdmin);
@@ -76,8 +76,8 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                   if (producer != null)
                     _InfoRow(label: 'Propriedade', value: producer.location),
                   if (widget.isAdmin) ...[
-                    _InfoRow(label: 'Vendedor', value: _barter.sellerName),
-                    _InfoRow(label: 'Filial', value: _barter.sellerBranch),
+                    _InfoRow(label: 'Consultor', value: _barter.consultantName),
+                    _InfoRow(label: 'Filial', value: _barter.consultantBranch),
                   ],
                   const Divider(height: 16),
                   _InfoRow(label: 'Criada em', value: _formatDate(_barter.createdAt)),

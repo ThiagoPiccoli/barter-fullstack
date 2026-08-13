@@ -1,28 +1,23 @@
-import {
-  Body,
-  Controller,
-  Get,
-  HttpCode,
-  Param,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { AdminGuard } from '../common/admin.guard';
 import { CurrentUser } from '../common/decorators';
 import { toBarterJson } from '../common/serializers';
 import { BartersService } from './barters.service';
-import { CreateBarterDto, ReviewBarterDto } from './dto/barter.dto';
+import { CreateBarterDto, ListBartersQuery, ReviewBarterDto } from './dto/barter.dto';
 
 @Controller('barters')
 export class BartersController {
   constructor(private readonly bartersService: BartersService) {}
 
-  /** Listagem escopada (vendedor: as suas; admin: todas), ?status= opcional. */
+  /**
+   * Listagem escopada (consultor: as suas; admin: todas). Aceita ?status=,
+   * ?limit= e ?offset=; a resposta traz `meta.total` com o tamanho real da
+   * coleção por trás da página.
+   */
   @Get()
-  async index(@CurrentUser() user: User, @Query('status') status?: string) {
-    return (await this.bartersService.listFor(user, status)).map(toBarterJson);
+  async index(@CurrentUser() user: User, @Query() query: ListBartersQuery) {
+    return (await this.bartersService.listFor(user, query)).map(toBarterJson);
   }
 
   /** Detalhe pelo código público (ex.: PRM-2026-001). */
@@ -32,7 +27,7 @@ export class BartersController {
   }
 
   /**
-   * Registro de permuta pelo vendedor. O payload traz apenas produtos e
+   * Registro de permuta pelo consultor. O payload traz apenas produtos e
    * quantidades: preços, mínimos e o cálculo das sacas são autoridade do
    * servidor (BartersService).
    */

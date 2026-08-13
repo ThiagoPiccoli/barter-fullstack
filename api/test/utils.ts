@@ -13,7 +13,9 @@ import { PrismaService } from '../src/prisma/prisma.service';
  */
 export async function createTestApp(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication({ logger: false });
+  // `bodyParser: false` espelha o main.ts: quem registra o parser (com limite
+  // explícito) é o setupApp, e o servidor de teste precisa do mesmo.
+  const app = moduleRef.createNestApplication({ logger: false, bodyParser: false });
   setupApp(app);
   await app.init();
   return app;

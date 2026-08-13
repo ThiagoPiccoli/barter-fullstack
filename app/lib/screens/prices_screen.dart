@@ -68,8 +68,18 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
             child: TabBarView(
               controller: _tabController,
               children: [
-                _ProductPriceList(products: AppData.grains, query: q, onUpdate: () => setState(() {})),
-                _ProductPriceList(products: AppData.inputs, query: q, onUpdate: () => setState(() {})),
+                _ProductPriceList(
+                  products: AppData.grains,
+                  type: ProductType.grain,
+                  query: q,
+                  onUpdate: () => setState(() {}),
+                ),
+                _ProductPriceList(
+                  products: AppData.inputs,
+                  type: ProductType.input,
+                  query: q,
+                  onUpdate: () => setState(() {}),
+                ),
                 _CategoryList(query: q, onUpdate: () => setState(() {})),
               ],
             ),
@@ -82,10 +92,26 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
 
 class _ProductPriceList extends StatelessWidget {
   final List<ProductModel> products;
+  final ProductType type;
   final String query;
   final VoidCallback onUpdate;
 
-  const _ProductPriceList({required this.products, required this.query, required this.onUpdate});
+  const _ProductPriceList({
+    required this.products,
+    required this.type,
+    required this.query,
+    required this.onUpdate,
+  });
+
+  bool get _isGrain => type == ProductType.grain;
+
+  Future<void> _create(BuildContext context) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NewProductScreen(type: type)),
+    );
+    onUpdate();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -93,23 +119,40 @@ class _ProductPriceList extends StatelessWidget {
         ? products
         : products.where((p) => p.name.toLowerCase().contains(query)).toList();
 
-    if (filtered.isEmpty) {
-      return const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.search_off, size: 48, color: AppColors.textLight),
-            SizedBox(height: 8),
-            Text('Nenhum item encontrado', style: TextStyle(color: AppColors.textLight)),
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
+    return ListView(
       padding: const EdgeInsets.all(12),
-      itemCount: filtered.length,
-      itemBuilder: (context, index) => _PriceCard(product: filtered[index], onUpdate: onUpdate),
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: () => _create(context),
+            icon: Icon(_isGrain ? Icons.grass : Icons.science_outlined, size: 18),
+            label: Text(_isGrain ? 'Novo grão' : 'Novo insumo'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: _isGrain ? AppColors.grain : AppColors.input,
+              side: BorderSide(color: _isGrain ? AppColors.grain : AppColors.input),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (filtered.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.search_off, size: 48, color: AppColors.textLight),
+                  SizedBox(height: 8),
+                  Text('Nenhum item encontrado', style: TextStyle(color: AppColors.textLight)),
+                ],
+              ),
+            ),
+          )
+        else
+          ...filtered.map((p) => _PriceCard(product: p, onUpdate: onUpdate)),
+      ],
     );
   }
 }
@@ -121,9 +164,39 @@ class _PriceCard extends StatelessWidget {
 
   Color get _accent => product.type == ProductType.grain ? AppColors.grain : AppColors.input;
 
+  /// Em quantas permutas este produto já apareceu. Serve para avisar o admin
+  /// do tamanho do histórico antes de tirar o item do catálogo — o histórico
+  /// não se perde (cada item guarda seu próprio snapshot), mas ele merece
+  /// saber que não está mexendo num cadastro sem uso.
+  int _barterCount() => AppData.barters
+      .where((b) => [...b.grains, ...b.inputs].any((i) => i.productId == product.id))
+      .length;
+
+  void _delete(BuildContext context) {
+    confirmDeleteRegistration(
+      context,
+      title: product.type == ProductType.grain ? 'Excluir grão' : 'Excluir insumo',
+      name: product.name,
+      barterCount: _barterCount(),
+      onConfirm: () async {
+        await AppData.deleteProduct(product);
+        onUpdate();
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${product.name} saiu do catálogo.'),
+          backgroundColor: AppColors.approved,
+        ));
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final first = product.priceHistory.first.price;
+    // Todo produto nasce com um ponto no histórico, mas a tela não pode
+    // depender disso: um catálogo importado por fora chegaria sem nenhum.
+    final first = product.priceHistory.isEmpty
+        ? product.currentPrice
+        : product.priceHistory.first.price;
     final deltaPct = first == 0 ? 0.0 : (product.currentPrice - first) / first * 100;
     final up = product.currentPrice >= first;
 
@@ -179,6 +252,12 @@ class _PriceCard extends StatelessWidget {
                         ],
                       ),
                     ],
+                  ),
+                  IconButton(
+                    onPressed: () => _delete(context),
+                    icon: const Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
+                    tooltip: 'Excluir do catálogo',
+                    visualDensity: VisualDensity.compact,
                   ),
                 ],
               ),

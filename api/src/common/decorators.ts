@@ -14,10 +14,10 @@ export const ALLOWS_PROVISIONAL_PASSWORD_KEY = 'allowsProvisionalPassword';
  * isto: consultar quem se é, trocar a senha e desistir e sair. Todo o resto
  * da API fica fechado até a troca — ver o AuthGuard.
  */
-export const AllowProvisionalPassword = () =>
-  SetMetadata(ALLOWS_PROVISIONAL_PASSWORD_KEY, true);
+export const AllowProvisionalPassword = () => SetMetadata(ALLOWS_PROVISIONAL_PASSWORD_KEY, true);
 
 /** Usuário autenticado, colocado na request pelo AuthGuard. */
-export const CurrentUser = createParamDecorator((_data: unknown, context: ExecutionContext): User => {
-  return context.switchToHttp().getRequest().user as User;
-});
+export const CurrentUser = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): User =>
+    context.switchToHttp().getRequest<{ user: User }>().user,
+);

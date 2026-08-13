@@ -7,7 +7,7 @@ import '../widgets/common_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
 import 'prices_screen.dart';
-import 'sellers_screen.dart';
+import 'consultants_screen.dart';
 
 class AdminMainScreen extends StatefulWidget {
   final UserModel admin;
@@ -26,9 +26,9 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
     super.initState();
     _screens = [
       _AdminDashboardTab(admin: widget.admin, onNavigate: (i) => setState(() => _selectedIndex = i)),
-      const BartersScreen(isAdmin: true, sellerId: null),
+      const BartersScreen(isAdmin: true, consultantId: null),
       const PricesScreen(),
-      const SellersScreen(),
+      const ConsultantsScreen(),
     ];
   }
 
@@ -106,10 +106,10 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     }
     final grainEntries = byGrain.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
-    // Volume (sacas) por filial do vendedor.
+    // Volume (sacas) por filial do consultor.
     final byBranch = <String, double>{};
     for (final b in approvedList) {
-      byBranch[b.sellerBranch] = (byBranch[b.sellerBranch] ?? 0) + b.totalGrainQty;
+      byBranch[b.consultantBranch] = (byBranch[b.consultantBranch] ?? 0) + b.totalGrainQty;
     }
     final branchEntries = byBranch.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
 
@@ -617,7 +617,7 @@ class _PendingActionCard extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 3),
-                    Text('${barter.sellerName} • ${barter.producerName}',
+                    Text('${barter.consultantName} • ${barter.producerName}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 11, color: AppColors.textMedium)),

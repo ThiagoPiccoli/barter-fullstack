@@ -27,11 +27,11 @@ describe('Products & Categories (e2e)', () => {
   });
 
   it('reajuste de valor é do admin e alimenta a linha do tempo', async () => {
-    const asSeller = await request(app.getHttpServer())
+    const asConsultant = await request(app.getHttpServer())
       .put('/api/v1/products/1/price')
       .set('Authorization', await asUser(JOAO))
       .send({ price: 150 });
-    expect(asSeller.status).toBe(403);
+    expect(asConsultant.status).toBe(403);
 
     const asAdmin = await request(app.getHttpServer())
       .put('/api/v1/products/1/price')
@@ -90,5 +90,99 @@ describe('Products & Categories (e2e)', () => {
       p.name.startsWith('Semente Soja'),
     );
     expect(semente.categoryId).toBeNull();
+  });
+
+  it('tipo de produto desconhecido é recusado em vez de devolver o catálogo inteiro', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/products?type=qualquer')
+      .set('Authorization', await asUser(ADMIN));
+    expect(response.status).toBe(422);
+    expect(response.body.message).toContain('tipo');
+  });
+
+  /**
+   * Sem criação e exclusão, o catálogo ficava congelado no que o seed criou:
+   * cadastrar um insumo novo ou aposentar um descontinuado exigia SQL na mão.
+   */
+  describe('catálogo é administrável', () => {
+    const novoInsumo = {
+      name: 'Adubo Foliar Zinco',
+      unit: 'litro',
+      type: 'input',
+      currentPrice: 62.5,
+      requiredPerHa: 0,
+      categoryId: 1,
+    };
+
+    it('admin cria produto e ele já nasce com o primeiro ponto do histórico', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', await asUser(ADMIN))
+        .send(novoInsumo);
+      expect(created.status).toBe(201);
+      expect(created.body.data.priceHistory).toHaveLength(1);
+      expect(created.body.data.priceHistory[0].price).toBe(62.5);
+      expect(created.body.data.priceHistory[0].changedBy).toBe('Carlos Mendes');
+    });
+
+    it('criar e excluir produto é só do admin', async () => {
+      const consultant = await asUser(JOAO);
+      await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', consultant)
+        .send(novoInsumo)
+        .expect(403);
+      await request(app.getHttpServer())
+        .delete('/api/v1/products/8')
+        .set('Authorization', consultant)
+        .expect(403);
+    });
+
+    /**
+     * A exclusão não pode reescrever o passado: a permuta guarda nome, unidade
+     * e preço no próprio item, e é isso que faz o histórico sobreviver ao
+     * produto sair do catálogo.
+     */
+    it('excluir produto preserva as permutas já registradas', async () => {
+      const admin = await asUser(ADMIN);
+
+      // Produto 8 (Fungicida Azoxistrobina) aparece em permutas do seed.
+      const before = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', admin);
+      const usedIn = before.body.data.filter((b: { items: { productId: number }[] }) =>
+        b.items.some((i) => i.productId === 8),
+      );
+      expect(usedIn.length).toBeGreaterThan(0);
+
+      await request(app.getHttpServer())
+        .delete('/api/v1/products/8')
+        .set('Authorization', admin)
+        .expect(204);
+
+      // Sumiu do catálogo...
+      await request(app.getHttpServer())
+        .get('/api/v1/products/8')
+        .set('Authorization', admin)
+        .expect(404);
+
+      // ...mas as permutas continuam inteiras, com o nome congelado no item.
+      const after = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', admin);
+      expect(after.body.data).toHaveLength(before.body.data.length);
+      const item = after.body.data
+        .flatMap((b: { items: { productName: string; productId: number | null }[] }) => b.items)
+        .find((i: { productName: string }) => i.productName.startsWith('Fungicida'));
+      expect(item.productName).toBe('Fungicida Azoxistrobina');
+      expect(item.productId).toBeNull();
+    });
+
+    it('excluir produto inexistente responde 404', async () => {
+      await request(app.getHttpServer())
+        .delete('/api/v1/products/9999')
+        .set('Authorization', await asUser(ADMIN))
+        .expect(404);
+    });
   });
 });

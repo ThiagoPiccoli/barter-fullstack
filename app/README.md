@@ -18,7 +18,7 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333      # emulador Android
 ```
 
 Login de demonstração: `admin@barter.com.br` / `123456` (admin) ou
-`joao.silva@barter.com.br` / `123456` (vendedor).
+`joao.silva@barter.com.br` / `123456` (consultor).
 
 ## Camadas
 

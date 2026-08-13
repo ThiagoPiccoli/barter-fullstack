@@ -20,7 +20,7 @@ describe('Auth (e2e)', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.token).toBeDefined();
-    expect(response.body.data.user.role).toBe('seller');
+    expect(response.body.data.user.role).toBe('consultant');
     expect(response.body.data.user.fullName).toBe('João Silva');
     expect(response.body.data.user.initials).toBe('JS');
   });
@@ -109,19 +109,25 @@ describe('Auth (e2e)', () => {
       .expect(200);
   });
 
-  it('vendedor provisionado pelo admin nasce obrigado a trocar a senha', async () => {
+  it('consultor provisionado pelo admin nasce obrigado a trocar a senha', async () => {
     const adminToken = await loginAs(app, ADMIN);
     const created = await request(app.getHttpServer())
-      .post('/api/v1/sellers')
+      .post('/api/v1/consultants')
       .set({ Authorization: `Bearer ${adminToken}` })
-      .send({ fullName: 'Novo Vendedor', email: 'novo@barter.com.br', branch: 'Filial 99' })
+      .send({ fullName: 'Novo Consultor', email: 'novo@barter.com.br', branch: 'Filial 99' })
       .expect(201);
     expect(created.body.data.mustChangePassword).toBe(true);
+
+    // A senha de primeira entrada vem na resposta — é a única vez que ela
+    // existe fora do hash, e é o que o admin dita para o consultor.
+    const provisional = created.body.data.provisionalPassword as string;
+    expect(typeof provisional).toBe('string');
+    expect(provisional.length).toBeGreaterThanOrEqual(8);
 
     // Entra com a senha provisória e o app recebe o aviso de troca obrigatória.
     const login = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: 'novo@barter.com.br', password: '123456' })
+      .send({ email: 'novo@barter.com.br', password: provisional })
       .expect(200);
     expect(login.body.data.user.mustChangePassword).toBe(true);
 
@@ -129,7 +135,7 @@ describe('Auth (e2e)', () => {
     const changed = await request(app.getHttpServer())
       .post('/api/v1/auth/password')
       .set({ Authorization: `Bearer ${login.body.data.token}` })
-      .send({ currentPassword: '123456', newPassword: 'senha-propria-1' })
+      .send({ currentPassword: provisional, newPassword: 'senha-propria-1' })
       .expect(200);
     expect(changed.body.data.mustChangePassword).toBe(false);
   });
@@ -143,30 +149,31 @@ describe('Auth (e2e)', () => {
   });
 
   /**
-   * A obrigatoriedade de trocar a senha vale no SERVIDOR, não só no app. A
-   * senha provisória é conhecida (o '123456' do provisionamento), então quem
-   * chamasse a API direto usaria o sistema inteiro sem nunca abrir o app —
-   * a tela de troca obrigatória não protegeria nada.
+   * A obrigatoriedade de trocar a senha vale no SERVIDOR, não só no app. Sem
+   * essa trava, quem chamasse a API direto usaria o sistema inteiro com a
+   * senha do provisionamento sem nunca abrir o app — e a tela de troca
+   * obrigatória não protegeria nada.
    */
   describe('senha provisória não abre a API', () => {
-    /** Cria um vendedor pelo admin e devolve o token da senha provisória. */
-    async function provisionedSellerToken(): Promise<string> {
+    /** Cria um consultor pelo admin e devolve o token da senha provisória. */
+    async function provisionedConsultantToken(): Promise<{ token: string; password: string }> {
       const adminToken = await loginAs(app, ADMIN);
-      await request(app.getHttpServer())
-        .post('/api/v1/sellers')
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/consultants')
         .set({ Authorization: `Bearer ${adminToken}` })
         .send({ fullName: 'Recém Provisionado', email: 'recem@barter.com.br', branch: 'Filial 7' })
         .expect(201);
+      const password = created.body.data.provisionalPassword as string;
 
       const login = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email: 'recem@barter.com.br', password: '123456' })
+        .send({ email: 'recem@barter.com.br', password })
         .expect(200);
-      return login.body.data.token as string;
+      return { token: login.body.data.token as string, password };
     }
 
     it('rotas de negócio ficam fechadas até a troca', async () => {
-      const token = await provisionedSellerToken();
+      const { token } = await provisionedConsultantToken();
       const auth = { Authorization: `Bearer ${token}` };
 
       await request(app.getHttpServer()).get('/api/v1/producers').set(auth).expect(403);
@@ -180,7 +187,7 @@ describe('Auth (e2e)', () => {
     });
 
     it('o caminho para SAIR da senha provisória continua aberto', async () => {
-      const token = await provisionedSellerToken();
+      const { token, password } = await provisionedConsultantToken();
       const auth = { Authorization: `Bearer ${token}` };
 
       // Sem /me o app não descobre que precisa trocar; sem /auth/password não
@@ -189,54 +196,131 @@ describe('Auth (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/auth/password')
         .set(auth)
-        .send({ currentPassword: '123456', newPassword: 'senha-propria-1' })
+        .send({ currentPassword: password, newPassword: 'senha-propria-1' })
         .expect(200);
       await request(app.getHttpServer()).post('/api/v1/auth/logout').set(auth).expect(200);
     });
 
     it('trocada a senha, a API libera na mesma sessão', async () => {
-      const token = await provisionedSellerToken();
+      const { token, password } = await provisionedConsultantToken();
       const auth = { Authorization: `Bearer ${token}` };
 
       await request(app.getHttpServer()).get('/api/v1/producers').set(auth).expect(403);
       await request(app.getHttpServer())
         .post('/api/v1/auth/password')
         .set(auth)
-        .send({ currentPassword: '123456', newPassword: 'senha-propria-1' })
+        .send({ currentPassword: password, newPassword: 'senha-propria-1' })
         .expect(200);
       await request(app.getHttpServer()).get('/api/v1/producers').set(auth).expect(200);
     });
   });
 
   /**
-   * Regressão: SELLER_DEFAULT_PASSWORD era lido numa constante de topo de
-   * módulo, avaliada antes do ConfigModule carregar o .env — quem configurasse
-   * a variável continuava provisionando vendedores com '123456' sem aviso.
+   * REGRESSÃO DO SEQUESTRO DE CONTA.
+   *
+   * A senha de primeira entrada já foi um valor fixo, igual para todo
+   * consultor provisionado ('123456'). Com isso, qualquer um que soubesse o
+   * e-mail de um consultor recém-cadastrado podia entrar antes dele, trocar a
+   * senha e ficar com a conta — e como não existia rota de reset, o admin não
+   * tinha como retomá-la: só apagar o consultor, o que desfazia a carteira
+   * inteira de produtores dele.
+   *
+   * Os dois testes abaixo trancam as duas metades do problema: a senha nasce
+   * imprevisível, e existe caminho de volta quando a conta se perde.
    */
-  it('SELLER_DEFAULT_PASSWORD vale de verdade na criação do vendedor', async () => {
-    const saved = process.env.SELLER_DEFAULT_PASSWORD;
-    process.env.SELLER_DEFAULT_PASSWORD = 'provisoria-da-cooperativa';
-    try {
-      const adminToken = await loginAs(app, ADMIN);
-      await request(app.getHttpServer())
-        .post('/api/v1/sellers')
+  describe('a conta do consultor não pode ser sequestrada', () => {
+    /** Provisiona um consultor e devolve a senha de primeira entrada. */
+    async function provision(email: string, adminToken: string): Promise<string> {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/consultants')
         .set({ Authorization: `Bearer ${adminToken}` })
-        .send({ fullName: 'Com Senha do Ambiente', email: 'ambiente@barter.com.br', branch: 'F1' })
+        .send({ fullName: 'Consultor Provisionado', email, branch: 'Filial 9' })
         .expect(201);
-
-      // O '123456' não vale mais...
-      await request(app.getHttpServer())
-        .post('/api/v1/auth/login')
-        .send({ email: 'ambiente@barter.com.br', password: '123456' })
-        .expect(400);
-      // ...e a senha configurada, sim.
-      await request(app.getHttpServer())
-        .post('/api/v1/auth/login')
-        .send({ email: 'ambiente@barter.com.br', password: 'provisoria-da-cooperativa' })
-        .expect(200);
-    } finally {
-      if (saved === undefined) delete process.env.SELLER_DEFAULT_PASSWORD;
-      else process.env.SELLER_DEFAULT_PASSWORD = saved;
+      return created.body.data.provisionalPassword as string;
     }
+
+    it('cada consultor nasce com uma senha provisória diferente e imprevisível', async () => {
+      const adminToken = await loginAs(app, ADMIN);
+      const first = await provision('um@barter.com.br', adminToken);
+      const second = await provision('dois@barter.com.br', adminToken);
+
+      expect(first).not.toBe(second);
+
+      // As senhas fixas que já valeram não abrem mais nenhuma conta nova.
+      for (const guess of ['123456', 'senha', first.toLowerCase()]) {
+        await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ email: 'dois@barter.com.br', password: guess })
+          .expect(400);
+      }
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: 'dois@barter.com.br', password: second })
+        .expect(200);
+    });
+
+    it('o admin retoma a conta perdida com um reset — e derruba quem estava dentro', async () => {
+      const adminToken = await loginAs(app, ADMIN);
+      const provisional = await provision('perdida@barter.com.br', adminToken);
+      const consultantId = (
+        await request(app.getHttpServer())
+          .get('/api/v1/consultants')
+          .set({ Authorization: `Bearer ${adminToken}` })
+      ).body.data.find((c: { email: string }) => c.email === 'perdida@barter.com.br').id as number;
+
+      // Alguém entra com a provisória e define a senha definitiva: a conta
+      // está, para todos os efeitos, nas mãos dessa pessoa.
+      const intruder = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: 'perdida@barter.com.br', password: provisional })
+        .expect(200);
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/password')
+        .set({ Authorization: `Bearer ${intruder.body.data.token}` })
+        .send({ currentPassword: provisional, newPassword: 'senha-do-invasor' })
+        .expect(200);
+
+      // O reset do admin devolve o acesso...
+      const reset = await request(app.getHttpServer())
+        .post(`/api/v1/consultants/${consultantId}/reset-password`)
+        .set({ Authorization: `Bearer ${adminToken}` })
+        .expect(200);
+      const novaProvisoria = reset.body.data.provisionalPassword as string;
+      expect(novaProvisoria).not.toBe(provisional);
+      expect(reset.body.data.mustChangePassword).toBe(true);
+
+      // ...invalida a senha que o invasor tinha definido...
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: 'perdida@barter.com.br', password: 'senha-do-invasor' })
+        .expect(400);
+
+      // ...e derruba a sessão que ele já tinha aberta. Sem isto o reset não
+      // resolveria nada: o invasor continuaria dentro com o token na mão.
+      await request(app.getHttpServer())
+        .get('/api/v1/me')
+        .set({ Authorization: `Bearer ${intruder.body.data.token}` })
+        .expect(401);
+
+      // O consultor legítimo entra com a nova provisória.
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: 'perdida@barter.com.br', password: novaProvisoria })
+        .expect(200);
+    });
+
+    it('reset é do admin e só alcança consultores', async () => {
+      const consultantToken = await loginAs(app, JOAO);
+      await request(app.getHttpServer())
+        .post('/api/v1/consultants/3/reset-password')
+        .set({ Authorization: `Bearer ${consultantToken}` })
+        .expect(403);
+
+      // O admin (id 1) não é gerenciado por esta rota — nem para reset.
+      await request(app.getHttpServer())
+        .post('/api/v1/consultants/1/reset-password')
+        .set({ Authorization: `Bearer ${await loginAs(app, ADMIN)}` })
+        .expect(404);
+    });
   });
 });

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../data/app_data.dart';
@@ -155,50 +156,56 @@ class _LoginScreenState extends State<LoginScreen> {
                             : const Text('Entrar'),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    const Divider(),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'Acesso rápido (demonstração):',
-                      style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              _emailCtrl.text = 'admin@barter.com.br';
-                              _passCtrl.text = '123456';
-                            },
-                            icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
-                            label: const Text('Admin', style: TextStyle(fontSize: 12)),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                              side: const BorderSide(color: AppColors.primary),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
+                    // Atalhos da demonstração só existem em build de debug: em
+                    // release este bloco é removido na compilação (kDebugMode
+                    // é constante). Sem isso, o app de produção sairia com as
+                    // credenciais do seed impressas na tela de login.
+                    if (kDebugMode) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Acesso rápido (demonstração):',
+                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                _emailCtrl.text = 'admin@barter.com.br';
+                                _passCtrl.text = '123456';
+                              },
+                              icon: const Icon(Icons.admin_panel_settings_outlined, size: 16),
+                              label: const Text('Admin', style: TextStyle(fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.primary,
+                                side: const BorderSide(color: AppColors.primary),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              _emailCtrl.text = 'joao.silva@barter.com.br';
-                              _passCtrl.text = '123456';
-                            },
-                            icon: const Icon(Icons.person_outlined, size: 16),
-                            label: const Text('Vendedor', style: TextStyle(fontSize: 12)),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.primaryMedium,
-                              side: const BorderSide(color: AppColors.primaryMedium),
-                              padding: const EdgeInsets.symmetric(vertical: 10),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () {
+                                _emailCtrl.text = 'joao.silva@barter.com.br';
+                                _passCtrl.text = '123456';
+                              },
+                              icon: const Icon(Icons.person_outlined, size: 16),
+                              label: const Text('Consultor', style: TextStyle(fontSize: 12)),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.primaryMedium,
+                                side: const BorderSide(color: AppColors.primaryMedium),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
                             ),
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

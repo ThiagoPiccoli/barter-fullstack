@@ -4,6 +4,7 @@ import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/provisional_password_dialog.dart';
 
 /// Iniciais (até 2 letras) a partir do nome, para o avatar do rascunho local;
 /// o valor definitivo vem do servidor junto com o registro salvo.
@@ -37,9 +38,9 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   late final TextEditingController _city;
   late final TextEditingController _area;
 
-  /// Vendedor dono da carteira a que o produtor pertence. Obrigatório: todo
+  /// Consultor dono da carteira a que o produtor pertence. Obrigatório: todo
   /// produtor nasce dentro da carteira de alguém.
-  String? _sellerId;
+  String? _consultantId;
 
   bool get _isNew => widget.producer == null;
 
@@ -47,8 +48,8 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   void initState() {
     super.initState();
     final p = widget.producer;
-    // Se o vendedor da carteira foi excluído, força o admin a escolher outro.
-    _sellerId = p != null && AppData.sellerById(p.sellerId) != null ? p.sellerId : null;
+    // Se o consultor da carteira foi excluído, força o admin a escolher outro.
+    _consultantId = p != null && AppData.consultantById(p.consultantId) != null ? p.consultantId : null;
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
     _phone = TextEditingController(text: p?.phone ?? '');
@@ -82,7 +83,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     final draft = ProducerModel(
       id: old?.id ?? '',
       name: name,
-      sellerId: _sellerId!,
+      consultantId: _consultantId!,
       document: _document.text.trim(),
       phone: _phone.text.trim(),
       farmName: _farm.text.trim(),
@@ -111,20 +112,20 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             Padding(
               padding: const EdgeInsets.only(bottom: 14),
               child: DropdownButtonFormField<String>(
-                initialValue: _sellerId,
+                initialValue: _consultantId,
                 decoration: const InputDecoration(
-                  labelText: 'Carteira do vendedor',
+                  labelText: 'Carteira do consultor',
                   prefixIcon: Icon(Icons.badge_outlined, size: 20),
                 ),
-                items: AppData.sellers
+                items: AppData.consultants
                     .map((s) => DropdownMenuItem(
                           value: s.id,
                           child: Text('${s.name} • ${s.branch}',
                               overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
                         ))
                     .toList(),
-                onChanged: (v) => setState(() => _sellerId = v),
-                validator: (v) => v == null ? 'Escolha o vendedor responsável' : null,
+                onChanged: (v) => setState(() => _consultantId = v),
+                validator: (v) => v == null ? 'Escolha o consultor responsável' : null,
               ),
             ),
             _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
@@ -153,7 +154,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             const Text(
               'A área define os insumos obrigatórios e a quantidade mínima de cada '
               'um nas novas permutas deste produtor. O produtor só aparece para o '
-              'vendedor dono da carteira escolhida acima.',
+              'consultor dono da carteira escolhida acima.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
@@ -165,29 +166,29 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   }
 }
 
-/// Cadastro/edição de um VENDEDOR. Quando [vendor] é null, cria um novo; caso
-/// contrário, edita o existente. Salva em [AppData.sellers] e devolve o resultado.
-class EditVendorScreen extends StatefulWidget {
-  final UserModel? vendor;
-  const EditVendorScreen({super.key, this.vendor});
+/// Cadastro/edição de um CONSULTOR. Quando [consultant] é null, cria um novo; caso
+/// contrário, edita o existente. Salva em [AppData.consultants] e devolve o resultado.
+class EditConsultantScreen extends StatefulWidget {
+  final UserModel? consultant;
+  const EditConsultantScreen({super.key, this.consultant});
 
   @override
-  State<EditVendorScreen> createState() => _EditVendorScreenState();
+  State<EditConsultantScreen> createState() => _EditConsultantScreenState();
 }
 
-class _EditVendorScreenState extends State<EditVendorScreen> {
+class _EditConsultantScreenState extends State<EditConsultantScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _email;
   late final TextEditingController _phone;
   late final TextEditingController _branch;
 
-  bool get _isNew => widget.vendor == null;
+  bool get _isNew => widget.consultant == null;
 
   @override
   void initState() {
     super.initState();
-    final v = widget.vendor;
+    final v = widget.consultant;
     _name = TextEditingController(text: v?.name ?? '');
     _email = TextEditingController(text: v?.email ?? '');
     _phone = TextEditingController(text: v?.phone ?? '');
@@ -203,11 +204,13 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
     super.dispose();
   }
 
-  /// Envia o cadastro à API. Vendedor novo nasce com a senha padrão (123456)
-  /// definida no servidor.
+  /// Envia o cadastro à API.
+  ///
+  /// No cadastro NOVO, o servidor sorteia a senha de primeira entrada e a
+  /// devolve uma única vez — por isso a tela precisa mostrá-la antes de sair.
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final old = widget.vendor;
+    final old = widget.consultant;
     final name = _name.text.trim();
     final draft = UserModel(
       id: old?.id ?? '',
@@ -215,13 +218,20 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
       email: _email.text.trim(),
       phone: _phone.text.trim(),
       branch: _branch.text.trim(),
-      role: old?.role ?? UserRole.seller,
+      role: old?.role ?? UserRole.consultant,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
     );
     try {
-      final saved = await AppData.saveSeller(draft, isNew: _isNew);
-      if (mounted) Navigator.pop(context, saved);
+      if (_isNew) {
+        final provisioned = await AppData.createConsultant(draft);
+        if (!mounted) return;
+        await showProvisionalPassword(context, provisioned, isReset: false);
+        if (mounted) Navigator.pop(context, provisioned.consultant);
+      } else {
+        final saved = await AppData.updateConsultant(draft);
+        if (mounted) Navigator.pop(context, saved);
+      }
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
@@ -230,7 +240,7 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_isNew ? 'Novo Vendedor' : 'Editar Vendedor')),
+      appBar: AppBar(title: Text(_isNew ? 'Novo Consultor' : 'Editar Consultor')),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -259,6 +269,164 @@ class _EditVendorScreenState extends State<EditVendorScreen> {
             _EditField(controller: _branch, label: 'Filial', icon: Icons.store_outlined, required: true),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Cadastro de um PRODUTO — grão de pagamento ou insumo do catálogo.
+///
+/// Só criação: o valor de referência tem rota própria (com histórico), e a
+/// categoria e a exigência por hectare são editadas direto no card da tela de
+/// valores. Aqui é o passo que faltava para o catálogo deixar de ser o que o
+/// seed criou e passar a ser administrável pelo app.
+class NewProductScreen extends StatefulWidget {
+  final ProductType type;
+  const NewProductScreen({super.key, required this.type});
+
+  @override
+  State<NewProductScreen> createState() => _NewProductScreenState();
+}
+
+class _NewProductScreenState extends State<NewProductScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _name = TextEditingController();
+  final _unit = TextEditingController();
+  final _price = TextEditingController();
+  final _requiredPerHa = TextEditingController();
+  String? _categoryId;
+  bool _saving = false;
+
+  bool get _isInput => widget.type == ProductType.input;
+  String get _label => _isInput ? 'Insumo' : 'Grão';
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _unit.dispose();
+    _price.dispose();
+    _requiredPerHa.dispose();
+    super.dispose();
+  }
+
+  double _number(TextEditingController c) =>
+      double.tryParse(c.text.trim().replaceAll(',', '.')) ?? 0;
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      final saved = await AppData.createProduct(
+        name: _name.text.trim(),
+        unit: _unit.text.trim(),
+        type: widget.type,
+        currentPrice: _number(_price),
+        requiredPerHa: _isInput ? _number(_requiredPerHa) : 0,
+        categoryId: _isInput ? _categoryId : null,
+      );
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        showErrorSnack(context, e);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Novo $_label')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _EditField(
+              controller: _name,
+              label: 'Nome',
+              icon: _isInput ? Icons.science_outlined : Icons.grass,
+              required: true,
+              validator: (v) => (v ?? '').trim().length < 2 ? 'Use ao menos 2 caracteres' : null,
+            ),
+            _EditField(
+              controller: _unit,
+              label: _isInput ? 'Unidade (litro, saco 50kg...)' : 'Unidade (saca 60kg...)',
+              icon: Icons.straighten,
+              required: true,
+            ),
+            _EditField(
+              controller: _price,
+              label: 'Valor de referência (R\$)',
+              icon: Icons.attach_money,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              required: true,
+              validator: (v) {
+                final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                if (n == null || n <= 0) return 'Informe um valor maior que 0';
+                return null;
+              },
+            ),
+            if (_isInput) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: 14),
+                child: DropdownButtonFormField<String?>(
+                  initialValue: _categoryId,
+                  decoration: const InputDecoration(
+                    labelText: 'Categoria (opcional)',
+                    prefixIcon: Icon(Icons.folder_outlined, size: 20),
+                  ),
+                  items: [
+                    const DropdownMenuItem<String?>(value: null, child: Text('Sem categoria')),
+                    ...AppData.categories.map(
+                      (c) => DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => _categoryId = v),
+                ),
+              ),
+              _EditField(
+                controller: _requiredPerHa,
+                label: 'Exigência por hectare (opcional)',
+                icon: Icons.tune,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                validator: (v) {
+                  final text = (v ?? '').trim();
+                  if (text.isEmpty) return null;
+                  final n = double.tryParse(text.replaceAll(',', '.'));
+                  if (n == null || n < 0) return 'Informe um número válido (ou deixe vazio)';
+                  return null;
+                },
+              ),
+              const Text(
+                'Com exigência por hectare, este insumo passa a ser obrigatório em toda '
+                'permuta nova, no mínimo taxa × área do produtor.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ] else
+              const Text(
+                'O valor de referência é a taxa de câmbio da permuta: é ele que converte '
+                'o custo dos insumos em sacas deste grão.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.add, size: 18),
+                label: Text('Cadastrar $_label'),
+              ),
+            ),
           ],
         ),
       ),
@@ -390,7 +558,7 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
             ],
             const SizedBox(height: 4),
             const Text(
-              'Enquanto o mínimo da pasta não for atingido, o vendedor não consegue '
+              'Enquanto o mínimo da pasta não for atingido, o consultor não consegue '
               'enviar a permuta. Edite o valor sempre que o período mudar.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),

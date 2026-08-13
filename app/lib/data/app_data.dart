@@ -3,7 +3,7 @@ import '../repositories/auth_repository.dart';
 import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
-import '../repositories/seller_repository.dart';
+import '../repositories/consultant_repository.dart';
 
 /// Estado de dados do app: um cache em memória hidratado da API no login.
 ///
@@ -17,17 +17,17 @@ class AppData {
 
   static final AuthRepository _auth = AuthRepository();
   static final ProducerRepository _producers = ProducerRepository();
-  static final SellerRepository _sellers = SellerRepository();
+  static final ConsultantRepository _consultants = ConsultantRepository();
   static final CatalogRepository _catalog = CatalogRepository();
   static final BarterRepository _barters = BarterRepository();
 
-  /// Usuário logado (admin ou vendedor).
+  /// Usuário logado (admin ou consultor).
   static UserModel? currentUser;
 
-  /// Vendedores (visível só para admin — a API restringe a rota).
-  static List<UserModel> sellers = [];
+  /// Consultores (visível só para admin — a API restringe a rota).
+  static List<UserModel> consultants = [];
 
-  /// Produtores visíveis: a API devolve a carteira do vendedor logado, ou
+  /// Produtores visíveis: a API devolve a carteira do consultor logado, ou
   /// todas as carteiras para o admin.
   static List<ProducerModel> producers = [];
 
@@ -90,7 +90,7 @@ class AppData {
 
   static void _clearCache() {
     currentUser = null;
-    sellers = [];
+    consultants = [];
     producers = [];
     grains = [];
     inputs = [];
@@ -105,7 +105,7 @@ class AppData {
       refreshCatalog(),
       refreshProducers(),
       refreshBarters(),
-      if (currentUser?.role == UserRole.admin) refreshSellers(),
+      if (currentUser?.role == UserRole.admin) refreshConsultants(),
     ]);
   }
 
@@ -124,8 +124,8 @@ class AppData {
     producers = await _producers.list();
   }
 
-  static Future<void> refreshSellers() async {
-    sellers = await _sellers.list();
+  static Future<void> refreshConsultants() async {
+    consultants = await _consultants.list();
   }
 
   static Future<void> refreshBarters() async {
@@ -142,18 +142,18 @@ class AppData {
     return null;
   }
 
-  /// Carteira de produtores visível para um usuário: vendedor enxerga apenas
-  /// os próprios; admin (sellerId null) enxerga todos. O servidor já aplica
+  /// Carteira de produtores visível para um usuário: consultor enxerga apenas
+  /// os próprios; admin (consultantId null) enxerga todos. O servidor já aplica
   /// essa regra — aqui é apenas um filtro sobre o cache.
-  static List<ProducerModel> producersForSeller(String? sellerId) {
-    if (sellerId == null) return List.of(producers);
-    return producers.where((p) => p.sellerId == sellerId).toList();
+  static List<ProducerModel> producersForConsultant(String? consultantId) {
+    if (consultantId == null) return List.of(producers);
+    return producers.where((p) => p.consultantId == consultantId).toList();
   }
 
-  /// Busca um vendedor pelo id (null se não encontrado). Só o admin tem a
-  /// lista de vendedores carregada.
-  static UserModel? sellerById(String id) {
-    for (final s in sellers) {
+  /// Busca um consultor pelo id (null se não encontrado). Só o admin tem a
+  /// lista de consultores carregada.
+  static UserModel? consultantById(String id) {
+    for (final s in consultants) {
       if (s.id == id) return s;
     }
     return null;
@@ -213,27 +213,79 @@ class AppData {
     producers.removeWhere((p) => p.id == id);
   }
 
-  static Future<UserModel> saveSeller(UserModel seller, {required bool isNew}) async {
-    final saved = isNew ? await _sellers.create(seller) : await _sellers.update(seller);
-    final index = sellers.indexWhere((s) => s.id == saved.id);
-    if (index == -1) {
-      sellers.add(saved);
-    } else {
-      sellers[index] = saved;
-    }
+  /// Provisiona um consultor. Devolve o cadastro E a senha de primeira
+  /// entrada, que a tela precisa mostrar na hora: ela não pode ser consultada
+  /// depois. Criação e edição são separadas justamente por isso — só uma delas
+  /// produz um segredo com prazo de validade de uma tela.
+  static Future<ProvisionedConsultant> createConsultant(UserModel consultant) async {
+    final provisioned = await _consultants.create(consultant);
+    _cacheConsultant(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateConsultant(UserModel consultant) async {
+    final saved = await _consultants.update(consultant);
+    _cacheConsultant(saved);
     return saved;
   }
 
-  /// Excluir vendedor deixa os produtores da carteira sem dono (regra do
+  /// Nova senha provisória para um consultor. As sessões dele caem no
+  /// servidor; aqui só o cadastro precisa ser atualizado (ele volta com
+  /// `mustChangePassword` ligado).
+  static Future<ProvisionedConsultant> resetConsultantPassword(String id) async {
+    final provisioned = await _consultants.resetPassword(id);
+    _cacheConsultant(provisioned.consultant);
+    return provisioned;
+  }
+
+  static void _cacheConsultant(UserModel saved) {
+    final index = consultants.indexWhere((s) => s.id == saved.id);
+    if (index == -1) {
+      consultants.add(saved);
+    } else {
+      consultants[index] = saved;
+    }
+  }
+
+  /// Excluir consultor deixa os produtores da carteira sem dono (regra do
   /// servidor) — recarrega a lista para refletir os vínculos desfeitos.
-  static Future<void> deleteSeller(String id) async {
-    await _sellers.delete(id);
-    sellers.removeWhere((s) => s.id == id);
+  static Future<void> deleteConsultant(String id) async {
+    await _consultants.delete(id);
+    consultants.removeWhere((s) => s.id == id);
     await refreshProducers();
   }
 
   static Future<ProductModel> updatePrice(ProductModel product, double price) async {
     return _replaceProduct(await _catalog.updatePrice(product.id, price));
+  }
+
+  static Future<ProductModel> createProduct({
+    required String name,
+    required String unit,
+    required ProductType type,
+    required double currentPrice,
+    double requiredPerHa = 0,
+    String? categoryId,
+  }) async {
+    return _replaceProduct(await _catalog.createProduct(
+      name: name,
+      unit: unit,
+      type: type,
+      currentPrice: currentPrice,
+      requiredPerHa: requiredPerHa,
+      categoryId: categoryId,
+    ));
+  }
+
+  /// Tira o produto do catálogo. O histórico não é afetado — as permutas
+  /// guardam o snapshot do item —, mas as permutas em cache passam a apontar
+  /// para um produto que não existe mais, então recarrega para o app refletir
+  /// exatamente o que o servidor tem.
+  static Future<void> deleteProduct(ProductModel product) async {
+    await _catalog.deleteProduct(product.id);
+    (product.type == ProductType.grain ? grains : inputs)
+        .removeWhere((p) => p.id == product.id);
+    await refreshBarters();
   }
 
   static Future<ProductModel> updateProductFields(

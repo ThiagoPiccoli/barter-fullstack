@@ -1,0 +1,618 @@
+# Guia de arquitetura — Barter (app + api)
+
+Guia de leitura do código **como ele está hoje**. A ideia é abrir este arquivo
+ao lado do editor e ir seguindo: cada seção diz o que uma peça faz, por que ela
+existe e qual arquivo abrir.
+
+---
+
+## 0. A regra que explica tudo
+
+Antes de qualquer arquitetura, o domínio:
+
+> O produtor **retira insumos** (adubo, defensivo, semente…). Esses insumos
+> formam um **custo em R$**. Esse custo é convertido em **sacas de um grão**,
+> que o produtor entrega na colheita. Sacas são **consequência** do custo —
+> nunca o contrário.
+
+Três regras derivam disso e aparecem nos dois lados do código:
+
+| Regra | Onde nasce | Onde é imposta de verdade |
+|---|---|---|
+| Insumo com `requiredPerHa` é obrigatório: `taxa × área` | cadastro do produto | servidor ([barters.service.ts](../api/src/barters/barters.service.ts) passo 2) |
+| Categoria ("pasta") com regra de mínimo trava o envio | cadastro da categoria | servidor ([barters.service.ts](../api/src/barters/barters.service.ts) passo 3) |
+| Sacas = custo ÷ preço do grão | — | servidor ([barter-math.ts](../api/src/barters/barter-math.ts)) |
+
+E duas regras de acesso:
+
+- **Consultor** vê apenas a própria *carteira* de produtores e as próprias permutas.
+- **Admin** vê tudo, gerencia cadastros/preços e revisa (aprova/nega) permutas.
+- **Produtor não é usuário** — ele não loga, é um cadastro.
+
+---
+
+# PARTE 1 — Backend (`api/`)
+
+**Stack:** NestJS 11 · Prisma 7 (adapter `better-sqlite3`) · SQLite · TypeScript.
+Sem JWT, sem Passport, sem bcrypt: autenticação é token opaco em tabela, hash de
+senha com `scrypt` nativo do Node.
+
+## 1.1 O caminho de uma requisição
+
+```
+HTTP  POST /api/v1/barters
+  │
+  ├─ 0. middleware ............ helmet, log da requisição, parser com limite
+  │                              (256kb) — e o tradutor dos erros do parser
+  ├─ 1. ThrottlerGuard ........ limite por IP (antes da auth, de propósito)
+  ├─ 2. AuthGuard ............. Bearer → hash → busca no banco → req.user
+  │                              (bloqueia quem ainda tem senha provisória)
+  ├─ 3. AdminGuard ............ só nas rotas marcadas com @UseGuards(AdminGuard)
+  ├─ 4. ValidationPipe ........ DTO com class-validator → 422 se inválido
+  │                              (whitelist: campo não declarado é DESCARTADO)
+  ├─ 5. Controller ............ fino: só extrai user/params e chama o service
+  ├─ 6. Service ............... REGRA DE NEGÓCIO + Prisma
+  ├─ 7. Serializer ............ toBarterJson(...) — o contrato com o app
+  ├─ 8. EnvelopeInterceptor ... embrulha em { data: ... } (+ meta se paginado)
+  └─ ✗. AllExceptionsFilter ... qualquer erro do caminho acima vira
+                                 { message, statusCode } em pt-BR
+```
+
+Os passos 1, 2, 4, 8 e o filtro são **globais**, registrados num lugar só:
+[app.module.ts](../api/src/app.module.ts). O passo 0 fica em
+[app.setup.ts](../api/src/app.setup.ts), compartilhado entre o `main.ts` e os
+testes e2e. Vale a pena ler esses dois arquivos primeiro — são o índice do
+backend.
+
+**O filtro de erro é o que garante o contrato com o app.** O
+[api_client.dart](../app/lib/services/api/api_client.dart) mostra `message`
+direto para o usuário, então nenhuma falha pode escapar em inglês, com detalhe
+interno, ou sem mensagem. Isso inclui o que nasce fora do Nest: JSON
+malformado, corpo grande demais e o texto do limitador de requisições. Erro
+inesperado (500) devolve só um `requestId`; a pilha fica no log.
+
+O prefixo `/api/v1`, o CORS e o `trust proxy` ficam em
+[app.setup.ts](../api/src/app.setup.ts), separado do
+[main.ts](../api/src/main.ts) justamente para os testes e2e subirem um servidor
+idêntico ao real.
+
+## 1.2 A anatomia de um módulo
+
+Todo recurso segue o mesmo formato de 4 arquivos. Aprendeu um, aprendeu todos:
+
+```
+src/barters/
+├── barters.module.ts      declara controller + service
+├── barters.controller.ts  rotas HTTP (fino, sem regra)
+├── barters.service.ts     regra de negócio + acesso ao banco
+└── dto/barter.dto.ts      forma do payload de entrada, com validação
+```
+
+Os módulos existentes: `auth`, `producers`, `consultants`, `categories`,
+`products`, `barters`. Mais `prisma` (o client como provider global) e `common`
+(peças compartilhadas).
+
+**Controller fino é regra aqui.** Compare
+[producers.controller.ts](../api/src/producers/producers.controller.ts) com
+[producers.service.ts](../api/src/producers/producers.service.ts): o controller
+não tem um `if` de negócio sequer.
+
+## 1.3 `common/` — as peças transversais
+
+| Arquivo | Papel |
+|---|---|
+| [serializers.ts](../api/src/common/serializers.ts) | **O contrato da API em um só lugar.** Toda resposta passa por um `toXxxJson`. Mudou aqui → mudou o app. |
+| [decorators.ts](../api/src/common/decorators.ts) | `@Public()`, `@AllowProvisionalPassword()`, `@CurrentUser()` |
+| [admin.guard.ts](../api/src/common/admin.guard.ts) | `@UseGuards(AdminGuard)` → 403 se não for admin |
+| [envelope.interceptor.ts](../api/src/common/envelope.interceptor.ts) | `{ data: ... }` em toda resposta de sucesso |
+| [validation.ts](../api/src/common/validation.ts) | 422 com **uma** string de mensagem (é o que o app exibe) |
+| [throttling.ts](../api/src/common/throttling.ts) | limites de requisição, lidos **por requisição** (não em constante de topo — senão o `.env` seria ignorado) |
+
+## 1.4 Autenticação — como funciona sem JWT
+
+Leia nesta ordem: [token.util.ts](../api/src/auth/token.util.ts) →
+[password.util.ts](../api/src/auth/password.util.ts) →
+[auth.service.ts](../api/src/auth/auth.service.ts) →
+[auth.guard.ts](../api/src/auth/auth.guard.ts).
+
+```
+login  → gera 32 bytes aleatórios (base64url)
+       → grava no banco APENAS o SHA-256 + expiresAt (TOKEN_TTL_DAYS, padrão 30)
+       → devolve o valor cru ao app
+
+request→ AuthGuard faz SHA-256 do Bearer e procura a linha
+       → não achou → 401 · venceu → apaga a linha e 401
+       → achou → req.user = usuário
+
+logout → apaga a linha (revogação REAL, não é só o cliente esquecer)
+```
+
+Consequências que aparecem no app: excluir um consultor derruba as sessões dele
+em cascata; trocar a senha derruba as outras sessões e mantém a atual.
+
+### Senha provisória — a trava que atravessa tudo
+
+Consultor criado pelo admin nasce com `mustChangePassword: true`
+([consultants.service.ts](../api/src/consultants/consultants.service.ts)). Enquanto essa
+flag estiver ligada, o [AuthGuard](../api/src/auth/auth.guard.ts) devolve **403
+em toda a API**, exceto nas três rotas marcadas com
+`@AllowProvisionalPassword()`: `GET /me`, `POST /auth/password`,
+`POST /auth/logout`. Ou seja: a obrigatoriedade não vive na UI — quem chamasse
+a API direto também esbarraria nela.
+
+**A senha em si é sorteada, uma por consultor**
+([password.util.ts](../api/src/auth/password.util.ts),
+`generateProvisionalPassword`), e devolvida **uma única vez** no corpo da
+criação. O app a exibe num diálogo com botão de copiar
+([provisional_password_dialog.dart](../app/lib/widgets/provisional_password_dialog.dart)).
+
+Isso é o coração de uma correção de segurança, não um detalhe de UX. Enquanto
+essa senha foi um valor fixo compartilhado, a trava acima protegia a *API* mas
+não a *posse da conta*: quem soubesse o e-mail de um consultor recém-criado
+entrava antes dele, chamava `POST /auth/password` — rota liberada, justamente
+porque é a saída da senha provisória — e definia a senha definitiva. E não
+havia rota de reset: recuperar a conta exigia excluir o consultor, o que
+desfazia a carteira inteira de produtores dele.
+
+Hoje existe `POST /consultants/:id/reset-password`: sorteia outra senha e
+**apaga todos os tokens daquela conta** na mesma transação. Sem apagar os
+tokens o reset não resolveria o caso que mais importa — o invasor continuaria
+dentro, com o token na mão. Para o admin, que não tem ninguém acima dele, a
+saída equivalente é
+[scripts/reset-password.ts](../api/scripts/reset-password.ts).
+
+## 1.5 O coração: criação de permuta
+
+[barters.service.ts](../api/src/barters/barters.service.ts), método `create`.
+Vale ler linha a linha; a sequência é:
+
+1. **admin não registra permuta** (é ato do consultor da carteira) → 403
+2. **produtor precisa ser da carteira de quem registra** → 403
+3. **grão de pagamento** precisa existir, ser `type=grain` e ter preço > 0
+4. quantidades repetidas no payload são **consolidadas por produto**
+5. preços vêm **do banco** — o payload nem tem campo de preço, e o
+   `whitelist` do ValidationPipe descartaria se tivesse
+6. **insumos obrigatórios por hectare**: `requiredPerHa × areaHa`, com
+   tolerância de 0,005
+7. **mínimos por categoria**: `percentOfTotal` ou `valuePerHa`, com tolerância
+   de 1 centavo (`MONEY_EPSILON`)
+8. `sacksToCover(custo, preçoDoGrão)` → o servidor **cria o item de grão**
+9. tudo dentro de uma transação, com o código público `PRM-<ano>-NNN` gerado ali
+   dentro para evitar corrida
+
+A matemática pura está separada em
+[barter-math.ts](../api/src/barters/barter-math.ts) — sem I/O, testada em
+[barter-math.spec.ts](../api/src/barters/barter-math.spec.ts).
+
+## 1.6 Modelo de dados
+
+[schema.prisma](../api/prisma/schema.prisma). Dois padrões merecem atenção:
+
+**Enums são `String`** (SQLite não tem enum): `role`, `type`, `kind`, `status`,
+`ruleType`. A validação de valores fica nos DTOs (`@IsIn`).
+
+**Permuta é registro histórico.** `BarterItem` guarda `productName`, `unit` e
+`unitValue` como *snapshot*; `Barter` guarda `consultantName`, `producerName`,
+`reviewedBy`. Os FKs usam `onDelete: SetNull`. Resultado: excluir um produto,
+um produtor ou um consultor **não** reescreve nem apaga o histórico — e reajustar
+um preço não altera permutas antigas.
+
+```
+User ─┬─< AccessToken        (sessões revogáveis)
+      ├─< Producer           (carteira; SetNull se o consultor sai)
+      └─< Barter             (SetNull)
+Producer ─< Barter
+InputCategory ─< Product ─┬─< PriceHistoryEntry
+                          └─< BarterItem >─ Barter
+```
+
+`Producer` guarda o documento duas vezes: `document` como o admin digitou (é o
+que aparece na tela e no comprovante) e `documentDigits`, só os dígitos, com
+índice único. A unicidade precisa morar na forma canônica — sobre o texto cru,
+"CPF 123.456.789-00" e "12345678900" passariam como produtores diferentes, que
+é justamente o cadastro em duplicidade que a regra existe para impedir. Um
+produtor duplicado divide a carteira ao meio e faz a área contar em dobro nos
+mínimos por hectare.
+
+## 1.7 Ambiente, seed e primeiro acesso
+
+[main.ts](../api/src/main.ts) bifurca por `NODE_ENV`:
+
+- **dev** → [seed-if-empty.ts](../api/prisma/seed-if-empty.ts): banco vazio
+  recebe o dataset de demonstração (senha `123456`). Banco com dados não é tocado.
+- **produção** → [bootstrap-admin.ts](../api/prisma/bootstrap-admin.ts): nada de
+  dataset público; o primeiro admin vem de `ADMIN_EMAIL`/`ADMIN_PASSWORD` e
+  nasce com senha provisória.
+
+O dataset em si está em [seed-data.ts](../api/prisma/seed-data.ts); `npm run
+db:seed` ([seed.ts](../api/prisma/seed.ts)) apaga e recria tudo.
+
+Variáveis: [.env.example](../api/.env.example) documenta todas
+(`TOKEN_TTL_DAYS`, `CORS_ORIGINS`, `TRUST_PROXY`, `LOGIN_RATE_LIMIT`,
+`PASSWORD_COST`, `SWAGGER`).
+
+Perdida a senha do admin, o caminho é
+[scripts/reset-password.ts](../api/scripts/reset-password.ts)
+(`npm run password:reset`): o `bootstrap-admin` só roda com o banco vazio, e
+não há ninguém acima do admin para redefini-la pela aplicação.
+
+## 1.8 Rotas (todas sob `/api/v1`, exceto `/`)
+
+| Método | Rota | Quem pode | Observação |
+|---|---|---|---|
+| GET | `/` | público | sinal de vida, sem envelope |
+| POST | `/auth/login` | público | throttle apertado |
+| POST | `/auth/logout` | autenticado* | revoga o token |
+| GET | `/me` | autenticado* | é aqui que o app vê `mustChangePassword` |
+| POST | `/auth/password` | autenticado* | exige a senha atual |
+| GET | `/producers` `?consultantId=` | escopado | consultor: só a carteira |
+| GET | `/producers/:id` | escopado | |
+| POST/PUT/DELETE | `/producers` | admin | |
+| GET/POST/PUT/DELETE | `/consultants` | admin | controller inteiro sob AdminGuard |
+| POST | `/consultants/:id/reset-password` | admin | nova provisória + derruba as sessões dele |
+| GET | `/products` `?type=` | autenticado | inclui histórico de preço |
+| POST/PUT/DELETE | `/products`, `/products/:id` | admin | |
+| PUT | `/products/:id/price` | admin | acrescenta ponto no histórico |
+| GET | `/categories` | autenticado | |
+| POST/PUT/DELETE | `/categories` | admin | |
+| GET | `/barters` `?status=` | escopado | |
+| GET | `/barters/:code` | escopado | `code` = PRM-2026-001 |
+| POST | `/barters` | consultor | admin recebe 403 |
+| POST | `/barters/:code/review` | admin | só permuta pendente |
+
+\* também liberadas com senha provisória.
+
+Documentação navegável: **`/api/v1/docs`** (Swagger, gerado dos próprios DTOs
+pelo plugin em [nest-cli.json](../api/nest-cli.json)). Fechada em produção até
+`SWAGGER=on`.
+
+### Paginação — e por que ela não aparece nas telas
+
+`/barters` e `/producers` aceitam `?limit=` (padrão 100, máximo 500) e
+`?offset=`, e respondem `{ data, meta: { total, limit, offset } }`
+([pagination.ts](../api/src/common/pagination.ts)). São as duas coleções que
+crescem a cada safra; o catálogo e a lista de consultores não são paginados
+porque têm teto natural e o app precisa deles inteiros.
+
+O app, porém, foi construído sobre um cache completo — o painel do admin soma
+sacas, valores e rankings sobre TODAS as permutas. Então
+[ApiClient.getAll](../app/lib/services/api/api_client.dart) remonta as páginas
+numa lista só. A paginação protege o servidor hoje (nenhuma resposta carrega a
+base inteira) e deixa pronto o dia em que as telas passarem a carregar sob
+demanda — o que exige antes decidir o que o painel mostra quando "tudo" não
+cabe mais.
+
+Filtro que a API não entende (`?status=lixo`, `?consultantId=abc`) é **recusado
+com 422**, nunca ignorado: ignorar devolvia a coleção inteira com aparência de
+lista filtrada, e quem olhasse não tinha como perceber.
+
+## 1.9 Testes
+
+- `npm test` → unidade, ao lado do código (`*.spec.ts`): matemática da permuta,
+  throttling, setup do app e o filtro de exceção.
+- `npm run test:e2e` → [test/](../api/test/), banco próprio (`prisma/test.db`
+  via `.env.test`), sobe a app com o mesmo `setupApp`. Cobre auth, escopo por
+  papel, as regras de permuta, o contrato de erro e — em
+  [auth.e2e-spec.ts](../api/test/auth.e2e-spec.ts) — o cenário completo de
+  sequestro e retomada de conta.
+- `.env.test` baixa `PASSWORD_COST` para a suíte rodar em segundos: o custo
+  real do scrypt (~170ms por login) é proposital em produção, mas cem logins
+  de teste não podem pagá-lo.
+
+---
+
+# PARTE 2 — Frontend (`app/`)
+
+**Stack:** Flutter · Material 3 · `http` · `flutter_secure_storage` · `pdf`/`printing`.
+**Sem** gerenciador de estado (Provider/Riverpod/Bloc): o estado é um cache
+estático global + `setState` nas telas.
+
+## 2.1 As camadas
+
+```
+screens/          widgets, navegação, validação de UX
+   │  lê síncrono ↓        ↑ chama assíncrono
+data/app_data.dart         cache em memória + orquestração
+   │
+repositories/              1 por recurso: JSON ⇄ modelos
+   │
+services/api/api_client.dart   HTTP, token, envelope, erros
+   │
+                          API
+```
+
+Regra de ouro do design: **leitura é síncrona, escrita é assíncrona.** As telas
+leem `AppData.barters`, `AppData.inputs` etc. direto no `build()`; toda mutação
+passa pela API e só depois atualiza o cache com **a resposta do servidor**.
+
+## 2.2 `ApiClient` — o funil
+
+[api_client.dart](../app/lib/services/api/api_client.dart). Instância única
+global (`final ApiClient api = ApiClient()`). Concentra:
+
+- **base URL** por `--dart-define=API_URL=...` (padrão `localhost:3333`;
+  emulador Android usa `10.0.2.2`)
+- `Authorization: Bearer` quando há token
+- desembrulha o `{ data: ... }`
+- converte erro em `ApiException(statusCode, message)`, extraindo a mensagem
+  pt-BR que o backend mandou — é ela que aparece na SnackBar
+- timeout de 15s e mensagens amigáveis para queda de rede
+- **callback `onSessionExpired`**: num 401 o token é descartado *antes* de
+  avisar, para várias chamadas simultâneas não dispararem o retorno ao login
+  várias vezes
+
+O `signalSessionLoss: false` existe para os dois casos em que um 401 é
+esperado: o `GET /me` da abertura e o `logout`.
+
+## 2.3 Ciclo de vida da sessão
+
+```
+main.dart
+  └─ installSessionExpiryHandler()   liga o ApiClient à navegação
+  └─ BootstrapScreen
+        └─ AppData.restoreSession()
+              └─ AuthRepository.restore()
+                    ├─ TokenStorage.read()  (Keychain / cofre do Android)
+                    └─ GET /me
+        ├─ null           → LoginScreen
+        ├─ erro de rede   → tela de "tentar novamente" (NÃO descarta o token)
+        └─ usuário        → destinationFor(user)
+                              ├─ mustChangePassword → ChangePasswordScreen(forced)
+                              ├─ admin              → AdminMainScreen
+                              └─ consultor           → ConsultantMainScreen
+```
+
+Arquivos: [main.dart](../app/lib/main.dart) ·
+[session.dart](../app/lib/services/session.dart) ·
+[bootstrap_screen.dart](../app/lib/screens/bootstrap_screen.dart) ·
+[destination.dart](../app/lib/screens/destination.dart) ·
+[token_storage.dart](../app/lib/services/token_storage.dart)
+
+Dois detalhes que explicam decisões do código:
+
+- [destination.dart](../app/lib/screens/destination.dart) tem 17 linhas e existe
+  só para o login e a retomada de sessão **não duplicarem** a decisão de destino
+  — duplicada, uma das duas deixaria passar quem ainda tem senha provisória.
+- [session.dart](../app/lib/services/session.dart) usa `GlobalKey` do Navigator
+  e do ScaffoldMessenger porque quem descobre o 401 é a camada de dados, que não
+  tem `BuildContext`.
+
+## 2.4 `AppData` — o cache
+
+[app_data.dart](../app/lib/data/app_data.dart). Classe estática com listas
+públicas (`currentUser`, `consultants`, `producers`, `grains`, `inputs`,
+`categories`, `barters`).
+
+- **Hidratação**: no login (ou na retomada) `refreshAll()` dispara catálogo,
+  produtores, permutas e — se admin — consultores, em paralelo. O dataset é
+  pequeno (cooperativa), então carregar tudo de uma vez deixa o app instantâneo.
+- **Com senha provisória não hidrata**: o servidor recusaria com 403, e o erro
+  apareceria na cara de quem ainda vai definir a senha (`_hydrateIfCleared`).
+- **Mutações**: sempre `API primeiro, cache depois` — `createBarter`,
+  `reviewBarter`, `saveProducer`, `deleteConsultant`, `updatePrice`…
+- Quando a mutação tem **efeito colateral no servidor**, o cache é recarregado
+  em vez de remendado: excluir consultor → `refreshProducers()` (produtores
+  ficaram sem dono); excluir categoria → `refreshCatalog()` (insumos foram
+  desvinculados).
+
+## 2.5 Modelos
+
+[models.dart](../app/lib/models/models.dart) — 419 linhas, o arquivo mais
+documentado do app. Cada modelo tem `fromJson` com conversões defensivas
+(`_asDouble`, `_asId`, `_asDate`).
+
+Duas coisas que o app faz na tradução do JSON:
+
+- `BarterModel.id` **é o `code`** (PRM-2026-001), não o id numérico.
+- O servidor manda `items` numa lista única; o modelo separa em `grains` e
+  `inputs` pelo campo `kind`.
+
+E os getters concentram a narrativa do domínio: `inputCost`, `sacksToDeliver`,
+`referenceGrainName`, `balance`. Nenhuma tela recalcula isso na mão.
+
+## 2.6 Telas
+
+```
+BootstrapScreen ──▶ LoginScreen ──▶ ChangePasswordScreen(forced) ──┐
+                                                                   ▼
+                    ┌──────────────────────────────────────────────┴────┐
+              AdminMainScreen                                  ConsultantMainScreen
+              (BottomNav, IndexedStack)                        (BottomNav, IndexedStack)
+              ├ Dashboard                                      ├ Início (dashboard)
+              ├ Permutas   → BartersScreen(isAdmin: true)       ├ Permutas → BartersScreen(isAdmin: false)
+              ├ Valores    → PricesScreen                       ├ Nova Permuta → NewBarterScreen
+              └ Cadastros  → ConsultantsScreen                      └ Perfil
+```
+
+| Arquivo | O que é |
+|---|---|
+| [admin_main_screen.dart](../app/lib/screens/admin_main_screen.dart) | casca do admin + dashboard (herói de sacas a receber, mix por grão, rankings, fila de pendentes) |
+| [consultant_main_screen.dart](../app/lib/screens/consultant_main_screen.dart) | casca do consultor + dashboard + aba de perfil |
+| [barter_screen.dart](../app/lib/screens/barter_screen.dart) | **o construtor de permuta** (1206 linhas, a tela mais complexa) |
+| [barters_screen.dart](../app/lib/screens/barters_screen.dart) | listagem com abas por status + busca |
+| [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe, revisão do admin, PDF |
+| [prices_screen.dart](../app/lib/screens/prices_screen.dart) | valores de referência + pastas (categorias) |
+| [product_report_screen.dart](../app/lib/screens/product_report_screen.dart) | relatório de um produto + diálogos de preço/categoria/exigência |
+| [consultants_screen.dart](../app/lib/screens/consultants_screen.dart) | ⚠️ é a aba **Cadastros** (alterna Produtores ↔ Consultores) |
+| [producer_profile_screen.dart](../app/lib/screens/producer_profile_screen.dart) | perfil do **produtor** visto pelo admin |
+| [consultant_profile_screen.dart](../app/lib/screens/consultant_profile_screen.dart) | perfil do **consultor** visto pelo admin |
+| [edit_forms.dart](../app/lib/screens/edit_forms.dart) | três formulários: produtor, consultor, categoria |
+| [change_password_screen.dart](../app/lib/screens/change_password_screen.dart) | troca obrigatória (`forced: true`) ou voluntária |
+
+O ⚠️ é nome herdado do protótipo: `consultants_screen.dart` não lista só
+consultores, é a aba **Cadastros** inteira.
+
+## 2.7 O construtor de permuta, passo a passo
+
+[barter_screen.dart](../app/lib/screens/barter_screen.dart). O fluxo espelha a
+regra do domínio:
+
+- **Etapa 1 — produtor** (tela inteira, sem tabs ainda). Vem primeiro porque a
+  **área da propriedade** define quais insumos são obrigatórios e em que
+  quantidade. A lista é `AppData.producersForConsultant(consultantId)` — a carteira.
+- **Etapa 2 — insumos** (tab 1). Insumos com exigência já vêm pré-preenchidos no
+  mínimo e não descem abaixo dele (`_setInput` trava). Barras de progresso das
+  categorias mostram o quanto falta **em proporção**.
+- **Etapa 3 — grão de pagamento** (tab 2). Cada card mostra quantas sacas
+  *daquele* grão cobririam o custo atual.
+- **Envio**: `AppData.createBarter` manda só `producerId`, `grainId` e
+  `[{productId, quantity}]`. O diálogo de sucesso mostra **a permuta devolvida
+  pelo servidor**, não a prévia local.
+
+### Por que a matemática está duplicada
+
+[barter_math.dart](../app/lib/services/barter_math.dart) é o espelho de
+[barter-math.ts](../api/src/barters/barter-math.ts): mesmos nomes de função,
+mesmas contas, mesmo arredondamento. **É intencional** — o app precisa reagir a
+cada dígito digitado, sem ida ao servidor. Mas o app é *prévia*; o servidor é
+*autoridade* e revalida tudo no envio.
+
+O que segura as duas cópias juntas é um par de testes:
+[barter-math.spec.ts](../api/src/barters/barter-math.spec.ts) e
+[barter_math_test.dart](../app/test/barter_math_test.dart) fixam **os mesmos
+números**. Mudou uma regra, mude nos dois lugares — um dos testes vai cair se
+você esquecer.
+
+**O arredondamento é parte do contrato, não detalhe.** A tela usava
+`toStringAsFixed(2)`, o caminho natural em Dart; o servidor usa
+`Math.round(v * 100) / 100`. Eles arredondam por bases diferentes (decimal vs
+binário) e discordam em 4,2% dos valores — sempre em meio centavo. Meio centavo
+é exatamente o bastante para a tela mostrar a quantidade mínima de um insumo e
+o servidor recusar o envio por ela estar abaixo do mínimo. Por isso o espelho
+Dart reproduz a fórmula do servidor em vez de usar o idioma local.
+
+## 2.8 Privacidade por papel
+
+O **consultor nunca vê R$**. Para ele a permuta é "insumos retirados → sacas do
+grão". A flag `showValue` / `showValues` atravessa telas e PDF:
+
+- [barter_screen.dart](../app/lib/screens/barter_screen.dart) → sempre `false`
+- [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) → `widget.isAdmin`
+- [barter_pdf.dart](../app/lib/services/barter_pdf.dart) → mesmo critério
+
+Note que isso é **regra de apresentação, não de segurança**: os preços vêm no
+JSON de `/products` para qualquer autenticado.
+
+## 2.9 Widgets e tema
+
+[common_widgets.dart](../app/lib/widgets/common_widgets.dart) (795 linhas) é o
+vocabulário visual do app: `StatusBadge`, `TypeBadge`, `BarterBalanceBar`,
+`SearchField`, `InfoTile`, `DashboardHeader`, `MiniBarterCard`, `BarterLogo`,
+os formatadores (`formatCurrency`, `formatSacks`), a SnackBar de erro padrão e
+os fluxos compartilhados de `confirmLogout` / troca de senha.
+
+[app_theme.dart](../app/lib/theme/app_theme.dart) tem a semântica de cor:
+verde institucional, **âmbar = grão**, **verde-azulado = insumo**, e o par
+cor/fundo de cada status. Nenhuma tela inventa cor própria.
+
+[price_chart.dart](../app/lib/widgets/price_chart.dart) é um `CustomPainter`
+próprio (sem lib de gráfico), que vira sparkline no modo `mini`.
+
+## 2.10 Testes do app
+
+- [test/barter_math_test.dart](../app/test/barter_math_test.dart) — espelho do
+  spec do servidor; é o que impede as duas cópias da matemática de divergirem.
+- [test/models_test.dart](../app/test/models_test.dart) — o parse do JSON,
+  inclusive o que acontece quando o servidor manda um valor que este app não
+  conhece (não pode derrubar a lista inteira).
+- [test/widget_test.dart](../app/test/widget_test.dart) — abertura do app e
+  retomada de sessão.
+- [tool/verify_api_contract.dart](../app/tool/verify_api_contract.dart) — sobe
+  os **repositórios reais** contra a API no ar e confere o encontro das duas
+  pontas: paginação, provisionamento de consultor, catálogo. `dart run`, sem
+  simulador. É o teste que pega um campo renomeado ou um envelope alterado.
+- [integration_test/app_flow_test.dart](../app/integration_test/app_flow_test.dart)
+  — fluxo de interface ponta a ponta **contra a API real no ar**; cria uma
+  permuta de verdade no banco de dev (rode `npm run db:seed` depois). Rode num
+  **simulador iOS** (`-d 'iPhone 17 Pro'`): ele não exige assinatura de código,
+  enquanto `-d macos` só builda com um certificado de desenvolvimento
+  configurado no Xcode, por causa do `keychain-access-groups` das
+  entitlements.
+
+---
+
+# PARTE 3 — O contrato entre os dois
+
+Estes pares andam juntos. Mudou de um lado, procure o outro:
+
+| Backend | Frontend |
+|---|---|
+| [serializers.ts](../api/src/common/serializers.ts) | [models.dart](../app/lib/models/models.dart) (`fromJson`) |
+| [envelope.interceptor.ts](../api/src/common/envelope.interceptor.ts) | `_send` em [api_client.dart](../app/lib/services/api/api_client.dart) |
+| [validation.ts](../api/src/common/validation.ts) (422, string única) | `_errorMessage` em [api_client.dart](../app/lib/services/api/api_client.dart) |
+| [exception.filter.ts](../api/src/common/exception.filter.ts) (todo erro vira `message`) | idem — é o texto que aparece na tela |
+| [pagination.ts](../api/src/common/pagination.ts) (`meta`) | `getAll`/`_page` em [api_client.dart](../app/lib/services/api/api_client.dart) |
+| `provisionalPassword` em [consultants.controller.ts](../api/src/consultants/consultants.controller.ts) | [provisional_password_dialog.dart](../app/lib/widgets/provisional_password_dialog.dart) |
+| DTOs (`dto/*.ts`) | `_payload(...)` nos [repositories/](../app/lib/repositories/) |
+| `mustChangePassword` no [AuthGuard](../api/src/auth/auth.guard.ts) | [destination.dart](../app/lib/screens/destination.dart) |
+| 401 (token morto/vencido) | `onSessionExpired` em [session.dart](../app/lib/services/session.dart) |
+| [barter-math.ts](../api/src/barters/barter-math.ts) | [barter_math.dart](../app/lib/services/barter_math.dart) — espelho, com testes espelhados |
+
+**As mensagens de erro do backend estão em pt-BR de propósito** — elas vão
+direto para a tela, sem tradução no cliente.
+
+---
+
+# PARTE 4 — Roteiro de leitura
+
+Se for ler tudo em ordem, sugiro:
+
+**Backend (≈1h)**
+1. [schema.prisma](../api/prisma/schema.prisma) — o vocabulário
+2. [app.module.ts](../api/src/app.module.ts) — o índice
+3. [serializers.ts](../api/src/common/serializers.ts) — o contrato
+4. [auth.guard.ts](../api/src/auth/auth.guard.ts) + [token.util.ts](../api/src/auth/token.util.ts) — como a sessão funciona
+5. [barter-math.ts](../api/src/barters/barter-math.ts) → [barters.service.ts](../api/src/barters/barters.service.ts) — o domínio
+6. um módulo CRUD qualquer (`categories/`) para ver o padrão simples
+
+**Frontend (≈1h30)**
+1. [models.dart](../app/lib/models/models.dart) — o domínio no cliente
+2. [api_client.dart](../app/lib/services/api/api_client.dart) — o funil
+3. um repositório (`barter_repository.dart`) — a tradução
+4. [app_data.dart](../app/lib/data/app_data.dart) — o estado
+5. [main.dart](../app/lib/main.dart) → [bootstrap_screen.dart](../app/lib/screens/bootstrap_screen.dart) → [destination.dart](../app/lib/screens/destination.dart) — a entrada
+6. [barter_screen.dart](../app/lib/screens/barter_screen.dart) — a tela que exercita tudo
+
+---
+
+# PARTE 5 — "Onde eu mexo se eu quiser…"
+
+| Quero… | Backend | Frontend |
+|---|---|---|
+| um campo novo em produtor | `schema.prisma` + migration, `producer.dto.ts`, `toProducerJson` | `ProducerModel` + `_payload`, `edit_forms.dart` |
+| uma regra nova de categoria | `barter-math.ts` (`categoryRequired`), `category.dto.ts` | `CategoryRuleType`, `_categoryRequired` em `barter_screen.dart`, `edit_forms.dart` |
+| mudar validade da sessão | `TOKEN_TTL_DAYS` no `.env` | nada |
+| um endpoint novo | módulo (controller+service+dto) + serializer | repositório novo + campo no `AppData` |
+| deixar o consultor ver R$ | nada (já vem no JSON) | trocar as flags `showValue` |
+| trocar SQLite por Postgres | `datasource` no schema, trocar o adapter em `prisma.service.ts`, rodar migrations | nada |
+| mudar mensagem de erro | a exceção no service | nada (o app só exibe) |
+
+---
+
+# PARTE 6 — Pontos frágeis conhecidos
+
+Coisas verdadeiras sobre o código hoje, para você não interpretar como bug:
+
+- **Estado global estático.** `AppData` é conveniente e simples, mas as telas em
+  `IndexedStack` são construídas uma vez: um dashboard pode mostrar dado
+  defasado até um pull-to-refresh. Foi decisão consciente (dataset pequeno);
+  virar um problema quando o app crescer.
+- **Matemática duplicada** app/servidor (ver 2.7) — por design, presa pelos
+  testes espelhados, mas ainda exige mexer nos dois lados ao alterar regras.
+- **O app carrega tudo em memória.** A API já é paginada; o cache do app não.
+  Enquanto o painel do admin somar sacas e valores sobre TODAS as permutas, ele
+  precisa de todas. Trocar isso é uma decisão de produto antes de ser técnica:
+  o que o painel mostra quando "tudo" não cabe mais? Uma safra? Um período?
+- **`BartersScreen._filtered`** roda várias vezes por rebuild (contadores das
+  abas + listas). Irrelevante no volume atual.
+- **`nextCode`** carrega todos os códigos do ano para achar o próximo. É O(n)
+  por permuta criada. A corrida entre ler e gravar está tratada com retry
+  (`createWithCode`), mas a leitura continua crescendo com o ano.
+- **Nome de arquivo enganoso** no app (`consultants_screen`) — ver 2.6.
+- **Uma instância só.** `better-sqlite3` roda dentro do processo: duas
+  instâncias da API sobre o mesmo arquivo não se coordenam. Adequado para uma
+  cooperativa, e escolhido de propósito — mas é o teto de escala horizontal
+  hoje. O caminho de saída é Postgres (ver "Produção" no `api/README.md`).
+- **Paginação por offset.** Se registros forem criados entre uma página e a
+  seguinte, a janela desloca. Autocorrige no refresh seguinte; para volume
+  maior, o caminho é cursor.

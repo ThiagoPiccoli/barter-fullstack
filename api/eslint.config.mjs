@@ -29,7 +29,22 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
-      "prettier/prettier": ["error", { endOfLine: "auto" }],
+      'prettier/prettier': ['error', { endOfLine: 'auto' }],
+    },
+  },
+  {
+    // Nos testes e2e todo acesso passa por `response.body`, que o supertest
+    // tipa como `any` — não há tipo a recuperar, e afirmar um a cada asserção
+    // deixaria o teste mais longo que o comportamento que ele descreve. As
+    // regras de tipagem insegura ficam desligadas AQUI, e só aqui: no código
+    // de produção elas continuam valendo como erro.
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
     },
   },
 );

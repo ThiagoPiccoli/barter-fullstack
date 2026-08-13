@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, UnprocessableEntityException } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { hashPassword, verifyPassword } from './password.util';
+import { burnPasswordTime, hashPassword, needsRehash, verifyPassword } from './password.util';
 import { generateToken, hashToken, tokenExpiry } from './token.util';
 
 @Injectable()
@@ -14,15 +14,38 @@ export class AuthService {
    */
   async login(email: string, password: string): Promise<{ user: User; token: string }> {
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || !(await verifyPassword(password, user.password))) {
+
+    // E-mail desconhecido também paga o preço de um scrypt. Sem isso a
+    // resposta volta rápido demais e o TEMPO responde o que a mensagem
+    // genérica esconde: quais e-mails estão cadastrados.
+    if (!user) {
+      await burnPasswordTime();
       throw new BadRequestException('Credenciais inválidas');
     }
+    if (!(await verifyPassword(password, user.password))) {
+      throw new BadRequestException('Credenciais inválidas');
+    }
+
+    const current = await this.upgradeHashIfStale(user, password);
 
     const token = generateToken();
     await this.prisma.accessToken.create({
       data: { hash: hashToken(token), userId: user.id, expiresAt: tokenExpiry() },
     });
-    return { user, token };
+    return { user: current, token };
+  }
+
+  /**
+   * Senha guardada com custo menor que o de hoje é reescrita no login, com a
+   * senha que o usuário acabou de digitar em mãos. É o que permite subir o
+   * custo do scrypt depois sem pedir troca de senha a ninguém.
+   */
+  private async upgradeHashIfStale(user: User, password: string): Promise<User> {
+    if (!needsRehash(user.password)) return user;
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: await hashPassword(password) },
+    });
   }
 
   /** Revoga o token da sessão atual (idempotente). */

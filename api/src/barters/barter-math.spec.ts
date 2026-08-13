@@ -57,4 +57,21 @@ describe('BarterMath', () => {
     expect(minQuantityFor(0.15, 120)).toBe(18);
     expect(minQuantityFor(0, 120)).toBe(0);
   });
+
+  /**
+   * O app repete esta conta enquanto o consultor monta a permuta (o servidor
+   * não pode ser consultado a cada dígito). Os valores abaixo são os mesmos
+   * fixados em app/test/barter_math_test.dart: se um lado mudar de
+   * arredondamento, um dos dois testes cai.
+   *
+   * Meio centavo importa aqui — é a diferença entre a tela mostrar a
+   * quantidade mínima e o envio ser recusado por estar abaixo dela.
+   */
+  it('arredondamento casa com o do app (mesmos casos de meio centavo)', () => {
+    expect(minQuantityFor(0.015, 1)).toBe(0.02);
+    expect(minQuantityFor(0.045, 1)).toBe(0.05);
+    expect(minQuantityFor(2.675, 1)).toBe(2.68);
+    expect(minQuantityFor(1.005, 1)).toBe(1.0);
+    expect(sacksToCover(1, 3)).toBe(0.3333);
+  });
 });

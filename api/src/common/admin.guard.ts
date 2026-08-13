@@ -5,7 +5,7 @@ import type { User } from '@prisma/client';
 @Injectable()
 export class AdminGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
-    const user = context.switchToHttp().getRequest().user as User | undefined;
+    const { user } = context.switchToHttp().getRequest<{ user?: User }>();
     if (user?.role !== 'admin') {
       throw new ForbiddenException('Apenas administradores podem executar esta ação');
     }

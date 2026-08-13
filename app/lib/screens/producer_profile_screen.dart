@@ -5,15 +5,15 @@ import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'edit_forms.dart';
 
-class SellerProfileAdminScreen extends StatefulWidget {
+class ProducerProfileScreen extends StatefulWidget {
   final ProducerModel producer;
-  const SellerProfileAdminScreen({super.key, required this.producer});
+  const ProducerProfileScreen({super.key, required this.producer});
 
   @override
-  State<SellerProfileAdminScreen> createState() => _SellerProfileAdminScreenState();
+  State<ProducerProfileScreen> createState() => _ProducerProfileScreenState();
 }
 
-class _SellerProfileAdminScreenState extends State<SellerProfileAdminScreen> {
+class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
   late ProducerModel producer = widget.producer;
 
   Future<void> _edit() async {
@@ -81,8 +81,8 @@ class _SellerProfileAdminScreenState extends State<SellerProfileAdminScreen> {
               children: [
                 InfoTile(
                   icon: Icons.work_outline,
-                  label: 'Carteira do vendedor',
-                  value: AppData.sellerById(producer.sellerId)?.name ?? 'Sem vendedor vinculado',
+                  label: 'Carteira do consultor',
+                  value: AppData.consultantById(producer.consultantId)?.name ?? 'Sem consultor vinculado',
                 ),
                 const Divider(height: 1),
                 InfoTile(icon: Icons.badge_outlined, label: 'Documento', value: producer.document),

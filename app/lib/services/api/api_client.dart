@@ -18,6 +18,15 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// Uma página de uma coleção paginada: os itens devolvidos e o total real que
+/// existe por trás deles. É o `meta` que a API manda ao lado de `data`.
+class ApiPage {
+  final List<dynamic> items;
+  final int total;
+
+  const ApiPage(this.items, this.total);
+}
+
 /// Cliente HTTP do app. Toda chamada à API passa por aqui: base URL, token
 /// de acesso (Bearer), decodificação do envelope `{data: ...}` e conversão
 /// de erros da API em [ApiException].
@@ -37,7 +46,7 @@ class ApiClient {
   String? _token;
 
   /// Avisa que o servidor rejeitou o token (401) numa chamada autenticada: a
-  /// sessão morreu do lado de lá — o admin excluiu o vendedor, ou a sessão foi
+  /// sessão morreu do lado de lá — o admin excluiu o consultor, ou a sessão foi
   /// encerrada em outro aparelho — e o app precisa voltar ao login em vez de
   /// repetir "Sessão expirada" a cada toque. Registrado uma vez no start,
   /// em services/session.dart.
@@ -56,6 +65,50 @@ class ApiClient {
   }) =>
       _send('GET', path, query: query, signalSessionLoss: signalSessionLoss);
 
+  /// Busca uma coleção paginada INTEIRA, página por página.
+  ///
+  /// A API limita quanto uma resposta pode carregar de uma vez (o servidor não
+  /// pode ser obrigado a montar a base inteira num JSON só). O app, por outro
+  /// lado, foi feito em cima de um cache completo em memória — o painel do
+  /// admin soma sacas, valores e rankings sobre TODAS as permutas —, então
+  /// aqui as páginas são remontadas em uma lista só.
+  ///
+  /// É por isso que a paginação existe no servidor mas não aparece nas telas:
+  /// ela protege a API hoje e deixa pronto o dia em que as listas passarem a
+  /// carregar sob demanda.
+  Future<List<Map<String, dynamic>>> getAll(
+    String path, {
+    Map<String, String>? query,
+    int pageSize = 200,
+  }) async {
+    // Trava de segurança: se o servidor devolvesse um `total` que a paginação
+    // nunca alcança, o laço não pode girar para sempre.
+    const maxPages = 200;
+    final all = <Map<String, dynamic>>[];
+
+    for (var page = 0; page < maxPages; page++) {
+      final result = await _page(path, {
+        ...?query,
+        'limit': '$pageSize',
+        'offset': '${all.length}',
+      });
+      all.addAll(result.items.cast<Map<String, dynamic>>());
+      if (result.items.isEmpty || all.length >= result.total) break;
+    }
+    return all;
+  }
+
+  /// Uma página com o `meta` preservado (o `get` comum descarta o envelope).
+  Future<ApiPage> _page(String path, Map<String, String> query) async {
+    final body = await _send('GET', path, query: query, unwrap: false);
+    if (body is! Map<String, dynamic>) return const ApiPage([], 0);
+    final items = (body['data'] as List?) ?? const [];
+    final meta = body['meta'];
+    final total = meta is Map<String, dynamic> ? (meta['total'] as num?)?.toInt() : null;
+    // Rota sem paginação (ou resposta antiga): o que veio é tudo o que existe.
+    return ApiPage(items, total ?? items.length);
+  }
+
   Future<dynamic> post(String path, {Object? body, bool signalSessionLoss = true}) =>
       _send('POST', path, body: body, signalSessionLoss: signalSessionLoss);
 
@@ -63,12 +116,15 @@ class ApiClient {
 
   Future<dynamic> delete(String path) => _send('DELETE', path);
 
+  /// [unwrap] falso devolve o envelope cru (`{data, meta}`) — quem pagina
+  /// precisa do `meta`, que o desembrulho normal joga fora.
   Future<dynamic> _send(
     String method,
     String path, {
     Map<String, String>? query,
     Object? body,
     bool signalSessionLoss = true,
+    bool unwrap = true,
   }) async {
     final uri = Uri.parse('$baseUrl/api/v1$path').replace(queryParameters: query);
     final request = http.Request(method, uri);
@@ -103,8 +159,9 @@ class ApiClient {
       throw ApiException(response.statusCode, _errorMessage(response.statusCode, decoded));
     }
 
-    // Envelope padrão da API: { data: ... }
-    if (decoded is Map<String, dynamic> && decoded.containsKey('data')) {
+    // Envelope padrão da API: { data: ... } — e { data, meta } nas listas
+    // paginadas, que quem pediu o envelope cru quer inteiro.
+    if (unwrap && decoded is Map<String, dynamic> && decoded.containsKey('data')) {
       return decoded['data'];
     }
     return decoded;

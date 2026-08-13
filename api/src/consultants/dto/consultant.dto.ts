@@ -1,10 +1,10 @@
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 /**
- * Vendedores são provisionados pelo ADMIN (não há signup público). A senha é
+ * Consultores são provisionados pelo ADMIN (não há signup público). A senha é
  * opcional na criação: sem ela, vale a senha padrão de primeira entrada.
  */
-export class CreateSellerDto {
+export class CreateConsultantDto {
   @IsString()
   @MinLength(2)
   @MaxLength(120)
@@ -32,7 +32,7 @@ export class CreateSellerDto {
 }
 
 /** Edição não troca senha nem papel. */
-export class UpdateSellerDto {
+export class UpdateConsultantDto {
   @IsString()
   @MinLength(2)
   @MaxLength(120)

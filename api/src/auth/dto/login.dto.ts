@@ -11,7 +11,7 @@ export class LoginDto {
 
 /**
  * Troca da própria senha. O mínimo de 6 acompanha o provisionamento de
- * vendedores (CreateSellerDto) — a senha provisória do admin também respeita
+ * consultores (CreateConsultantDto) — a senha provisória do admin também respeita
  * esse piso.
  */
 export class ChangePasswordDto {

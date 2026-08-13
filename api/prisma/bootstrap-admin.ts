@@ -10,7 +10,9 @@ import { hashPassword } from '../src/auth/password.util';
  * A senha nasce marcada como provisória: o admin é obrigado a trocá-la no
  * primeiro login, de modo que o valor passado no deploy não fica valendo.
  */
-export async function bootstrapAdmin(prisma: PrismaClient): Promise<'created' | 'skipped' | 'missing-env'> {
+export async function bootstrapAdmin(
+  prisma: PrismaClient,
+): Promise<'created' | 'skipped' | 'missing-env'> {
   const existing = await prisma.user.count();
   if (existing > 0) return 'skipped';
 

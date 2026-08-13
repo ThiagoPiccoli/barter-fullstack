@@ -1,75 +1,108 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import type { User } from '@prisma/client';
-import { hashPassword } from '../auth/password.util';
+import { generateProvisionalPassword, hashPassword } from '../auth/password.util';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateSellerDto, UpdateSellerDto } from './dto/seller.dto';
+import { CreateConsultantDto, UpdateConsultantDto } from './dto/consultant.dto';
 
 /**
- * Senha de primeira entrada quando o admin não define uma na criação. Vale
- * uma única vez: o vendedor cai direto na troca de senha ao entrar com ela
- * (ver mustChangePassword em create). Pode ser trocada por SELLER_DEFAULT_PASSWORD.
- *
- * Lida na hora de criar, e não numa constante de topo de módulo: este arquivo
- * é importado antes do ConfigModule carregar o .env, então uma constante
- * congelaria o padrão e ignoraria a variável em silêncio — justamente no
- * ponto em que ela existe para tirar o '123456' do caminho.
+ * Consultor recém-provisionado, com a senha de primeira entrada em texto puro.
+ * É a ÚNICA vez que esse valor existe fora do hash: o admin precisa dele para
+ * ditar ao consultor, e ele nunca mais pode ser lido de volta.
  */
-function defaultPassword(): string {
-  return process.env.SELLER_DEFAULT_PASSWORD || '123456';
+export interface ProvisionedConsultant {
+  user: User;
+  provisionalPassword: string;
 }
 
-/** Gestão de VENDEDORES pelo admin — não existe signup público. */
+/** Gestão de CONSULTORES pelo admin — não existe signup público. */
 @Injectable()
-export class SellersService {
+export class ConsultantsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(): Promise<User[]> {
-    return this.prisma.user.findMany({ where: { role: 'seller' }, orderBy: { id: 'asc' } });
+    return this.prisma.user.findMany({ where: { role: 'consultant' }, orderBy: { id: 'asc' } });
   }
 
-  async create(dto: CreateSellerDto): Promise<User> {
+  /**
+   * Cria o consultor com uma senha de primeira entrada ALEATÓRIA (ou a que o
+   * admin escolheu). Ela nasce marcada como provisória: quem entra com ela é
+   * obrigado a trocá-la antes de usar o app.
+   *
+   * A aleatoriedade é o ponto. Enquanto essa senha era um valor fixo igual
+   * para todo mundo, qualquer um que soubesse o e-mail podia entrar antes do
+   * titular, definir a senha definitiva e ficar com a conta — e não havia como
+   * o admin retomá-la.
+   */
+  async create(dto: CreateConsultantDto): Promise<ProvisionedConsultant> {
     const emailTaken = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (emailTaken) {
       throw new UnprocessableEntityException('Este e-mail já está em uso por outro usuário');
     }
-    // A senha definida aqui é PROVISÓRIA: quem entra com ela é obrigado a
-    // trocá-la antes de usar o app (mustChangePassword), então ela nunca vira
-    // a senha permanente de ninguém.
+
     const { password, ...data } = dto;
-    return this.prisma.user.create({
+    const provisionalPassword = password ?? generateProvisionalPassword();
+    const user = await this.prisma.user.create({
       data: {
         ...data,
-        password: await hashPassword(password ?? defaultPassword()),
-        role: 'seller',
+        password: await hashPassword(provisionalPassword),
+        role: 'consultant',
         mustChangePassword: true,
       },
     });
+    return { user, provisionalPassword };
   }
 
-  async update(id: number, dto: UpdateSellerDto): Promise<User> {
-    const seller = await this.findSeller(id);
+  async update(id: number, dto: UpdateConsultantDto): Promise<User> {
+    const consultant = await this.findConsultant(id);
     const emailTaken = await this.prisma.user.findFirst({
-      where: { email: dto.email, NOT: { id: seller.id } },
+      where: { email: dto.email, NOT: { id: consultant.id } },
     });
     if (emailTaken) {
       throw new UnprocessableEntityException('Este e-mail já está em uso por outro usuário');
     }
-    return this.prisma.user.update({ where: { id: seller.id }, data: dto });
+    return this.prisma.user.update({ where: { id: consultant.id }, data: dto });
   }
 
   /**
-   * Excluir um vendedor não apaga permutas (snapshot + FK NULL) e deixa os
-   * produtores da carteira "sem vendedor" até o admin realocá-los.
+   * Devolve o acesso ao consultor com uma nova senha provisória. É o caminho
+   * para os dois problemas reais do dia a dia: esqueceu a senha, ou a conta
+   * ficou com quem não devia.
+   *
+   * Derruba TODAS as sessões abertas da conta — sem isso, redefinir a senha
+   * não expulsaria quem já estava dentro, e o reset não resolveria nada no
+   * caso que mais importa.
    */
-  async delete(id: number): Promise<void> {
-    const seller = await this.findSeller(id);
-    await this.prisma.user.delete({ where: { id: seller.id } });
+  async resetPassword(id: number): Promise<ProvisionedConsultant> {
+    const consultant = await this.findConsultant(id);
+    const provisionalPassword = generateProvisionalPassword();
+
+    const [user] = await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: consultant.id },
+        data: {
+          password: await hashPassword(provisionalPassword),
+          mustChangePassword: true,
+        },
+      }),
+      this.prisma.accessToken.deleteMany({ where: { userId: consultant.id } }),
+    ]);
+
+    return { user, provisionalPassword };
   }
 
-  /** Só registros role=seller passam por aqui — admin não se gerencia nesta rota. */
-  private async findSeller(id: number): Promise<User> {
-    const seller = await this.prisma.user.findFirst({ where: { id, role: 'seller' } });
-    if (!seller) throw new NotFoundException('Registro não encontrado.');
-    return seller;
+  /**
+   * Excluir um consultor não apaga permutas (snapshot + FK NULL) e deixa os
+   * produtores da carteira "sem consultor" até o admin realocá-los.
+   */
+  async delete(id: number): Promise<void> {
+    const consultant = await this.findConsultant(id);
+    await this.prisma.user.delete({ where: { id: consultant.id } });
+  }
+
+  /** Só registros role=consultant passam por aqui — admin não se gerencia nesta rota. */
+  private async findConsultant(id: number): Promise<User> {
+    const consultant = await this.prisma.user.findFirst({ where: { id, role: 'consultant' } });
+    if (!consultant) throw new NotFoundException('Registro não encontrado.');
+    return consultant;
   }
 }

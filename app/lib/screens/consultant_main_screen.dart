@@ -7,14 +7,14 @@ import '../widgets/common_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_screen.dart';
 
-class SellerMainScreen extends StatefulWidget {
-  final UserModel seller;
-  const SellerMainScreen({super.key, required this.seller});
+class ConsultantMainScreen extends StatefulWidget {
+  final UserModel consultant;
+  const ConsultantMainScreen({super.key, required this.consultant});
   @override
-  State<SellerMainScreen> createState() => _SellerMainScreenState();
+  State<ConsultantMainScreen> createState() => _ConsultantMainScreenState();
 }
 
-class _SellerMainScreenState extends State<SellerMainScreen> {
+class _ConsultantMainScreenState extends State<ConsultantMainScreen> {
   int _selectedIndex = 0;
   late List<Widget> _screens;
 
@@ -22,10 +22,10 @@ class _SellerMainScreenState extends State<SellerMainScreen> {
   void initState() {
     super.initState();
     _screens = [
-      _SellerDashboardTab(seller: widget.seller, onNavigate: _go),
-      BartersScreen(isAdmin: false, sellerId: widget.seller.id),
-      NewBarterScreen(seller: widget.seller),
-      _SellerProfileTab(seller: widget.seller),
+      _ConsultantDashboardTab(consultant: widget.consultant, onNavigate: _go),
+      BartersScreen(isAdmin: false, consultantId: widget.consultant.id),
+      NewBarterScreen(consultant: widget.consultant),
+      _ConsultantProfileTab(consultant: widget.consultant),
     ];
   }
 
@@ -41,7 +41,7 @@ class _SellerMainScreenState extends State<SellerMainScreen> {
           if (i == 2) {
             // Recria o construtor de permuta a cada acesso (estado limpo).
             setState(() {
-              _screens[2] = NewBarterScreen(seller: widget.seller);
+              _screens[2] = NewBarterScreen(consultant: widget.consultant);
               _selectedIndex = i;
             });
           } else {
@@ -64,17 +64,17 @@ class _SellerMainScreenState extends State<SellerMainScreen> {
   }
 }
 
-class _SellerDashboardTab extends StatefulWidget {
-  final UserModel seller;
+class _ConsultantDashboardTab extends StatefulWidget {
+  final UserModel consultant;
   final Function(int) onNavigate;
-  const _SellerDashboardTab({required this.seller, required this.onNavigate});
+  const _ConsultantDashboardTab({required this.consultant, required this.onNavigate});
 
   @override
-  State<_SellerDashboardTab> createState() => _SellerDashboardTabState();
+  State<_ConsultantDashboardTab> createState() => _ConsultantDashboardTabState();
 }
 
-class _SellerDashboardTabState extends State<_SellerDashboardTab> {
-  UserModel get seller => widget.seller;
+class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
+  UserModel get consultant => widget.consultant;
   Function(int) get onNavigate => widget.onNavigate;
 
   /// Puxar para atualizar: recarrega permutas/carteira da API.
@@ -89,7 +89,7 @@ class _SellerDashboardTabState extends State<_SellerDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = AppData.barters.where((b) => b.sellerId == seller.id).toList()
+    final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final approved = myBarters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = myBarters.where((b) => b.status == BarterStatus.pending).length;
@@ -105,7 +105,7 @@ class _SellerDashboardTabState extends State<_SellerDashboardTab> {
             child: CircleAvatar(
               backgroundColor: AppColors.primaryAccent,
               radius: 18,
-              child: Text(seller.avatarInitials,
+              child: Text(consultant.avatarInitials,
                   style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
             ),
           ),
@@ -118,8 +118,8 @@ class _SellerDashboardTabState extends State<_SellerDashboardTab> {
         padding: const EdgeInsets.all(16),
         children: [
           DashboardHeader(
-            greetingName: seller.name.split(' ')[0],
-            subtitle: seller.branch,
+            greetingName: consultant.name.split(' ')[0],
+            subtitle: consultant.branch,
             caption: 'Registre permutas para seus produtores',
             icon: Icons.agriculture_outlined,
           ),
@@ -205,13 +205,13 @@ class _SellerDashboardTabState extends State<_SellerDashboardTab> {
   }
 }
 
-class _SellerProfileTab extends StatelessWidget {
-  final UserModel seller;
-  const _SellerProfileTab({required this.seller});
+class _ConsultantProfileTab extends StatelessWidget {
+  final UserModel consultant;
+  const _ConsultantProfileTab({required this.consultant});
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = AppData.barters.where((b) => b.sellerId == seller.id).toList();
+    final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList();
     return Scaffold(
       appBar: AppBar(
         title: const Text('Meu Perfil'),
@@ -226,13 +226,13 @@ class _SellerProfileTab extends StatelessWidget {
                 CircleAvatar(
                   backgroundColor: AppColors.primary,
                   radius: 40,
-                  child: Text(seller.avatarInitials,
+                  child: Text(consultant.avatarInitials,
                       style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                 ),
                 const SizedBox(height: 12),
-                Text(seller.name,
+                Text(consultant.name,
                     style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                Text(seller.branch,
+                Text(consultant.branch,
                     style: const TextStyle(fontSize: 13, color: AppColors.textMedium)),
                 const SizedBox(height: 4),
                 Container(
@@ -241,7 +241,7 @@ class _SellerProfileTab extends StatelessWidget {
                     color: AppColors.primarySurface,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Text('Vendedor',
+                  child: const Text('Consultor',
                       style: TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w600)),
                 ),
               ],
@@ -251,16 +251,16 @@ class _SellerProfileTab extends StatelessWidget {
           Card(
             child: Column(
               children: [
-                InfoTile(icon: Icons.email_outlined, label: 'E-mail', value: seller.email),
+                InfoTile(icon: Icons.email_outlined, label: 'E-mail', value: consultant.email),
                 const Divider(height: 1),
-                InfoTile(icon: Icons.phone_outlined, label: 'Telefone', value: seller.phone),
+                InfoTile(icon: Icons.phone_outlined, label: 'Telefone', value: consultant.phone),
                 const Divider(height: 1),
-                InfoTile(icon: Icons.store_outlined, label: 'Filial', value: seller.branch),
+                InfoTile(icon: Icons.store_outlined, label: 'Filial', value: consultant.branch),
                 const Divider(height: 1),
                 InfoTile(
                   icon: Icons.calendar_today_outlined,
                   label: 'Membro desde',
-                  value: '${seller.createdAt.month.toString().padLeft(2, '0')}/${seller.createdAt.year}',
+                  value: '${consultant.createdAt.month.toString().padLeft(2, '0')}/${consultant.createdAt.year}',
                 ),
               ],
             ),

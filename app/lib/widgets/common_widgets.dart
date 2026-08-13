@@ -185,10 +185,10 @@ class BarterBalanceBar extends StatelessWidget {
   /// Nome do grão de pagamento (ex.: "Soja").
   final String referenceGrainName;
 
-  /// Quantos itens de insumo entram na permuta (para o resumo do vendedor).
+  /// Quantos itens de insumo entram na permuta (para o resumo do consultor).
   final int inputCount;
 
-  /// Se exibe os valores em R$ (admin). O vendedor NUNCA vê valores: para ele a
+  /// Se exibe os valores em R$ (admin). O consultor NUNCA vê valores: para ele a
   /// permuta é só "insumos retirados → sacas do grão".
   final bool showValue;
 
@@ -450,7 +450,7 @@ class ChangePasswordButton extends StatelessWidget {
 }
 
 /// Botão de "Sair" padrão para a AppBar de qualquer tela de nível principal
-/// (abas do admin e do vendedor). Garante o mesmo ícone, rótulo e confirmação
+/// (abas do admin e do consultor). Garante o mesmo ícone, rótulo e confirmação
 /// em todo o app.
 class LogoutButton extends StatelessWidget {
   const LogoutButton({super.key});
@@ -466,7 +466,7 @@ class LogoutButton extends StatelessWidget {
 }
 
 /// Cor do trilho/indicador de um status de permuta. Compartilhada por todos os
-/// cards de histórico (perfil do produtor e do vendedor).
+/// cards de histórico (perfil do produtor e do consultor).
 Color statusColor(BarterStatus s) {
   switch (s) {
     case BarterStatus.approved:
@@ -479,7 +479,7 @@ Color statusColor(BarterStatus s) {
 }
 
 /// Linha de informação (ícone + rótulo + valor) usada nos cartões de perfil
-/// (vendedor, produtor) em todo o app.
+/// (consultor, produtor) em todo o app.
 class InfoTile extends StatelessWidget {
   final IconData icon;
   final String label, value;
@@ -497,7 +497,7 @@ class InfoTile extends StatelessWidget {
 }
 
 /// Cabeçalho de saudação dos dashboards ("Olá, Fulano!") com o gradiente padrão.
-/// [caption] é uma terceira linha opcional (usada no painel do vendedor).
+/// [caption] é uma terceira linha opcional (usada no painel do consultor).
 class DashboardHeader extends StatelessWidget {
   final String greetingName;
   final String subtitle;
@@ -543,8 +543,8 @@ class DashboardHeader extends StatelessWidget {
   }
 }
 
-/// Card compacto de permuta usado nos dashboards (admin e vendedor). No modo
-/// admin mostra as iniciais do vendedor; no modo vendedor, um ícone de troca.
+/// Card compacto de permuta usado nos dashboards (admin e consultor). No modo
+/// admin mostra as iniciais do consultor; no modo consultor, um ícone de troca.
 class MiniBarterCard extends StatelessWidget {
   final BarterModel barter;
   final bool isAdmin;
@@ -563,7 +563,7 @@ class MiniBarterCard extends StatelessWidget {
           backgroundColor: AppColors.primarySurface,
           child: isAdmin
               ? Text(
-                  barter.sellerName.split(' ').map((e) => e[0]).take(2).join(),
+                  barter.consultantName.split(' ').map((e) => e[0]).take(2).join(),
                   style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.bold),
                 )
               : const Icon(Icons.swap_horiz, color: AppColors.primary, size: 20),
@@ -572,7 +572,7 @@ class MiniBarterCard extends StatelessWidget {
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
         subtitle: Text(
             isAdmin
-                ? '${barter.sellerName} • ${barter.inputs.length} insumo(s)'
+                ? '${barter.consultantName} • ${barter.inputs.length} insumo(s)'
                 : '${barter.inputs.length} insumo(s) • ${barter.producerName}',
             style: const TextStyle(fontSize: 11, color: AppColors.textMedium),
             overflow: TextOverflow.ellipsis),
@@ -595,7 +595,7 @@ class MiniBarterCard extends StatelessWidget {
 }
 
 /// Item de histórico de permuta (trilho colorido por status) usado nos perfis de
-/// produtor e de vendedor vistos pelo admin. [subtitle] é a linha contextual.
+/// produtor e de consultor vistos pelo admin. [subtitle] é a linha contextual.
 class BarterLogItem extends StatelessWidget {
   final BarterModel barter;
   final String subtitle;

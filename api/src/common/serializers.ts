@@ -33,8 +33,24 @@ export function toUserJson(user: User) {
     createdAt: user.createdAt,
     initials: initialsOf(user.fullName),
     // O app usa isto para exigir a troca da senha provisória antes de deixar
-    // o vendedor entrar no painel.
+    // o consultor entrar no painel.
     mustChangePassword: user.mustChangePassword,
+  };
+}
+
+/**
+ * Resposta do provisionamento (criação e reset de senha do consultor): o
+ * cadastro mais a senha de primeira entrada em texto puro. É a única resposta
+ * da API que carrega uma senha, e ela existe uma vez só — depois disto o valor
+ * só existe como hash, e nem o admin consegue lê-lo de volta.
+ */
+export function toProvisionedConsultantJson(provisioned: {
+  user: User;
+  provisionalPassword: string;
+}) {
+  return {
+    ...toUserJson(provisioned.user),
+    provisionalPassword: provisioned.provisionalPassword,
   };
 }
 
@@ -42,7 +58,7 @@ export function toProducerJson(producer: Producer) {
   return {
     id: producer.id,
     name: producer.name,
-    sellerId: producer.sellerId,
+    consultantId: producer.consultantId,
     document: producer.document,
     phone: producer.phone,
     farmName: producer.farmName,
@@ -98,9 +114,9 @@ export function toBarterJson(barter: Barter & { items?: BarterItem[] }) {
   return {
     id: barter.id,
     code: barter.code,
-    sellerId: barter.sellerId,
-    sellerName: barter.sellerName,
-    sellerBranch: barter.sellerBranch,
+    consultantId: barter.consultantId,
+    consultantName: barter.consultantName,
+    consultantBranch: barter.consultantBranch,
     producerId: barter.producerId,
     producerName: barter.producerName,
     status: barter.status,
