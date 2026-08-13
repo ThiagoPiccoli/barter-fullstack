@@ -7,9 +7,20 @@ import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 
 class BartersScreen extends StatefulWidget {
+  /// Visão de RETAGUARDA: todas as permutas, com os valores em R$.
   final bool isAdmin;
   final String? consultantId;
-  const BartersScreen({super.key, required this.isAdmin, required this.consultantId});
+
+  /// Pode aprovar/negar. Ver [BarterDetailScreen.canReview]: gerente, comitê e
+  /// faturista enxergam tudo, mas quem revisa hoje é só o admin.
+  final bool canReview;
+
+  const BartersScreen({
+    super.key,
+    required this.isAdmin,
+    required this.consultantId,
+    this.canReview = true,
+  });
   @override
   State<BartersScreen> createState() => _BartersScreenState();
 }
@@ -86,10 +97,10 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             child: TabBarView(
               controller: _tabController,
               children: [
-                _BarterList(barters: _filtered(null), isAdmin: widget.isAdmin, onChanged: () => setState(() {})),
-                _BarterList(barters: _filtered(BarterStatus.pending), isAdmin: widget.isAdmin, onChanged: () => setState(() {})),
-                _BarterList(barters: _filtered(BarterStatus.approved), isAdmin: widget.isAdmin, onChanged: () => setState(() {})),
-                _BarterList(barters: _filtered(BarterStatus.denied), isAdmin: widget.isAdmin, onChanged: () => setState(() {})),
+                _BarterList(barters: _filtered(null), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
+                _BarterList(barters: _filtered(BarterStatus.pending), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
+                _BarterList(barters: _filtered(BarterStatus.approved), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
+                _BarterList(barters: _filtered(BarterStatus.denied), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
               ],
             ),
           ),
@@ -102,8 +113,14 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
 class _BarterList extends StatelessWidget {
   final List<BarterModel> barters;
   final bool isAdmin;
+  final bool canReview;
   final VoidCallback onChanged;
-  const _BarterList({required this.barters, required this.isAdmin, required this.onChanged});
+  const _BarterList({
+    required this.barters,
+    required this.isAdmin,
+    required this.canReview,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -123,7 +140,7 @@ class _BarterList extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       itemCount: barters.length,
       itemBuilder: (context, index) =>
-          _BarterCard(barter: barters[index], isAdmin: isAdmin, onChanged: onChanged),
+          _BarterCard(barter: barters[index], isAdmin: isAdmin, canReview: canReview, onChanged: onChanged),
     );
   }
 }
@@ -131,8 +148,14 @@ class _BarterList extends StatelessWidget {
 class _BarterCard extends StatelessWidget {
   final BarterModel barter;
   final bool isAdmin;
+  final bool canReview;
   final VoidCallback onChanged;
-  const _BarterCard({required this.barter, required this.isAdmin, required this.onChanged});
+  const _BarterCard({
+    required this.barter,
+    required this.isAdmin,
+    required this.canReview,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -143,7 +166,10 @@ class _BarterCard extends StatelessWidget {
         onTap: () async {
           await Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => BarterDetailScreen(barter: barter, isAdmin: isAdmin)),
+            MaterialPageRoute(
+              builder: (_) =>
+                  BarterDetailScreen(barter: barter, isAdmin: isAdmin, canReview: canReview),
+            ),
           );
           onChanged();
         },
@@ -214,7 +240,7 @@ class _BarterCard extends StatelessWidget {
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                 ],
               ),
-              if (isAdmin && barter.status == BarterStatus.pending) ...[
+              if (isAdmin && canReview && barter.status == BarterStatus.pending) ...[
                 const SizedBox(height: 10),
                 Row(
                   children: [

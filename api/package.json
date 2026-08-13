@@ -21,7 +21,8 @@
     "db:seed": "prisma db seed",
     "predb:reset": "node scripts/drop-database.js",
     "db:reset": "prisma migrate reset --force && npm run db:seed",
-    "password:reset": "ts-node scripts/reset-password.ts"
+    "password:reset": "ts-node scripts/reset-password.ts",
+    "pretest:e2e": "dotenv -e .env.test -- prisma migrate deploy"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

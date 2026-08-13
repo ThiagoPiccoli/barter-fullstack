@@ -108,6 +108,9 @@ curl -X POST http://localhost:3333/api/v1/barters \
 | Papel | E-mail | Carteira de produtores |
 |---|---|---|
 | **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo) |
+| Gerente | `gerente@agrobarter.com.br` | — (enxerga tudo, em modo leitura) |
+| Comitê | `comite@agrobarter.com.br` | — (enxerga tudo, em modo leitura) |
+| Faturista | `faturista@agrobarter.com.br` | — (enxerga tudo, em modo leitura) |
 | Consultor | `joao.silva@agrobarter.com.br` | Antônio Carvalho, Sebastião Ramos |
 | Consultor | `ana.ferreira@agrobarter.com.br` | Helena Prado, Cláudia Nunes |
 | Consultor | `roberto.souza@agrobarter.com.br` | Joaquim Tavares |
@@ -152,17 +155,40 @@ npm run password:reset # redefine a senha de qualquer conta (saída de emergênc
 
 ## Papéis e regra de acesso
 
+São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts)):
+
 - **admin** — gerencia cadastros (consultores, produtores), valores de
   referência e pastas de insumos; revisa (aprova/nega) permutas. Enxerga tudo.
+- **manager (gerente)**, **committee (comitê)** e **biller (faturista)** — a
+  RETAGUARDA. Enxergam a operação inteira, como o admin, e **ainda não escrevem
+  nada**: o fluxo de cada um entra junto com o contrato entre eles. Toda
+  tentativa de escrita hoje devolve 403, e isso é testado
+  ([`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts)).
 - **consultant (consultor)** — loga no app e registra permutas **apenas para os
   produtores da própria carteira**; nunca vê as carteiras dos colegas.
 - **produtor** — não loga: é um cadastro designado pelo consultor nas permutas.
 
-Não há signup público: consultores são provisionados pelo admin.
+Quem impõe isso é o `AccessGuard` global, e ele **nega por padrão**: toda rota
+declara a sua política (`@RequireCapability`, `@AnyRole` ou `@Public`), e rota
+sem política é recusada. Quem tem cada capacidade está numa tabela só,
+[`src/common/policy.ts`](src/common/policy.ts) — os services consultam a mesma
+tabela para decidir o escopo por linha (carteira própria × operação inteira).
+
+Atos sensíveis deixam rastro em `GET /audit-logs`: provisionar, editar, resetar
+senha, excluir usuário e revisar permuta.
+
+Não há signup público: **usuário é provisionado pelo admin**, cada papel pela
+sua rota — `POST /consultants`, `/managers`, `/committee-members`, `/billers`.
+O papel vem da ROTA, nunca do corpo, e cada rota só enxerga e altera o próprio
+papel (papel alheio responde 404).
+
+`admin` não tem rota: o primeiro vem do `bootstrap-admin` (banco vazio +
+variáveis de ambiente) e a senha se recupera por `npm run password:reset`. Não
+há ninguém acima do admin para autorizar a criação de outro.
 
 ### Senha de primeira entrada
 
-Ao criar um consultor, o servidor **sorteia uma senha só dele** e a devolve
+Ao criar um usuário de qualquer papel, o servidor **sorteia uma senha só dele** e a devolve
 **uma única vez**, no corpo da resposta (`provisionalPassword`, algo como
 `K7NP-4TQX`). O admin dita esse valor para o consultor; depois disso ele não
 pode mais ser lido — o banco guarda apenas o hash.
@@ -206,9 +232,12 @@ A senha definida por aí também é provisória: exige troca no primeiro login.
 | DELETE | `/products/:id` | admin | Tira do catálogo (permutas antigas intactas) |
 | GET | `/categories` | autenticado | Pastas de insumos e regras vigentes |
 | POST/PUT/DELETE | `/categories[/:id]` | admin | CRUD de pastas |
-| GET | `/consultants` | admin | Consultores |
-| POST/PUT/DELETE | `/consultants[/:id]` | admin | CRUD de consultores |
-| POST | `/consultants/:id/reset-password` | admin | Nova senha provisória; encerra as sessões dele |
+| GET/POST/PUT/DELETE | `/consultants[/:id]` | admin | Consultores |
+| GET/POST/PUT/DELETE | `/managers[/:id]` | admin | Gerentes |
+| GET/POST/PUT/DELETE | `/committee-members[/:id]` | admin | Integrantes do comitê |
+| GET/POST/PUT/DELETE | `/billers[/:id]` | admin | Faturistas |
+| POST | `/<papel>/:id/reset-password` | admin | Nova senha provisória; encerra as sessões dele |
+| GET | `/audit-logs` | admin | Trilha de auditoria (`?action=`, `?targetType=`); só leitura |
 | GET | `/barters` | autenticado | Escopado por papel (`?status=`) |
 | GET | `/barters/:code` | autenticado | Detalhe pelo código público (PRM-AAAA-NNN) |
 | POST | `/barters` | consultor | Registra permuta (ver regras abaixo) |

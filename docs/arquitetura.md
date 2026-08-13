@@ -23,10 +23,35 @@ Três regras derivam disso e aparecem nos dois lados do código:
 | Categoria ("pasta") com regra de mínimo trava o envio | cadastro da categoria | servidor ([barters.service.ts](../api/src/barters/barters.service.ts) passo 3) |
 | Sacas = custo ÷ preço do grão | — | servidor ([barter-math.ts](../api/src/barters/barter-math.ts)) |
 
-E duas regras de acesso:
+E as regras de acesso — **cinco papéis**, definidos em um só lugar
+([roles.ts](../api/src/common/roles.ts)):
 
-- **Consultor** vê apenas a própria *carteira* de produtores e as próprias permutas.
-- **Admin** vê tudo, gerencia cadastros/preços e revisa (aprova/nega) permutas.
+| Papel | `role` | Enxerga | Faz hoje |
+|---|---|---|---|
+| Administrador | `admin` | tudo | cadastros, catálogo/preços, revisão das permutas |
+| Gerente | `manager` | tudo | leitura (fluxo próprio em construção) |
+| Comitê | `committee` | tudo | leitura (fluxo próprio em construção) |
+| Faturista | `biller` | tudo | leitura (fluxo próprio em construção) |
+| Consultor | `consultant` | só a **própria carteira** | registra permuta para os produtores dela |
+
+- Gerente, comitê e faturista **ainda não escrevem nada**. O acesso existe e é
+  testado ([rbac.e2e-spec.ts](../api/test/rbac.e2e-spec.ts)); as ações de cada
+  um entram junto com o contrato entre eles.
+
+Quem responde "o que cada papel pode" é **uma tabela só**,
+[policy.ts](../api/src/common/policy.ts):
+
+| Capacidade | Quem tem |
+|---|---|
+| `users.manage` · `producers.manage` · `catalog.manage` · `barters.review` · `audit.read` | admin |
+| `producers.readAll` · `barters.readAll` | admin, gerente, comitê, faturista |
+| `barters.register` | consultor |
+
+A rota declara a CAPACIDADE de que precisa (`@RequireCapability`), não quem
+entra; os services perguntam à mesma tabela (`can(user, ...)`) para decidir o
+escopo por linha. Antes disso a autorização morava em dois lugares que não se
+falavam — o decorator e um `seesEverything()` dentro dos services —, e não
+havia arquivo nenhum onde se lesse o que um faturista pode.
 - **Produtor não é usuário** — ele não loga, é um cadastro.
 
 ---
@@ -47,7 +72,8 @@ HTTP  POST /api/v1/barters
   ├─ 1. ThrottlerGuard ........ limite por IP (antes da auth, de propósito)
   ├─ 2. AuthGuard ............. Bearer → hash → busca no banco → req.user
   │                              (bloqueia quem ainda tem senha provisória)
-  ├─ 3. AdminGuard ............ só nas rotas marcadas com @UseGuards(AdminGuard)
+  ├─ 3. AccessGuard ........... global; NEGA por padrão — toda rota declara a
+  │                              sua política (@RequireCapability/@AnyRole/@Public)
   ├─ 4. ValidationPipe ........ DTO com class-validator → 422 se inválido
   │                              (whitelist: campo não declarado é DESCARTADO)
   ├─ 5. Controller ............ fino: só extrai user/params e chama o service
@@ -88,9 +114,17 @@ src/barters/
 └── dto/barter.dto.ts      forma do payload de entrada, com validação
 ```
 
-Os módulos existentes: `auth`, `producers`, `consultants`, `categories`,
-`products`, `barters`. Mais `prisma` (o client como provider global) e `common`
-(peças compartilhadas).
+Os módulos existentes: `auth`, `producers`, `users`, `categories`, `products`,
+`barters`, `audit`. Mais `prisma` (o client como provider global) e `common` (peças
+compartilhadas).
+
+`users` é o único que foge do formato: **quatro controllers, um service**. Cada
+papel provisionável tem a sua rota (`/consultants`, `/managers`,
+`/committee-members`, `/billers`) para poder ser guardado e evoluir sozinho,
+enquanto senha provisória, e-mail único e reset moram uma vez só em
+[user-provisioning.service.ts](../api/src/users/user-provisioning.service.ts).
+Todo método dele recebe o papel da rota — é o que faz `PUT /managers/2`
+responder 404 quando o 2 é consultor.
 
 **Controller fino é regra aqui.** Compare
 [producers.controller.ts](../api/src/producers/producers.controller.ts) com
@@ -102,8 +136,10 @@ não tem um `if` de negócio sequer.
 | Arquivo | Papel |
 |---|---|
 | [serializers.ts](../api/src/common/serializers.ts) | **O contrato da API em um só lugar.** Toda resposta passa por um `toXxxJson`. Mudou aqui → mudou o app. |
-| [decorators.ts](../api/src/common/decorators.ts) | `@Public()`, `@AllowProvisionalPassword()`, `@CurrentUser()` |
-| [admin.guard.ts](../api/src/common/admin.guard.ts) | `@UseGuards(AdminGuard)` → 403 se não for admin |
+| [decorators.ts](../api/src/common/decorators.ts) | `@Public()`, `@AllowProvisionalPassword()`, `@Roles()`, `@CurrentUser()` |
+| [roles.ts](../api/src/common/roles.ts) | **Os cinco papéis em um só lugar**: identificador, rótulo em pt-BR e `seesEverything()` (o escopo de leitura) |
+| [policy.ts](../api/src/common/policy.ts) | **A tabela de capacidades**: o que cada papel pode, em um lugar só. `can(user, capability)` é a única pergunta de autorização do sistema |
+| [access.guard.ts](../api/src/common/access.guard.ts) | Aplica a política da rota → 403 dizendo QUEM pode. É **global** e **nega por padrão**: rota sem política declarada é recusada e grita no log |
 | [envelope.interceptor.ts](../api/src/common/envelope.interceptor.ts) | `{ data: ... }` em toda resposta de sucesso |
 | [validation.ts](../api/src/common/validation.ts) | 422 com **uma** string de mensagem (é o que o app exibe) |
 | [throttling.ts](../api/src/common/throttling.ts) | limites de requisição, lidos **por requisição** (não em constante de topo — senão o `.env` seria ignorado) |
@@ -132,8 +168,8 @@ em cascata; trocar a senha derruba as outras sessões e mantém a atual.
 
 ### Senha provisória — a trava que atravessa tudo
 
-Consultor criado pelo admin nasce com `mustChangePassword: true`
-([consultants.service.ts](../api/src/consultants/consultants.service.ts)). Enquanto essa
+Usuário criado pelo admin — de qualquer papel — nasce com `mustChangePassword: true`
+([user-provisioning.service.ts](../api/src/users/user-provisioning.service.ts)). Enquanto essa
 flag estiver ligada, o [AuthGuard](../api/src/auth/auth.guard.ts) devolve **403
 em toda a API**, exceto nas três rotas marcadas com
 `@AllowProvisionalPassword()`: `GET /me`, `POST /auth/password`,
@@ -161,12 +197,62 @@ dentro, com o token na mão. Para o admin, que não tem ninguém acima dele, a
 saída equivalente é
 [scripts/reset-password.ts](../api/scripts/reset-password.ts).
 
+## 1.4b Autorização — negar por padrão, e a trilha
+
+Duas decisões que mudam como o resto se comporta.
+
+**Negar por padrão.** Toda rota precisa declarar a sua política:
+`@RequireCapability(...)`, `@AnyRole()` ou `@Public()`. Rota que não declara
+nada é RECUSADA, com um `ERROR` no log apontando o handler.
+
+Isso inverte o desenho anterior, em que ausência de decorator significava
+"liberado para qualquer autenticado". Naquele arranjo, acrescentar um
+`@Delete(':id')` e esquecer a linha de acesso nascia funcionando — para todo
+consultor da cooperativa. Não havia erro, nem teste vermelho, nem sintoma.
+
+O `@AnyRole()` existe para deixar isso explícito onde a abertura é intencional:
+`GET /barters` e `GET /producers` valem para qualquer autenticado porque quem
+limita o que cada um enxerga é o SERVICE, linha a linha — não a porta.
+
+A rede de segurança é o
+[inventário de rotas](../api/test/route-policy.e2e-spec.ts): ele percorre os
+controllers que o Nest registrou de verdade e trava a política de cada rota
+numa tabela. Rota nova, ou mudança de quem pode chamar uma existente, quebra a
+suíte até alguém escrever a linha — ou seja, até a decisão de acesso ser
+tomada de propósito.
+
+**A trilha de auditoria** ([audit/](../api/src/audit/)). Registra o que muda
+QUEM tem acesso e o que decide dinheiro: `user.created`, `user.updated`,
+`user.password-reset`, `user.deleted` e `barter.reviewed`. Lida em
+`GET /audit-logs` (capacidade `audit.read`), sem rota que altere ou apague.
+
+Ela existe por causa do reset de senha: ele sorteia uma senha nova e derruba as
+sessões abertas do titular — é a primitiva de tomada de conta do sistema. Sem
+registro, uma sessão de admin comprometida faria isso com qualquer usuário e
+não sobraria como reconstruir o ocorrido; o log HTTP vai para a saída padrão,
+é volátil e nem sabe quem chamou.
+
+Duas escolhas dentro dela:
+
+- **Tudo é snapshot em texto**, não relação. A linha precisa continuar legível
+  depois que o autor ou o alvo forem excluídos — que é exatamente o caso em que
+  alguém vai querer lê-la.
+- **Falha de gravação não derruba a operação**: o ato já aconteceu, e abortar a
+  resposta por causa do registro transformaria uma falha de auditoria em
+  indisponibilidade. A perda vira `ERROR` no log. O preço é que a trilha pode
+  parar de gravar sem ninguém notar em produção — por isso
+  [audit.e2e-spec.ts](../api/test/audit.e2e-spec.ts) verifica as linhas de
+  verdade. Se o faturamento exigir valor legal, essa troca muda: a trilha entra
+  na mesma transação do ato.
+
 ## 1.5 O coração: criação de permuta
 
 [barters.service.ts](../api/src/barters/barters.service.ts), método `create`.
 Vale ler linha a linha; a sequência é:
 
-1. **admin não registra permuta** (é ato do consultor da carteira) → 403
+1. **só o consultor registra permuta** (é ato do dono da carteira; admin e
+   retaguarda levam 403) → a regra é uma *lista de permitidos*, para papel novo
+   não entrar por omissão
 2. **produtor precisa ser da carteira de quem registra** → 403
 3. **grão de pagamento** precisa existir, ser `type=grain` e ter preço > 0
 4. quantidades repetidas no payload são **consolidadas por produto**
@@ -245,11 +331,15 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST | `/auth/logout` | autenticado* | revoga o token |
 | GET | `/me` | autenticado* | é aqui que o app vê `mustChangePassword` |
 | POST | `/auth/password` | autenticado* | exige a senha atual |
-| GET | `/producers` `?consultantId=` | escopado | consultor: só a carteira |
+| GET | `/producers` `?consultantId=` | escopado | consultor: só a carteira; retaguarda: todas |
 | GET | `/producers/:id` | escopado | |
 | POST/PUT/DELETE | `/producers` | admin | |
-| GET/POST/PUT/DELETE | `/consultants` | admin | controller inteiro sob AdminGuard |
-| POST | `/consultants/:id/reset-password` | admin | nova provisória + derruba as sessões dele |
+| GET/POST/PUT/DELETE | `/consultants` | admin | consultores |
+| GET/POST/PUT/DELETE | `/managers` | admin | gerentes |
+| GET/POST/PUT/DELETE | `/committee-members` | admin | integrantes do comitê |
+| GET/POST/PUT/DELETE | `/billers` | admin | faturistas |
+| POST | `/<papel>/:id/reset-password` | admin | nova provisória + derruba as sessões dele |
+| GET | `/audit-logs` `?action=` `?targetType=` | admin | trilha, mais recentes primeiro; só leitura |
 | GET | `/products` `?type=` | autenticado | inclui histórico de preço |
 | POST/PUT/DELETE | `/products`, `/products/:id` | admin | |
 | PUT | `/products/:id/price` | admin | acrescenta ponto no histórico |
@@ -257,8 +347,17 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST/PUT/DELETE | `/categories` | admin | |
 | GET | `/barters` `?status=` | escopado | |
 | GET | `/barters/:code` | escopado | `code` = PRM-2026-001 |
-| POST | `/barters` | consultor | admin recebe 403 |
+| POST | `/barters` | consultor | admin e retaguarda recebem 403 |
 | POST | `/barters/:code/review` | admin | só permuta pendente |
+
+As quatro rotas de usuário seguem o mesmo desenho e **só alcançam o próprio
+papel**: papel diferente responde 404, e o admin não é gerenciado por nenhuma
+delas (ver `ManagedRole` em [roles.ts](../api/src/common/roles.ts)) — ele nasce
+do `bootstrap-admin` e se recupera por script.
+
+"Escopado" = consultor vê a própria carteira, retaguarda (admin, gerente,
+comitê, faturista) vê tudo. "admin" nas linhas de escrita é o estado de hoje:
+é onde os papéis novos vão ganhar as próprias ações.
 
 \* também liberadas com senha provisória.
 
@@ -370,9 +469,12 @@ Arquivos: [main.dart](../app/lib/main.dart) ·
 
 Dois detalhes que explicam decisões do código:
 
-- [destination.dart](../app/lib/screens/destination.dart) tem 17 linhas e existe
+- [destination.dart](../app/lib/screens/destination.dart) é curto e existe
   só para o login e a retomada de sessão **não duplicarem** a decisão de destino
-  — duplicada, uma das duas deixaria passar quem ainda tem senha provisória.
+  — duplicada, uma das duas deixaria passar quem ainda tem senha provisória. É
+  também onde cada papel encontra a sua casa, num `switch` sem `default`: papel
+  novo em `UserRole` vira erro de compilação aqui, e não uma tela aberta por
+  engano no painel de outro.
 - [session.dart](../app/lib/services/session.dart) usa `GlobalKey` do Navigator
   e do ScaffoldMessenger porque quem descobre o 401 é a camada de dados, que não
   tem `BuildContext`.
@@ -428,6 +530,7 @@ BootstrapScreen ──▶ LoginScreen ──▶ ChangePasswordScreen(forced) ─
 |---|---|
 | [admin_main_screen.dart](../app/lib/screens/admin_main_screen.dart) | casca do admin + dashboard (herói de sacas a receber, mix por grão, rankings, fila de pendentes) |
 | [consultant_main_screen.dart](../app/lib/screens/consultant_main_screen.dart) | casca do consultor + dashboard + aba de perfil |
+| [back_office_main_screen.dart](../app/lib/screens/back_office_main_screen.dart) | casca de **gerente, comitê e faturista** — uma tela parametrizada pelo papel, em modo leitura, até cada um ganhar as próprias ações |
 | [barter_screen.dart](../app/lib/screens/barter_screen.dart) | **o construtor de permuta** (1206 linhas, a tela mais complexa) |
 | [barters_screen.dart](../app/lib/screens/barters_screen.dart) | listagem com abas por status + busca |
 | [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe, revisão do admin, PDF |
@@ -542,7 +645,7 @@ Estes pares andam juntos. Mudou de um lado, procure o outro:
 | [validation.ts](../api/src/common/validation.ts) (422, string única) | `_errorMessage` em [api_client.dart](../app/lib/services/api/api_client.dart) |
 | [exception.filter.ts](../api/src/common/exception.filter.ts) (todo erro vira `message`) | idem — é o texto que aparece na tela |
 | [pagination.ts](../api/src/common/pagination.ts) (`meta`) | `getAll`/`_page` em [api_client.dart](../app/lib/services/api/api_client.dart) |
-| `provisionalPassword` em [consultants.controller.ts](../api/src/consultants/consultants.controller.ts) | [provisional_password_dialog.dart](../app/lib/widgets/provisional_password_dialog.dart) |
+| `provisionalPassword` em [consultants.controller.ts](../api/src/users/consultants.controller.ts) | [provisional_password_dialog.dart](../app/lib/widgets/provisional_password_dialog.dart) |
 | DTOs (`dto/*.ts`) | `_payload(...)` nos [repositories/](../app/lib/repositories/) |
 | `mustChangePassword` no [AuthGuard](../api/src/auth/auth.guard.ts) | [destination.dart](../app/lib/screens/destination.dart) |
 | 401 (token morto/vencido) | `onSessionExpired` em [session.dart](../app/lib/services/session.dart) |

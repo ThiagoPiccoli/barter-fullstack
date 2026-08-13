@@ -17,8 +17,9 @@ flutter run --dart-define=API_URL=http://192.168.0.10:3333  # aparelho físico (
 flutter run --dart-define=API_URL=http://10.0.2.2:3333      # emulador Android
 ```
 
-Login de demonstração: `admin@agrobarter.com.br` / `123456` (admin) ou
-`joao.silva@agrobarter.com.br` / `123456` (consultor).
+Login de demonstração (senha `123456` em todos): `admin@`, `gerente@`,
+`comite@`, `faturista@` e `joao.silva@` — todos em `agrobarter.com.br`, um por
+papel. Em build de debug a tela de login traz um atalho para cada um.
 
 ## Camadas
 

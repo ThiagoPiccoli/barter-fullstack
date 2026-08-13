@@ -99,7 +99,22 @@
       "Bash(flutter build *)",
       "Bash(/Users/thiagopiccoli/Library/Android/sdk/build-tools/*/aapt2 dump *)",
       "Bash(unzip -p build/app/outputs/flutter-apk/app-debug.apk AndroidManifest.xml)",
-      "Bash(xmllint --noout android/app/src/main/res/xml/network_security_config.xml)"
+      "Bash(xmllint --noout android/app/src/main/res/xml/network_security_config.xml)",
+      "Bash(python3 -c \"import json,sys; print\\(json.dumps\\(json.load\\(sys.stdin\\)['scripts'], indent=2\\)\\)\")",
+      "Bash(sqlite3 prisma/dev.db \"select id, email, role from User;\")",
+      "Bash(sqlite3 prisma/dev.db \"select 'producers', count\\(*\\) from Producer union all select 'barters', count\\(*\\) from Barter union all select 'products', count\\(*\\) from Product union all select 'tokens', count\\(*\\) from AccessToken;\")",
+      "Bash(sqlite3 prisma/dev.db \"DELETE FROM sqlite_sequence;\")",
+      "Bash(sqlite3 prisma/dev.db \"select id, email from User where email='x@y.com';\")",
+      "Bash(sqlite3 prisma/dev.db \"delete from User where email='x@y.com';\")",
+      "Bash(sqlite3 prisma/dev.db \"select code,status from Barter where code='PRM-2026-003';\")",
+      "Bash(pkill -f \"nest start\")",
+      "Bash(pkill -f \"node dist/src/main\")",
+      "Bash(sqlite3 api/prisma/dev.db \"select id, email, role from User;\")",
+      "Bash(sqlite3 prisma/test.db \".tables\")",
+      "Bash(sqlite3 prisma/test.db \"select count\\(*\\) from AuditLog;\")",
+      "Bash(sqlite3 prisma/test.db \"select code, status from Barter order by code;\")",
+      "Bash(sqlite3 api/prisma/dev.db \"select id,email,role from User;\")",
+      "Bash(sqlite3 api/prisma/dev.db \"select count\\(*\\) from AuditLog;\")"
     ],
     "additionalDirectories": [
       "/tmp",

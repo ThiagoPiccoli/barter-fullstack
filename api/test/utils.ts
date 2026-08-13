@@ -45,3 +45,11 @@ export async function loginAs(app: INestApplication, email: string): Promise<str
 export const ADMIN = 'admin@agrobarter.com.br';
 export const JOAO = 'joao.silva@agrobarter.com.br';
 export const ANA = 'ana.ferreira@agrobarter.com.br';
+
+/* Retaguarda (um por papel novo). */
+export const GERENTE = 'gerente@agrobarter.com.br';
+export const COMITE = 'comite@agrobarter.com.br';
+export const FATURISTA = 'faturista@agrobarter.com.br';
+
+/** Os três papéis de retaguarda criados junto com o RBAC, para varrer todos. */
+export const BACK_OFFICE = [GERENTE, COMITE, FATURISTA];

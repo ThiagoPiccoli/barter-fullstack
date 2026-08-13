@@ -7,6 +7,8 @@ import {
 import type { Producer, User } from '@prisma/client';
 import { Paginated, windowOf } from '../common/pagination';
 import { PrismaService } from '../prisma/prisma.service';
+import { CAPABILITY, can } from '../common/policy';
+import { ROLE } from '../common/roles';
 import { documentDigitsOf } from './document';
 import { ListProducersQuery, ProducerDto } from './dto/producer.dto';
 
@@ -15,18 +17,17 @@ export class ProducersService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Carteira visível: consultor enxerga apenas os próprios produtores; admin
-   * enxerga todos (com filtro opcional por consultor). É a regra de acesso
-   * central do domínio.
+   * Carteira visível: consultor enxerga apenas os próprios produtores; os
+   * papéis de retaguarda (admin, gerente, comitê, faturista) enxergam todos,
+   * com filtro opcional por consultor. É a regra de acesso central do domínio.
    */
   async listFor(user: User, query: ListProducersQuery): Promise<Paginated<Producer>> {
     const { take, skip } = windowOf(query);
-    const where =
-      user.role === 'admin'
-        ? query.consultantId
-          ? { consultantId: query.consultantId }
-          : {}
-        : { consultantId: user.id };
+    const where = can(user, CAPABILITY.producersReadAll)
+      ? query.consultantId
+        ? { consultantId: query.consultantId }
+        : {}
+      : { consultantId: user.id };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.producer.findMany({ where, orderBy: { id: 'asc' }, take, skip }),
@@ -39,7 +40,7 @@ export class ProducersService {
   async findFor(user: User, id: number): Promise<Producer> {
     const producer = await this.prisma.producer.findUnique({ where: { id } });
     if (!producer) throw new NotFoundException('Registro não encontrado.');
-    if (user.role !== 'admin' && producer.consultantId !== user.id) {
+    if (!can(user, CAPABILITY.producersReadAll) && producer.consultantId !== user.id) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
     return producer;
@@ -98,7 +99,7 @@ export class ProducersService {
 
   private async ensureConsultant(consultantId: number): Promise<void> {
     const consultant = await this.prisma.user.findUnique({ where: { id: consultantId } });
-    if (!consultant || consultant.role !== 'consultant') {
+    if (!consultant || consultant.role !== ROLE.consultant) {
       throw new UnprocessableEntityException('Escolha um consultor válido para a carteira');
     }
   }

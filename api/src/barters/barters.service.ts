@@ -5,6 +5,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type { Barter, BarterItem, Prisma, User } from '@prisma/client';
+import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   MONEY_EPSILON,
@@ -16,6 +17,8 @@ import {
   type PricedInput,
 } from './barter-math';
 import { Paginated, windowOf } from '../common/pagination';
+import { CAPABILITY, can } from '../common/policy';
+import { ROLE } from '../common/roles';
 import { CreateBarterDto, ListBartersQuery, ReviewBarterDto } from './dto/barter.dto';
 
 type BarterWithItems = Barter & { items: BarterItem[] };
@@ -27,11 +30,15 @@ type BarterWithItems = Barter & { items: BarterItem[] };
  */
 @Injectable()
 export class BartersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   /**
-   * Permutas visíveis para o usuário: consultor enxerga apenas as próprias;
-   * admin enxerga todas. Regra de acesso central do domínio.
+   * Permutas visíveis para o usuário: consultor enxerga apenas as próprias; os
+   * papéis de retaguarda (admin, gerente, comitê, faturista) enxergam todas.
+   * Regra de acesso central do domínio.
    *
    * O `id` desempata a ordenação por data. Sem ele, permutas criadas no mesmo
    * instante sairiam em ordem arbitrária a cada consulta e a paginação
@@ -40,7 +47,7 @@ export class BartersService {
   async listFor(user: User, query: ListBartersQuery): Promise<Paginated<BarterWithItems>> {
     const { take, skip } = windowOf(query);
     const where = {
-      ...(user.role === 'admin' ? {} : { consultantId: user.id }),
+      ...(can(user, CAPABILITY.bartersReadAll) ? {} : { consultantId: user.id }),
       ...(query.status ? { status: query.status } : {}),
     };
 
@@ -65,7 +72,7 @@ export class BartersService {
       include: { items: true },
     });
     if (!barter) throw new NotFoundException('Registro não encontrado.');
-    if (user.role !== 'admin' && barter.consultantId !== user.id) {
+    if (!can(user, CAPABILITY.bartersReadAll) && barter.consultantId !== user.id) {
       throw new ForbiddenException('Você não tem acesso a esta permuta');
     }
     return barter;
@@ -81,7 +88,11 @@ export class BartersService {
    *    sacas do grão de pagamento — o item de grão é criado pelo servidor.
    */
   async create(consultant: User, dto: CreateBarterDto): Promise<BarterWithItems> {
-    if (consultant.role === 'admin') {
+    // A rota já exige a capacidade `barters.register`; aqui a regra é repetida
+    // como invariante do DOMÍNIO, e na forma de LISTA DE PERMITIDOS. Enquanto
+    // isto perguntava "é admin?", cada papel novo entrava por omissão — gerente,
+    // comitê e faturista registrariam permuta sem ninguém ter decidido isso.
+    if (consultant.role !== ROLE.consultant) {
       throw new ForbiddenException('Permutas são registradas pelo consultor da carteira');
     }
 
@@ -240,7 +251,7 @@ export class BartersService {
       throw new UnprocessableEntityException('Esta permuta já foi revisada');
     }
 
-    return this.prisma.barter.update({
+    const reviewed = await this.prisma.barter.update({
       where: { code },
       data: {
         status: dto.status,
@@ -251,6 +262,22 @@ export class BartersService {
       },
       include: { items: true },
     });
+
+    // A permuta já guarda `reviewedBy`, mas ele é sobrescrito a cada revisão e
+    // vive dentro do próprio registro. A trilha é outra coisa: fica fora, não
+    // se reescreve, e é onde se lê a SEQUÊNCIA de decisões — que é o que o
+    // fluxo de aprovação por etapas vai precisar.
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.barterReviewed,
+      targetType: 'barter',
+      targetId: reviewed.id,
+      targetLabel: reviewed.code,
+      detail: `${dto.status === 'approved' ? 'aprovada' : 'negada'}${
+        reviewed.adminNote ? ` — ${reviewed.adminNote}` : ''
+      }`,
+    });
+    return reviewed;
   }
 
   /**

@@ -8,8 +8,23 @@ import '../widgets/common_widgets.dart';
 
 class BarterDetailScreen extends StatefulWidget {
   final BarterModel barter;
+
+  /// Visão de RETAGUARDA: enxerga a permuta de qualquer consultor e com os
+  /// valores em R$ (o consultor vê a própria, sem valores).
   final bool isAdmin;
-  const BarterDetailScreen({super.key, required this.barter, required this.isAdmin});
+
+  /// Pode aprovar/negar. Separado de [isAdmin] porque gerente, comitê e
+  /// faturista têm a mesma VISÃO do admin sem ter a mesma AÇÃO: sem essa
+  /// distinção, os botões apareceriam para eles e o servidor devolveria 403 —
+  /// oferecer um botão que a API recusa é pior do que não mostrá-lo.
+  final bool canReview;
+
+  const BarterDetailScreen({
+    super.key,
+    required this.barter,
+    required this.isAdmin,
+    this.canReview = true,
+  });
   @override
   State<BarterDetailScreen> createState() => _BarterDetailScreenState();
 }
@@ -174,7 +189,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           ),
           const SizedBox(height: 20),
 
-          if (widget.isAdmin && _barter.status == BarterStatus.pending) ...[
+          if (widget.isAdmin && widget.canReview && _barter.status == BarterStatus.pending) ...[
             Text('Ação do Administrador',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),

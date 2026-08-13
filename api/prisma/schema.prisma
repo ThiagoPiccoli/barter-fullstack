@@ -154,3 +154,40 @@ model BarterItem {
   quantity    Float
   unitValue   Float
 }
+
+/// Trilha de AUDITORIA dos atos sensíveis: quem provisionou, redefiniu senha,
+/// excluiu usuário e quem decidiu permuta.
+///
+/// Existe porque redefinir senha é a primitiva de tomada de conta do sistema:
+/// ela sorteia uma senha nova e derruba as sessões abertas do titular. Sem
+/// registro, uma sessão de admin comprometida faria isso com qualquer usuário
+/// e não sobraria como reconstruir o que aconteceu — o log HTTP vai para a
+/// saída padrão, é volátil e nem sabe QUEM chamou.
+///
+/// Tudo aqui é SNAPSHOT em texto, não relação: a linha precisa continuar
+/// legível depois que o autor ou o alvo forem excluídos, que é justamente o
+/// caso em que alguém vai querer lê-la. Os ids ficam só como pista.
+model AuditLog {
+  id Int @id @default(autoincrement())
+
+  /// Quem praticou o ato, congelado no momento em que ele aconteceu.
+  actorId    Int?
+  actorName  String
+  actorRole  String
+
+  /// O que foi feito — ver AUDIT_ACTION em src/audit/audit.service.ts.
+  action String
+
+  /// Sobre quem/o quê, também congelado ("user" | "barter").
+  targetType  String
+  targetId    Int?
+  targetLabel String
+
+  /// Contexto curto e legível do ato (ex.: papel provisionado, decisão tomada).
+  detail String?
+
+  at DateTime @default(now())
+
+  @@index([at])
+  @@index([targetType, targetId])
+}

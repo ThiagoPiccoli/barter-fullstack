@@ -3,27 +3,30 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
+import { AuditModule } from './audit/audit.module';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { BartersModule } from './barters/barters.module';
 import { CategoriesModule } from './categories/categories.module';
 import { EnvelopeInterceptor } from './common/envelope.interceptor';
 import { AllExceptionsFilter } from './common/exception.filter';
+import { AccessGuard } from './common/access.guard';
 import { throttlerModule } from './common/throttling';
 import { buildValidationPipe } from './common/validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProducersModule } from './producers/producers.module';
 import { ProductsModule } from './products/products.module';
-import { ConsultantsModule } from './consultants/consultants.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     throttlerModule(),
     PrismaModule,
+    AuditModule,
     AuthModule,
     ProducersModule,
-    ConsultantsModule,
+    UsersModule,
     CategoriesModule,
     ProductsModule,
     BartersModule,
@@ -35,6 +38,9 @@ import { ConsultantsModule } from './consultants/consultants.module';
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     // Autenticação por token em TODAS as rotas (exceto @Public()).
     { provide: APP_GUARD, useClass: AuthGuard },
+    // Autorização. Depois do AuthGuard, que é quem resolve o usuário. NEGA
+    // por padrão: rota sem política declarada não passa.
+    { provide: APP_GUARD, useClass: AccessGuard },
     // Envelope { data: ... } — contrato esperado pelo app Flutter.
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
     // Validação: 422 com a primeira mensagem; whitelist descarta campos extras.

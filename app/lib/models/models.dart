@@ -1,4 +1,33 @@
-enum UserRole { admin, consultant }
+/// Papéis do sistema. Os nomes técnicos são os MESMOS que a API grava em
+/// `user.role` (ver api/src/common/roles.ts) — este enum é a tradução deles
+/// para o app, e não uma segunda lista para manter em dia de cabeça.
+enum UserRole {
+  admin('admin', 'Administrador'),
+  manager('manager', 'Gerente'),
+  committee('committee', 'Comitê'),
+  biller('biller', 'Faturista'),
+  consultant('consultant', 'Consultor');
+
+  /// Valor gravado no banco e trafegado no JSON.
+  final String wire;
+
+  /// Nome que a pessoa lê na tela.
+  final String label;
+
+  const UserRole(this.wire, this.label);
+
+  /// Papéis de RETAGUARDA: acompanham a operação inteira, sem carteira própria.
+  /// Espelha BACK_OFFICE_ROLES da API, que é quem decide o escopo de verdade.
+  bool get isBackOffice => this != UserRole.consultant;
+
+  /// Papel vindo da API. Um valor desconhecido (servidor mais novo que o app)
+  /// cai em [consultant], que é o papel de MENOS alcance — errar para menos
+  /// deixa a tela pobre; errar para mais abriria o painel de quem manda.
+  static UserRole fromWire(Object? value) => UserRole.values.firstWhere(
+        (role) => role.wire == value,
+        orElse: () => UserRole.consultant,
+      );
+}
 
 /// Conversões defensivas do JSON da API: números podem chegar como int/double
 /// e ids são expostos como String para o restante do app.
@@ -43,7 +72,7 @@ class UserModel {
         email: json['email'] as String,
         phone: (json['phone'] ?? '') as String,
         branch: (json['branch'] ?? '') as String,
-        role: json['role'] == 'admin' ? UserRole.admin : UserRole.consultant,
+        role: UserRole.fromWire(json['role']),
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
         mustChangePassword: json['mustChangePassword'] == true,

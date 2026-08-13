@@ -1,4 +1,6 @@
+import { capabilitiesOf } from './policy';
 import type {
+  AuditLog,
   Barter,
   BarterItem,
   InputCategory,
@@ -33,21 +35,27 @@ export function toUserJson(user: User) {
     createdAt: user.createdAt,
     initials: initialsOf(user.fullName),
     // O app usa isto para exigir a troca da senha provisória antes de deixar
-    // o consultor entrar no painel.
+    // o usuário entrar no painel.
     mustChangePassword: user.mustChangePassword,
+    // O que esta pessoa pode fazer, resolvido pelo SERVIDOR a partir de
+    // policy.ts. É com isto que o app monta as abas e decide quais botões
+    // existem — em vez de perguntar "é admin?" e manter uma segunda cópia das
+    // regras em Dart. Conceder um serviço a um papel passa a ser uma linha no
+    // servidor, e o app se ajusta na próxima sessão, sem versão nova.
+    capabilities: capabilitiesOf(user),
   };
 }
 
 /**
- * Resposta do provisionamento (criação e reset de senha do consultor): o
+ * Resposta do provisionamento (criação e reset de senha de QUALQUER papel): o
  * cadastro mais a senha de primeira entrada em texto puro. É a única resposta
  * da API que carrega uma senha, e ela existe uma vez só — depois disto o valor
  * só existe como hash, e nem o admin consegue lê-lo de volta.
+ *
+ * A FORMA é a mesma para os quatro papéis, de propósito: o app tem um só
+ * diálogo de "anote esta senha", e ele não precisa saber quem foi cadastrado.
  */
-export function toProvisionedConsultantJson(provisioned: {
-  user: User;
-  provisionalPassword: string;
-}) {
+export function toProvisionedUserJson(provisioned: { user: User; provisionalPassword: string }) {
   return {
     ...toUserJson(provisioned.user),
     provisionalPassword: provisioned.provisionalPassword,
@@ -125,5 +133,24 @@ export function toBarterJson(barter: Barter & { items?: BarterItem[] }) {
     reviewedAt: barter.reviewedAt,
     createdAt: barter.createdAt,
     items: barter.items?.map(toBarterItemJson),
+  };
+}
+
+/**
+ * Linha da trilha de auditoria. Sai com o autor e o alvo já em texto — quem lê
+ * precisa entender o ocorrido mesmo que a conta envolvida não exista mais.
+ */
+export function toAuditLogJson(entry: AuditLog) {
+  return {
+    id: entry.id,
+    at: entry.at,
+    actorId: entry.actorId,
+    actorName: entry.actorName,
+    actorRole: entry.actorRole,
+    action: entry.action,
+    targetType: entry.targetType,
+    targetId: entry.targetId,
+    targetLabel: entry.targetLabel,
+    detail: entry.detail,
   };
 }

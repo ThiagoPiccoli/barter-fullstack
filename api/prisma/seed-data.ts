@@ -1,5 +1,6 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/auth/password.util';
+import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
 
 /**
@@ -18,6 +19,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.inputCategory.deleteMany();
   await prisma.producer.deleteMany();
   await prisma.accessToken.deleteMany();
+  await prisma.auditLog.deleteMany();
   await prisma.user.deleteMany();
 
   const at = (year: number, month: number, day: number, hour = 0, minute = 0) =>
@@ -29,7 +31,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const mkUser = (data: {
     fullName: string;
     email: string;
-    role: 'admin' | 'consultant';
+    role: Role;
     phone: string;
     branch: string;
     createdAt: Date;
@@ -38,7 +40,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const admin = await mkUser({
     fullName: 'Carlos Mendes',
     email: 'admin@agrobarter.com.br',
-    role: 'admin',
+    role: ROLE.admin,
     phone: '(44) 99999-0001',
     branch: 'Matriz',
     createdAt: at(2020, 1, 10),
@@ -46,7 +48,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const joao = await mkUser({
     fullName: 'João Silva',
     email: 'joao.silva@agrobarter.com.br',
-    role: 'consultant',
+    role: ROLE.consultant,
     phone: '(44) 99999-0002',
     branch: 'Filial 02 – Gran. Santa T.',
     createdAt: at(2021, 3, 15),
@@ -54,7 +56,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const ana = await mkUser({
     fullName: 'Ana Paula Ferreira',
     email: 'ana.ferreira@agrobarter.com.br',
-    role: 'consultant',
+    role: ROLE.consultant,
     phone: '(44) 99999-0003',
     branch: 'Filial 04 – Gran. Inharap.',
     createdAt: at(2021, 6, 20),
@@ -62,7 +64,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const roberto = await mkUser({
     fullName: 'Roberto Souza',
     email: 'roberto.souza@agrobarter.com.br',
-    role: 'consultant',
+    role: ROLE.consultant,
     phone: '(44) 99999-0004',
     branch: 'Filial 34 – Gran. Jari',
     createdAt: at(2022, 2, 8),
@@ -70,7 +72,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const maria = await mkUser({
     fullName: 'Maria Oliveira',
     email: 'maria.oliveira@agrobarter.com.br',
-    role: 'consultant',
+    role: ROLE.consultant,
     phone: '(44) 99999-0005',
     branch: 'Filial 24 – Gran. Oliveira',
     createdAt: at(2022, 9, 1),
@@ -78,10 +80,38 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const lucas = await mkUser({
     fullName: 'Lucas Barros',
     email: 'lucas.barros@agrobarter.com.br',
-    role: 'consultant',
+    role: ROLE.consultant,
     phone: '(44) 99999-0006',
     branch: 'Filial 18 – Gran. São Joa.',
     createdAt: at(2023, 1, 15),
+  });
+
+  /* Retaguarda: um usuário de cada papel novo, para entrar e ver o sistema
+     pelos olhos dele. Vêm DEPOIS dos consultores de propósito — os ids 1..6
+     (admin e consultores) são fixados por testes e pelas carteiras acima. */
+  await mkUser({
+    fullName: 'Beatriz Nogueira',
+    email: 'gerente@agrobarter.com.br',
+    role: ROLE.manager,
+    phone: '(44) 99999-0010',
+    branch: 'Matriz',
+    createdAt: at(2020, 2, 3),
+  });
+  await mkUser({
+    fullName: 'Ricardo Alencar',
+    email: 'comite@agrobarter.com.br',
+    role: ROLE.committee,
+    phone: '(44) 99999-0011',
+    branch: 'Matriz',
+    createdAt: at(2020, 2, 3),
+  });
+  await mkUser({
+    fullName: 'Patrícia Lemos',
+    email: 'faturista@agrobarter.com.br',
+    role: ROLE.biller,
+    phone: '(44) 99999-0012',
+    branch: 'Matriz',
+    createdAt: at(2020, 2, 3),
   });
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */

@@ -161,7 +161,11 @@ describe('Auth (e2e)', () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/consultants')
         .set({ Authorization: `Bearer ${adminToken}` })
-        .send({ fullName: 'Recém Provisionado', email: 'recem@agrobarter.com.br', branch: 'Filial 7' })
+        .send({
+          fullName: 'Recém Provisionado',
+          email: 'recem@agrobarter.com.br',
+          branch: 'Filial 7',
+        })
         .expect(201);
       const password = created.body.data.provisionalPassword as string;
 
@@ -266,7 +270,8 @@ describe('Auth (e2e)', () => {
         await request(app.getHttpServer())
           .get('/api/v1/consultants')
           .set({ Authorization: `Bearer ${adminToken}` })
-      ).body.data.find((c: { email: string }) => c.email === 'perdida@agrobarter.com.br').id as number;
+      ).body.data.find((c: { email: string }) => c.email === 'perdida@agrobarter.com.br')
+        .id as number;
 
       // Alguém entra com a provisória e define a senha definitiva: a conta
       // está, para todos os efeitos, nas mãos dessa pessoa.

@@ -51,8 +51,11 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333       # emulador Android
 | Papel    | E-mail                      | Senha  |
 |----------|-----------------------------|--------|
 | Admin    | admin@agrobarter.com.br         | 123456 |
-| Consultor | joao.silva@agrobarter.com.br    | 123456 |
-| Consultor | ana.ferreira@agrobarter.com.br  | 123456 |
+| Gerente  | gerente@agrobarter.com.br       | 123456 |
+| Comitê   | comite@agrobarter.com.br        | 123456 |
+| Faturista | faturista@agrobarter.com.br    | 123456 |
+| Consultor | joao.silva@agrobarter.com.br   | 123456 |
+| Consultor | ana.ferreira@agrobarter.com.br | 123456 |
 
 (Os demais consultores do dataset também logam com `123456`.)
 

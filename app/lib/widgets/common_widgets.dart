@@ -488,7 +488,17 @@ class DashboardHeader extends StatelessWidget {
 class MiniBarterCard extends StatelessWidget {
   final BarterModel barter;
   final bool isAdmin;
-  const MiniBarterCard({super.key, required this.barter, required this.isAdmin});
+
+  /// Ver [BarterDetailScreen.canReview] — a retaguarda abre o detalhe sem os
+  /// botões de aprovar/negar.
+  final bool canReview;
+
+  const MiniBarterCard({
+    super.key,
+    required this.barter,
+    required this.isAdmin,
+    this.canReview = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -497,7 +507,10 @@ class MiniBarterCard extends StatelessWidget {
       child: ListTile(
         onTap: () => Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => BarterDetailScreen(barter: barter, isAdmin: isAdmin)),
+          MaterialPageRoute(
+            builder: (_) =>
+                BarterDetailScreen(barter: barter, isAdmin: isAdmin, canReview: canReview),
+          ),
         ),
         leading: CircleAvatar(
           backgroundColor: AppColors.primarySurface,

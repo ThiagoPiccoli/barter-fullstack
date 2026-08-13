@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/auth/password.util';
+import { ROLE } from '../src/common/roles';
 
 /**
  * Primeiro acesso em PRODUÇÃO. O dataset de demonstração não roda fora de
@@ -25,7 +26,7 @@ export async function bootstrapAdmin(
       fullName: process.env.ADMIN_NAME?.trim() || 'Administrador',
       email,
       password: await hashPassword(password),
-      role: 'admin',
+      role: ROLE.admin,
       branch: 'Matriz',
       mustChangePassword: true,
     },

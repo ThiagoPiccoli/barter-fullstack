@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Post, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import type { User } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
-import { AllowProvisionalPassword, CurrentUser, Public } from '../common/decorators';
+import { AllowProvisionalPassword, AnyRole, CurrentUser, Public } from '../common/decorators';
 import { toUserJson } from '../common/serializers';
 import { loginThrottle } from '../common/throttling';
 import { AuthService } from './auth.service';
@@ -23,6 +23,7 @@ export class AuthController {
 
   /** Desistir e sair precisa funcionar mesmo com a senha ainda provisória. */
   @AllowProvisionalPassword()
+  @AnyRole()
   @Post('auth/logout')
   @HttpCode(200)
   async logout(@Req() request: Request & { tokenHash?: string }) {
@@ -34,6 +35,7 @@ export class AuthController {
 
   /** É por aqui que o app descobre que a senha ainda é provisória. */
   @AllowProvisionalPassword()
+  @AnyRole()
   @Get('me')
   me(@CurrentUser() user: User) {
     return toUserJson(user);
@@ -45,6 +47,7 @@ export class AuthController {
    * usando o app sem refazer login.
    */
   @AllowProvisionalPassword()
+  @AnyRole()
   @Post('auth/password')
   @HttpCode(200)
   async changePassword(
