@@ -154,6 +154,14 @@ class BarterPdf {
               pw.SizedBox(height: 2),
               pw.Text(barter.id,
                   style: pw.TextStyle(color: _onPrimary, fontSize: 10)),
+              // A gestão em que a permuta foi fechada. O comprovante precisa
+              // dizer isso: são os valores desta versão que valem para ela,
+              // mesmo depois que a próxima for publicada.
+              if (barter.versionCode.isNotEmpty) ...[
+                pw.SizedBox(height: 1),
+                pw.Text('Barter ${barter.versionCode}',
+                    style: pw.TextStyle(color: _onPrimaryMuted, fontSize: 8)),
+              ],
               pw.SizedBox(height: 4),
               _statusChip(barter),
             ],

@@ -1,8 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
+import ExcelJS from 'exceljs';
 import request from 'supertest';
 import { ADMIN, JOAO, createTestApp, loginAs, resetDb } from './utils';
 
-describe('Products & Categories (e2e)', () => {
+describe('Products & Classes (e2e)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
@@ -13,7 +14,16 @@ describe('Products & Categories (e2e)', () => {
 
   const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
 
-  it('catálogo traz histórico de valores em ordem cronológica', async () => {
+  /**
+   * A LISTAGEM não carrega a linha do tempo. Ela cresce um ponto por produto a
+   * cada versão do Barter publicada, sem teto, e esta rota é pedida a cada
+   * login e a cada refresh do app — a série inteira de todo o catálogo em toda
+   * abertura é justamente o que não pode acontecer.
+   *
+   * O que vai no lugar é o que a tela de lista lê da série: o primeiro valor
+   * (para a variação) e quantos pontos existem.
+   */
+  it('catálogo traz o RESUMO do histórico, não a série inteira', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/products?type=grain')
       .set('Authorization', await asUser(JOAO));
@@ -21,33 +31,58 @@ describe('Products & Categories (e2e)', () => {
     expect(response.status).toBe(200);
     const soja = response.body.data.find((p: { name: string }) => p.name === 'Soja');
     expect(soja.currentPrice).toBe(148.5);
-    expect(soja.priceHistory).toHaveLength(7);
-    expect(soja.priceHistory[0].price).toBe(142.0); // mais antigo primeiro
-    expect(soja.priceHistory[6].price).toBe(148.5);
+    expect(soja.firstPrice).toBe(142.0);
+    expect(soja.priceHistoryCount).toBe(7);
+    // O campo não vem pela metade: ou é a série inteira, ou não é o campo.
+    expect(soja.priceHistory).toBeUndefined();
   });
 
-  it('reajuste de valor é do admin e alimenta a linha do tempo', async () => {
-    const asConsultant = await request(app.getHttpServer())
-      .put('/api/v1/products/1/price')
-      .set('Authorization', await asUser(JOAO))
-      .send({ price: 150 });
-    expect(asConsultant.status).toBe(403);
+  it('o detalhe do produto traz a linha do tempo completa, em ordem cronológica', async () => {
+    const response = await request(app.getHttpServer())
+      .get('/api/v1/products/1')
+      .set('Authorization', await asUser(JOAO));
 
-    const asAdmin = await request(app.getHttpServer())
+    expect(response.status).toBe(200);
+    expect(response.body.data.name).toBe('Soja');
+    expect(response.body.data.priceHistory).toHaveLength(7);
+    expect(response.body.data.priceHistory[0].price).toBe(142.0); // mais antigo primeiro
+    expect(response.body.data.priceHistory[6].price).toBe(148.5);
+  });
+
+  /**
+   * O catálogo não tem mais rota de preço: valor é do Barter, e reajustar por
+   * fora dele criaria um número que o app mostra e a permuta não usa. O
+   * `currentPrice` continua existindo como ÚLTIMO VALOR PUBLICADO, escrito por
+   * quem publica a versão — ver seasons.e2e-spec.ts.
+   */
+  it('não existe reajuste de preço pelo catálogo', async () => {
+    const response = await request(app.getHttpServer())
       .put('/api/v1/products/1/price')
       .set('Authorization', await asUser(ADMIN))
       .send({ price: 152.75 });
-    expect(asAdmin.status).toBe(200);
-    const soja = asAdmin.body.data;
-    expect(soja.currentPrice).toBe(152.75);
-    expect(soja.priceHistory).toHaveLength(8);
-    expect(soja.priceHistory[7].changedBy).toBe('Carlos Mendes');
+    expect(response.status).toBe(404);
+  });
+
+  it('corrigir o valor na versão alimenta a linha do tempo do produto', async () => {
+    const admin = await asUser(ADMIN);
+    const corrigido = await request(app.getHttpServer())
+      .put('/api/v1/barter-versions/S2026.02/prices/1')
+      .set('Authorization', admin)
+      .send({ price: 152.75 });
+    expect(corrigido.status).toBe(200);
+
+    const soja = await request(app.getHttpServer())
+      .get('/api/v1/products/1')
+      .set('Authorization', admin);
+    expect(soja.body.data.currentPrice).toBe(152.75);
+    expect(soja.body.data.priceHistory).toHaveLength(8);
+    expect(soja.body.data.priceHistory[7].changedBy).toBe('Barter S2026.02');
   });
 
   it('reajuste não altera permutas antigas (snapshot nos itens)', async () => {
     const admin = await asUser(ADMIN);
     await request(app.getHttpServer())
-      .put('/api/v1/products/1/price')
+      .put('/api/v1/barter-versions/S2026.02/prices/1')
       .set('Authorization', admin)
       .send({ price: 999 });
 
@@ -58,38 +93,171 @@ describe('Products & Categories (e2e)', () => {
     expect(grain.unitValue).toBe(148.5);
   });
 
-  it('grão não pertence a categoria (só insumos)', async () => {
+  /**
+   * Todo item precisa de CÓDIGO: é por ele que se procura na busca e é ele que
+   * casa a planilha do fornecedor com o cadastro. Quem não informa recebe um
+   * gerado, para nenhum item ficar sem.
+   */
+  describe('código do item', () => {
+    const novo = {
+      name: 'Adjuvante de Verificação',
+      unit: 'litro',
+      type: 'input',
+      currentPrice: 30,
+    };
+
+    it('item sem código informado nasce com um gerado', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', await asUser(ADMIN))
+        .send(novo);
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.sku).toMatch(/^INS-\d{4}$/);
+    });
+
+    it('o código do fornecedor, quando informado, é o que vale', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', await asUser(ADMIN))
+        .send({ ...novo, sku: 'ADJ-991' });
+
+      expect(response.body.data.sku).toBe('ADJ-991');
+    });
+
+    /** Código repetido tornaria a busca ambígua e o casamento da planilha, um sorteio. */
+    it('código repetido é recusado com o nome de quem já o usa', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/products')
+        .set('Authorization', await asUser(ADMIN))
+        .send({ ...novo, sku: 'NPK-0414' });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Fertilizante NPK 04-14-08');
+    });
+
+    it('o código é corrigível depois, e continua único', async () => {
+      const admin = await asUser(ADMIN);
+      const corrigido = await request(app.getHttpServer())
+        .put('/api/v1/products/5')
+        .set('Authorization', admin)
+        .send({ sku: 'NPK-NOVO' });
+      expect(corrigido.body.data.sku).toBe('NPK-NOVO');
+
+      const repetido = await request(app.getHttpServer())
+        .put('/api/v1/products/6')
+        .set('Authorization', admin)
+        .send({ sku: 'NPK-NOVO' });
+      expect(repetido.status).toBe(422);
+    });
+
+    it('a planilha reconhece o item pelo código, sem criar um segundo cadastro', async () => {
+      const admin = await asUser(ADMIN);
+      const antes = await request(app.getHttpServer())
+        .get('/api/v1/products?type=input')
+        .set('Authorization', admin);
+
+      // Mesmo código do seed, nome escrito de outro jeito.
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Tabela');
+      sheet.addRow(['codigo', 'nome', 'unidade', 'classe', 'preco', 'custo']);
+      sheet.addRow([
+        'NPK-0414',
+        'FERTILIZANTE NPK 04 14 08',
+        'saco 50kg',
+        'Fertilizantes',
+        130,
+        100,
+      ]);
+      const arquivo = Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/seasons/S2026/versions/import')
+        .set('Authorization', admin)
+        .field('grainPrice', '150')
+        .attach('file', arquivo, 'tabela.xlsx')
+        .expect(201);
+
+      const depois = await request(app.getHttpServer())
+        .get('/api/v1/products?type=input')
+        .set('Authorization', admin);
+      expect(depois.body.data).toHaveLength(antes.body.data.length);
+    });
+  });
+
+  it('grão não pertence a classe (só insumos)', async () => {
     const response = await request(app.getHttpServer())
       .put('/api/v1/products/1')
       .set('Authorization', await asUser(ADMIN))
-      .send({ categoryId: 1 });
+      .send({ classId: 1 });
     expect(response.status).toBe(422);
   });
 
-  it('percentual de categoria acima de 100 é rejeitado', async () => {
+  /**
+   * A lista de classes é FIXA — ela nasce na migration. Estas duas rotas
+   * existiam quando "pasta" era um cadastro livre, e a ausência delas é o que
+   * impede o vocabulário de voltar a se multiplicar a cada carga de planilha.
+   */
+  it('classe não se cria nem se exclui', async () => {
+    const admin = await asUser(ADMIN);
+    await request(app.getHttpServer())
+      .post('/api/v1/classes')
+      .set('Authorization', admin)
+      .send({ name: 'Classe Inventada' })
+      .expect(404);
+    await request(app.getHttpServer())
+      .delete('/api/v1/classes/1')
+      .set('Authorization', admin)
+      .expect(404);
+  });
+
+  it('a lista vem completa e na ordem do negócio', async () => {
     const response = await request(app.getHttpServer())
-      .post('/api/v1/categories')
-      .set('Authorization', await asUser(ADMIN))
-      .send({ name: 'Inválida', ruleType: 'percentOfTotal', ruleValue: 120 });
-    expect(response.status).toBe(422);
+      .get('/api/v1/classes')
+      .set('Authorization', await asUser(JOAO));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.map((c: { slug: string }) => c.slug)).toEqual([
+      'fungicidas',
+      'inseticidas',
+      'herbicidas',
+      'sementes',
+      'fertilizantes',
+      'biologicos',
+      'nutricao',
+      'seguro-agricola',
+      'oleos-adjuvantes',
+    ]);
   });
 
-  it('excluir a pasta desvincula os insumos sem apagá-los', async () => {
+  it('a regra de mínimo da classe é editável — e o percentual não passa de 100', async () => {
     const admin = await asUser(ADMIN);
 
-    // Sementes (id 3) tem a Semente Soja (produto 9).
-    await request(app.getHttpServer())
-      .delete('/api/v1/categories/3')
+    const ok = await request(app.getHttpServer())
+      .put('/api/v1/classes/1/rule')
       .set('Authorization', admin)
-      .expect(204);
+      .send({ ruleType: 'percentOfTotal', ruleValue: 15 });
+    expect(ok.status).toBe(200);
+    expect(ok.body.data).toMatchObject({
+      slug: 'fungicidas',
+      ruleType: 'percentOfTotal',
+      ruleValue: 15,
+    });
 
-    const products = await request(app.getHttpServer())
-      .get('/api/v1/products?type=input')
-      .set('Authorization', admin);
-    const semente = products.body.data.find((p: { name: string }) =>
-      p.name.startsWith('Semente Soja'),
-    );
-    expect(semente.categoryId).toBeNull();
+    const demais = await request(app.getHttpServer())
+      .put('/api/v1/classes/1/rule')
+      .set('Authorization', admin)
+      .send({ ruleType: 'percentOfTotal', ruleValue: 120 });
+    expect(demais.status).toBe(422);
+  });
+
+  /** Sem exigência, o valor da regra não significa nada — some junto. */
+  it('desligar a regra zera o valor', async () => {
+    const response = await request(app.getHttpServer())
+      .put('/api/v1/classes/5/rule')
+      .set('Authorization', await asUser(ADMIN))
+      .send({ ruleType: 'none', ruleValue: 30 });
+    expect(response.body.data).toMatchObject({ ruleType: 'none', ruleValue: 0 });
   });
 
   it('tipo de produto desconhecido é recusado em vez de devolver o catálogo inteiro', async () => {
@@ -111,7 +279,7 @@ describe('Products & Categories (e2e)', () => {
       type: 'input',
       currentPrice: 62.5,
       requiredPerHa: 0,
-      categoryId: 1,
+      classId: 1,
     };
 
     it('admin cria produto e ele já nasce com o primeiro ponto do histórico', async () => {

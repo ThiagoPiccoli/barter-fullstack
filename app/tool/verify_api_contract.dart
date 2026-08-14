@@ -17,6 +17,7 @@
 import 'dart:io';
 
 import 'package:agrobarter_app/models/models.dart';
+import 'package:agrobarter_app/repositories/barter_program_repository.dart';
 import 'package:agrobarter_app/repositories/barter_repository.dart';
 import 'package:agrobarter_app/repositories/catalog_repository.dart';
 import 'package:agrobarter_app/repositories/consultant_repository.dart';
@@ -78,10 +79,31 @@ Future<void> _run() async {
   /* ── Catálogo ─────────────────────────────────────────────────────── */
   final catalog = CatalogRepository();
   final products = await catalog.listProducts();
-  final categories = await catalog.listCategories();
-  check('catálogo com histórico de valores',
-      products.every((p) => p.priceHistory.isNotEmpty), '${products.length} produto(s)');
-  check('categorias com regra legível', categories.isNotEmpty, '${categories.length} pasta(s)');
+  final classes = await catalog.listClasses();
+  // A listagem traz o RESUMO do histórico, não a série: ela é pedida a cada
+  // login e cresce um ponto por produto a cada versão publicada.
+  check(
+      'catálogo traz o resumo do histórico, sem a série',
+      products.every((p) => p.priceHistoryCount > 0 && p.priceHistory.isEmpty),
+      '${products.length} produto(s)');
+  check('catálogo traz o primeiro valor, para a variação',
+      products.every((p) => p.firstPrice != null));
+
+  // E o detalhe traz a linha do tempo inteira — é dele que vive o relatório.
+  final detail = await catalog.findProduct(products.first.id);
+  check(
+      'detalhe do produto traz a linha do tempo completa',
+      detail.priceHistory.length == detail.priceHistoryCount && detail.hasFullHistory,
+      '${detail.priceHistory.length} ponto(s) em ${detail.name}');
+
+  // A lista de classes é FIXA no servidor: se ela chegar diferente disto, ou a
+  // migration não rodou, ou alguém abriu uma porta para alterá-la.
+  check(
+      'as nove classes do negócio chegam na ordem',
+      classes.map((c) => c.slug).join(',') ==
+          'fungicidas,inseticidas,herbicidas,sementes,fertilizantes,biologicos,'
+              'nutricao,seguro-agricola,oleos-adjuvantes',
+      classes.map((c) => c.name).join(' · '));
 
   final created = await catalog.createProduct(
     name: 'Insumo de Verificação',
@@ -89,16 +111,42 @@ Future<void> _run() async {
     type: ProductType.input,
     currentPrice: 12.34,
     requiredPerHa: 0,
-    categoryId: categories.first.id,
+    classId: classes.first.id,
   );
   check('produto criado nasce com o primeiro ponto do histórico',
       created.priceHistory.length == 1 && created.currentPrice == 12.34);
-  check('produto criado respeita a categoria', created.categoryId == categories.first.id);
+  check('produto criado respeita a classe', created.classId == classes.first.id);
 
   await catalog.deleteProduct(created.id);
   final afterDelete = await catalog.listProducts();
   check('produto excluído sai do catálogo',
       afterDelete.every((p) => p.id != created.id), '${afterDelete.length} produto(s)');
+
+  /* ── Barter vigente ───────────────────────────────────────────────── */
+  // É o dado de que a tela de nova permuta depende: sem ele o consultor não
+  // tem grão, nem valores, nem sacas. Um campo renomeado aqui deixaria o app
+  // achando que o Barter está fechado.
+  final program = BarterProgramRepository();
+  final current = await program.current();
+  check('existe Barter vigente', current != null, current?.code ?? 'nenhum');
+  if (current != null) {
+    check('a versão traz grão e cotação',
+        current.grainName.isNotEmpty && current.grainPrice > 0,
+        '${current.grainName} a ${current.grainPrice}');
+    check('a versão traz a tabela de insumos', current.prices.isNotEmpty,
+        '${current.prices.length} insumo(s)');
+    check('a permuta aponta a versão em que foi fechada',
+        barters.every((b) => b.versionCode.isNotEmpty));
+
+    final detail = await program.findVersion(current.code);
+    check('o detalhe traz o realizado das metas', detail.goals.isNotEmpty,
+        '${detail.goals.length} meta(s)');
+  }
+
+  final seasons = await program.listSeasons();
+  check('safras chegam com as versões',
+      seasons.isNotEmpty && seasons.any((s) => s.versions.isNotEmpty),
+      '${seasons.length} safra(s)');
 
   /* ── Provisionamento de consultor ─────────────────────────────────── */
   final consultants = ConsultantRepository();

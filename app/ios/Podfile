@@ -1,5 +1,7 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
+# iOS 14 é o piso do file_picker_darwin, usado para o admin subir a planilha
+# que lança uma versão do Barter. Sem esta linha o CocoaPods assume 13.0 e o
+# `pod install` falha.
+platform :ios, '14.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'

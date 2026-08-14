@@ -92,6 +92,10 @@ const Brand agroBarterBrand = Brand(
   ),
 
   copy: BrandCopy(
+    program: 'barter',
+    programTitle: 'Barter',
+    season: 'safra',
+    seasonTitle: 'Safra',
     barter: 'permuta',
     barterTitle: 'Permuta',
     barterPlural: 'permutas',

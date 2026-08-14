@@ -96,6 +96,11 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                     _InfoRow(label: 'Filial', value: _barter.consultantBranch),
                   ],
                   const Divider(height: 16),
+                  // Em qual gestão do Barter esta permuta foi fechada: é o que
+                  // explica os valores dela, que não mudam quando a versão
+                  // seguinte é publicada.
+                  if (_barter.versionCode.isNotEmpty)
+                    _InfoRow(label: 'Barter', value: _barter.versionCode),
                   _InfoRow(label: 'Criada em', value: _formatDate(_barter.createdAt)),
                   if (_barter.updatedAt != null)
                     _InfoRow(label: 'Atualizada em', value: _formatDate(_barter.updatedAt!)),

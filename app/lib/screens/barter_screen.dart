@@ -8,9 +8,16 @@ import '../services/barter_math.dart';
 import '../services/barter_pdf.dart';
 import '../widgets/common_widgets.dart';
 
-/// Construtor de permuta. O produtor primeiro escolhe os INSUMOS de que precisa
-/// (eles formam um custo) e depois escolhe UM grão de pagamento — o app calcula
-/// quantas sacas desse grão são necessárias para cobrir o custo dos insumos.
+/// Construtor de permuta.
+///
+/// O consultor escolhe o PRODUTOR e os INSUMOS. Só isso. O grão de pagamento e
+/// os valores vêm do Barter vigente — a versão que o admin lançou —, e é ela
+/// que converte o custo dos insumos em sacas.
+///
+/// Escolher grão era do desenho anterior, em que cada permuta carregava a
+/// própria cotação. Hoje o Barter é lançado sobre um grão, por um período: sem
+/// lançamento aberto não existe permuta nova, e a tela diz isso em vez de
+/// montar um pedido que o servidor recusaria.
 class NewBarterScreen extends StatefulWidget {
   final UserModel consultant;
   const NewBarterScreen({super.key, required this.consultant});
@@ -18,122 +25,107 @@ class NewBarterScreen extends StatefulWidget {
   State<NewBarterScreen> createState() => _NewBarterScreenState();
 }
 
-class _NewBarterScreenState extends State<NewBarterScreen>
-    with SingleTickerProviderStateMixin {
-  late TabController _tabController;
+class _NewBarterScreenState extends State<NewBarterScreen> {
   final Map<String, double> _inputQty = {};
-  String? _paymentGrainId;
   String? _producerId;
   String _searchQuery = '';
 
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this)
-      ..addListener(() => setState(() {}));
-  }
+  /// O Barter vigente. Null (ou fechado) trava a tela inteira.
+  BarterVersionModel? get _version => AppData.currentVersion;
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
+  /// Os insumos que a versão vigente colocou na mesa.
+  List<ProductModel> get _catalog => AppData.barterInputs;
 
-  /// Os insumos escolhidos, já precificados — a entrada da matemática da
-  /// permuta (services/barter_math.dart, espelho do cálculo do servidor).
+  /// Os insumos escolhidos, precificados PELA VERSÃO — a entrada da matemática
+  /// da permuta (services/barter_math.dart, espelho do cálculo do servidor).
   List<PricedInput> get _pricedInputs => [
         for (final e in _inputQty.entries)
           if (e.value > 0)
-            () {
-              final p = AppData.inputs.firstWhere((i) => i.id == e.key);
-              return PricedInput(
-                productId: p.id,
-                quantity: e.value,
-                unitPrice: p.currentPrice,
-                categoryId: p.categoryId,
-              );
-            }(),
+            PricedInput(
+              productId: e.key,
+              quantity: e.value,
+              unitPrice: AppData.priceOf(e.key),
+              classId: _productById(e.key)?.classId,
+            ),
       ];
+
+  ProductModel? _productById(String id) {
+    for (final input in _catalog) {
+      if (input.id == id) return input;
+    }
+    return null;
+  }
 
   /// Custo total dos insumos escolhidos (R$) — o valor que a permuta paga.
   double get _inputCost => inputCost(_pricedInputs);
-
-  /// Grão escolhido para pagamento (ou null se ainda não escolheu).
-  ProductModel? get _paymentGrain {
-    if (_paymentGrainId == null) return null;
-    return AppData.grains.firstWhere((g) => g.id == _paymentGrainId);
-  }
 
   /// Produtor (cliente) designado para esta permuta (ou null).
   ProducerModel? get _producer =>
       _producerId == null ? null : AppData.producerById(_producerId!);
 
-  /// Sacas do grão escolhido necessárias para cobrir o custo dos insumos.
+  /// Sacas do grão da safra necessárias para cobrir o custo dos insumos.
   /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
   double get _sacksNeeded {
-    final g = _paymentGrain;
-    return g == null ? 0 : sacksToCover(_inputCost, g.currentPrice);
+    final version = _version;
+    return version == null ? 0 : sacksToCover(_inputCost, version.grainPrice);
   }
-
-  /// Quantas sacas de [grain] cobririam o custo atual dos insumos.
-  double _sacksFor(ProductModel grain) => sacksToCover(_inputCost, grain.currentPrice);
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
   /// taxa por hectare × área da propriedade. 0 se não há produtor ou exigência.
   double _minFor(String inputId) {
-    final p = _producer;
-    if (p == null) return 0;
-    final input = AppData.inputs.firstWhere((i) => i.id == inputId);
-    return minQuantityFor(input.requiredPerHa, p.areaHa);
+    final producer = _producer;
+    final input = _productById(inputId);
+    if (producer == null || input == null) return 0;
+    return minQuantityFor(input.requiredPerHa, producer.areaHa);
   }
 
   /// Há algum insumo com exigência mínima por área para o produtor atual?
-  bool get _hasRequiredInputs => AppData.inputs.any((i) => _minFor(i.id) > 0);
+  bool get _hasRequiredInputs => _catalog.any((i) => _minFor(i.id) > 0);
 
-  /// Categorias ("pastas") que carregam uma regra de mínimo capaz de travar o
-  /// envio da permuta.
-  List<InputCategoryModel> get _ruledCategories =>
-      AppData.categories.where((c) => c.hasRule).toList();
+  /// Classes que carregam uma regra de mínimo capaz de travar o envio da
+  /// permuta.
+  List<ProductClassModel> get _ruledClasses =>
+      AppData.classes.where((c) => c.hasRule).toList();
 
-  /// Custo (R$) dos insumos escolhidos que pertencem à categoria [categoryId].
-  double _categorySpend(String categoryId) => categorySpend(_pricedInputs, categoryId);
+  /// Custo (R$) dos insumos escolhidos que pertencem à classe [classId].
+  double _classSpend(String classId) => classSpend(_pricedInputs, classId);
 
-  /// Mínimo (R$) exigido por uma categoria, dado o estado atual da permuta:
+  /// Mínimo (R$) exigido por uma classe, dado o estado atual da permuta:
   /// percentual do custo total, ou valor por hectare × área do produtor.
-  double _categoryRequired(InputCategoryModel c) {
+  double _classRequired(ProductClassModel c) {
     final p = _producer;
     // Sem produtor escolhido não há área, e a regra por hectare não tem base
     // de cálculo — o servidor sempre tem, porque a permuta chega com produtor.
-    if (p == null && c.ruleType == CategoryRuleType.valuePerHa) return 0;
-    return categoryRequired(
-      CategoryRule.values.byName(c.ruleType.name),
+    if (p == null && c.ruleType == ClassRuleType.valuePerHa) return 0;
+    return classRequired(
+      ClassRule.values.byName(c.ruleType.name),
       c.ruleValue,
       totalCost: _inputCost,
       areaHa: p?.areaHa ?? 0,
     );
   }
 
-  /// O mínimo da categoria foi atingido? (tolerância de centavos)
-  bool _categoryMet(InputCategoryModel c) {
-    final req = _categoryRequired(c);
+  /// O mínimo da classe foi atingido? (tolerância de centavos)
+  bool _classMet(ProductClassModel c) {
+    final req = _classRequired(c);
     if (req <= 0) return true;
-    return _categorySpend(c.id) >= req - moneyEpsilon;
+    return _classSpend(c.id) >= req - moneyEpsilon;
   }
 
-  /// Progresso (0–1) rumo ao mínimo da categoria. Usado na barra do consultor —
+  /// Progresso (0–1) rumo ao mínimo da classe. Usado na barra do consultor —
   /// é proporção, nunca expõe R\$.
-  double _categoryProgress(InputCategoryModel c) {
-    final req = _categoryRequired(c);
+  double _classProgress(ProductClassModel c) {
+    final req = _classRequired(c);
     if (req <= 0) return 1;
-    return (_categorySpend(c.id) / req).clamp(0.0, 1.0);
+    return (_classSpend(c.id) / req).clamp(0.0, 1.0);
   }
 
-  /// Todas as exigências de categoria foram cumpridas?
-  bool get _categoriesOk => _ruledCategories.every(_categoryMet);
+  /// Todas as exigências de classe foram cumpridas?
+  bool get _classesOk => _ruledClasses.every(_classMet);
 
-  /// Categorias ainda abaixo do mínimo (para avisar o consultor).
-  List<InputCategoryModel> get _unmetCategories =>
-      _ruledCategories.where((c) => !_categoryMet(c)).toList();
+  /// Classes ainda abaixo do mínimo (para avisar o consultor).
+  List<ProductClassModel> get _unmetClasses =>
+      _ruledClasses.where((c) => !_classMet(c)).toList();
 
   void _setInput(String id, double qty) {
     final min = _minFor(id);
@@ -148,8 +140,6 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     });
   }
 
-  void _selectGrain(String id) => setState(() => _paymentGrainId = id);
-
   /// Escolhe o produtor (primeira etapa). Pré-preenche os insumos exigidos por
   /// área com seus mínimos obrigatórios, calculados a partir da área dele.
   void _selectProducer(String id) {
@@ -159,7 +149,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     setState(() {
       _producerId = id;
       _searchQuery = '';
-      for (final i in AppData.inputs) {
+      for (final i in _catalog) {
         final min = minQuantityFor(i.requiredPerHa, p.areaHa);
         if (min > 0) _inputQty[i.id] = min;
       }
@@ -172,8 +162,6 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       _producerId = null;
       _searchQuery = '';
       _inputQty.clear();
-      _paymentGrainId = null;
-      _tabController.index = 0;
     });
   }
 
@@ -181,10 +169,10 @@ class _NewBarterScreenState extends State<NewBarterScreen>
 
   bool get _canSubmit =>
       !_submitting &&
+      (_version?.isOpen ?? false) &&
       _producerId != null &&
       _inputCost > 0 &&
-      _paymentGrainId != null &&
-      _categoriesOk;
+      _classesOk;
 
   /// O produtor já foi escolhido na primeira etapa; aqui só revisamos e enviamos.
   Future<void> _onSubmitPressed() async {
@@ -193,25 +181,24 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     if (confirmed == true) await _submit();
   }
 
-  /// Resumo completo da permuta antes de enviar: todos os insumos retirados,
-  /// o grão de pagamento e o total de sacas a entregar — para o consultor
-  /// revisar antes de finalizar.
+  /// Resumo completo da permuta antes de enviar: os insumos retirados e o total
+  /// de sacas a entregar — para o consultor revisar antes de finalizar.
   Future<bool?> _showSummaryDialog() {
-    final grain = _paymentGrain;
+    final version = _version;
     final producer = _producer;
     final sacks = _sacksNeeded;
     final inputs = _inputQty.entries.where((e) => e.value > 0).map((e) {
-      final p = AppData.inputs.firstWhere((i) => i.id == e.key);
+      final p = _productById(e.key)!;
       return BarterItem(
         productId: p.id,
         productName: p.name,
         unit: p.unit,
         quantity: e.value,
-        unitValue: p.currentPrice,
+        unitValue: AppData.priceOf(p.id),
       );
     }).toList();
 
-    if (grain == null || producer == null || inputs.isEmpty) return Future.value(false);
+    if (version == null || producer == null || inputs.isEmpty) return Future.value(false);
 
     return showDialog<bool>(
       context: context,
@@ -226,6 +213,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _DialogLine('Produtor', producer.name),
+                _DialogLine('Barter', version.code),
                 const SizedBox(height: 8),
                 Text('Insumos retirados',
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
@@ -254,7 +242,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
                   ),
                   child: _DialogLine(
                     'Você vai entregar',
-                    '${formatSacks(sacks)} ${grain.name.toLowerCase()}',
+                    '${formatSacks(sacks)} ${version.grainName.toLowerCase()}',
                     bold: true,
                   ),
                 ),
@@ -294,7 +282,6 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// quem precifica, valida os mínimos e calcula as sacas finais é o servidor
   /// — a permuta exibida no diálogo de sucesso é a versão oficial devolvida.
   Future<void> _submit() async {
-    final grain = _paymentGrain;
     final producer = _producer;
     final chosen = Map<String, double>.from(_inputQty)
       ..removeWhere((_, qty) => qty <= 0);
@@ -307,11 +294,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
       _toast('Selecione ao menos um insumo para retirar.');
       return;
     }
-    if (grain == null) {
-      _toast('Escolha o grão com que você vai pagar.');
-      return;
-    }
-    final unmet = _unmetCategories;
+    final unmet = _unmetClasses;
     if (unmet.isNotEmpty) {
       _toast('Mínimo não atingido: ${unmet.map((c) => c.name).join(', ')}.');
       return;
@@ -322,13 +305,15 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     try {
       barter = await AppData.createBarter(
         producerId: producer.id,
-        grainId: grain.id,
         inputQuantities: chosen,
       );
     } on ApiException catch (e) {
       if (mounted) {
         setState(() => _submitting = false);
         _toast(e.message);
+        // O Barter pode ter sido encerrado enquanto a permuta era montada:
+        // recarrega a vigência para a tela contar a verdade na hora.
+        _refreshVersion();
       }
       return;
     }
@@ -339,9 +324,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     setState(() {
       _submitting = false;
       _inputQty.clear();
-      _paymentGrainId = null;
       _producerId = null;
-      _tabController.index = 0;
     });
 
     showDialog(
@@ -371,6 +354,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               child: Column(
                 children: [
                   _DialogLine('Produtor', producer.name),
+                  if (barter.versionCode.isNotEmpty) _DialogLine('Barter', barter.versionCode),
                   _DialogLine('Insumos retirados', '${barter.inputs.length} item(ns)'),
                   const Divider(height: 14),
                   _DialogLine(
@@ -408,6 +392,16 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     }
   }
 
+  /// Recarrega o Barter vigente (e o catálogo, que depende da tabela dela).
+  Future<void> _refreshVersion() async {
+    try {
+      await AppData.refreshBarterVersion();
+    } on ApiException {
+      // Sem rede a tela continua com o que tinha; o envio é que decide.
+    }
+    if (mounted) setState(() {});
+  }
+
   void _toast(String msg) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -422,26 +416,56 @@ class _NewBarterScreenState extends State<NewBarterScreen>
 
   @override
   Widget build(BuildContext context) {
+    final version = _version;
     final producer = _producer;
-    final inputCount = _inputQty.values.where((q) => q > 0).length;
-    final grainChosen = _paymentGrainId != null;
 
     return Scaffold(
       appBar: AppBar(
         title: Text('Nova ${brand.copy.barterTitle}'),
         actions: const [LogoutButton()],
-        bottom: producer == null
-            ? null
-            : TabBar(
-                controller: _tabController,
-                labelPadding: const EdgeInsets.symmetric(vertical: 4),
-                tabs: [
-                  Tab(text: '2. Insumos${inputCount > 0 ? ' ($inputCount)' : ''}'),
-                  Tab(text: '3. Pagar com Grãos${grainChosen ? ' ✓' : ''}'),
-                ],
-              ),
       ),
-      body: producer == null ? _buildProducerStep() : _buildBarterStep(producer, inputCount),
+      body: version == null || !version.isOpen
+          ? _buildClosedBarter()
+          : producer == null
+              ? _buildProducerStep(version)
+              : _buildInputStep(version, producer),
+    );
+  }
+
+  /// Sem Barter aberto não há o que montar: nem grão, nem valores, nem regra.
+  /// A tela diz isso — e não deixa o consultor descobrir no envio.
+  Widget _buildClosedBarter() {
+    return RefreshIndicator(
+      onRefresh: _refreshVersion,
+      color: AppColors.primary,
+      child: ListView(
+        padding: const EdgeInsets.all(32),
+        children: [
+          const SizedBox(height: 60),
+          Icon(Icons.event_busy_outlined, size: 64, color: AppColors.textLight),
+          const SizedBox(height: 16),
+          Text(
+            '${brand.copy.programTitle} fechado no momento',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textDark),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Não há lançamento aberto para registrar permutas. Assim que o '
+            'administrador publicar a próxima versão, ela aparece aqui.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+          ),
+          const SizedBox(height: 20),
+          Center(
+            child: TextButton.icon(
+              onPressed: _refreshVersion,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: const Text('Verificar novamente'),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -449,9 +473,8 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   /// dele define quais insumos são obrigatórios e em que quantidade mínima.
   /// A lista é a CARTEIRA do consultor logado: ele nunca vê produtores dos
   /// colegas — só o admin enxerga todas as carteiras.
-  Widget _buildProducerStep() {
+  Widget _buildProducerStep(BarterVersionModel version) {
     final wallet = AppData.producersForConsultant(widget.consultant.id);
-    if (wallet.isEmpty) return _emptyWalletHint();
     final query = _searchQuery.trim().toLowerCase();
     final producers = query.isEmpty
         ? wallet
@@ -461,111 +484,95 @@ class _NewBarterScreenState extends State<NewBarterScreen>
                 p.city.toLowerCase().contains(query) ||
                 p.farmName.toLowerCase().contains(query))
             .toList();
+
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-          child: _hint(
-            icon: Icons.person_pin_circle_outlined,
-            color: AppColors.primary,
-            text: 'Etapa 1: escolha um produtor da sua carteira. A área da propriedade '
-                'define os insumos obrigatórios e a quantidade mínima de cada um.',
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-          child: SizedBox(
-            height: 40,
-            child: TextField(
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'Buscar produtor, fazenda ou cidade...',
-                prefixIcon: const Icon(Icons.search, size: 18),
-                suffixIcon: _searchQuery.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close, size: 16),
-                        onPressed: () => setState(() => _searchQuery = ''),
-                      ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-              ),
+        _BarterBanner(version: version),
+        if (wallet.isEmpty)
+          Expanded(child: _emptyWalletHint())
+        else ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+            child: _hint(
+              icon: Icons.person_pin_circle_outlined,
+              color: AppColors.primary,
+              text: 'Etapa 1: escolha um produtor da sua carteira. A área da propriedade '
+                  'define os insumos obrigatórios e a quantidade mínima de cada um.',
             ),
           ),
-        ),
-        Expanded(
-          child: producers.isEmpty
-              ? _emptySearchHint()
-              : ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-                  itemCount: producers.length,
-                  itemBuilder: (_, i) => _ProducerChoiceTile(
-                    producer: producers[i],
-                    onSelect: () => _selectProducer(producers[i].id),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: _searchBox('Buscar produtor, fazenda ou cidade...'),
+          ),
+          Expanded(
+            child: producers.isEmpty
+                ? _emptySearchHint()
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                    itemCount: producers.length,
+                    itemBuilder: (_, i) => _ProducerChoiceTile(
+                      producer: producers[i],
+                      onSelect: () => _selectProducer(producers[i].id),
+                    ),
                   ),
-                ),
-        ),
+          ),
+        ],
       ],
     );
   }
 
-  /// Etapas 2 e 3: montar os insumos (já com os mínimos pré-preenchidos) e
-  /// escolher o grão de pagamento, sempre com o produtor fixado no topo.
-  Widget _buildBarterStep(ProducerModel producer, int inputCount) {
+  /// Etapa 2: montar os insumos (já com os mínimos pré-preenchidos), com o
+  /// produtor e o Barter vigente fixados no topo.
+  Widget _buildInputStep(BarterVersionModel version, ProducerModel producer) {
+    final inputCount = _inputQty.values.where((q) => q > 0).length;
     return Column(
       children: [
+        _BarterBanner(version: version),
         _buildProducerHeader(producer),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
           child: BarterBalanceBar(
             inputCost: _inputCost,
-            referenceValue: _paymentGrain?.currentPrice ?? 0,
-            referenceGrainName: _paymentGrain?.name ?? '',
+            referenceValue: version.grainPrice,
+            referenceGrainName: version.grainName,
             inputCount: inputCount,
             showValue: false,
           ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-          child: SizedBox(
-            height: 40,
-            child: TextField(
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: const TextStyle(fontSize: 13),
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: _tabController.index == 0 ? 'Buscar insumo...' : 'Buscar grão...',
-                prefixIcon: const Icon(Icons.search, size: 18),
-                suffixIcon: _searchQuery.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.close, size: 16),
-                        onPressed: () => setState(() => _searchQuery = ''),
-                      ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-              ),
-            ),
-          ),
+          child: _searchBox('Buscar insumo...'),
         ),
-        Expanded(
-          child: TabBarView(
-            controller: _tabController,
-            children: [
-              _buildInputTab(),
-              _buildGrainTab(),
-            ],
-          ),
-        ),
-        _buildFooter(),
+        Expanded(child: _buildInputList()),
+        _buildFooter(version),
       ],
     );
   }
 
+  Widget _searchBox(String hint) => SizedBox(
+        height: 40,
+        child: TextField(
+          onChanged: (v) => setState(() => _searchQuery = v),
+          style: const TextStyle(fontSize: 13),
+          decoration: InputDecoration(
+            isDense: true,
+            hintText: hint,
+            prefixIcon: const Icon(Icons.search, size: 18),
+            suffixIcon: _searchQuery.isEmpty
+                ? null
+                : IconButton(
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: () => setState(() => _searchQuery = ''),
+                  ),
+            contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          ),
+        ),
+      );
+
   /// Cabeçalho fixo com o produtor escolhido e sua área, com opção de trocar.
   Widget _buildProducerHeader(ProducerModel p) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
         color: AppColors.primarySurface,
@@ -614,11 +621,11 @@ class _NewBarterScreenState extends State<NewBarterScreen>
     );
   }
 
-  Widget _buildInputTab() {
+  Widget _buildInputList() {
     final query = _searchQuery.trim().toLowerCase();
     final inputs = query.isEmpty
-        ? AppData.inputs
-        : AppData.inputs.where((i) => i.name.toLowerCase().contains(query)).toList();
+        ? _catalog
+        : _catalog.where((i) => i.matches(query)).toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
       children: [
@@ -630,17 +637,17 @@ class _NewBarterScreenState extends State<NewBarterScreen>
                 ? 'Os insumos obrigatórios para a área deste produtor já vêm com a '
                     'quantidade mínima preenchida. Você pode aumentar, não reduzir.'
                 : 'Escolha os insumos que o produtor precisa. Eles serão '
-                    'convertidos em sacas do grão que você escolher para pagar.',
+                    'convertidos em sacas do grão desta safra.',
           ),
         if (query.isEmpty) const SizedBox(height: 8),
-        if (query.isEmpty && _ruledCategories.isNotEmpty) ...[
-          ..._ruledCategories.map((c) => _CategoryRuleTile(
+        if (query.isEmpty && _ruledClasses.isNotEmpty) ...[
+          ..._ruledClasses.map((c) => _ClassRuleTile(
                 name: c.name,
-                detail: c.ruleType == CategoryRuleType.percentOfTotal
+                detail: c.ruleType == ClassRuleType.percentOfTotal
                     ? 'mín. ${_fmtPct(c.ruleValue)} do total da permuta'
                     : 'mínimo por área da propriedade',
-                progress: _categoryProgress(c),
-                met: _categoryMet(c),
+                progress: _classProgress(c),
+                met: _classMet(c),
               )),
           const SizedBox(height: 8),
         ],
@@ -649,36 +656,6 @@ class _NewBarterScreenState extends State<NewBarterScreen>
               qty: _inputQty[i.id] ?? 0,
               minQty: _minFor(i.id),
               onChanged: (q) => _setInput(i.id, q),
-            )),
-      ],
-    );
-  }
-
-  Widget _buildGrainTab() {
-    final hasInputs = _inputCost > 0;
-    final query = _searchQuery.trim().toLowerCase();
-    final grains = query.isEmpty
-        ? AppData.grains
-        : AppData.grains.where((g) => g.name.toLowerCase().contains(query)).toList();
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-      children: [
-        if (query.isEmpty)
-          _hint(
-            icon: hasInputs ? Icons.check_circle_outline : Icons.lock_outline,
-            color: hasInputs ? AppColors.grain : AppColors.pending,
-            text: hasInputs
-                ? 'Escolha com qual grão você vai pagar. Veja quantas sacas de cada '
-                    'um cobrem os insumos retirados.'
-                : 'Volte à etapa 1 e escolha os insumos para ver quantas sacas serão necessárias.',
-          ),
-        if (query.isEmpty) const SizedBox(height: 8),
-        if (grains.isEmpty) _emptySearchHint() else ...grains.map((g) => _GrainChoiceTile(
-              product: g,
-              selected: _paymentGrainId == g.id,
-              sacksNeeded: _sacksFor(g),
-              enabled: hasInputs,
-              onSelect: () => _selectGrain(g.id),
             )),
       ],
     );
@@ -717,8 +694,7 @@ class _NewBarterScreenState extends State<NewBarterScreen>
         ),
       );
 
-  Widget _buildFooter() {
-    final grain = _paymentGrain;
+  Widget _buildFooter(BarterVersionModel version) {
     final sacks = _sacksNeeded;
     final inputCount = _inputQty.values.where((q) => q > 0).length;
     return Container(
@@ -734,14 +710,14 @@ class _NewBarterScreenState extends State<NewBarterScreen>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_unmetCategories.isNotEmpty) ...[
+            if (_unmetClasses.isNotEmpty) ...[
               Row(
                 children: [
                   Icon(Icons.lock_outline, size: 14, color: AppColors.pending),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'Mínimo não atingido: ${_unmetCategories.map((c) => c.name).join(', ')}',
+                      'Mínimo não atingido: ${_unmetClasses.map((c) => c.name).join(', ')}',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -755,9 +731,9 @@ class _NewBarterScreenState extends State<NewBarterScreen>
                 Icon(Icons.local_shipping_outlined, size: 14, color: AppColors.textMedium),
                 const SizedBox(width: 6),
                 Text(
-                  grain != null
-                      ? 'Entregar: ${formatSacks(sacks)} ${grain.name.toLowerCase()} • $inputCount insumo(s)'
-                      : 'Escolha insumos e grão para continuar',
+                  inputCount > 0
+                      ? 'Entregar: ${formatSacks(sacks)} ${version.grainName.toLowerCase()} • $inputCount insumo(s)'
+                      : 'Escolha os insumos para ver quantas sacas serão necessárias',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -799,6 +775,51 @@ class _NewBarterScreenState extends State<NewBarterScreen>
   }
 }
 
+/// Faixa do Barter vigente: qual lançamento está valendo e em que grão a
+/// permuta será paga. Sem R\$ — o consultor não vê valores, e o grão aqui é
+/// informação, não escolha.
+class _BarterBanner extends StatelessWidget {
+  final BarterVersionModel version;
+  const _BarterBanner({required this.version});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.grainBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.grain.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.grass, size: 18, color: AppColors.grain),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${brand.copy.programTitle} ${version.code}',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                Text(
+                  'Pagamento em ${version.grainName.toLowerCase()}'
+                  '${version.endsAt != null ? ' • até ${_shortDate(version.endsAt!)}' : ''}',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _shortDate(DateTime date) =>
+      '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
+}
+
 class _DialogLine extends StatelessWidget {
   final String label, value;
   final bool bold;
@@ -832,15 +853,15 @@ class _DialogLine extends StatelessWidget {
   }
 }
 
-/// Barra de progresso de uma regra de categoria, para o consultor. Mostra o
+/// Barra de progresso da regra de uma classe, para o consultor. Mostra o
 /// quanto falta para liberar o envio SEM expor valores em R\$ — só proporção.
-class _CategoryRuleTile extends StatelessWidget {
+class _ClassRuleTile extends StatelessWidget {
   final String name;
   final String detail;
   final double progress;
   final bool met;
 
-  const _CategoryRuleTile({
+  const _ClassRuleTile({
     required this.name,
     required this.detail,
     required this.progress,
@@ -892,7 +913,7 @@ class _CategoryRuleTile extends StatelessWidget {
   }
 }
 
-/// Linha de um insumo nas etapas de montagem. Quando [minQty] > 0, o insumo é
+/// Linha de um insumo na etapa de montagem. Quando [minQty] > 0, o insumo é
 /// obrigatório para a área do produtor: vem pré-preenchido e não pode descer
 /// abaixo do mínimo.
 class _InputTile extends StatefulWidget {
@@ -1035,80 +1056,6 @@ class _InputTileState extends State<_InputTile> {
               ],
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Card de escolha do grão de pagamento (seleção única). Mostra quantas sacas
-/// daquele grão cobririam o custo atual dos insumos.
-class _GrainChoiceTile extends StatelessWidget {
-  final ProductModel product;
-  final bool selected;
-  final double sacksNeeded;
-  final bool enabled;
-  final VoidCallback onSelect;
-
-  const _GrainChoiceTile({
-    required this.product,
-    required this.selected,
-    required this.sacksNeeded,
-    required this.enabled,
-    required this.onSelect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Opacity(
-      opacity: enabled ? 1 : 0.55,
-      child: Card(
-        margin: const EdgeInsets.only(bottom: 10),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(
-            color: selected ? AppColors.grain : Colors.transparent,
-            width: 2,
-          ),
-        ),
-        child: InkWell(
-          onTap: enabled ? onSelect : null,
-          borderRadius: BorderRadius.circular(12),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(color: AppColors.grainBg, borderRadius: BorderRadius.circular(10)),
-                  child: Icon(Icons.grass, color: AppColors.grain, size: 20),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(product.name,
-                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                      Text('Pago em ${product.unit}',
-                          style: TextStyle(fontSize: 12, color: AppColors.textLight)),
-                      if (enabled) ...[
-                        const SizedBox(height: 2),
-                        Text('≈ ${formatSacks(sacksNeeded)} para pagar os insumos',
-                            style: TextStyle(fontSize: 11, color: AppColors.grain, fontWeight: FontWeight.w600)),
-                      ],
-                    ],
-                  ),
-                ),
-                Icon(
-                  selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                  color: selected ? AppColors.grain : AppColors.textLight,
-                  size: 22,
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );

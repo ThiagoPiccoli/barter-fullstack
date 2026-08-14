@@ -79,6 +79,8 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       const auth = await asUser(email);
       const post = (url: string, body: object) =>
         request(app.getHttpServer()).post(url).set('Authorization', auth).send(body);
+      const put = (url: string, body: object) =>
+        request(app.getHttpServer()).put(url).set('Authorization', auth).send(body);
 
       await expect(
         post('/api/v1/producers', {
@@ -108,8 +110,9 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
         }).then((r) => r.status),
       ).resolves.toBe(403);
 
+      // Classe não se cria (a lista é fixa); o que existe é ajustar a regra.
       await expect(
-        post('/api/v1/categories', { name: 'Pasta Nova', ruleType: 'none', ruleValue: 0 }).then(
+        put('/api/v1/classes/1/rule', { ruleType: 'percentOfTotal', ruleValue: 10 }).then(
           (r) => r.status,
         ),
       ).resolves.toBe(403);

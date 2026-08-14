@@ -28,6 +28,13 @@ export const CAPABILITY = {
   producersManage: 'producers.manage',
   /** Catálogo: produtos, valores de referência e pastas de insumos. */
   catalogManage: 'catalog.manage',
+  /**
+   * Lançar o Barter: abrir safra, publicar versões (a tabela de valores),
+   * corrigir um preço e encerrar. É a capacidade que DECIDE POR QUANTO se
+   * permuta — por isso é separada de `catalog.manage`, que só mexe no cadastro
+   * do produto (nome, unidade, pasta) e não move dinheiro.
+   */
+  barterManage: 'barter.manage',
   /** Enxergar TODAS as carteiras de produtores, não só a própria. */
   producersReadAll: 'producers.readAll',
   /** Enxergar TODAS as permutas, não só as próprias. */
@@ -58,6 +65,7 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.usersManage,
     CAPABILITY.producersManage,
     CAPABILITY.catalogManage,
+    CAPABILITY.barterManage,
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadAll,
     CAPABILITY.bartersReview,

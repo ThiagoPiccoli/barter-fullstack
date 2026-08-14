@@ -80,11 +80,32 @@ model Producer {
   barters Barter[]
 }
 
-/// "Pasta" de insumos; a regra de mínimo vigente trava o envio da permuta:
-/// percentOfTotal (>= ruleValue % do custo) ou valuePerHa (>= R$ × área).
-model InputCategory {
-  id        Int    @id @default(autoincrement())
-  name      String
+/// CLASSE do insumo — a taxonomia do negócio (fungicidas, herbicidas,
+/// sementes, seguro agrícola…). A lista é FIXA: ela nasce na migration e não
+/// tem rota que crie, renomeie ou exclua.
+///
+/// É fixa porque classe não é gosto de quem cadastra: ela é o vocabulário com
+/// que a cooperativa fala de mix, de exigência mínima e de relatório. Quando
+/// era editável, cada carga de planilha inventava uma pasta nova ("Defensivo",
+/// "DEFENSIVOS", "Defensivos Foliares") e o mínimo por classe passava a medir
+/// conjuntos diferentes a cada versão do Barter.
+///
+/// O que continua editável é a REGRA de mínimo de cada classe
+/// (percentOfTotal >= ruleValue % do custo, ou valuePerHa >= R$ × área): ela é
+/// decisão comercial e muda de safra para safra.
+model ProductClass {
+  id Int @id @default(autoincrement())
+
+  /// Identificador estável da classe (`fungicidas`, `seguro-agricola`…). É por
+  /// ele que a planilha e o código se referem a ela: o nome de exibição pode
+  /// ser reescrito um dia, o slug não.
+  slug String @unique
+  name String
+
+  /// Ordem de exibição — a lista tem um jeito certo de ser lida (do defensivo
+  /// ao serviço), e ordenar por id ou por nome desmancharia isso.
+  position Int @default(0)
+
   ruleType  String @default("none")
   ruleValue Float  @default(0)
 
@@ -92,7 +113,12 @@ model InputCategory {
 }
 
 /// type=input: insumo retirado (forma o custo). type=grain: grão de pagamento.
-/// currentPrice é o valor de referência do admin — a "taxa de câmbio".
+///
+/// O CADASTRO do produto mora aqui (nome, unidade, categoria, exigência por
+/// hectare); o VALOR de troca não mora mais: ele pertence à versão do Barter
+/// (ver VersionPrice e BarterVersion.grainPrice). `currentPrice` continua como
+/// o último valor publicado — é o que alimenta o relatório de preço do produto
+/// e a linha do tempo — mas quem precifica uma permuta é a versão vigente.
 model Product {
   id            Int            @id @default(autoincrement())
   name          String
@@ -100,11 +126,107 @@ model Product {
   type          String
   currentPrice  Float
   requiredPerHa Float          @default(0)
-  categoryId    Int?
-  category      InputCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  classId       Int?
+  productClass  ProductClass?  @relation(fields: [classId], references: [id], onDelete: SetNull)
 
-  priceHistory PriceHistoryEntry[]
-  items        BarterItem[]
+  /// Código do produto na planilha do fornecedor. É a chave de casamento da
+  /// carga em massa: sem ele, "Ureia 45%" e "UREIA 45 %" viram dois cadastros a
+  /// cada arquivo importado.
+  sku String? @unique
+
+  priceHistory  PriceHistoryEntry[]
+  items         BarterItem[]
+  versionPrices VersionPrice[]
+  seasons       Season[]            @relation("SeasonGrain")
+}
+
+/// SAFRA (temporada): o Barter acontece SOBRE um grão, durante um ciclo.
+/// `code` é a raiz do código das versões: letra do grão + ano (ex.: S2026 →
+/// versões S2026.01, S2026.02...).
+///
+/// O grão fica desnormalizado (nome e unidade) porque a safra é registro
+/// histórico: excluir o produto do catálogo não pode apagar a memória de que
+/// aquela temporada era de soja.
+model Season {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  year      Int
+  grainId   Int?
+  grain     Product? @relation("SeasonGrain", fields: [grainId], references: [id], onDelete: SetNull)
+  grainName String
+  grainUnit String
+  status    String   @default("open")
+  openedAt  DateTime @default(now())
+  closedAt  DateTime?
+
+  versions BarterVersion[]
+}
+
+/// O BARTER LANÇADO — uma versão da safra (S2026.01, S2026.02...).
+///
+/// É ela que responde "com que valores se permuta hoje": o valor da saca do
+/// grão e a tabela de preços dos insumos. Uma correção de valores no meio da
+/// safra não reescreve a versão vigente — publica a próxima, e a anterior
+/// fecha. É isso que mantém legível o que foi acordado em cada momento.
+///
+/// A VIGÊNCIA tem duas naturezas de propósito: `endsAt` é uma data que o admin
+/// marcou e por isso TRAVA (a API recusa permuta depois dela); as metas abaixo
+/// apenas medem — quem encerra por meta é o admin, para nada fechar sozinho de
+/// madrugada. Ver isOpenAt() em version-progress.ts.
+model BarterVersion {
+  id       Int    @id @default(autoincrement())
+  seasonId Int
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  number   Int
+  code     String @unique
+  status   String @default("active")
+
+  /// Valor (R$) da saca do grão nesta versão — a taxa que converte o custo dos
+  /// insumos em sacas. É digitado pelo admin ao publicar, não vem da planilha.
+  grainPrice Float
+
+  startsAt DateTime  @default(now())
+  endsAt   DateTime?
+
+  /// Metas de encerramento (null = sem meta). Medem o realizado das permutas
+  /// APROVADAS da versão; ao atingir, o painel avisa e o admin decide.
+  targetSales   Float?
+  targetProfit  Float?
+  targetSacks   Float?
+  targetBarters Int?
+
+  /// De onde a tabela veio (nome do arquivo) e a observação do lançamento.
+  sourceFile String?
+  note       String?
+
+  closedAt   DateTime?
+  closedBy   String?
+  closedById Int?
+
+  prices  VersionPrice[]
+  barters Barter[]
+
+  @@unique([seasonId, number])
+}
+
+/// Uma LINHA da tabela de valores da versão: o preço e o custo de um insumo
+/// naquele lançamento. O custo é o que torna a meta de lucro calculável.
+///
+/// Nome e unidade são snapshot pelo mesmo motivo do BarterItem: a tabela
+/// precisa continuar legível depois que o produto sair do catálogo.
+model VersionPrice {
+  id          Int           @id @default(autoincrement())
+  versionId   Int
+  version     BarterVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  productId   Int?
+  product     Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String
+  unit        String
+  price       Float
+  cost        Float         @default(0)
+
+  @@unique([versionId, productId])
 }
 
 /// Linha do tempo dos reajustes. changedBy desnormalizado: o histórico
@@ -119,29 +241,43 @@ model PriceHistoryEntry {
   changedAt   DateTime
 }
 
-/// Permuta: insumos retirados formam um custo, pago com UM grão cujas sacas
-/// são calculadas pelo servidor. `code` (PRM-AAAA-NNN) é o id público.
+/// Permuta: insumos retirados formam um custo, pago com o grão da safra, cujas
+/// sacas são calculadas pelo servidor. `code` (PRM-AAAA-NNN) é o id público.
+///
+/// Toda permuta nasce DENTRO de uma versão do Barter — é ela que diz por quais
+/// valores esta permuta foi fechada. `versionCode` fica desnormalizado porque é
+/// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
+/// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
 model Barter {
-  id               Int       @id @default(autoincrement())
-  code             String    @unique
+  id               Int            @id @default(autoincrement())
+  code             String         @unique
+  versionId        Int?
+  version          BarterVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  versionCode      String         @default("")
   consultantId     Int?
-  consultant       User?     @relation("ConsultantBarters", fields: [consultantId], references: [id], onDelete: SetNull)
+  consultant       User?          @relation("ConsultantBarters", fields: [consultantId], references: [id], onDelete: SetNull)
   producerId       Int?
-  producer         Producer? @relation(fields: [producerId], references: [id], onDelete: SetNull)
+  producer         Producer?      @relation(fields: [producerId], references: [id], onDelete: SetNull)
   consultantName   String
-  consultantBranch String    @default("")
+  consultantBranch String         @default("")
   producerName     String
-  status           String    @default("pending")
+  status           String         @default("pending")
   adminNote        String?
   reviewedBy       String?
   reviewedById     Int?
   reviewedAt       DateTime?
-  createdAt        DateTime  @default(now())
+  createdAt        DateTime       @default(now())
 
   items BarterItem[]
+
+  @@index([versionId])
 }
 
 /// Item da permuta com snapshots imutáveis de nome/unidade/preço.
+///
+/// `unitCost` é o custo do insumo na versão em que a permuta foi fechada. Ele é
+/// congelado aqui, e não lido da tabela da versão, porque o lucro apurado de
+/// uma permuta não pode mudar quando o admin corrigir um custo depois.
 model BarterItem {
   id          Int      @id @default(autoincrement())
   barterId    Int
@@ -153,6 +289,7 @@ model BarterItem {
   unit        String
   quantity    Float
   unitValue   Float
+  unitCost    Float    @default(0)
 }
 
 /// Trilha de AUDITORIA dos atos sensíveis: quem provisionou, redefiniu senha,

@@ -1,5 +1,6 @@
 import '../models/models.dart';
 import '../repositories/auth_repository.dart';
+import '../repositories/barter_program_repository.dart';
 import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
@@ -20,6 +21,7 @@ class AppData {
   static final ConsultantRepository _consultants = ConsultantRepository();
   static final CatalogRepository _catalog = CatalogRepository();
   static final BarterRepository _barters = BarterRepository();
+  static final BarterProgramRepository _program = BarterProgramRepository();
 
   /// Usuário logado (admin ou consultor).
   static UserModel? currentUser;
@@ -33,8 +35,31 @@ class AppData {
 
   static List<ProductModel> grains = [];
   static List<ProductModel> inputs = [];
-  static List<InputCategoryModel> categories = [];
+  /// As CLASSES de produto — lista fixa vinda do servidor.
+  static List<ProductClassModel> classes = [];
   static List<BarterModel> barters = [];
+
+  /// A versão VIGENTE do Barter, ou null quando não há lançamento aberto.
+  ///
+  /// É o dado mais importante do cache para o consultor: sem ela não há grão,
+  /// não há valores e não há permuta nova — a tela mostra "Barter fechado".
+  static BarterVersionModel? currentVersion;
+
+  /// As safras (só o admin carrega — a rota exige `barter.manage`).
+  static List<SeasonModel> seasons = [];
+
+  /// Os insumos que estão na tabela da versão vigente: é o que dá para permutar
+  /// hoje. Fora da versão, o insumo existe no cadastro mas não tem valor
+  /// acordado — e o servidor recusa.
+  static List<ProductModel> get barterInputs {
+    final version = currentVersion;
+    if (version == null) return const [];
+    return inputs.where((input) => version.priceOf(input.id) != null).toList();
+  }
+
+  /// O valor (R$) de um insumo na versão vigente, ou 0 se ele não está nela.
+  static double priceOf(String productId) =>
+      currentVersion?.priceOf(productId)?.price ?? 0;
 
   /* ── Sessão ─────────────────────────────────────────────────────────── */
 
@@ -94,30 +119,51 @@ class AppData {
     producers = [];
     grains = [];
     inputs = [];
-    categories = [];
+    classes = [];
     barters = [];
+    currentVersion = null;
+    seasons = [];
   }
 
   /* ── Cargas / refresh ───────────────────────────────────────────────── */
 
   static Future<void> refreshAll() async {
+    final isAdmin = currentUser?.role == UserRole.admin;
     await Future.wait([
       refreshCatalog(),
       refreshProducers(),
       refreshBarters(),
-      if (currentUser?.role == UserRole.admin) refreshConsultants(),
+      refreshBarterVersion(),
+      if (isAdmin) refreshConsultants(),
+      if (isAdmin) refreshSeasons(),
     ]);
   }
+
+  /// A versão vigente do Barter. Todo papel carrega — o consultor precisa dela
+  /// para montar a permuta, e a retaguarda para saber o que está aberto.
+  static Future<void> refreshBarterVersion() async {
+    currentVersion = await _program.current();
+  }
+
+  /// As safras com o histórico de versões (admin).
+  static Future<void> refreshSeasons() async {
+    seasons = await _program.listSeasons();
+  }
+
+  /// Um produto com a linha do tempo completa, buscado sob demanda. A listagem
+  /// do catálogo não carrega o histórico (ele cresce a cada versão publicada),
+  /// então quem desenha o gráfico pede o detalhe.
+  static Future<ProductModel> productDetail(String id) => _catalog.findProduct(id);
 
   static Future<void> refreshCatalog() async {
     final results = await Future.wait([
       _catalog.listProducts(),
-      _catalog.listCategories(),
+      _catalog.listClasses(),
     ]);
     final products = results[0] as List<ProductModel>;
     grains = products.where((p) => p.type == ProductType.grain).toList();
     inputs = products.where((p) => p.type == ProductType.input).toList();
-    categories = results[1] as List<InputCategoryModel>;
+    classes = results[1] as List<ProductClassModel>;
   }
 
   static Future<void> refreshProducers() async {
@@ -159,10 +205,10 @@ class AppData {
     return null;
   }
 
-  /// Busca uma categoria pelo id (null se não encontrada ou id null).
-  static InputCategoryModel? categoryById(String? id) {
+  /// Busca uma classe pelo id (null se não encontrada ou id null).
+  static ProductClassModel? classById(String? id) {
     if (id == null) return null;
-    for (final c in categories) {
+    for (final c in classes) {
       if (c.id == id) return c;
     }
     return null;
@@ -172,16 +218,93 @@ class AppData {
 
   static Future<BarterModel> createBarter({
     required String producerId,
-    required String grainId,
     required Map<String, double> inputQuantities,
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
-      grainId: grainId,
       inputQuantities: inputQuantities,
     );
     barters.insert(0, barter);
     return barter;
+  }
+
+  /* ── Lançamento do Barter (admin) ───────────────────────────────────── */
+
+  /// Publica a próxima versão a partir da planilha. Recarrega safras E versão
+  /// vigente: publicar encerra a anterior no servidor, e um cache remendado à
+  /// mão mostraria duas vigentes.
+  static Future<BarterVersionModel> publishVersion({
+    required String seasonCode,
+    required String filename,
+    required List<int> bytes,
+    required double grainPrice,
+    DateTime? endsAt,
+    double? targetSales,
+    double? targetProfit,
+    double? targetSacks,
+    int? targetBarters,
+    String? note,
+    bool carryOver = false,
+  }) async {
+    final version = await _program.publishFromFile(
+      seasonCode: seasonCode,
+      filename: filename,
+      bytes: bytes,
+      grainPrice: grainPrice,
+      endsAt: endsAt,
+      targetSales: targetSales,
+      targetProfit: targetProfit,
+      targetSacks: targetSacks,
+      targetBarters: targetBarters,
+      note: note,
+      carryOver: carryOver,
+    );
+    // A publicação mexe no catálogo (cria insumos, atualiza o último valor
+    // publicado), então o cache inteiro do catálogo precisa vir de novo.
+    await Future.wait([refreshCatalog(), refreshSeasons(), refreshBarterVersion()]);
+    return version;
+  }
+
+  /// Corrige um valor da versão vigente (o grão da safra inclusive).
+  static Future<void> updateVersionPrice(
+    String productId, {
+    double? price,
+    double? cost,
+  }) async {
+    final version = currentVersion;
+    if (version == null) return;
+    currentVersion = await _program.updatePrice(
+      version.code,
+      productId,
+      price: price,
+      cost: cost,
+    );
+    // O produto guarda o último valor publicado e ganha ponto no histórico.
+    if (price != null) await refreshCatalog();
+  }
+
+  /// Detalhe de uma versão, com metas e realizado.
+  static Future<BarterVersionModel> versionDetail(String code) => _program.findVersion(code);
+
+  /// Encerra o Barter vigente: o consultor passa a ver "Barter fechado".
+  static Future<void> closeVersion(String code) async {
+    await _program.closeVersion(code);
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+  }
+
+  static Future<void> closeSeason(String code) async {
+    await _program.closeSeason(code);
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+  }
+
+  static Future<void> openSeason({
+    required String grainId,
+    required int year,
+    String? name,
+    String? letter,
+  }) async {
+    await _program.openSeason(grainId: grainId, year: year, name: name, letter: letter);
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
   static Future<BarterModel> reviewBarter(
@@ -255,25 +378,23 @@ class AppData {
     await refreshProducers();
   }
 
-  static Future<ProductModel> updatePrice(ProductModel product, double price) async {
-    return _replaceProduct(await _catalog.updatePrice(product.id, price));
-  }
-
   static Future<ProductModel> createProduct({
     required String name,
+    String sku = '',
     required String unit,
     required ProductType type,
     required double currentPrice,
     double requiredPerHa = 0,
-    String? categoryId,
+    String? classId,
   }) async {
     return _replaceProduct(await _catalog.createProduct(
       name: name,
+      sku: sku,
       unit: unit,
       type: type,
       currentPrice: currentPrice,
       requiredPerHa: requiredPerHa,
-      categoryId: categoryId,
+      classId: classId,
     ));
   }
 
@@ -295,27 +416,14 @@ class AppData {
     return _replaceProduct(await _catalog.updateProduct(product.id, fields));
   }
 
-  static Future<InputCategoryModel> saveCategory(
-    InputCategoryModel category, {
-    required bool isNew,
-  }) async {
-    final saved =
-        isNew ? await _catalog.createCategory(category) : await _catalog.updateCategory(category);
-    final index = categories.indexWhere((c) => c.id == saved.id);
-    if (index == -1) {
-      categories.add(saved);
-    } else {
-      categories[index] = saved;
-    }
+  /// Ajusta a regra de mínimo de uma classe. Não há criar nem excluir: a lista
+  /// é fixa no servidor, e é isso que mantém o vocabulário estável entre uma
+  /// carga de planilha e outra.
+  static Future<ProductClassModel> updateClassRule(ProductClassModel productClass) async {
+    final saved = await _catalog.updateClassRule(productClass);
+    final index = classes.indexWhere((c) => c.id == saved.id);
+    if (index != -1) classes[index] = saved;
     return saved;
-  }
-
-  /// Excluir a pasta desvincula os insumos no servidor — recarrega o catálogo
-  /// para os `categoryId` ficarem coerentes.
-  static Future<void> deleteCategory(String id) async {
-    await _catalog.deleteCategory(id);
-    categories.removeWhere((c) => c.id == id);
-    await refreshCatalog();
   }
 
   static ProductModel _replaceProduct(ProductModel updated) {

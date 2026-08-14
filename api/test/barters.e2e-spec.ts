@@ -113,8 +113,8 @@ describe('Barters (e2e)', () => {
     expect(abaixo.status).toBe(422);
   });
 
-  it('regra de mínimo da categoria trava o envio', async () => {
-    // Adicionando 30 sacos de semente (R$ 9.600, pasta sem regra), o custo
+  it('regra de mínimo da CLASSE trava o envio', async () => {
+    // Adicionando 30 sacos de semente (R$ 9.600, classe sem regra), o custo
     // total vai a R$ 21.546 e Fertilizantes cai para 25,6% — abaixo dos 30%.
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters')

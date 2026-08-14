@@ -122,17 +122,34 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /barters', policy: 'capability:barters.register' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
 
+        // Lançamento do Barter — safra e versões são do admin. A exceção é a
+        // versão VIGENTE: o consultor precisa dela para saber se há Barter
+        // aberto e para a prévia das sacas.
+        { route: 'GET /barter-versions/current', policy: 'any-authenticated' },
+        { route: 'GET /barter-versions/:code', policy: 'capability:barter.manage' },
+        { route: 'POST /barter-versions/:code/close', policy: 'capability:barter.manage' },
+        {
+          route: 'PUT /barter-versions/:code/prices/:productId',
+          policy: 'capability:barter.manage',
+        },
+        { route: 'GET /seasons', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:code/close', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:code/versions', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:code/versions/import', policy: 'capability:barter.manage' },
+
         // Catálogo — leitura comum, gestão do admin.
-        { route: 'DELETE /categories/:id', policy: 'capability:catalog.manage' },
-        { route: 'GET /categories', policy: 'any-authenticated' },
-        { route: 'POST /categories', policy: 'capability:catalog.manage' },
-        { route: 'PUT /categories/:id', policy: 'capability:catalog.manage' },
+        // Classes: a lista é FIXA (vem da migration), então só há leitura e o
+        // ajuste da regra de mínimo. Não existe POST nem DELETE — e é isso que
+        // este inventário trava.
+        { route: 'GET /classes', policy: 'any-authenticated' },
+        { route: 'PUT /classes/:id/rule', policy: 'capability:catalog.manage' },
         { route: 'DELETE /products/:id', policy: 'capability:catalog.manage' },
         { route: 'GET /products', policy: 'any-authenticated' },
         { route: 'GET /products/:id', policy: 'any-authenticated' },
         { route: 'POST /products', policy: 'capability:catalog.manage' },
         { route: 'PUT /products/:id', policy: 'capability:catalog.manage' },
-        { route: 'PUT /products/:id/price', policy: 'capability:catalog.manage' },
+        // Sem rota de preço no catálogo: valor é da versão do Barter.
 
         // Produtores — leitura escopada pelo service; cadastro do admin.
         { route: 'DELETE /producers/:id', policy: 'capability:producers.manage' },

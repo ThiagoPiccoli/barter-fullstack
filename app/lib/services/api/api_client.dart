@@ -116,6 +116,52 @@ class ApiClient {
 
   Future<dynamic> delete(String path) => _send('DELETE', path);
 
+  /// Envia um ARQUIVO com campos de formulário (multipart) — hoje, a planilha
+  /// que lança uma versão do Barter.
+  ///
+  /// Não passa pelo `_send` porque o corpo é outro (multipart, não JSON) e o
+  /// arquivo pode ser grande: o timeout aqui é maior, já que quem espera é o
+  /// admin olhando a barra de progresso, não uma tela que precisa responder ao
+  /// toque. O resto do contrato é o mesmo — token, envelope e mensagem de erro
+  /// em pt-BR passam pelo mesmo tratamento.
+  Future<dynamic> upload(
+    String path, {
+    required String filename,
+    required List<int> bytes,
+    Map<String, String> fields = const {},
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    final uri = Uri.parse('$baseUrl/api/v1$path');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..fields.addAll(fields)
+      ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+    if (_token != null) request.headers['Authorization'] = 'Bearer $_token';
+
+    http.Response response;
+    try {
+      final streamed = await request.send().timeout(timeout);
+      response = await http.Response.fromStream(streamed);
+    } on TimeoutException {
+      throw const ApiException(0, 'O envio do arquivo demorou demais. Tente novamente.');
+    } on SocketException {
+      throw const ApiException(0, 'Sem conexão com o servidor. Verifique sua rede.');
+    } on http.ClientException {
+      throw const ApiException(0, 'Falha ao enviar o arquivo.');
+    }
+
+    final decoded = response.body.isEmpty ? null : _tryDecode(response.body);
+    if (response.statusCode >= 400) {
+      if (response.statusCode == 401 && _token != null) {
+        _token = null;
+        onSessionExpired?.call();
+      }
+      throw ApiException(response.statusCode, _errorMessage(response.statusCode, decoded));
+    }
+    if (decoded is Map<String, dynamic> && decoded.containsKey('data')) return decoded['data'];
+    return decoded;
+  }
+
   /// [unwrap] falso devolve o envelope cru (`{data, meta}`) — quem pagina
   /// precisa do `meta`, que o desembrulho normal joga fora.
   Future<dynamic> _send(

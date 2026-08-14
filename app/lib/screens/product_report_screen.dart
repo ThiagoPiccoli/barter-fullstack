@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/price_chart.dart';
+import 'barter_program_screen.dart';
+import 'edit_forms.dart';
 
 const _monthsFull = [
   '', 'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
@@ -27,9 +30,108 @@ class ProductReportScreen extends StatefulWidget {
 class _ProductReportScreenState extends State<ProductReportScreen> {
   _Period _period = _Period.all;
 
-  ProductModel get _product {
+  /// O produto com a linha do tempo COMPLETA. Vem do detalhe da API, não do
+  /// cache: a listagem do catálogo não carrega o histórico (ele cresce um
+  /// ponto por produto a cada versão publicada), e é ele que esta tela desenha.
+  ProductModel? _detail;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDetail();
+  }
+
+  Future<void> _loadDetail() async {
+    try {
+      final detail = await AppData.productDetail(widget.productId);
+      if (mounted) setState(() => (_detail = detail, _error = null));
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = e.message);
+    }
+  }
+
+  /// O produto pode ser corrigido? Só se houver Barter vigente E ele estiver na
+  /// tabela dessa versão (ou for o grão da safra, cuja cotação é a da versão).
+  bool _editableInVersion(ProductModel product) {
+    final version = AppData.currentVersion;
+    if (version == null || !version.isOpen) return false;
+    return version.grainId == product.id || version.priceOf(product.id) != null;
+  }
+
+  /// Troca o CÓDIGO do item. Ele é único no catálogo e é o que se digita na
+  /// busca — por isso a recusa do servidor (código já usado) aparece inteira.
+  Future<void> _editCode(ProductModel product) async {
+    final controller = TextEditingController(text: product.sku ?? '');
+    final novo = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Código do item'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(product.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(
+                labelText: 'Código',
+                prefixIcon: Icon(Icons.qr_code_2),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Use o código do fornecedor quando houver: é ele que casa a '
+              'planilha com este cadastro na próxima carga.',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('Salvar'),
+          ),
+        ],
+      ),
+    );
+    if (novo == null || novo.isEmpty || novo == product.sku) return;
+
+    try {
+      await AppData.updateProductFields(product, {'sku': novo});
+      if (mounted) setState(() {});
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  Future<void> _correctInVersion(BuildContext context, ProductModel product) {
+    final version = AppData.currentVersion!;
+    final row = version.priceOf(product.id);
+    return showVersionPriceDialog(
+      context,
+      productId: product.id,
+      productName: product.name,
+      price: row?.price ?? version.grainPrice,
+      cost: row?.cost,
+      // Corrigir o valor acrescenta um ponto na linha do tempo: a tela precisa
+      // do detalhe de novo, não de um rebuild do que já estava em mãos.
+      onUpdated: _loadDetail,
+    );
+  }
+
+  /// O produto do cache, para o cabeçalho aparecer enquanto o detalhe carrega.
+  /// Null se ele não estiver no catálogo carregado (produto recém-excluído).
+  ProductModel? get _cached {
     final list = widget.type == ProductType.grain ? AppData.grains : AppData.inputs;
-    return list.firstWhere((p) => p.id == widget.productId);
+    for (final product in list) {
+      if (product.id == widget.productId) return product;
+    }
+    return null;
   }
 
   Color get _accent => widget.type == ProductType.grain ? AppColors.grain : AppColors.input;
@@ -47,7 +149,14 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final product = _product;
+    final product = _detail;
+    // Enquanto o detalhe não chega (ou falhou), não há série para desenhar. O
+    // cabeçalho sai do cache, que já tem nome e valor atual — a tela abre
+    // preenchida e só o gráfico espera.
+    if (product == null || product.priceHistory.isEmpty) {
+      return _placeholder();
+    }
+
     final history = _visibleHistory(product);
     final values = history.map((e) => e.price).toList();
     final first = values.first;
@@ -131,16 +240,217 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
           _timeline(product),
           const SizedBox(height: 20),
 
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () => showUpdateValueDialog(context, product, () => setState(() {})),
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              label: const Text('Atualizar Valor'),
-              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+          // Corrigir o valor é ato do LANÇAMENTO, não do cadastro: só aparece
+          // enquanto houver Barter vigente, e o que ele muda é a tabela da
+          // versão — o `currentPrice` acima é o último valor publicado.
+          if (_editableInVersion(product))
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _correctInVersion(context, product),
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                label: Text('Corrigir no Barter ${AppData.currentVersion!.code}'),
+                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+              ),
+            ),
+          const SizedBox(height: 20),
+
+          // O CADASTRO do item vive aqui, junto do histórico dele, e não na
+          // lista: são atos raros (classificar, exigir por hectare, excluir) e
+          // ficavam repetidos em cada cartão de uma lista que se lê para
+          // consultar valor.
+          _registration(product),
+          const SizedBox(height: 16),
+        ],
+      ),
+    );
+  }
+
+  /// O cadastro do item: código, classe, exigência por hectare e a saída do
+  /// catálogo.
+  ///
+  /// Classe e exigência só existem para INSUMO — grão não pertence a classe
+  /// nem tem mínimo por hectare (ele é o pagamento, não a retirada).
+  Widget _registration(ProductModel product) {
+    final isInput = product.type == ProductType.input;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.tune, size: 18, color: AppColors.textMedium),
+                const SizedBox(width: 6),
+                Text('Cadastro do item',
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text('Unidade: ${product.unit}',
+                style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+            const Divider(height: 20),
+            _registrationRow(
+              icon: Icons.qr_code_2,
+              label: 'Código: ${product.codeLabel}',
+              active: product.sku != null,
+              action: 'Alterar',
+              onPressed: () => _editCode(product),
+            ),
+            if (isInput) ...[
+              const Divider(height: 20),
+              _registrationRow(
+                icon: Icons.category_outlined,
+                label: 'Classe: ${AppData.classById(product.classId)?.name ?? 'sem classe'}',
+                active: product.classId != null,
+                action: 'Alterar',
+                onPressed: () => showClassAssignDialog(context, product, () => setState(() {})),
+              ),
+              const Divider(height: 20),
+              _registrationRow(
+                icon: Icons.straighten,
+                label: product.requiredPerHa > 0
+                    ? 'Exigência: ${formatQty(product.requiredPerHa)} ${product.unit}/ha'
+                    : 'Sem exigência por área',
+                active: product.requiredPerHa > 0,
+                action: 'Definir',
+                onPressed: () => showRequiredPerHaDialog(context, product, () => setState(() {})),
+              ),
+            ],
+            const Divider(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _delete(product),
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Excluir do catálogo'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.denied,
+                  side: BorderSide(color: AppColors.denied.withValues(alpha: 0.5)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _registrationRow({
+    required IconData icon,
+    required String label,
+    required bool active,
+    required String action,
+    required VoidCallback onPressed,
+  }) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: AppColors.input),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: active ? AppColors.input : AppColors.textLight,
+              )),
+        ),
+        TextButton(
+          onPressed: onPressed,
+          style: TextButton.styleFrom(
+            foregroundColor: AppColors.input,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            minimumSize: const Size(0, 0),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          child: Text(action, style: const TextStyle(fontSize: 12)),
+        ),
+      ],
+    );
+  }
+
+  /// Tirar o item do catálogo. O histórico das permutas não se perde (cada item
+  /// guarda o próprio snapshot), mas o admin merece saber o tamanho do que já
+  /// passou por ali antes de decidir — e a tela precisa sair, porque o produto
+  /// que ela mostra deixou de existir.
+  void _delete(ProductModel product) {
+    confirmDeleteRegistration(
+      context,
+      title: product.type == ProductType.grain
+          ? 'Excluir ${brand.copy.grain}'
+          : 'Excluir ${brand.copy.input}',
+      name: product.name,
+      barterCount: AppData.barters
+          .where((b) => [...b.grains, ...b.inputs].any((i) => i.productId == product.id))
+          .length,
+      onConfirm: () async {
+        await AppData.deleteProduct(product);
+        if (!mounted) return;
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${product.name} saiu do catálogo.'),
+          backgroundColor: AppColors.approved,
+        ));
+      },
+    );
+  }
+
+  /// A tela antes de o detalhe chegar: o cabeçalho sai do cache (nome e valor
+  /// atual já estão lá) e o lugar do gráfico mostra o que está acontecendo —
+  /// carregando, sem histórico ou falhou, com como tentar de novo.
+  Widget _placeholder() {
+    final cached = _cached;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Relatório do Item')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (cached != null) ...[
+            _header(cached, cached.deltaPct, cached.deltaPct >= 0),
+            const SizedBox(height: 16),
+          ],
+          Card(
+            child: SizedBox(
+              height: 200,
+              child: Center(
+                child: _error != null
+                    ? Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_off, color: AppColors.textLight, size: 32),
+                          const SizedBox(height: 10),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              _error!,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontSize: 13, color: AppColors.textLight),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextButton(
+                            onPressed: () {
+                              setState(() => _error = null);
+                              _loadDetail();
+                            },
+                            child: const Text('Tentar de novo'),
+                          ),
+                        ],
+                      )
+                    : _detail != null
+                        ? Text('Sem histórico de valores para este item.',
+                            style: TextStyle(fontSize: 13, color: AppColors.textLight))
+                        : const CircularProgressIndicator(),
+              ),
             ),
           ),
-          const SizedBox(height: 16),
+          if (cached != null) ...[
+            const SizedBox(height: 16),
+            _registration(cached),
+          ],
         ],
       ),
     );
@@ -409,66 +719,11 @@ class _TimelineRow extends StatelessWidget {
   }
 }
 
-/// Diálogo de atualização de valor, compartilhado entre a lista e o relatório.
-Future<void> showUpdateValueDialog(BuildContext context, ProductModel product, VoidCallback onUpdated) {
-  final ctrl = TextEditingController(text: product.currentPrice.toStringAsFixed(2));
-  return showDialog(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Atualizar Valor'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(product.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-          Text('Valor atual: ${formatCurrency(product.currentPrice)}',
-              style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
-          const SizedBox(height: 16),
-          TextField(
-            controller: ctrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(labelText: 'Novo Valor (R\$)', prefixIcon: Icon(Icons.attach_money)),
-            autofocus: true,
-          ),
-          const SizedBox(height: 8),
-          Text('Este valor será usado como taxa de troca em todas as novas permutas.',
-              style: TextStyle(fontSize: 11, color: AppColors.textLight)),
-        ],
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-        ElevatedButton(
-          onPressed: () async {
-            final newPrice = double.tryParse(ctrl.text.replaceAll(',', '.'));
-            if (newPrice == null || newPrice <= 0) return;
-            try {
-              // O servidor reajusta e acrescenta o ponto na linha do tempo,
-              // registrando quem alterou (usuário logado).
-              await AppData.updatePrice(product, newPrice);
-              if (!ctx.mounted) return;
-              Navigator.pop(ctx);
-              onUpdated();
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Valor atualizado com sucesso!'),
-                backgroundColor: AppColors.approved,
-              ));
-            } on ApiException catch (e) {
-              if (ctx.mounted) showErrorSnack(ctx, e);
-            }
-          },
-          child: const Text('Salvar'),
-        ),
-      ],
-    ),
-  );
-}
-
-/// Diálogo para classificar um INSUMO em uma "pasta" (categoria). A pasta pode
-/// carregar uma regra de mínimo que trava o envio da permuta. Selecionar
-/// "Sem categoria" desvincula o insumo.
-Future<void> showCategoryAssignDialog(BuildContext context, ProductModel product, VoidCallback onUpdated) {
-  String? selected = product.categoryId;
+/// Diálogo para classificar um INSUMO em uma CLASSE. A classe pode carregar
+/// uma regra de mínimo que trava o envio da permuta. Selecionar "Sem classe"
+/// desvincula o insumo.
+Future<void> showClassAssignDialog(BuildContext context, ProductModel product, VoidCallback onUpdated) {
+  String? selected = product.classId;
   return showDialog(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -489,7 +744,7 @@ Future<void> showCategoryAssignDialog(BuildContext context, ProductModel product
               ),
               items: [
                 const DropdownMenuItem<String?>(value: null, child: Text('Sem categoria')),
-                ...AppData.categories.map((c) => DropdownMenuItem<String?>(
+                ...AppData.classes.map((c) => DropdownMenuItem<String?>(
                       value: c.id,
                       child: Text(c.name, overflow: TextOverflow.ellipsis),
                     )),

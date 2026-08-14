@@ -36,10 +36,20 @@ export class CreateProductDto {
   @IsOptional()
   @IsInt()
   @IsPositive()
-  categoryId?: number | null;
+  classId?: number | null;
+
+  /**
+   * CÓDIGO do item — o que se digita na busca e o que casa a planilha do
+   * fornecedor com o cadastro. Opcional na entrada: vazio, o servidor gera um
+   * (`INS-0007`), para nenhum item ficar sem código.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  sku?: string;
 }
 
-/** Edição de cadastro (nome/unidade/pasta/exigência). Preço tem rota própria. */
+/** Edição de cadastro (nome/unidade/código/classe/exigência). */
 export class UpdateProductDto {
   @IsOptional()
   @IsString()
@@ -58,18 +68,21 @@ export class UpdateProductDto {
   @Min(0)
   requiredPerHa?: number;
 
-  /** null desvincula o insumo da pasta. */
+  /** null desvincula o insumo da classe. */
   @IsOptional()
   @IsInt()
   @IsPositive()
-  categoryId?: number | null;
-}
+  classId?: number | null;
 
-/** Reajuste do valor de referência — sempre gera entrada no histórico. */
-export class UpdatePriceDto {
-  @IsNumber()
-  @IsPositive()
-  price!: number;
+  /**
+   * CÓDIGO do item — o que se digita na busca e o que casa a planilha do
+   * fornecedor com o cadastro. Opcional na entrada: vazio, o servidor gera um
+   * (`INS-0007`), para nenhum item ficar sem código.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  sku?: string;
 }
 
 /**

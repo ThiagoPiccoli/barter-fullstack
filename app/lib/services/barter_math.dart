@@ -20,18 +20,18 @@ class PricedInput {
   final String productId;
   final double quantity;
   final double unitPrice;
-  final String? categoryId;
+  final String? classId;
 
   const PricedInput({
     required this.productId,
     required this.quantity,
     required this.unitPrice,
-    this.categoryId,
+    this.classId,
   });
 }
 
-/// Como uma categoria calcula seu mínimo. Espelha o `ruleType` da API.
-enum CategoryRule { none, percentOfTotal, valuePerHa }
+/// Como uma classe calcula seu mínimo. Espelha o `ruleType` da API.
+enum ClassRule { none, percentOfTotal, valuePerHa }
 
 /// Arredondamento igual ao do servidor.
 ///
@@ -51,24 +51,24 @@ double _roundTo(double value, int factor) => (value * factor).round() / factor;
 double inputCost(Iterable<PricedInput> inputs) =>
     inputs.fold(0.0, (sum, item) => sum + item.quantity * item.unitPrice);
 
-/// Custo (R$) dos insumos que pertencem a uma categoria.
-double categorySpend(Iterable<PricedInput> inputs, String categoryId) =>
-    inputCost(inputs.where((item) => item.categoryId == categoryId));
+/// Custo (R$) dos insumos que pertencem a uma classe.
+double classSpend(Iterable<PricedInput> inputs, String classId) =>
+    inputCost(inputs.where((item) => item.classId == classId));
 
-/// Mínimo (R$) exigido por uma regra de categoria, dado o custo total da
+/// Mínimo (R$) exigido pela regra de uma classe, dado o custo total da
 /// permuta e a área (ha) do produtor. Devolve 0 quando não há exigência.
-double categoryRequired(
-  CategoryRule rule,
+double classRequired(
+  ClassRule rule,
   double ruleValue, {
   required double totalCost,
   required double areaHa,
 }) {
   switch (rule) {
-    case CategoryRule.percentOfTotal:
+    case ClassRule.percentOfTotal:
       return totalCost * ruleValue / 100;
-    case CategoryRule.valuePerHa:
+    case ClassRule.valuePerHa:
       return ruleValue * areaHa;
-    case CategoryRule.none:
+    case ClassRule.none:
       return 0;
   }
 }
@@ -78,6 +78,21 @@ double sacksToCover(double cost, double grainPrice) {
   if (grainPrice <= 0) return 0;
   return _roundTo(cost / grainPrice, 10000);
 }
+
+/// Um item já fechado da permuta: quanto, por qual preço e a que custo.
+abstract class CostedItem {
+  double get quantity;
+  double get unitValue;
+  double get unitCost;
+}
+
+/// Margem (R$) dos insumos de uma permuta: (preço − custo) × quantidade.
+/// É a conta que a meta de lucro do Barter acompanha, e o custo vem congelado
+/// no item — corrigir um custo hoje não reescreve o lucro de ontem.
+double itemsProfit(Iterable<CostedItem> items) => _roundTo(
+      items.fold(0.0, (sum, item) => sum + item.quantity * (item.unitValue - item.unitCost)),
+      100,
+    );
 
 /// Quantidade mínima obrigatória de um insumo: taxa por hectare × área (2 casas).
 double minQuantityFor(double requiredPerHa, double areaHa) {

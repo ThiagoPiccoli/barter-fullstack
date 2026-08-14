@@ -14,7 +14,7 @@ export interface PricedInput {
   productId: number;
   quantity: number;
   unitPrice: number;
-  categoryId: number | null;
+  classId: number | null;
 }
 
 /** Custo total dos insumos retirados (R$) — o valor que a permuta paga. */
@@ -22,16 +22,16 @@ export function inputCost(inputs: PricedInput[]): number {
   return inputs.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
 }
 
-/** Custo (R$) dos insumos que pertencem a uma categoria. */
-export function categorySpend(inputs: PricedInput[], categoryId: number): number {
-  return inputCost(inputs.filter((item) => item.categoryId === categoryId));
+/** Custo (R$) dos insumos que pertencem a uma classe. */
+export function classSpend(inputs: PricedInput[], classId: number): number {
+  return inputCost(inputs.filter((item) => item.classId === classId));
 }
 
 /**
- * Mínimo (R$) exigido por uma regra de categoria, dado o custo total da
+ * Mínimo (R$) exigido pela regra de uma classe, dado o custo total da
  * permuta e a área (ha) do produtor. Retorna 0 quando não há exigência.
  */
-export function categoryRequired(
+export function classRequired(
   rule: { ruleType: string; ruleValue: number },
   context: { totalCost: number; areaHa: number },
 ): number {
@@ -54,6 +54,31 @@ export function sacksToCover(cost: number, grainPrice: number): number {
     return 0;
   }
   return Math.round((cost / grainPrice) * 10_000) / 10_000;
+}
+
+/**
+ * Um item já fechado da permuta: quanto foi retirado, por qual preço e a que
+ * custo. É a forma dos snapshots do BarterItem.
+ */
+export interface CostedItem {
+  quantity: number;
+  unitValue: number;
+  unitCost: number;
+}
+
+/**
+ * Margem (R$) dos insumos de uma permuta: (preço − custo) × quantidade.
+ *
+ * O custo vem congelado no item, não da tabela da versão: o lucro apurado de
+ * uma permuta fechada não pode mudar porque alguém corrigiu um custo depois.
+ * É esta conta que a meta de lucro do Barter acompanha.
+ */
+export function itemsProfit(items: CostedItem[]): number {
+  const total = items.reduce(
+    (sum, item) => sum + item.quantity * (item.unitValue - item.unitCost),
+    0,
+  );
+  return Math.round(total * 100) / 100;
 }
 
 /**

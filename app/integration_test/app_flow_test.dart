@@ -114,10 +114,9 @@ void main() {
 
     await tester.tap(find.text('Helena Prado'));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Pagar com Grãos'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Soja'));
-    await tester.pumpAndSettle();
+    // Não existe mais etapa de grão: o Barter vigente já diz em que grão se
+    // paga, e a faixa no topo mostra qual versão está valendo.
+    expect(find.textContaining('Pagamento em'), findsOneWidget);
     await tester.tap(find.widgetWithText(ElevatedButton, 'Enviar Permuta'));
     await tester.pumpAndSettle();
     expect(find.text('Confirmar Permuta'), findsOneWidget);

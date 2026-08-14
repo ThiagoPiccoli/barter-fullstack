@@ -1,0 +1,50 @@
+# Distribuição do APK para os testadores.
+#
+# Mudou de lugar e de gatilho. Antes vivia em `app/.github/workflows/` — pasta
+# que o GitHub ignora, porque só lê a da RAIZ do repositório — e disparava
+# direto no push, sem que nenhum teste tivesse rodado.
+#
+# Agora ele espera o CI: `workflow_run` só entrega o APK depois que as duas
+# suítes passaram. Suíte vermelha não vira build na mão dos testadores.
+name: Build and distribute APK
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+jobs:
+  distribute:
+    # `completed` inclui falha e cancelamento: sem esta linha, o CI vermelho
+    # continuaria distribuindo — exatamente o que este arquivo veio impedir.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # O commit que o CI aprovou, não o topo da branch: entre a aprovação
+          # e este job pode ter entrado outro push, e o APK distribuído seria
+          # de um código que ninguém testou.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      - run: flutter build apk --release
+
+      - name: Distribute to Firebase App Distribution
+        run: |
+          npx firebase-tools appdistribution:distribute \
+            build/app/outputs/flutter-apk/app-release.apk \
+            --app 1:1030524586097:android:c613df505800ff5ae7b3d0 \
+            --groups "testers" \
+            --release-notes "Build automático a partir do commit ${{ github.event.workflow_run.head_sha }}" \
+            --token "${{ secrets.FIREBASE_TOKEN }}"

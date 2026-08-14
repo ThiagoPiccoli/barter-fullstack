@@ -1,3 +1,5 @@
+import '../services/barter_math.dart';
+
 /// Papéis do sistema. Os nomes técnicos são os MESMOS que a API grava em
 /// `user.role` (ver api/src/common/roles.ts) — este enum é a tradução deles
 /// para o app, e não uma segunda lista para manter em dia de cabeça.
@@ -195,12 +197,20 @@ BarterStatus _asStatus(dynamic v) {
 /// Item de uma permuta. Serve tanto para o grão entregue quanto para o
 /// insumo retirado. [unitValue] é o valor de referência (R$) por unidade no
 /// momento da permuta — é o que permite converter grão em insumo.
-class BarterItem {
+class BarterItem implements CostedItem {
   final String productId;
   final String productName;
   final String unit;
+  @override
   final double quantity;
+  @override
   final double unitValue;
+
+  /// Custo (R$) do item na versão do Barter em que a permuta foi fechada.
+  /// Congelado junto com o preço — é o que permite apurar a margem depois sem
+  /// que uma correção de custo reescreva permutas antigas.
+  @override
+  final double unitCost;
 
   const BarterItem({
     required this.productId,
@@ -208,6 +218,7 @@ class BarterItem {
     required this.unit,
     required this.quantity,
     required this.unitValue,
+    this.unitCost = 0,
   });
 
   factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
@@ -216,6 +227,7 @@ class BarterItem {
         unit: json['unit'] as String,
         quantity: _asDouble(json['quantity']),
         unitValue: _asDouble(json['unitValue']),
+        unitCost: _asDouble(json['unitCost']),
       );
 
   /// Valor total de troca deste item (R$).
@@ -227,6 +239,10 @@ class BarterItem {
 /// quantas sacas do grão escolhido cobrem esse custo — esse é o coração do escambo.
 class BarterModel {
   final String id;
+
+  /// Versão do Barter em que esta permuta foi fechada (ex.: "S2026.02").
+  /// Vazio nas permutas anteriores ao lançamento por versões.
+  final String versionCode;
   // Consultor: usuário que registrou a permuta (loga no app).
   final String consultantId;
   final String consultantName;
@@ -244,6 +260,7 @@ class BarterModel {
 
   const BarterModel({
     required this.id,
+    this.versionCode = '',
     required this.consultantId,
     required this.consultantName,
     required this.consultantBranch,
@@ -265,6 +282,7 @@ class BarterModel {
         .cast<Map<String, dynamic>>();
     return BarterModel(
       id: json['code'] as String,
+      versionCode: (json['versionCode'] ?? '') as String,
       consultantId: _asId(json['consultantId']),
       consultantName: json['consultantName'] as String,
       consultantBranch: (json['consultantBranch'] ?? '') as String,
@@ -296,6 +314,11 @@ class BarterModel {
   /// Folga do pagamento (R$): grãos pagos menos custo dos insumos. ~0 quando o
   /// pagamento cobre exatamente os insumos; nunca deveria ficar negativo.
   double get balance => grainCredit - inputCost;
+
+  /// Margem (R$) desta permuta: (preço − custo) × quantidade dos insumos, com
+  /// os valores congelados na versão em que ela foi fechada. É o que soma na
+  /// meta de lucro do Barter. Espelha `itemsProfit` do servidor.
+  double get profit => itemsProfit(inputs);
 
   /// Total de sacas do grão de pagamento a entregar.
   double get totalGrainQty => grains.fold(0.0, (sum, i) => sum + i.quantity);
@@ -357,18 +380,40 @@ class ProductModel {
   /// É a "taxa de câmbio" que converte o custo dos insumos em sacas de grão.
   final double currentPrice;
   final ProductType type;
+
+  /// A linha do tempo dos reajustes — **só vem preenchida no DETALHE**
+  /// (`GET /products/:id`, via [CatalogRepository.findProduct]).
+  ///
+  /// A listagem do catálogo não a carrega: ela ganha um ponto por produto a
+  /// cada versão do Barter publicada, e o app pede o catálogo inteiro a cada
+  /// login. Quem só precisa da variação e da contagem usa [firstPrice] e
+  /// [priceHistoryCount], que a listagem traz. Ver [hasFullHistory].
   final List<PriceHistoryEntry> priceHistory;
+
+  /// Primeiro valor já publicado deste produto, ou null quando não há
+  /// histórico. É contra ele que se mede a variação exibida na lista.
+  final double? firstPrice;
+
+  /// Quantos pontos a linha do tempo tem — inclusive quando ela não veio.
+  final int priceHistoryCount;
 
   /// Exigência mínima do insumo por hectare, definida pelo admin (0 = sem
   /// exigência). Em uma permuta, o produtor é obrigado a retirar no mínimo
   /// `requiredPerHa × areaHa` deste insumo. Só faz sentido para insumos.
   final double requiredPerHa;
 
-  /// "Pasta" a que o insumo pertence (ex.: Defensivos, Fertilizantes), ou null
-  /// se não foi classificado. Só faz sentido para insumos. A categoria pode
-  /// carregar uma regra de mínimo que trava o envio da permuta. Ver
-  /// [InputCategoryModel].
-  final String? categoryId;
+  /// CLASSE do insumo (ex.: Herbicidas, Sementes), ou null se ele ainda não
+  /// foi classificado. Só faz sentido para insumos. A classe pode carregar uma
+  /// regra de mínimo que trava o envio da permuta. Ver [ProductClassModel].
+  final String? classId;
+
+  /// CÓDIGO do item (`INS-0007`, `NPK-0414`). Todo produto tem um: quando o
+  /// admin não informa, o servidor gera. É por ele que a planilha do fornecedor
+  /// reconhece o item já cadastrado — e é por ele que se procura na busca.
+  final String? sku;
+
+  /// O código como se lê na tela (vazio vira travessão).
+  String get codeLabel => sku?.isNotEmpty == true ? sku! : '—';
 
   const ProductModel({
     required this.id,
@@ -377,88 +422,133 @@ class ProductModel {
     required this.currentPrice,
     required this.type,
     required this.priceHistory,
+    this.firstPrice,
+    this.priceHistoryCount = 0,
     this.requiredPerHa = 0,
-    this.categoryId,
+    this.classId,
+    this.sku,
   });
 
-  factory ProductModel.fromJson(Map<String, dynamic> json) => ProductModel(
-        id: _asId(json['id']),
-        name: json['name'] as String,
-        unit: json['unit'] as String,
-        currentPrice: _asDouble(json['currentPrice']),
-        type: json['type'] == 'grain' ? ProductType.grain : ProductType.input,
-        priceHistory: (json['priceHistory'] as List? ?? const [])
-            .cast<Map<String, dynamic>>()
-            .map(PriceHistoryEntry.fromJson)
-            .toList(),
-        requiredPerHa: _asDouble(json['requiredPerHa']),
-        categoryId: json['categoryId'] == null ? null : _asId(json['categoryId']),
-      );
+  /// O item atende a uma busca por nome OU por código.
+  ///
+  /// Mora aqui, e não em cada tela, porque a resposta precisa ser a mesma nas
+  /// três listas que buscam item — se uma delas esquecer o código, quem digita
+  /// "NPK-0414" acha o insumo numa tela e não acha na outra.
+  bool matches(String query) {
+    if (query.isEmpty) return true;
+    return name.toLowerCase().contains(query) ||
+        (sku ?? '').toLowerCase().contains(query);
+  }
+
+  /// A série inteira está em mãos? Falso no que veio da listagem — é o sinal
+  /// de que o relatório precisa buscar o detalhe antes de desenhar o gráfico.
+  bool get hasFullHistory => priceHistory.length == priceHistoryCount;
+
+  /// Variação (%) do último valor publicado contra o primeiro da linha do
+  /// tempo. Zero quando não há com que comparar. Funciona nas duas formas: a
+  /// listagem manda [firstPrice] pronto, o detalhe traz a série.
+  double get deltaPct {
+    final first = firstPrice ?? (priceHistory.isEmpty ? null : priceHistory.first.price);
+    if (first == null || first == 0) return 0;
+    return (currentPrice - first) / first * 100;
+  }
+
+  factory ProductModel.fromJson(Map<String, dynamic> json) {
+    final history = (json['priceHistory'] as List? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(PriceHistoryEntry.fromJson)
+        .toList();
+    return ProductModel(
+      id: _asId(json['id']),
+      name: json['name'] as String,
+      unit: json['unit'] as String,
+      currentPrice: _asDouble(json['currentPrice']),
+      type: json['type'] == 'grain' ? ProductType.grain : ProductType.input,
+      priceHistory: history,
+      // A listagem manda o resumo; o detalhe manda a série. Um sem o outro é o
+      // normal, e cada forma sabe se completar a partir do que recebeu.
+      firstPrice: json['firstPrice'] == null
+          ? (history.isEmpty ? null : history.first.price)
+          : _asDouble(json['firstPrice']),
+      priceHistoryCount: (json['priceHistoryCount'] as num?)?.toInt() ?? history.length,
+      requiredPerHa: _asDouble(json['requiredPerHa']),
+      classId: json['classId'] == null ? null : _asId(json['classId']),
+      sku: json['sku'] as String?,
+    );
+  }
 }
 
-/// Como a exigência mínima de uma categoria de insumos é calculada.
-enum CategoryRuleType {
-  /// Sem exigência: a categoria é só um agrupamento.
+/// Como a exigência mínima de uma classe é calculada.
+enum ClassRuleType {
+  /// Sem exigência: a classe é só a taxonomia do item.
   none,
 
-  /// A categoria deve representar no mínimo X% do custo total dos insumos da
-  /// permuta. [InputCategoryModel.ruleValue] é o percentual (ex.: 10 = 10%).
+  /// A classe deve representar no mínimo X% do custo total dos insumos da
+  /// permuta. [ProductClassModel.ruleValue] é o percentual (ex.: 10 = 10%).
   percentOfTotal,
 
-  /// A categoria exige no mínimo `ruleValue × areaHa` em valor (R$). Generaliza
-  /// o `requiredPerHa` por produto para a pasta inteira. [ruleValue] é R$/ha.
+  /// A classe exige no mínimo `ruleValue × areaHa` em valor (R$). Generaliza o
+  /// `requiredPerHa` por produto para a classe inteira. [ruleValue] é R$/ha.
   valuePerHa,
 }
 
-/// "Pasta" de insumos (ex.: Defensivos, Fertilizantes). Agrupa produtos e pode
-/// carregar uma regra de mínimo que funciona como gatilho para fechar a permuta:
-/// enquanto o mínimo da pasta não é atingido, o consultor não consegue enviar.
+/// CLASSE do produto (fungicidas, herbicidas, sementes, seguro agrícola…).
 ///
-/// A regra é o percentual/valor VIGENTE, editável pelo admin a cada período
-/// (ex.: 2% numa semana, 3% na outra). Não há calendário: o admin troca o valor
-/// quando o período vira.
-class InputCategoryModel {
+/// A lista é FIXA — vem da migration do servidor e não há como criar, renomear
+/// ou excluir uma classe pelo app. Ela é o vocabulário com que a cooperativa
+/// fala de mix e de exigência mínima, e enquanto era editável cada carga de
+/// planilha inventava uma pasta nova.
+///
+/// O que se altera é a REGRA de mínimo: enquanto ela não é atingida, o
+/// consultor não consegue enviar a permuta. É decisão comercial, e muda de
+/// safra para safra.
+class ProductClassModel {
   final String id;
-  final String name;
-  final CategoryRuleType ruleType;
 
-  /// Percentual (0–100) quando [ruleType] é [CategoryRuleType.percentOfTotal];
-  /// valor em R$ por hectare quando [CategoryRuleType.valuePerHa]; ignorado
-  /// quando [CategoryRuleType.none].
+  /// Identificador estável (`fungicidas`, `seguro-agricola`). O nome é o que a
+  /// pessoa lê; o slug é o que o código e a planilha reconhecem.
+  final String slug;
+  final String name;
+  final ClassRuleType ruleType;
+
+  /// Percentual (0–100) quando [ruleType] é [ClassRuleType.percentOfTotal];
+  /// valor em R$ por hectare quando [ClassRuleType.valuePerHa]; ignorado
+  /// quando [ClassRuleType.none].
   final double ruleValue;
 
-  const InputCategoryModel({
+  const ProductClassModel({
     required this.id,
+    required this.slug,
     required this.name,
-    this.ruleType = CategoryRuleType.none,
+    this.ruleType = ClassRuleType.none,
     this.ruleValue = 0,
   });
 
-  factory InputCategoryModel.fromJson(Map<String, dynamic> json) =>
-      InputCategoryModel(
+  factory ProductClassModel.fromJson(Map<String, dynamic> json) => ProductClassModel(
         id: _asId(json['id']),
+        slug: (json['slug'] ?? '') as String,
         name: json['name'] as String,
-        // Mesmo cuidado do status: uma regra que o app não conhece não pode
-        // derrubar o catálogo inteiro. Sem exigência é o padrão seguro — o
-        // servidor valida os mínimos de novo no envio da permuta.
-        ruleType: CategoryRuleType.values.firstWhere(
+        // Mesmo cuidado do status da permuta: uma regra que o app não conhece
+        // não pode derrubar a lista inteira. Sem exigência é o padrão seguro —
+        // o servidor valida os mínimos de novo no envio.
+        ruleType: ClassRuleType.values.firstWhere(
           (r) => r.name == json['ruleType'],
-          orElse: () => CategoryRuleType.none,
+          orElse: () => ClassRuleType.none,
         ),
         ruleValue: _asDouble(json['ruleValue']),
       );
 
-  /// A categoria tem uma exigência ativa que pode travar o envio da permuta.
-  bool get hasRule => ruleType != CategoryRuleType.none && ruleValue > 0;
+  /// A classe tem uma exigência ativa que pode travar o envio da permuta.
+  bool get hasRule => ruleType != ClassRuleType.none && ruleValue > 0;
 
   /// Descrição da regra para o ADMIN (pode citar R$, diferente do consultor).
   String get ruleLabelAdmin {
     switch (ruleType) {
-      case CategoryRuleType.none:
+      case ClassRuleType.none:
         return 'Sem exigência';
-      case CategoryRuleType.percentOfTotal:
+      case ClassRuleType.percentOfTotal:
         return 'Mín. ${_fmtNum(ruleValue)}% do valor total da permuta';
-      case CategoryRuleType.valuePerHa:
+      case ClassRuleType.valuePerHa:
         return 'Mín. R\$ ${_fmtNum(ruleValue)}/ha';
     }
   }
@@ -469,6 +559,264 @@ class InputCategoryModel {
         : v.toStringAsFixed(2);
     return s.replaceAll('.', ',');
   }
+}
+
+/// Em que unidade uma meta do Barter é medida. Espelha `GOAL_KIND` da API.
+enum GoalKind {
+  /// R$ em insumos retirados nas permutas aprovadas.
+  sales,
+
+  /// R$ de margem (preço − custo).
+  profit,
+
+  /// Sacas do grão comprometidas.
+  sacks,
+
+  /// Quantidade de permutas aprovadas.
+  barters,
+}
+
+/// Uma meta da versão com o quanto dela já foi cumprido.
+class BarterGoal {
+  final GoalKind kind;
+  final double target;
+  final double realized;
+
+  /// 0–1, já saturado pelo servidor (a barra não passa do fim).
+  final double ratio;
+  final bool met;
+
+  const BarterGoal({
+    required this.kind,
+    required this.target,
+    required this.realized,
+    required this.ratio,
+    required this.met,
+  });
+
+  factory BarterGoal.fromJson(Map<String, dynamic> json) => BarterGoal(
+        // Uma meta que este app ainda não conhece não pode derrubar a tela:
+        // ela cai em "vendas", que é a leitura mais comum, e o número segue
+        // aparecendo. Mesmo critério do status da permuta.
+        kind: GoalKind.values.firstWhere(
+          (kind) => kind.name == json['kind'],
+          orElse: () => GoalKind.sales,
+        ),
+        target: _asDouble(json['target']),
+        realized: _asDouble(json['realized']),
+        ratio: _asDouble(json['ratio']),
+        met: json['met'] == true,
+      );
+
+  String get label {
+    switch (kind) {
+      case GoalKind.sales:
+        return 'Vendas';
+      case GoalKind.profit:
+        return 'Lucro';
+      case GoalKind.sacks:
+        return 'Sacas';
+      case GoalKind.barters:
+        return 'Permutas';
+    }
+  }
+
+  /// Metas em R$ e metas em contagem se leem de formas diferentes.
+  bool get isMoney => kind == GoalKind.sales || kind == GoalKind.profit;
+}
+
+/// O valor de um insumo dentro de uma versão do Barter — uma linha da tabela.
+class VersionPriceModel {
+  final String productId;
+  final String productName;
+  final String unit;
+  final double price;
+  final double cost;
+
+  const VersionPriceModel({
+    required this.productId,
+    required this.productName,
+    required this.unit,
+    required this.price,
+    required this.cost,
+  });
+
+  factory VersionPriceModel.fromJson(Map<String, dynamic> json) => VersionPriceModel(
+        productId: _asId(json['productId']),
+        productName: json['productName'] as String,
+        unit: json['unit'] as String,
+        price: _asDouble(json['price']),
+        cost: _asDouble(json['cost']),
+      );
+
+  /// Margem unitária (R$). Só o admin vê — o consultor nunca lê valor.
+  double get margin => price - cost;
+}
+
+/// O BARTER LANÇADO: uma versão da safra (ex.: S2026.02).
+///
+/// É ela que responde "por quanto se permuta agora": o valor da saca do grão e
+/// a tabela de valores dos insumos. O consultor não escolhe grão nem tabela —
+/// recebe esta aqui pronta, e sem ela não existe permuta nova.
+class BarterVersionModel {
+  final String id;
+  final String code;
+  final int number;
+  final String seasonCode;
+  final String seasonName;
+  final String grainId;
+  final String grainName;
+  final String grainUnit;
+
+  /// Valor (R$) da saca do grão nesta versão — a taxa que converte o custo dos
+  /// insumos em sacas.
+  final double grainPrice;
+
+  final String status;
+
+  /// Aceita permuta agora? Quem decide é o servidor (versão ativa e dentro da
+  /// vigência), para o app não manter uma segunda cópia da regra.
+  final bool isOpen;
+
+  final DateTime startsAt;
+  final DateTime? endsAt;
+  final DateTime? closedAt;
+  final String? closedBy;
+  final String? sourceFile;
+  final String? note;
+
+  /// A tabela de valores desta versão, por produto.
+  final List<VersionPriceModel> prices;
+
+  /// Metas e realizado — só chegam para quem gerencia o Barter.
+  final List<BarterGoal> goals;
+  final double realizedSales;
+  final double realizedProfit;
+  final double realizedSacks;
+  final int realizedBarters;
+
+  const BarterVersionModel({
+    required this.id,
+    required this.code,
+    required this.number,
+    required this.seasonCode,
+    required this.seasonName,
+    required this.grainId,
+    required this.grainName,
+    required this.grainUnit,
+    required this.grainPrice,
+    required this.status,
+    required this.isOpen,
+    required this.startsAt,
+    required this.prices,
+    this.endsAt,
+    this.closedAt,
+    this.closedBy,
+    this.sourceFile,
+    this.note,
+    this.goals = const [],
+    this.realizedSales = 0,
+    this.realizedProfit = 0,
+    this.realizedSacks = 0,
+    this.realizedBarters = 0,
+  });
+
+  factory BarterVersionModel.fromJson(Map<String, dynamic> json) {
+    final realized = (json['realized'] as Map<String, dynamic>?) ?? const {};
+    return BarterVersionModel(
+      id: _asId(json['id']),
+      code: json['code'] as String,
+      number: (json['number'] as num?)?.toInt() ?? 0,
+      seasonCode: (json['seasonCode'] ?? '') as String,
+      seasonName: (json['seasonName'] ?? '') as String,
+      grainId: _asId(json['grainId']),
+      grainName: (json['grainName'] ?? '') as String,
+      grainUnit: (json['grainUnit'] ?? '') as String,
+      grainPrice: _asDouble(json['grainPrice']),
+      status: (json['status'] ?? 'closed') as String,
+      isOpen: json['isOpen'] == true,
+      startsAt: _asDate(json['startsAt']),
+      endsAt: _asDateOrNull(json['endsAt']),
+      closedAt: _asDateOrNull(json['closedAt']),
+      closedBy: json['closedBy'] as String?,
+      sourceFile: json['sourceFile'] as String?,
+      note: json['note'] as String?,
+      prices: (json['prices'] as List? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(VersionPriceModel.fromJson)
+          .toList(),
+      goals: (json['goals'] as List? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(BarterGoal.fromJson)
+          .toList(),
+      realizedSales: _asDouble(realized['sales']),
+      realizedProfit: _asDouble(realized['profit']),
+      realizedSacks: _asDouble(realized['sacks']),
+      realizedBarters: (realized['barters'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  /// O valor de um insumo nesta versão, ou null se ele não está na tabela —
+  /// e um insumo fora da tabela não é permutável nesta gestão.
+  VersionPriceModel? priceOf(String productId) {
+    for (final price in prices) {
+      if (price.productId == productId) return price;
+    }
+    return null;
+  }
+
+  /// Alguma meta foi atingida? É o aviso de "hora de encerrar" para o admin —
+  /// o Barter não se fecha sozinho.
+  bool get anyGoalMet => goals.any((goal) => goal.met);
+
+  /// Rótulo curto para a faixa do consultor: "S2026.02 • paga em soja".
+  String get shortLabel => '$code • paga em ${grainName.toLowerCase()}';
+}
+
+/// A SAFRA: a temporada em que o Barter acontece, sobre um grão. Carrega as
+/// versões lançadas nela, da mais recente para a mais antiga.
+class SeasonModel {
+  final String id;
+  final String code;
+  final String name;
+  final int year;
+  final String grainId;
+  final String grainName;
+  final String status;
+  final DateTime openedAt;
+  final DateTime? closedAt;
+  final List<BarterVersionModel> versions;
+
+  const SeasonModel({
+    required this.id,
+    required this.code,
+    required this.name,
+    required this.year,
+    required this.grainId,
+    required this.grainName,
+    required this.status,
+    required this.openedAt,
+    required this.versions,
+    this.closedAt,
+  });
+
+  factory SeasonModel.fromJson(Map<String, dynamic> json) => SeasonModel(
+        id: _asId(json['id']),
+        code: json['code'] as String,
+        name: json['name'] as String,
+        year: (json['year'] as num?)?.toInt() ?? 0,
+        grainId: _asId(json['grainId']),
+        grainName: (json['grainName'] ?? '') as String,
+        status: (json['status'] ?? 'closed') as String,
+        openedAt: _asDate(json['openedAt']),
+        closedAt: _asDateOrNull(json['closedAt']),
+        versions: (json['versions'] as List? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(BarterVersionModel.fromJson)
+            .toList(),
+      );
+
+  bool get isOpen => status == 'open';
 }
 
 class PriceHistoryEntry {

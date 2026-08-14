@@ -9,11 +9,24 @@ import 'package:agrobarter_app/services/barter_math.dart';
 /// senão a tela passa a prometer um número e o servidor a gravar outro.
 ///
 /// Ao mexer em qualquer um dos dois, mexa no outro junto.
+/// Um item fechado da permuta, na forma mínima que a margem exige. No app real
+/// quem cumpre este contrato é o `BarterItem`.
+class _Item implements CostedItem {
+  @override
+  final double quantity;
+  @override
+  final double unitValue;
+  @override
+  final double unitCost;
+
+  const _Item({required this.quantity, required this.unitValue, required this.unitCost});
+}
+
 void main() {
   // Referência: permuta PRM-2026-001 do dataset de demonstração.
   const inputs = [
-    PricedInput(productId: '5', quantity: 300, unitPrice: 115.0, categoryId: '1'), // NPK
-    PricedInput(productId: '6', quantity: 150, unitPrice: 18.9, categoryId: '2'), // Glifosato
+    PricedInput(productId: '5', quantity: 300, unitPrice: 115.0, classId: '1'), // NPK
+    PricedInput(productId: '6', quantity: 150, unitPrice: 18.9, classId: '2'), // Glifosato
   ];
 
   test('custo dos insumos é a soma de quantidade × preço', () {
@@ -31,22 +44,36 @@ void main() {
     expect(sacksToCover(1000, -5), 0);
   });
 
-  test('gasto por categoria considera apenas os insumos da pasta', () {
-    expect(categorySpend(inputs, '1'), 34500.0);
-    expect(categorySpend(inputs, '2'), 2835.0);
-    expect(categorySpend(inputs, '99'), 0);
+  /* Espelhado em api/src/barters/barter-math.spec.ts — os MESMOS números. */
+  test('margem é (preço − custo) × quantidade, a 2 casas', () {
+    expect(
+      itemsProfit(const [
+        _Item(quantity: 300, unitValue: 115.0, unitCost: 89.7),
+        _Item(quantity: 150, unitValue: 18.9, unitCost: 14.74),
+      ]),
+      8214,
+    );
+    // Sem custo informado, a margem é o preço inteiro.
+    expect(itemsProfit(const [_Item(quantity: 10, unitValue: 12.5, unitCost: 0)]), 125);
+    expect(itemsProfit(const []), 0);
+  });
+
+  test('gasto por classe considera apenas os insumos dela', () {
+    expect(classSpend(inputs, '1'), 34500.0);
+    expect(classSpend(inputs, '2'), 2835.0);
+    expect(classSpend(inputs, '99'), 0);
   });
 
   test('mínimo percentual do total', () {
     expect(
-      categoryRequired(CategoryRule.percentOfTotal, 30, totalCost: 37335, areaHa: 120),
+      classRequired(ClassRule.percentOfTotal, 30, totalCost: 37335, areaHa: 120),
       11200.5,
     );
   });
 
   test('mínimo por hectare multiplica pela área do produtor', () {
-    expect(categoryRequired(CategoryRule.valuePerHa, 50, totalCost: 37335, areaHa: 120), 6000);
-    expect(categoryRequired(CategoryRule.none, 10, totalCost: 37335, areaHa: 120), 0);
+    expect(classRequired(ClassRule.valuePerHa, 50, totalCost: 37335, areaHa: 120), 6000);
+    expect(classRequired(ClassRule.none, 10, totalCost: 37335, areaHa: 120), 0);
   });
 
   test('quantidade mínima de insumo = taxa por hectare × área', () {

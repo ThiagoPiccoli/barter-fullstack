@@ -27,15 +27,15 @@ export class BarterInputDto {
  * Registro de permuta. Repare que NÃO há preços no payload: o cliente escolhe
  * produtos e quantidades; quem precifica e calcula as sacas é o servidor
  * (campos extras são descartados pelo whitelist do ValidationPipe).
+ *
+ * Também não há `grainId`: o grão é o da safra, e a versão vigente do Barter é
+ * quem diz por quanto vale a saca. Escolher grão era do tempo em que a permuta
+ * carregava a própria cotação.
  */
 export class CreateBarterDto {
   @IsInt()
   @IsPositive()
   producerId!: number;
-
-  @IsInt()
-  @IsPositive()
-  grainId!: number;
 
   @IsArray()
   @ArrayMinSize(1)

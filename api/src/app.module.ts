@@ -7,7 +7,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { BartersModule } from './barters/barters.module';
-import { CategoriesModule } from './categories/categories.module';
+import { ClassesModule } from './classes/classes.module';
 import { EnvelopeInterceptor } from './common/envelope.interceptor';
 import { AllExceptionsFilter } from './common/exception.filter';
 import { AccessGuard } from './common/access.guard';
@@ -16,6 +16,7 @@ import { buildValidationPipe } from './common/validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProducersModule } from './producers/producers.module';
 import { ProductsModule } from './products/products.module';
+import { SeasonsModule } from './seasons/seasons.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -27,8 +28,9 @@ import { UsersModule } from './users/users.module';
     AuthModule,
     ProducersModule,
     UsersModule,
-    CategoriesModule,
+    ClassesModule,
     ProductsModule,
+    SeasonsModule,
     BartersModule,
   ],
   controllers: [AppController],

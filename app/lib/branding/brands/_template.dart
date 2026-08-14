@@ -96,6 +96,10 @@ const Brand templateBrand = Brand(
   // Vocabulário. Trocar `consultor` por `vendedor` ou `RTV` aqui renomeia o
   // papel em todas as telas de uma vez.
   copy: BrandCopy(
+    program: 'barter',
+    programTitle: 'Barter',
+    season: 'safra',
+    seasonTitle: 'Safra',
     barter: 'permuta',
     barterTitle: 'Permuta',
     barterPlural: 'permutas',

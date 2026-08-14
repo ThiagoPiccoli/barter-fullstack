@@ -1,7 +1,8 @@
 import {
-  categoryRequired,
-  categorySpend,
+  classRequired,
+  classSpend,
   inputCost,
+  itemsProfit,
   minQuantityFor,
   sacksToCover,
   type PricedInput,
@@ -13,8 +14,8 @@ import {
  */
 describe('BarterMath', () => {
   const inputs: PricedInput[] = [
-    { productId: 5, quantity: 300, unitPrice: 115.0, categoryId: 1 }, // NPK
-    { productId: 6, quantity: 150, unitPrice: 18.9, categoryId: 2 }, // Glifosato
+    { productId: 5, quantity: 300, unitPrice: 115.0, classId: 1 }, // NPK
+    { productId: 6, quantity: 150, unitPrice: 18.9, classId: 2 }, // Glifosato
   ];
 
   it('custo dos insumos é a soma de quantidade × preço', () => {
@@ -32,22 +33,35 @@ describe('BarterMath', () => {
     expect(sacksToCover(1000, -5)).toBe(0);
   });
 
-  it('gasto por categoria considera apenas os insumos da pasta', () => {
-    expect(categorySpend(inputs, 1)).toBe(34500.0);
-    expect(categorySpend(inputs, 2)).toBe(2835.0);
-    expect(categorySpend(inputs, 99)).toBe(0);
+  /* Espelhado em app/test/barter_math_test.dart — os MESMOS números. */
+  it('margem é (preço − custo) × quantidade, a 2 casas', () => {
+    expect(
+      itemsProfit([
+        { quantity: 300, unitValue: 115.0, unitCost: 89.7 },
+        { quantity: 150, unitValue: 18.9, unitCost: 14.74 },
+      ]),
+    ).toBe(8214);
+    // Sem custo informado, a margem é o preço inteiro.
+    expect(itemsProfit([{ quantity: 10, unitValue: 12.5, unitCost: 0 }])).toBe(125);
+    expect(itemsProfit([])).toBe(0);
+  });
+
+  it('gasto por classe considera apenas os insumos dela', () => {
+    expect(classSpend(inputs, 1)).toBe(34500.0);
+    expect(classSpend(inputs, 2)).toBe(2835.0);
+    expect(classSpend(inputs, 99)).toBe(0);
   });
 
   it('mínimo percentual do total', () => {
     const rule = { ruleType: 'percentOfTotal', ruleValue: 30 };
-    expect(categoryRequired(rule, { totalCost: 37335, areaHa: 120 })).toBe(11200.5);
+    expect(classRequired(rule, { totalCost: 37335, areaHa: 120 })).toBe(11200.5);
   });
 
   it('mínimo por hectare multiplica pela área do produtor', () => {
     const rule = { ruleType: 'valuePerHa', ruleValue: 50 };
-    expect(categoryRequired(rule, { totalCost: 37335, areaHa: 120 })).toBe(6000);
+    expect(classRequired(rule, { totalCost: 37335, areaHa: 120 })).toBe(6000);
     expect(
-      categoryRequired({ ruleType: 'none', ruleValue: 10 }, { totalCost: 37335, areaHa: 120 }),
+      classRequired({ ruleType: 'none', ruleValue: 10 }, { totalCost: 37335, areaHa: 120 }),
     ).toBe(0);
   });
 

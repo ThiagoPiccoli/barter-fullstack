@@ -1,4 +1,7 @@
 PODS:
+  - file_picker_darwin (1.0.0):
+    - Flutter
+    - FlutterMacOS
   - Flutter (1.0.0)
   - flutter_secure_storage_darwin (10.0.0):
     - Flutter
@@ -9,12 +12,15 @@ PODS:
     - Flutter
 
 DEPENDENCIES:
+  - file_picker_darwin (from `.symlinks/plugins/file_picker_darwin/darwin`)
   - Flutter (from `Flutter`)
   - flutter_secure_storage_darwin (from `.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - integration_test (from `.symlinks/plugins/integration_test/ios`)
   - printing (from `.symlinks/plugins/printing/ios`)
 
 EXTERNAL SOURCES:
+  file_picker_darwin:
+    :path: ".symlinks/plugins/file_picker_darwin/darwin"
   Flutter:
     :path: Flutter
   flutter_secure_storage_darwin:
@@ -25,11 +31,12 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/printing/ios"
 
 SPEC CHECKSUMS:
+  file_picker_darwin: 65c8ed1d70cc2ea0b81ae1840db93f8d9c051d19
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_secure_storage_darwin: acdb3f316ed05a3e68f856e0353b133eec373a23
   integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
   printing: 54ff03f28fe9ba3aa93358afb80a8595a071dd07
 
-PODFILE CHECKSUM: 3c63482e143d1b91d2d2560aee9fb04ecc74ac7e
+PODFILE CHECKSUM: 1917361e6e9156b462f7be2fe3932e8c97bcf5a6
 
 COCOAPODS: 1.16.2

@@ -15,6 +15,14 @@ export const AUDIT_ACTION = {
   userPasswordReset: 'user.password-reset',
   userDeleted: 'user.deleted',
   barterReviewed: 'barter.reviewed',
+  // O lançamento do Barter decide POR QUANTO a cooperativa troca insumo por
+  // grão: publicar uma versão, corrigir um preço dentro dela e encerrá-la
+  // valem tanto quanto aprovar uma permuta, e pelo mesmo motivo — é dinheiro.
+  seasonOpened: 'season.opened',
+  seasonClosed: 'season.closed',
+  versionPublished: 'barter.version-published',
+  versionPriceChanged: 'barter.price-changed',
+  versionClosed: 'barter.version-closed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];
@@ -22,7 +30,7 @@ export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];
 export interface AuditEntry {
   actor: User;
   action: AuditAction;
-  targetType: 'user' | 'barter';
+  targetType: 'user' | 'barter' | 'season' | 'version';
   targetId?: number | null;
   targetLabel: string;
   detail?: string;

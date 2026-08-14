@@ -14,9 +14,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // Ordem respeita os FKs (filhos primeiro).
   await prisma.barterItem.deleteMany();
   await prisma.barter.deleteMany();
+  await prisma.versionPrice.deleteMany();
+  await prisma.barterVersion.deleteMany();
+  await prisma.season.deleteMany();
   await prisma.priceHistoryEntry.deleteMany();
   await prisma.product.deleteMany();
-  await prisma.inputCategory.deleteMany();
   await prisma.producer.deleteMany();
   await prisma.accessToken.deleteMany();
   await prisma.auditLog.deleteMany();
@@ -194,16 +196,30 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     createdAt: at(2022, 6, 14),
   });
 
-  /* ── Pastas de insumos (regras vigentes) ──────────────────────────── */
-  const fertilizantes = await prisma.inputCategory.create({
-    data: { name: 'Fertilizantes', ruleType: 'percentOfTotal', ruleValue: 30 },
-  });
-  const defensivos = await prisma.inputCategory.create({
-    data: { name: 'Defensivos', ruleType: 'percentOfTotal', ruleValue: 10 },
-  });
-  const sementes = await prisma.inputCategory.create({
-    data: { name: 'Sementes', ruleType: 'none', ruleValue: 0 },
-  });
+  /* ── Classes de produto ───────────────────────────────────────────── */
+  //
+  // A LISTA não nasce aqui: ela vem da migration, igual em dev, teste e
+  // produção — classe é vocabulário do negócio, não dado de demonstração. O
+  // que o dataset faz é ligar as REGRAS de mínimo vigentes e pegar os ids.
+  const classOf = async (slug: string) => {
+    const found = await prisma.productClass.findUnique({ where: { slug } });
+    if (!found) throw new Error(`Classe ${slug} não existe — rode as migrations.`);
+    return found;
+  };
+  const withRule = async (slug: string, ruleType: string, ruleValue: number) =>
+    prisma.productClass.update({ where: { slug }, data: { ruleType, ruleValue } });
+
+  // Todas voltam a "sem exigência" antes: re-semear não pode herdar a regra
+  // que um teste anterior deixou ligada.
+  await prisma.productClass.updateMany({ data: { ruleType: 'none', ruleValue: 0 } });
+  await withRule('fertilizantes', 'percentOfTotal', 30);
+  await withRule('herbicidas', 'percentOfTotal', 10);
+
+  const fertilizantes = await classOf('fertilizantes');
+  const herbicidas = await classOf('herbicidas');
+  const inseticidas = await classOf('inseticidas');
+  const fungicidas = await classOf('fungicidas');
+  const sementes = await classOf('sementes');
 
   /* ── Produtos + histórico de valores (dez/2025..jun/2026, dia 5) ──── */
   const historyDates = [
@@ -217,87 +233,105 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   ];
 
   const catalog: {
+    sku: string;
     name: string;
     unit: string;
     type: 'grain' | 'input';
     prices: number[];
     requiredPerHa?: number;
-    categoryId?: number;
+    classId?: number;
   }[] = [
     {
+      sku: 'GRA-0001',
       name: 'Soja',
       unit: 'saca 60kg',
       type: 'grain',
       prices: [142.0, 144.5, 145.0, 147.2, 146.8, 149.3, 148.5],
     },
     {
+      sku: 'GRA-0002',
       name: 'Milho',
       unit: 'saca 60kg',
       type: 'grain',
       prices: [58.0, 59.5, 60.0, 61.2, 63.0, 62.8, 62.3],
     },
     {
+      sku: 'GRA-0003',
       name: 'Trigo',
       unit: 'saca 60kg',
       type: 'grain',
       prices: [80.0, 81.5, 82.5, 84.0, 83.2, 86.1, 85.0],
     },
     {
+      sku: 'GRA-0004',
       name: 'Aveia',
       unit: 'saca 40kg',
       type: 'grain',
       prices: [43.0, 43.8, 44.5, 45.2, 44.9, 46.1, 45.8],
     },
     {
+      sku: 'NPK-0414',
       name: 'Fertilizante NPK 04-14-08',
       unit: 'saco 50kg',
       type: 'input',
       prices: [108.0, 110.5, 112.0, 113.5, 116.2, 114.3, 115.0],
       requiredPerHa: 0.4,
-      categoryId: fertilizantes.id,
+      classId: fertilizantes.id,
     },
     {
+      sku: 'GLI-480',
       name: 'Herbicida Glifosato 480g/L',
       unit: 'litro',
       type: 'input',
       prices: [20.5, 20.1, 19.5, 19.1, 18.4, 18.7, 18.9],
       requiredPerHa: 2.5,
-      categoryId: defensivos.id,
+      classId: herbicidas.id,
     },
     {
+      sku: 'LAM-050',
       name: 'Inseticida Lambda-cialotrina',
       unit: 'litro',
       type: 'input',
       prices: [39.0, 39.8, 40.5, 41.2, 42.5, 41.6, 42.0],
       requiredPerHa: 0.15,
-      categoryId: defensivos.id,
+      classId: inseticidas.id,
     },
     {
+      sku: 'AZO-200',
       name: 'Fungicida Azoxistrobina',
       unit: 'litro',
       type: 'input',
       prices: [82.0, 83.5, 85.0, 86.2, 88.1, 86.9, 87.5],
-      categoryId: defensivos.id,
+      classId: fungicidas.id,
     },
     {
+      sku: 'SEM-7062',
       name: 'Semente Soja RR – TMG 7062',
       unit: 'saco 40kg',
       type: 'input',
       prices: [300.0, 305.0, 310.0, 312.0, 318.0, 322.0, 320.0],
-      categoryId: sementes.id,
+      classId: sementes.id,
     },
   ];
 
-  const products: { id: number; name: string; unit: string; price: number }[] = [];
+  const products: {
+    id: number;
+    name: string;
+    unit: string;
+    price: number;
+    type: 'grain' | 'input';
+    prices: number[];
+  }[] = [];
   for (const item of catalog) {
     const product = await prisma.product.create({
       data: {
+        sku: item.sku,
         name: item.name,
         unit: item.unit,
         type: item.type,
         currentPrice: item.prices[item.prices.length - 1],
         requiredPerHa: item.requiredPerHa ?? 0,
-        categoryId: item.categoryId ?? null,
+        classId: item.classId ?? null,
         priceHistory: {
           create: item.prices.map((price, i) => ({
             price,
@@ -313,10 +347,151 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       name: product.name,
       unit: product.unit,
       price: product.currentPrice,
+      type: item.type,
+      prices: item.prices,
     });
   }
 
   const [soja, milho, trigo, , npk, glifosato, lambda, fungicida, semente] = products;
+
+  /* ── Safras e versões do Barter ───────────────────────────────────── */
+  //
+  // O dataset conta a história do modelo: duas safras já encerradas (é delas
+  // que vêm as permutas antigas pagas em milho e trigo) e a safra de soja
+  // ABERTA, com duas versões — a primeira encerrada quando os valores foram
+  // reajustados, a segunda vigente. É nela que uma permuta nova cai.
+  const inputs = products.filter((product) => product.type === 'input');
+
+  /** Margem de demonstração: o custo é 78% do preço de venda. */
+  const costOf = (price: number) => Math.round(price * 0.78 * 100) / 100;
+
+  const mkVersion = async (args: {
+    seasonId: number;
+    number: number;
+    code: string;
+    status: 'active' | 'closed';
+    grainPrice: number;
+    priceIndex: number;
+    startsAt: Date;
+    closedAt?: Date;
+    note: string;
+    targets?: { sales?: number; profit?: number; sacks?: number; barters?: number };
+  }) =>
+    prisma.barterVersion.create({
+      data: {
+        seasonId: args.seasonId,
+        number: args.number,
+        code: args.code,
+        status: args.status,
+        grainPrice: args.grainPrice,
+        startsAt: args.startsAt,
+        closedAt: args.closedAt ?? null,
+        closedBy: args.closedAt ? admin.fullName : null,
+        closedById: args.closedAt ? admin.id : null,
+        note: args.note,
+        targetSales: args.targets?.sales ?? null,
+        targetProfit: args.targets?.profit ?? null,
+        targetSacks: args.targets?.sacks ?? null,
+        targetBarters: args.targets?.barters ?? null,
+        prices: {
+          create: inputs.map((product) => ({
+            productId: product.id,
+            productName: product.name,
+            unit: product.unit,
+            price: product.prices[args.priceIndex],
+            cost: costOf(product.prices[args.priceIndex]),
+          })),
+        },
+      },
+    });
+
+  const trigoSeason = await prisma.season.create({
+    data: {
+      code: 'T2025',
+      name: 'Trigo 2025',
+      year: 2025,
+      grainId: trigo.id,
+      grainName: trigo.name,
+      grainUnit: trigo.unit,
+      status: 'closed',
+      openedAt: at(2025, 12, 1),
+      closedAt: at(2026, 3, 31),
+    },
+  });
+  const trigoVersion = await mkVersion({
+    seasonId: trigoSeason.id,
+    number: 1,
+    code: 'T2025.01',
+    status: 'closed',
+    grainPrice: trigo.price,
+    priceIndex: 6,
+    startsAt: at(2025, 12, 1),
+    closedAt: at(2026, 3, 31),
+    note: 'Tabela de abertura da safra de trigo.',
+  });
+
+  const milhoSeason = await prisma.season.create({
+    data: {
+      code: 'M2026',
+      name: 'Milho 2026',
+      year: 2026,
+      grainId: milho.id,
+      grainName: milho.name,
+      grainUnit: milho.unit,
+      status: 'closed',
+      openedAt: at(2026, 1, 15),
+      closedAt: at(2026, 6, 30),
+    },
+  });
+  const milhoVersion = await mkVersion({
+    seasonId: milhoSeason.id,
+    number: 1,
+    code: 'M2026.01',
+    status: 'closed',
+    grainPrice: milho.price,
+    priceIndex: 6,
+    startsAt: at(2026, 1, 15),
+    closedAt: at(2026, 6, 30),
+    note: 'Safra de milho encerrada por atingir a meta de vendas.',
+  });
+
+  const sojaSeason = await prisma.season.create({
+    data: {
+      code: 'S2026',
+      name: 'Soja 2026',
+      year: 2026,
+      grainId: soja.id,
+      grainName: soja.name,
+      grainUnit: soja.unit,
+      status: 'open',
+      openedAt: at(2026, 1, 5),
+    },
+  });
+  // A primeira tabela da soja viveu três dias: foi publicada com a cotação
+  // antiga e corrigida logo em seguida. É de propósito que ela não tenha
+  // nenhuma permuta — é o caso de quem republica antes de alguém usar.
+  await mkVersion({
+    seasonId: sojaSeason.id,
+    number: 1,
+    code: 'S2026.01',
+    status: 'closed',
+    grainPrice: 145.0,
+    priceIndex: 2,
+    startsAt: at(2026, 1, 5),
+    closedAt: at(2026, 1, 8),
+    note: 'Tabela de abertura — corrigida três dias depois.',
+  });
+  const sojaV2 = await mkVersion({
+    seasonId: sojaSeason.id,
+    number: 2,
+    code: 'S2026.02',
+    status: 'active',
+    grainPrice: soja.price,
+    priceIndex: 6,
+    startsAt: at(2026, 1, 8),
+    note: 'Tabela vigente da safra de soja.',
+    targets: { sales: 500000, profit: 110000, sacks: 5000, barters: 40 },
+  });
 
   /* ── Permutas históricas (mesmos números do mock) ─────────────────── */
   type Ref = (typeof products)[number];
@@ -327,6 +502,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     unit: p.unit,
     quantity,
     unitValue,
+    // O grão é a moeda da permuta, não uma compra: ele não tem custo.
+    unitCost: 0,
   });
   const inputItem = (p: Ref, quantity: number, unitValue: number) => ({
     productId: p.id,
@@ -335,11 +512,13 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     unit: p.unit,
     quantity,
     unitValue,
+    unitCost: costOf(unitValue),
   });
 
   const barters = [
     {
       code: 'PRM-2026-001',
+      version: sojaV2,
       consultant: joao,
       producer: antonio,
       status: 'approved',
@@ -354,6 +533,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-002',
+      version: sojaV2,
       consultant: ana,
       producer: helena,
       status: 'pending',
@@ -366,6 +546,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-003',
+      version: milhoVersion,
       consultant: roberto,
       producer: joaquim,
       status: 'denied',
@@ -376,6 +557,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-004',
+      version: sojaV2,
       consultant: ana,
       producer: claudia,
       status: 'approved',
@@ -391,6 +573,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-005',
+      version: sojaV2,
       consultant: joao,
       producer: sebastiao,
       status: 'pending',
@@ -403,6 +586,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-006',
+      version: sojaV2,
       consultant: maria,
       producer: osmar,
       status: 'approved',
@@ -417,6 +601,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-007',
+      version: milhoVersion,
       consultant: lucas,
       producer: vanessa,
       status: 'pending',
@@ -429,6 +614,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-008',
+      version: trigoVersion,
       consultant: roberto,
       producer: joaquim,
       status: 'approved',
@@ -447,6 +633,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     await prisma.barter.create({
       data: {
         code: entry.code,
+        versionId: entry.version.id,
+        versionCode: entry.version.code,
         consultantId: entry.consultant.id,
         consultantName: entry.consultant.fullName,
         consultantBranch: entry.consultant.branch ?? '',

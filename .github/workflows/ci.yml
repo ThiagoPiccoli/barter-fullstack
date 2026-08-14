@@ -1,0 +1,88 @@
+# Portão de qualidade do monorepo.
+#
+# Existe porque as suítes já estavam escritas e nada as obrigava a passar: dava
+# para empurrar código vermelho para a `main` e, pior, o APK saía assim mesmo e
+# ia para os testadores. Aqui as duas pontas rodam a cada push e a cada PR, e a
+# distribuição só acontece depois disto (ver distribute.yml).
+#
+# A RAIZ importa: o GitHub Actions só lê `.github/workflows` da raiz do
+# repositório. Este arquivo já esteve em `app/.github/workflows/`, herdado de
+# quando o app era um repositório próprio — lá ele nunca foi executado.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Push atrás de push na mesma branch: o build anterior é cancelado em vez de
+# disputar runner com o novo.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (NestJS)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - run: npm ci
+
+      # O client tipado não é versionado: sem gerar, nada compila.
+      - name: Gerar o Prisma Client
+        run: npx prisma generate
+
+      # Sem `--fix`: no CI o lint precisa REPROVAR, não consertar em silêncio um
+      # arquivo que ninguém vai commitar (o script `npm run lint` conserta, e é
+      # isso que se quer na máquina de quem escreve).
+      - name: Lint
+        run: npx eslint "src/**/*.ts" "test/**/*.ts"
+
+      - name: Compilar (o que o tsc pega e o jest não)
+        run: npm run build
+
+      - name: Testes de unidade
+        run: npm test
+
+      # `pretest:e2e` aplica as migrations no banco de teste. `.env.test` é
+      # versionado de propósito: ele não guarda segredo nenhum, e é o que
+      # permite a suíte rodar aqui sem configuração.
+      - name: Testes e2e
+        run: npm run test:e2e
+
+  app:
+    name: App (Flutter)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # `dart format` fica de fora de propósito: o código de hoje segue outro
+      # estilo de quebra de linha e exigi-lo aqui reprovaria 42 dos 47 arquivos
+      # por formatação, não por defeito. `flutter analyze` é o portão que
+      # encontra problema de verdade.
+      - name: Análise estática
+        run: flutter analyze
+
+      - name: Testes
+        run: flutter test

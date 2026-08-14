@@ -201,6 +201,14 @@ class BrandIdentity {
 /// título, `xPlural`/`xPluralTitle` são os plurais.
 @immutable
 class BrandCopy {
+  /// O LANÇAMENTO feito pela empresa: a tabela de valores que vale por um
+  /// período, sobre o grão da safra. É o que o admin publica e o consultor vê
+  /// como aberto ou fechado. Ex.: `Barter` / `Safra`.
+  final String program;
+  final String programTitle;
+  final String season;
+  final String seasonTitle;
+
   final String barter;
   final String barterTitle;
   final String barterPlural;
@@ -237,6 +245,10 @@ class BrandCopy {
   final String organization;
 
   const BrandCopy({
+    required this.program,
+    required this.programTitle,
+    required this.season,
+    required this.seasonTitle,
     required this.barter,
     required this.barterTitle,
     required this.barterPlural,

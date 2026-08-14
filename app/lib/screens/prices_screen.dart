@@ -4,10 +4,24 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
+import 'barter_program_screen.dart';
 import 'product_report_screen.dart';
 import 'edit_forms.dart';
 
-/// Gestão dos valores de referência (R$) usados como taxa de troca da permuta.
+/// A tela do BARTER, do lado do admin. Quatro abas, na ordem em que a operação
+/// acontece:
+///
+/// 1. **Barter** — a safra, a versão vigente e as metas; é onde se publica a
+///    próxima versão a partir da planilha.
+/// 2. **Valores** — a tabela da versão vigente (preço e custo de cada insumo,
+///    mais o valor da saca), com correção pontual.
+/// 3. **Histórico** — como o valor de cada item andou ao longo das versões.
+///    Leitura: o cadastro do produto (pasta, exigência, exclusão) mora na tela
+///    do próprio item, e o valor de hoje se corrige na aba Valores.
+/// 4. **Classes** — a taxonomia fixa do negócio e a regra de mínimo de cada uma.
+///
+/// Busca e filtros ficam no topo: a busca é do texto, os chips recortam o
+/// conjunto e o menu de ordenação responde "em que ordem". Os três se somam.
 class PricesScreen extends StatefulWidget {
   const PricesScreen({super.key});
   @override
@@ -22,7 +36,7 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this)
+    _tabController = TabController(length: 4, vsync: this)
       ..addListener(() => setState(() {}));
   }
 
@@ -33,55 +47,91 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
     super.dispose();
   }
 
+  /// A busca não faz sentido na aba do lançamento (é um cartão só).
+  bool get _showsSearch => _tabController.index > 0;
+
+  String get _searchHint {
+    switch (_tabController.index) {
+      case 1:
+        return 'Buscar na tabela de valores...';
+      case 3:
+        return 'Buscar classe...';
+      default:
+        return 'Buscar grão ou insumo...';
+    }
+  }
+
+  /// Cadastrar produto à mão continua existindo — a planilha cria os insumos,
+  /// mas o GRÃO precisa existir antes para a safra ser aberta. Fica no cabeçalho
+  /// da aba de histórico, e não como botão no meio da lista: é um ato raro.
+  Future<void> _createProduct(ProductType type) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NewProductScreen(type: type)),
+    );
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final q = _search.trim().toLowerCase();
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Valores de Referência'),
-        actions: const [LogoutButton()],
+        title: Text(brand.copy.programTitle),
+        actions: [
+          if (_tabController.index == 2)
+            PopupMenuButton<ProductType>(
+              tooltip: 'Cadastrar item',
+              icon: const Icon(Icons.add),
+              onSelected: _createProduct,
+              itemBuilder: (_) => [
+                PopupMenuItem(
+                  value: ProductType.grain,
+                  child: Text('Novo ${brand.copy.grain}'),
+                ),
+                PopupMenuItem(
+                  value: ProductType.input,
+                  child: Text('Novo ${brand.copy.input}'),
+                ),
+              ],
+            ),
+          const LogoutButton(),
+        ],
         bottom: TabBar(
           controller: _tabController,
-          tabs: [
-            Tab(icon: const Icon(Icons.grass_outlined, size: 18), text: brand.copy.grainPluralTitle),
-            Tab(icon: Icon(Icons.science_outlined, size: 18), text: 'Insumos'),
-            Tab(icon: Icon(Icons.folder_outlined, size: 18), text: 'Categorias'),
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
+          tabs: const [
+            Tab(icon: Icon(Icons.rocket_launch_outlined, size: 18), text: 'Lançamento'),
+            Tab(icon: Icon(Icons.price_change_outlined, size: 18), text: 'Valores'),
+            Tab(icon: Icon(Icons.history, size: 18), text: 'Histórico'),
+            Tab(icon: Icon(Icons.category_outlined, size: 18), text: 'Classes'),
           ],
         ),
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-            child: SearchField(
-              controller: _searchCtrl,
-              hint: _tabController.index == 2
-                  ? 'Buscar categoria...'
-                  : 'Buscar grão ou insumo...',
-              onChanged: (v) => setState(() => _search = v),
-              onClear: () => setState(() {
-                _search = '';
-                _searchCtrl.clear();
-              }),
+          if (_showsSearch)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: SearchField(
+                controller: _searchCtrl,
+                hint: _searchHint,
+                onChanged: (v) => setState(() => _search = v),
+                onClear: () => setState(() {
+                  _search = '';
+                  _searchCtrl.clear();
+                }),
+              ),
             ),
-          ),
           Expanded(
             child: TabBarView(
               controller: _tabController,
               children: [
-                _ProductPriceList(
-                  products: AppData.grains,
-                  type: ProductType.grain,
-                  query: q,
-                  onUpdate: () => setState(() {}),
-                ),
-                _ProductPriceList(
-                  products: AppData.inputs,
-                  type: ProductType.input,
-                  query: q,
-                  onUpdate: () => setState(() {}),
-                ),
-                _CategoryList(query: q, onUpdate: () => setState(() {})),
+                BarterProgramTab(onChanged: () => setState(() {})),
+                _VersionPriceTable(query: q, onUpdate: () => setState(() {})),
+                _HistoryList(query: q, onUpdate: () => setState(() {})),
+                _ClassList(query: q, onUpdate: () => setState(() {})),
               ],
             ),
           ),
@@ -91,120 +141,499 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
   }
 }
 
-class _ProductPriceList extends StatelessWidget {
-  final List<ProductModel> products;
-  final ProductType type;
+/// A tabela de valores da versão VIGENTE: a saca do grão no topo e um cartão
+/// por insumo, com preço, custo e margem. É a foto do que está valendo agora —
+/// e o único lugar do app onde um valor pode ser corrigido.
+class _VersionPriceTable extends StatefulWidget {
   final String query;
   final VoidCallback onUpdate;
+  const _VersionPriceTable({required this.query, required this.onUpdate});
 
-  const _ProductPriceList({
-    required this.products,
-    required this.type,
-    required this.query,
-    required this.onUpdate,
-  });
+  @override
+  State<_VersionPriceTable> createState() => _VersionPriceTableState();
+}
 
-  bool get _isGrain => type == ProductType.grain;
+/// Como ordenar a tabela de valores. "Menor margem" existe porque é a pergunta
+/// que o admin faz de verdade ao revisar um lançamento: onde a margem está
+/// apertada demais.
+enum _ValueSort { name, price, marginDesc, marginAsc }
 
-  Future<void> _create(BuildContext context) async {
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NewProductScreen(type: type)),
-    );
-    onUpdate();
+class _VersionPriceTableState extends State<_VersionPriceTable> {
+  /// Classe escolhida (null = todas). A tabela da versão não carrega a classe:
+  /// ela é atributo do CADASTRO, então vem do catálogo pelo productId.
+  String? _classId;
+  _ValueSort _sort = _ValueSort.name;
+
+  /// A linha da versão guarda nome e unidade, não o código — ele vem do
+  /// cadastro, pelo productId, do mesmo jeito que a classe.
+  bool _matches(VersionPriceModel row, String query) {
+    if (row.productName.toLowerCase().contains(query)) return true;
+    final code = _productOf(row.productId)?.sku ?? '';
+    return code.toLowerCase().contains(query);
+  }
+
+  ProductModel? _productOf(String productId) {
+    for (final input in AppData.inputs) {
+      if (input.id == productId) return input;
+    }
+    return null;
+  }
+
+  String? _classOf(String productId) {
+    for (final input in AppData.inputs) {
+      if (input.id == productId) return input.classId;
+    }
+    return null;
+  }
+
+  List<VersionPriceModel> _apply(List<VersionPriceModel> rows) {
+    final query = widget.query;
+    final filtered = rows.where((row) {
+      if (query.isNotEmpty && !_matches(row, query)) return false;
+      if (_classId != null && _classOf(row.productId) != _classId) return false;
+      return true;
+    }).toList();
+
+    switch (_sort) {
+      case _ValueSort.name:
+        filtered.sort((a, b) => a.productName.compareTo(b.productName));
+        break;
+      case _ValueSort.price:
+        filtered.sort((a, b) => b.price.compareTo(a.price));
+        break;
+      case _ValueSort.marginDesc:
+        filtered.sort((a, b) => b.margin.compareTo(a.margin));
+        break;
+      case _ValueSort.marginAsc:
+        filtered.sort((a, b) => a.margin.compareTo(b.margin));
+        break;
+    }
+    return filtered;
+  }
+
+  /// Só as classes que têm insumo NESTA versão viram filtro — oferecer uma
+  /// classe que devolveria lista vazia é um filtro que mente.
+  List<ProductClassModel> _classesInVersion(BarterVersionModel version) {
+    final ids = version.prices.map((row) => _classOf(row.productId)).whereType<String>().toSet();
+    return AppData.classes.where((category) => ids.contains(category.id)).toList();
   }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = query.isEmpty
-        ? products
-        : products.where((p) => p.name.toLowerCase().contains(query)).toList();
+    final version = AppData.currentVersion;
+    if (version == null) {
+      return const _EmptyState(
+        icon: Icons.price_change_outlined,
+        title: 'Nenhum Barter lançado',
+        text: 'Publique uma versão na aba Lançamento para definir os valores da safra.',
+      );
+    }
 
-    return ListView(
-      padding: const EdgeInsets.all(12),
+    final rows = _apply(version.prices);
+    final classes = _classesInVersion(version);
+
+    return Column(
       children: [
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () => _create(context),
-            icon: Icon(_isGrain ? Icons.grass : Icons.science_outlined, size: 18),
-            label: Text(_isGrain ? 'Novo ${brand.copy.grain}' : 'Novo ${brand.copy.input}'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: _isGrain ? AppColors.grain : AppColors.input,
-              side: BorderSide(color: _isGrain ? AppColors.grain : AppColors.input),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-            ),
+        _FilterBar(
+          chips: [
+            _FilterChipData(label: 'Todas', selected: _classId == null, onTap: () {
+              setState(() => _classId = null);
+            }),
+            for (final productClass in classes)
+              _FilterChipData(
+                label: productClass.name,
+                selected: _classId == productClass.id,
+                onTap: () => setState(() => _classId = productClass.id),
+              ),
+          ],
+          sortLabel: _sortLabel,
+          onSort: (value) => setState(() => _sort = value),
+          sortOptions: const {
+            _ValueSort.name: 'Nome (A–Z)',
+            _ValueSort.price: 'Maior preço',
+            _ValueSort.marginDesc: 'Maior margem',
+            _ValueSort.marginAsc: 'Menor margem',
+          },
+          current: _sort,
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            children: [
+              _GrainPriceCard(version: version, onUpdate: widget.onUpdate),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Text('Insumos da versão ${version.code}',
+                      style: TextStyle(
+                          fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  const Spacer(),
+                  Text(
+                    rows.length == version.prices.length
+                        ? '${version.prices.length} item(ns)'
+                        : '${rows.length} de ${version.prices.length}',
+                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (rows.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text('Nenhum item com esse filtro',
+                        style: TextStyle(fontSize: 13, color: AppColors.textLight)),
+                  ),
+                )
+              else
+                ...rows.map((row) => _VersionPriceCard(
+                      row: row,
+                      code: _productOf(row.productId)?.sku,
+                      editable: version.isOpen,
+                      onUpdate: widget.onUpdate,
+                    )),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        if (filtered.isEmpty)
-          Padding(
-            padding: EdgeInsets.symmetric(vertical: 32),
-            child: Center(
+      ],
+    );
+  }
+
+  String get _sortLabel {
+    switch (_sort) {
+      case _ValueSort.name:
+        return 'Nome';
+      case _ValueSort.price:
+        return 'Maior preço';
+      case _ValueSort.marginDesc:
+        return 'Maior margem';
+      case _ValueSort.marginAsc:
+        return 'Menor margem';
+    }
+  }
+}
+
+/// O valor da saca — a cotação que converte custo de insumo em grão.
+class _GrainPriceCard extends StatelessWidget {
+  final BarterVersionModel version;
+  final VoidCallback onUpdate;
+  const _GrainPriceCard({required this.version, required this.onUpdate});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: AppColors.grainBg,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppColors.grain.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(Icons.grass, color: AppColors.grain, size: 20),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.search_off, size: 48, color: AppColors.textLight),
-                  SizedBox(height: 8),
-                  Text('Nenhum item encontrado', style: TextStyle(color: AppColors.textLight)),
+                  Text('Saca de ${version.grainName.toLowerCase()}',
+                      style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  Text('Cotação do Barter ${version.code}',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                 ],
               ),
             ),
-          )
-        else
-          ...filtered.map((p) => _PriceCard(product: p, onUpdate: onUpdate)),
-      ],
+            Text(formatCurrency(version.grainPrice),
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.grain)),
+            if (version.isOpen && version.grainId.isNotEmpty)
+              IconButton(
+                tooltip: 'Corrigir',
+                onPressed: () => showVersionPriceDialog(
+                  context,
+                  productId: version.grainId,
+                  productName: 'Saca de ${version.grainName.toLowerCase()}',
+                  price: version.grainPrice,
+                  onUpdated: onUpdate,
+                ),
+                icon: Icon(Icons.edit_outlined, size: 18, color: AppColors.grain),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
 
-class _PriceCard extends StatelessWidget {
-  final ProductModel product;
+/// Uma linha da tabela: preço, custo e a margem que alimenta a meta de lucro.
+class _VersionPriceCard extends StatelessWidget {
+  final VersionPriceModel row;
+
+  /// Código do item no cadastro — a linha da versão não o guarda.
+  final String? code;
+  final bool editable;
   final VoidCallback onUpdate;
-  const _PriceCard({required this.product, required this.onUpdate});
+  const _VersionPriceCard({
+    required this.row,
+    required this.code,
+    required this.editable,
+    required this.onUpdate,
+  });
 
-  Color get _accent => product.type == ProductType.grain ? AppColors.grain : AppColors.input;
-
-  /// Em quantas permutas este produto já apareceu. Serve para avisar o admin
-  /// do tamanho do histórico antes de tirar o item do catálogo — o histórico
-  /// não se perde (cada item guarda seu próprio snapshot), mas ele merece
-  /// saber que não está mexendo num cadastro sem uso.
-  int _barterCount() => AppData.barters
-      .where((b) => [...b.grains, ...b.inputs].any((i) => i.productId == product.id))
-      .length;
-
-  void _delete(BuildContext context) {
-    confirmDeleteRegistration(
-      context,
-      title: product.type == ProductType.grain
-          ? 'Excluir ${brand.copy.grain}'
-          : 'Excluir ${brand.copy.input}',
-      name: product.name,
-      barterCount: _barterCount(),
-      onConfirm: () async {
-        await AppData.deleteProduct(product);
-        onUpdate();
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${product.name} saiu do catálogo.'),
-          backgroundColor: AppColors.approved,
-        ));
-      },
+  @override
+  Widget build(BuildContext context) {
+    final marginPct = row.price > 0 ? row.margin / row.price * 100 : 0.0;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.science_outlined, color: AppColors.input, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(row.productName,
+                      style: TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  Row(
+                    children: [
+                      if (code != null) ...[
+                        _CodeChip(code: code!),
+                        const SizedBox(width: 6),
+                      ],
+                      Flexible(
+                        child: Text(row.unit,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Custo ${formatCurrency(row.cost)} • margem ${formatCurrency(row.margin)}'
+                    '${row.price > 0 ? ' (${marginPct.toStringAsFixed(0)}%)' : ''}',
+                    style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(formatCurrency(row.price),
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                if (editable)
+                  TextButton(
+                    onPressed: () => showVersionPriceDialog(
+                      context,
+                      productId: row.productId,
+                      productName: row.productName,
+                      price: row.price,
+                      cost: row.cost,
+                      onUpdated: onUpdate,
+                    ),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      minimumSize: const Size(0, 0),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Corrigir', style: TextStyle(fontSize: 12)),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
+  }
+}
+
+/// O HISTÓRICO de valores por produto: cada item com o último valor publicado e
+/// a variação desde o primeiro. Tocar abre a linha do tempo completa (gráfico,
+/// pontos e o cadastro do item).
+///
+/// É leitura. O valor de hoje se corrige na aba Valores, dentro da versão; o
+/// cadastro (pasta, exigência, exclusão) mora na tela do produto — aqui só se
+/// enxerga como o preço andou.
+class _HistoryList extends StatefulWidget {
+  final String query;
+  final VoidCallback onUpdate;
+  const _HistoryList({required this.query, required this.onUpdate});
+
+  @override
+  State<_HistoryList> createState() => _HistoryListState();
+}
+
+enum _HistorySort { name, price, up, down }
+
+class _HistoryListState extends State<_HistoryList> {
+  /// null = todos; senão, só grãos ou só insumos.
+  ProductType? _type;
+  _HistorySort _sort = _HistorySort.name;
+
+  /// Variação (%) do último valor publicado contra o primeiro ponto da linha
+  /// do tempo. Zero quando não há histórico com que comparar.
+  ///
+  /// A conta mora no modelo porque a listagem do catálogo não carrega a série
+  /// — ela vem com o primeiro valor já resolvido (ver [ProductModel.deltaPct]).
+  static double deltaPctOf(ProductModel product) => product.deltaPct;
+
+  List<ProductModel> _apply() {
+    final query = widget.query;
+    final all = [...AppData.grains, ...AppData.inputs];
+    final filtered = all.where((product) {
+      if (!product.matches(query)) return false;
+      if (_type != null && product.type != _type) return false;
+      return true;
+    }).toList();
+
+    switch (_sort) {
+      case _HistorySort.name:
+        filtered.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case _HistorySort.price:
+        filtered.sort((a, b) => b.currentPrice.compareTo(a.currentPrice));
+        break;
+      case _HistorySort.up:
+        filtered.sort((a, b) => deltaPctOf(b).compareTo(deltaPctOf(a)));
+        break;
+      case _HistorySort.down:
+        filtered.sort((a, b) => deltaPctOf(a).compareTo(deltaPctOf(b)));
+        break;
+    }
+    return filtered;
   }
 
   @override
   Widget build(BuildContext context) {
-    // Todo produto nasce com um ponto no histórico, mas a tela não pode
-    // depender disso: um catálogo importado por fora chegaria sem nenhum.
-    final first = product.priceHistory.isEmpty
-        ? product.currentPrice
-        : product.priceHistory.first.price;
-    final deltaPct = first == 0 ? 0.0 : (product.currentPrice - first) / first * 100;
-    final up = product.currentPrice >= first;
+    final products = _apply();
+    final total = AppData.grains.length + AppData.inputs.length;
 
+    return Column(
+      children: [
+        _FilterBar(
+          chips: [
+            _FilterChipData(
+              label: 'Todos',
+              selected: _type == null,
+              onTap: () => setState(() => _type = null),
+            ),
+            _FilterChipData(
+              label: brand.copy.grainPluralTitle,
+              selected: _type == ProductType.grain,
+              onTap: () => setState(() => _type = ProductType.grain),
+            ),
+            _FilterChipData(
+              label: brand.copy.inputPluralTitle,
+              selected: _type == ProductType.input,
+              onTap: () => setState(() => _type = ProductType.input),
+            ),
+          ],
+          sortLabel: _sortLabel,
+          onSort: (value) => setState(() => _sort = value),
+          sortOptions: const {
+            _HistorySort.name: 'Nome (A–Z)',
+            _HistorySort.price: 'Maior valor',
+            _HistorySort.up: 'Maior alta',
+            _HistorySort.down: 'Maior queda',
+          },
+          current: _sort,
+        ),
+        Expanded(
+          child: products.isEmpty
+              ? const _EmptyState(
+                  icon: Icons.search_off,
+                  title: 'Nenhum item encontrado',
+                  text: 'Ajuste a busca ou o filtro para ver o histórico de outros itens.',
+                )
+              : ListView(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                  children: [
+                    Row(
+                      children: [
+                        Text('Linha do tempo de valores',
+                            style: TextStyle(
+                                fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                        const Spacer(),
+                        Text(
+                          products.length == total
+                              ? '$total item(ns)'
+                              : '${products.length} de $total',
+                          style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ...products.map((product) => _HistoryCard(
+                          product: product,
+                          deltaPct: deltaPctOf(product),
+                          onUpdate: widget.onUpdate,
+                        )),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  String get _sortLabel {
+    switch (_sort) {
+      case _HistorySort.name:
+        return 'Nome';
+      case _HistorySort.price:
+        return 'Maior valor';
+      case _HistorySort.up:
+        return 'Maior alta';
+      case _HistorySort.down:
+        return 'Maior queda';
+    }
+  }
+}
+
+/// Linha do histórico de um produto. Só leitura: último valor publicado, a
+/// variação desde o começo e a porta para a linha do tempo completa.
+class _HistoryCard extends StatelessWidget {
+  final ProductModel product;
+  final double deltaPct;
+  final VoidCallback onUpdate;
+  const _HistoryCard({required this.product, required this.deltaPct, required this.onUpdate});
+
+  Color get _accent => product.type == ProductType.grain ? AppColors.grain : AppColors.input;
+
+  /// Preço subindo é notícia RUIM para quem compra insumo — daí a cor de alerta
+  /// na alta e a de aprovação na queda. É a leitura do lado da cooperativa.
+  Color get _trendColor => deltaPct >= 0 ? AppColors.denied : AppColors.approved;
+
+  /// O produto está na tabela do Barter vigente? Fora dela ele existe no
+  /// cadastro mas não é permutável — e isso precisa aparecer aqui, senão o
+  /// admin só descobre quando o consultor reclama.
+  bool get _inCurrentVersion {
+    final version = AppData.currentVersion;
+    if (version == null) return false;
+    return version.grainId == product.id || version.priceOf(product.id) != null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A contagem vem do resumo: a listagem não traz a série (ver
+    // CatalogRepository.listProducts).
+    final points = product.priceHistoryCount;
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 10),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: () async {
@@ -218,134 +647,72 @@ class _PriceCard extends StatelessWidget {
         },
         child: Padding(
           padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          child: Row(
             children: [
-              Row(
-                children: [
-                  TypeBadge(type: product.type),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              TypeBadge(type: product.type),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(product.name,
+                        style: TextStyle(
+                            fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    Row(
                       children: [
-                        Text(product.name,
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        Text(product.unit, style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+                        _CodeChip(code: product.codeLabel),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(product.unit,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+                        ),
                       ],
                     ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(formatCurrency(product.currentPrice),
-                          style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: AppColors.primary)),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(up ? Icons.trending_up : Icons.trending_down,
-                              size: 13, color: up ? AppColors.denied : AppColors.approved),
-                          const SizedBox(width: 2),
-                          Text('${up ? '+' : ''}${deltaPct.toStringAsFixed(1).replaceAll('.', ',')}%',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: up ? AppColors.denied : AppColors.approved,
-                              )),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.show_chart, size: 12, color: _accent),
+                        const SizedBox(width: 4),
+                        Text('$points ponto(s)',
+                            style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+                        if (!_inCurrentVersion) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppColors.textLight.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text('fora do Barter',
+                                style: TextStyle(fontSize: 10, color: AppColors.textMedium)),
+                          ),
                         ],
-                      ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(formatCurrency(product.currentPrice),
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(deltaPct >= 0 ? Icons.trending_up : Icons.trending_down,
+                          size: 13, color: _trendColor),
+                      const SizedBox(width: 2),
+                      Text('${deltaPct >= 0 ? '+' : ''}${deltaPct.toStringAsFixed(1).replaceAll('.', ',')}%',
+                          style: TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w600, color: _trendColor)),
                     ],
                   ),
-                  IconButton(
-                    onPressed: () => _delete(context),
-                    icon: Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
-                    tooltip: 'Excluir do catálogo',
-                    visualDensity: VisualDensity.compact,
-                  ),
                 ],
               ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(Icons.show_chart, size: 14, color: _accent),
-                  const SizedBox(width: 4),
-                  Text('Ver relatório completo',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _accent)),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: () => showUpdateValueDialog(context, product, onUpdate),
-                    icon: const Icon(Icons.edit_outlined, size: 15),
-                    label: const Text('Atualizar', style: TextStyle(fontSize: 12)),
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      minimumSize: const Size(0, 0),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                  ),
-                  Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
-                ],
-              ),
-              if (product.type == ProductType.input) ...[
-                const Divider(height: 18),
-                Row(
-                  children: [
-                    Icon(Icons.folder_outlined, size: 14, color: AppColors.input),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        'Categoria: ${AppData.categoryById(product.categoryId)?.name ?? 'sem categoria'}',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: product.categoryId != null ? AppColors.input : AppColors.textLight,
-                        ),
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => showCategoryAssignDialog(context, product, onUpdate),
-                      icon: const Icon(Icons.folder_open, size: 15),
-                      label: const Text('Alterar', style: TextStyle(fontSize: 12)),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.input,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                  ],
-                ),
-                const Divider(height: 18),
-                Row(
-                  children: [
-                    Icon(Icons.straighten, size: 14, color: AppColors.input),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        product.requiredPerHa > 0
-                            ? 'Exigência: ${formatQty(product.requiredPerHa)} ${product.unit}/ha'
-                            : 'Sem exigência por área',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: product.requiredPerHa > 0 ? AppColors.input : AppColors.textLight,
-                        ),
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => showRequiredPerHaDialog(context, product, onUpdate),
-                      icon: const Icon(Icons.tune, size: 15),
-                      label: const Text('Definir', style: TextStyle(fontSize: 12)),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.input,
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        minimumSize: const Size(0, 0),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
             ],
           ),
         ),
@@ -354,99 +721,225 @@ class _PriceCard extends StatelessWidget {
   }
 }
 
-/// Lista de "pastas" (categorias) de insumos com sua regra de mínimo. Permite
-/// criar, editar e excluir. A regra é o gatilho que trava o envio da permuta.
-class _CategoryList extends StatelessWidget {
+/* ── Peças compartilhadas pelas duas listas ───────────────────────────── */
+
+/// O CÓDIGO do item, em selo de monoespaçado. É o que se digita na busca —
+/// por isso ele aparece antes da unidade, e não escondido no detalhe.
+class _CodeChip extends StatelessWidget {
+  final String code;
+  const _CodeChip({required this.code});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: AppColors.textLight.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(5),
+      ),
+      child: Text(
+        code,
+        style: TextStyle(
+          fontSize: 10,
+          fontFamily: 'monospace',
+          fontWeight: FontWeight.w600,
+          color: AppColors.textMedium,
+        ),
+      ),
+    );
+  }
+}
+
+class _FilterChipData {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _FilterChipData({required this.label, required this.selected, required this.onTap});
+}
+
+/// Barra de filtros: os recortes como chips que rolam na horizontal e a
+/// ordenação num menu à direita.
+///
+/// Chip e menu respondem a perguntas diferentes — "o que eu quero ver" e "em
+/// que ordem" —, e é por isso que não são a mesma lista: misturar os dois num
+/// seletor só obrigaria a escolher entre filtrar e ordenar.
+class _FilterBar<T> extends StatelessWidget {
+  final List<_FilterChipData> chips;
+  final String sortLabel;
+  final Map<T, String> sortOptions;
+  final T current;
+  final ValueChanged<T> onSort;
+
+  const _FilterBar({
+    required this.chips,
+    required this.sortLabel,
+    required this.sortOptions,
+    required this.current,
+    required this.onSort,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 6, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final chip in chips) ...[
+                    ChoiceChip(
+                      label: Text(chip.label, style: const TextStyle(fontSize: 12)),
+                      selected: chip.selected,
+                      onSelected: (_) => chip.onTap(),
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          PopupMenuButton<T>(
+            tooltip: 'Ordenar',
+            initialValue: current,
+            onSelected: onSort,
+            itemBuilder: (_) => [
+              for (final entry in sortOptions.entries)
+                PopupMenuItem(value: entry.key, child: Text(entry.value)),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.swap_vert, size: 16, color: AppColors.primary),
+                  const SizedBox(width: 2),
+                  Text(sortLabel,
+                      style: TextStyle(
+                          fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String text;
+  const _EmptyState({required this.icon, required this.title, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 52, color: AppColors.textLight),
+            const SizedBox(height: 12),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            const SizedBox(height: 6),
+            Text(text,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// As CLASSES de produto — a taxonomia do negócio (fungicidas, herbicidas,
+/// sementes, seguro agrícola…).
+///
+/// A lista é FIXA: não há criar, renomear nem excluir. O que se ajusta aqui é a
+/// REGRA de mínimo de cada uma — o gatilho que trava o envio da permuta
+/// enquanto a classe não representar o quanto foi combinado.
+class _ClassList extends StatelessWidget {
   final String query;
   final VoidCallback onUpdate;
-  const _CategoryList({required this.query, required this.onUpdate});
+  const _ClassList({required this.query, required this.onUpdate});
 
-  Future<void> _openEditor(BuildContext context, {InputCategoryModel? category}) async {
+  Future<void> _editRule(BuildContext context, ProductClassModel productClass) async {
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => EditCategoryScreen(category: category)),
+      MaterialPageRoute(builder: (_) => EditClassRuleScreen(productClass: productClass)),
     );
     onUpdate();
   }
 
-  /// Quantos insumos estão classificados nesta pasta.
-  int _inputCount(String categoryId) =>
-      AppData.inputs.where((i) => i.categoryId == categoryId).length;
-
-  void _delete(BuildContext context, InputCategoryModel category) {
-    final count = _inputCount(category.id);
-    confirmDeleteRegistration(
-      context,
-      title: 'Excluir categoria',
-      name: category.name,
-      barterCount: 0,
-      onConfirm: () async {
-        // O servidor desvincula os insumos da pasta antes de removê-la.
-        await AppData.deleteCategory(category.id);
-        onUpdate();
-        if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(count > 0
-              ? 'Categoria excluída. $count insumo(s) ficaram sem categoria.'
-              : 'Categoria excluída.'),
-          backgroundColor: AppColors.approved,
-        ));
-      },
-    );
-  }
+  /// Quantos insumos do catálogo estão nesta classe.
+  int _inputCount(String classId) =>
+      AppData.inputs.where((i) => i.classId == classId).length;
 
   @override
   Widget build(BuildContext context) {
     final filtered = query.isEmpty
-        ? AppData.categories
-        : AppData.categories.where((c) => c.name.toLowerCase().contains(query)).toList();
+        ? AppData.classes
+        : AppData.classes.where((c) => c.name.toLowerCase().contains(query)).toList();
 
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: () => _openEditor(context),
-            icon: const Icon(Icons.create_new_folder_outlined, size: 18),
-            label: const Text('Nova categoria'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.input,
-              side: BorderSide(color: AppColors.input),
-              padding: const EdgeInsets.symmetric(vertical: 12),
-            ),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.inputBg,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.lock_outline, size: 16, color: AppColors.input),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'A lista de classes é fixa. Toque em uma para definir o mínimo '
+                  'que ela precisa representar em cada permuta.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
         if (filtered.isEmpty)
           Padding(
-            padding: EdgeInsets.symmetric(vertical: 32),
+            padding: const EdgeInsets.symmetric(vertical: 32),
             child: Center(
-              child: Text('Nenhuma categoria encontrada', style: TextStyle(color: AppColors.textLight)),
+              child: Text('Nenhuma classe encontrada', style: TextStyle(color: AppColors.textLight)),
             ),
           )
         else
-          ...filtered.map((c) => _CategoryCard(
-                category: c,
+          ...filtered.map((c) => _ClassCard(
+                productClass: c,
                 inputCount: _inputCount(c.id),
-                onEdit: () => _openEditor(context, category: c),
-                onDelete: () => _delete(context, c),
+                onEdit: () => _editRule(context, c),
               )),
       ],
     );
   }
 }
 
-class _CategoryCard extends StatelessWidget {
-  final InputCategoryModel category;
+class _ClassCard extends StatelessWidget {
+  final ProductClassModel productClass;
   final int inputCount;
   final VoidCallback onEdit;
-  final VoidCallback onDelete;
-  const _CategoryCard({
-    required this.category,
+  const _ClassCard({
+    required this.productClass,
     required this.inputCount,
     required this.onEdit,
-    required this.onDelete,
   });
 
   @override
@@ -467,46 +960,43 @@ class _CategoryCard extends StatelessWidget {
                     width: 38,
                     height: 38,
                     decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
-                    child: Icon(Icons.folder, color: AppColors.input, size: 20),
+                    child: Icon(Icons.category_outlined, color: AppColors.input, size: 20),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(category.name,
+                        Text(productClass.name,
                             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                         Text('$inputCount insumo(s)',
                             style: TextStyle(fontSize: 12, color: AppColors.textLight)),
                       ],
                     ),
                   ),
-                  IconButton(
-                    onPressed: onDelete,
-                    icon: Icon(Icons.delete_outline, size: 20, color: AppColors.denied),
-                    tooltip: 'Excluir',
-                    visualDensity: VisualDensity.compact,
-                  ),
+                  // Sem excluir: a classe é do negócio, não do cadastro. O que
+                  // se abre ao tocar é a regra de mínimo dela.
+                  Icon(Icons.chevron_right, size: 20, color: AppColors.textLight),
                 ],
               ),
               const SizedBox(height: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
-                  color: (category.hasRule ? AppColors.pending : AppColors.textLight).withValues(alpha: 0.10),
+                  color: (productClass.hasRule ? AppColors.pending : AppColors.textLight).withValues(alpha: 0.10),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   children: [
-                    Icon(category.hasRule ? Icons.rule : Icons.remove_circle_outline,
-                        size: 14, color: category.hasRule ? AppColors.pending : AppColors.textLight),
+                    Icon(productClass.hasRule ? Icons.rule : Icons.remove_circle_outline,
+                        size: 14, color: productClass.hasRule ? AppColors.pending : AppColors.textLight),
                     const SizedBox(width: 6),
                     Expanded(
-                      child: Text(category.ruleLabelAdmin,
+                      child: Text(productClass.ruleLabelAdmin,
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
-                            color: category.hasRule ? AppColors.textDark : AppColors.textLight,
+                            color: productClass.hasRule ? AppColors.textDark : AppColors.textLight,
                           )),
                     ),
                   ],

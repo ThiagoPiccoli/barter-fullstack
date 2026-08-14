@@ -49,7 +49,10 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
         items: [
           BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), activeIcon: Icon(Icons.dashboard), label: 'Dashboard'),
           BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: const Icon(Icons.swap_horiz), label: brand.copy.barterPluralTitle),
-          BottomNavigationBarItem(icon: Icon(Icons.price_change_outlined), activeIcon: Icon(Icons.price_change), label: 'Valores'),
+          BottomNavigationBarItem(
+              icon: const Icon(Icons.price_change_outlined),
+              activeIcon: const Icon(Icons.price_change),
+              label: brand.copy.programTitle),
           BottomNavigationBarItem(icon: Icon(Icons.groups_outlined), activeIcon: Icon(Icons.groups), label: 'Cadastros'),
         ],
       ),

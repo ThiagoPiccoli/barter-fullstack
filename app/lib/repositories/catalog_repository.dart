@@ -1,36 +1,52 @@
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 
-/// Catálogo: produtos (grãos e insumos, com histórico de valores) e as
-/// "pastas" de insumos com regra de mínimo. Escritas são do admin.
+/// Catálogo: produtos (grãos e insumos, com histórico de valores) e as CLASSES
+/// de produto com sua regra de mínimo.
+///
+/// A lista de classes é fixa no servidor — aqui só se lê e se ajusta a regra.
 class CatalogRepository {
+  /// O catálogo inteiro, **sem** a linha do tempo de cada produto: dela vêm só
+  /// o primeiro valor e a contagem (ver [ProductModel.priceHistory]). É a
+  /// chamada que o app faz a cada login e a cada refresh, então ela não pode
+  /// crescer junto com o número de versões publicadas.
   Future<List<ProductModel>> listProducts() async {
     final data = await api.get('/products') as List;
     return data.cast<Map<String, dynamic>>().map(ProductModel.fromJson).toList();
   }
 
-  Future<List<InputCategoryModel>> listCategories() async {
-    final data = await api.get('/categories') as List;
-    return data.cast<Map<String, dynamic>>().map(InputCategoryModel.fromJson).toList();
+  /// Um produto com a linha do tempo COMPLETA — o que o relatório de preço
+  /// desenha. Buscado sob demanda, ao abrir a tela de um produto.
+  Future<ProductModel> findProduct(String id) async {
+    final data = await api.get('/products/$id');
+    return ProductModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<List<ProductClassModel>> listClasses() async {
+    final data = await api.get('/classes') as List;
+    return data.cast<Map<String, dynamic>>().map(ProductClassModel.fromJson).toList();
   }
 
   /// Cadastra um grão ou insumo. O servidor abre a linha do tempo de valores
   /// com o preço informado — todo produto nasce com um primeiro ponto.
   Future<ProductModel> createProduct({
     required String name,
+    String sku = '',
     required String unit,
     required ProductType type,
     required double currentPrice,
     double requiredPerHa = 0,
-    String? categoryId,
+    String? classId,
   }) async {
     final data = await api.post('/products', body: {
       'name': name,
+      // Vazio o servidor gera — nenhum item fica sem código.
+      if (sku.isNotEmpty) 'sku': sku,
       'unit': unit,
       'type': type.name,
       'currentPrice': currentPrice,
       'requiredPerHa': requiredPerHa,
-      if (categoryId != null) 'categoryId': int.parse(categoryId),
+      if (classId != null) 'classId': int.parse(classId),
     });
     return ProductModel.fromJson(data as Map<String, dynamic>);
   }
@@ -39,35 +55,24 @@ class CatalogRepository {
   /// guardam nome, unidade e preço no próprio item.
   Future<void> deleteProduct(String id) => api.delete('/products/$id');
 
-  /// Reajusta o valor de referência; o servidor acrescenta o ponto na linha
-  /// do tempo e devolve o produto atualizado.
-  Future<ProductModel> updatePrice(String productId, double price) async {
-    final data = await api.put('/products/$productId/price', body: {'price': price});
-    return ProductModel.fromJson(data as Map<String, dynamic>);
-  }
+  // Não há reajuste de preço pelo catálogo: valor pertence à VERSÃO do Barter
+  // (ver barter_program_repository.dart). O `currentPrice` que chega em
+  // ProductModel é o último valor publicado — leitura, não edição.
 
-  /// Edição parcial do cadastro do produto (categoria, exigência/ha, nome...).
-  /// Envie `{'categoryId': null}` para desvincular da pasta.
+  /// Edição parcial do cadastro do produto (classe, exigência/ha, nome...).
+  /// Envie `{'classId': null}` para desvincular da classe.
   Future<ProductModel> updateProduct(String productId, Map<String, dynamic> fields) async {
     final data = await api.put('/products/$productId', body: fields);
     return ProductModel.fromJson(data as Map<String, dynamic>);
   }
 
-  Future<InputCategoryModel> createCategory(InputCategoryModel category) async {
-    final data = await api.post('/categories', body: _categoryPayload(category));
-    return InputCategoryModel.fromJson(data as Map<String, dynamic>);
+  /// Ajusta a REGRA de mínimo de uma classe — a única alteração que ela aceita.
+  /// Criar, renomear ou excluir classe não existe: a lista é do negócio.
+  Future<ProductClassModel> updateClassRule(ProductClassModel productClass) async {
+    final data = await api.put('/classes/${productClass.id}/rule', body: {
+      'ruleType': productClass.ruleType.name,
+      'ruleValue': productClass.ruleValue,
+    });
+    return ProductClassModel.fromJson(data as Map<String, dynamic>);
   }
-
-  Future<InputCategoryModel> updateCategory(InputCategoryModel category) async {
-    final data = await api.put('/categories/${category.id}', body: _categoryPayload(category));
-    return InputCategoryModel.fromJson(data as Map<String, dynamic>);
-  }
-
-  Future<void> deleteCategory(String id) => api.delete('/categories/$id');
-
-  Map<String, dynamic> _categoryPayload(InputCategoryModel c) => {
-        'name': c.name,
-        'ruleType': c.ruleType.name,
-        'ruleValue': c.ruleValue,
-      };
 }

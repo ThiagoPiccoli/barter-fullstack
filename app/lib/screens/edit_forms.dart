@@ -278,10 +278,10 @@ class _EditConsultantScreenState extends State<EditConsultantScreen> {
 
 /// Cadastro de um PRODUTO — grão de pagamento ou insumo do catálogo.
 ///
-/// Só criação: o valor de referência tem rota própria (com histórico), e a
-/// categoria e a exigência por hectare são editadas direto no card da tela de
-/// valores. Aqui é o passo que faltava para o catálogo deixar de ser o que o
-/// seed criou e passar a ser administrável pelo app.
+/// Só criação. Depois de criado, o item se edita na tela dele (código, classe,
+/// exigência por hectare) e o valor se corrige na versão vigente do Barter —
+/// preço não é atributo do cadastro. Aqui é o passo que faltava para o catálogo
+/// deixar de ser o que o seed criou e passar a ser administrável pelo app.
 class NewProductScreen extends StatefulWidget {
   final ProductType type;
   const NewProductScreen({super.key, required this.type});
@@ -293,10 +293,11 @@ class NewProductScreen extends StatefulWidget {
 class _NewProductScreenState extends State<NewProductScreen> {
   final _formKey = GlobalKey<FormState>();
   final _name = TextEditingController();
+  final _sku = TextEditingController();
   final _unit = TextEditingController();
   final _price = TextEditingController();
   final _requiredPerHa = TextEditingController();
-  String? _categoryId;
+  String? _classId;
   bool _saving = false;
 
   bool get _isInput => widget.type == ProductType.input;
@@ -305,6 +306,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
   @override
   void dispose() {
     _name.dispose();
+    _sku.dispose();
     _unit.dispose();
     _price.dispose();
     _requiredPerHa.dispose();
@@ -320,11 +322,12 @@ class _NewProductScreenState extends State<NewProductScreen> {
     try {
       final saved = await AppData.createProduct(
         name: _name.text.trim(),
+        sku: _sku.text.trim(),
         unit: _unit.text.trim(),
         type: widget.type,
         currentPrice: _number(_price),
         requiredPerHa: _isInput ? _number(_requiredPerHa) : 0,
-        categoryId: _isInput ? _categoryId : null,
+        classId: _isInput ? _classId : null,
       );
       if (mounted) Navigator.pop(context, saved);
     } on ApiException catch (e) {
@@ -352,6 +355,20 @@ class _NewProductScreenState extends State<NewProductScreen> {
               validator: (v) => (v ?? '').trim().length < 2 ? 'Use ao menos 2 caracteres' : null,
             ),
             _EditField(
+              controller: _sku,
+              label: 'Código (opcional)',
+              icon: Icons.qr_code_2,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 14),
+              child: Text(
+                'É por ele que se procura o item na busca e que a planilha do '
+                'fornecedor reconhece o cadastro. Em branco, o servidor gera '
+                '(${_isInput ? 'INS' : 'GRA'}-0001).',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ),
+            _EditField(
               controller: _unit,
               label: _isInput ? 'Unidade (litro, saco 50kg...)' : 'Unidade (saca 60kg...)',
               icon: Icons.straighten,
@@ -373,18 +390,18 @@ class _NewProductScreenState extends State<NewProductScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 14),
                 child: DropdownButtonFormField<String?>(
-                  initialValue: _categoryId,
+                  initialValue: _classId,
                   decoration: const InputDecoration(
-                    labelText: 'Categoria (opcional)',
-                    prefixIcon: Icon(Icons.folder_outlined, size: 20),
+                    labelText: 'Classe (opcional)',
+                    prefixIcon: Icon(Icons.category_outlined, size: 20),
                   ),
                   items: [
-                    const DropdownMenuItem<String?>(value: null, child: Text('Sem categoria')),
-                    ...AppData.categories.map(
+                    const DropdownMenuItem<String?>(value: null, child: Text('Sem classe')),
+                    ...AppData.classes.map(
                       (c) => DropdownMenuItem<String?>(value: c.id, child: Text(c.name)),
                     ),
                   ],
-                  onChanged: (v) => setState(() => _categoryId = v),
+                  onChanged: (v) => setState(() => _classId = v),
                 ),
               ),
               _EditField(
@@ -434,34 +451,34 @@ class _NewProductScreenState extends State<NewProductScreen> {
   }
 }
 
-/// Cadastro/edição de uma CATEGORIA ("pasta") de insumos e sua regra de mínimo.
-/// Quando [category] é null, cria uma nova; caso contrário, edita a existente.
-/// Salva em [AppData.categories] e devolve o resultado via Navigator.pop.
-class EditCategoryScreen extends StatefulWidget {
-  final InputCategoryModel? category;
-  const EditCategoryScreen({super.key, this.category});
+/// Editor da REGRA de mínimo de uma classe.
+///
+/// Só a regra: nome e lista de classes não se alteram por aqui, nem por rota
+/// nenhuma. Classe é vocabulário do negócio (fungicidas, herbicidas, seguro
+/// agrícola…) e vive na migration do servidor; o que muda de safra para safra é
+/// o quanto do custo da permuta precisa passar por ela.
+class EditClassRuleScreen extends StatefulWidget {
+  final ProductClassModel productClass;
+  const EditClassRuleScreen({super.key, required this.productClass});
 
   @override
-  State<EditCategoryScreen> createState() => _EditCategoryScreenState();
+  State<EditClassRuleScreen> createState() => _EditClassRuleScreenState();
 }
 
-class _EditCategoryScreenState extends State<EditCategoryScreen> {
+class _EditClassRuleScreenState extends State<EditClassRuleScreen> {
   final _formKey = GlobalKey<FormState>();
-  late final TextEditingController _name;
   late final TextEditingController _value;
-  late CategoryRuleType _ruleType;
+  late ClassRuleType _ruleType;
 
-  bool get _isNew => widget.category == null;
-  bool get _needsValue => _ruleType != CategoryRuleType.none;
+  bool get _needsValue => _ruleType != ClassRuleType.none;
 
   @override
   void initState() {
     super.initState();
-    final c = widget.category;
-    _name = TextEditingController(text: c?.name ?? '');
-    _ruleType = c?.ruleType ?? CategoryRuleType.none;
+    final c = widget.productClass;
+    _ruleType = c.ruleType;
     _value = TextEditingController(
-      text: (c != null && c.ruleValue > 0)
+      text: c.ruleValue > 0
           ? (c.ruleValue == c.ruleValue.roundToDouble()
                   ? c.ruleValue.toStringAsFixed(0)
                   : c.ruleValue.toStringAsFixed(2))
@@ -472,29 +489,27 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
 
   @override
   void dispose() {
-    _name.dispose();
     _value.dispose();
     super.dispose();
   }
 
-  String get _valueLabel => _ruleType == CategoryRuleType.valuePerHa
+  String get _valueLabel => _ruleType == ClassRuleType.valuePerHa
       ? 'Valor mínimo por hectare (R\$)'
       : 'Percentual mínimo do total (%)';
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    final old = widget.category;
     final value = _needsValue
         ? (double.tryParse(_value.text.trim().replaceAll(',', '.')) ?? 0)
         : 0.0;
-    final draft = InputCategoryModel(
-      id: old?.id ?? '',
-      name: _name.text.trim(),
-      ruleType: _ruleType,
-      ruleValue: value,
-    );
     try {
-      final saved = await AppData.saveCategory(draft, isNew: _isNew);
+      final saved = await AppData.updateClassRule(ProductClassModel(
+        id: widget.productClass.id,
+        slug: widget.productClass.slug,
+        name: widget.productClass.name,
+        ruleType: _ruleType,
+        ruleValue: value,
+      ));
       if (mounted) Navigator.pop(context, saved);
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
@@ -504,66 +519,71 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_isNew ? 'Nova Categoria' : 'Editar Categoria')),
+      appBar: AppBar(title: Text(widget.productClass.name)),
       body: Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _EditField(controller: _name, label: 'Nome da pasta', icon: Icons.folder_outlined, required: true),
-            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.inputBg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.lock_outline, size: 16, color: AppColors.input),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'A lista de classes é fixa. O que se define aqui é o mínimo '
+                      'que esta classe precisa representar em cada permuta.',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
             Text('Regra de mínimo',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 8),
-            RadioGroup<CategoryRuleType>(
+            RadioGroup<ClassRuleType>(
               groupValue: _ruleType,
-              onChanged: (v) => setState(() => _ruleType = v ?? CategoryRuleType.none),
-              child: Column(
-                children: const [
+              onChanged: (v) => setState(() => _ruleType = v ?? ClassRuleType.none),
+              child: const Column(
+                children: [
                   _RuleOption(
-                    value: CategoryRuleType.none,
+                    value: ClassRuleType.none,
                     title: 'Sem exigência',
-                    subtitle: 'A pasta só agrupa insumos.',
+                    subtitle: 'A classe não trava o envio da permuta',
                   ),
                   _RuleOption(
-                    value: CategoryRuleType.percentOfTotal,
-                    title: '% do valor total',
-                    subtitle: 'A pasta deve ser ao menos X% do custo total dos insumos.',
+                    value: ClassRuleType.percentOfTotal,
+                    title: 'Percentual do total',
+                    subtitle: 'A classe precisa representar X% do custo da permuta',
                   ),
                   _RuleOption(
-                    value: CategoryRuleType.valuePerHa,
+                    value: ClassRuleType.valuePerHa,
                     title: 'Valor por hectare',
-                    subtitle: 'Mínimo de R\$ por hectare × área do produtor.',
+                    subtitle: 'A classe precisa somar R\$ X por hectare da propriedade',
                   ),
                 ],
               ),
             ),
             if (_needsValue) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 12),
               _EditField(
                 controller: _value,
                 label: _valueLabel,
-                icon: _ruleType == CategoryRuleType.valuePerHa ? Icons.attach_money : Icons.percent,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                icon: Icons.percent,
                 required: true,
-                validator: (v) {
-                  final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
-                  if (n == null || n <= 0) return 'Informe um valor maior que 0';
-                  if (_ruleType == CategoryRuleType.percentOfTotal && n > 100) {
-                    return 'O percentual não pode passar de 100';
-                  }
-                  return null;
-                },
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
               ),
             ],
-            const SizedBox(height: 4),
-            Text(
-              'Enquanto o mínimo da pasta não for atingido, o consultor não consegue '
-              'enviar a permuta. Edite o valor sempre que o período mudar.',
-              style: TextStyle(fontSize: 11, color: AppColors.textLight),
-            ),
-            const SizedBox(height: 20),
-            _SaveButton(onPressed: _save, isNew: _isNew),
+            const SizedBox(height: 24),
+            _SaveButton(onPressed: _save, isNew: false),
           ],
         ),
       ),
@@ -571,16 +591,15 @@ class _EditCategoryScreenState extends State<EditCategoryScreen> {
   }
 }
 
-/// Opção de regra de categoria (rádio + título + descrição).
 class _RuleOption extends StatelessWidget {
-  final CategoryRuleType value;
+  final ClassRuleType value;
   final String title;
   final String subtitle;
   const _RuleOption({required this.value, required this.title, required this.subtitle});
 
   @override
   Widget build(BuildContext context) {
-    return RadioListTile<CategoryRuleType>(
+    return RadioListTile<ClassRuleType>(
       value: value,
       contentPadding: EdgeInsets.zero,
       dense: true,

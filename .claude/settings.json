@@ -114,11 +114,40 @@
       "Bash(sqlite3 prisma/test.db \"select count\\(*\\) from AuditLog;\")",
       "Bash(sqlite3 prisma/test.db \"select code, status from Barter order by code;\")",
       "Bash(sqlite3 api/prisma/dev.db \"select id,email,role from User;\")",
-      "Bash(sqlite3 api/prisma/dev.db \"select count\\(*\\) from AuditLog;\")"
+      "Bash(sqlite3 api/prisma/dev.db \"select count\\(*\\) from AuditLog;\")",
+      "Bash(node -e \"console.log\\(require\\('exceljs/package.json'\\).version\\)\")",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/@types/multer/package.json'\\).version\\)\")",
+      "Bash(npx eslint *)",
+      "Bash(sqlite3 prisma/dev.db \"select code,status,grainPrice,\\(select count\\(*\\) from VersionPrice v where v.versionId=BarterVersion.id\\) as linhas from BarterVersion;\")",
+      "Bash(sed -n '1,80p' ~/.pub-cache/hosted/pub.dev/file_picker-12.0.0/lib/src/file_picker.dart)",
+      "Read(//Users/thiagopiccoli/.pub-cache/hosted/pub.dev/file_picker-12.0.0/lib/src/**)",
+      "Bash(grep -n \"static Future<PlatformFile?> pickFile\\\\|readAsBytes\" ~/.pub-cache/hosted/pub.dev/file_picker-12.0.0/lib/src/file_picker.dart | head -5)",
+      "Bash(timeout 60 flutter devices)",
+      "Bash(flutter run *)",
+      "Read(//tmp/claude-501/-Users-thiagopiccoli-Projects-barter-fullstack/90446b90-aada-48bd-9a25-10a7c6184558/scratchpad/**)",
+      "Bash(pkill -f \"flutter run\")",
+      "Bash(sort -t: -k2 -n)",
+      "Bash(awk -F: '{print $2}')",
+      "Bash(sed -n '/toProductJson/,/^}/p' src/common/serializers.ts; echo \"=== does seasons e2e cover failed-import rollback? ===\"; grep -n \"encerrada\\\\|closed\\\\|rollback\\\\|não cria\\\\|orfão\\\\|orphan\" test/seasons.e2e-spec.ts | head -20)",
+      "Bash(chmod +x dev.sh)",
+      "Bash(bash -n dev.sh)",
+      "Bash(./dev.sh --help)",
+      "Bash(python3 -c \"import sys,json;[print\\(s['code'],s['status'],len\\(s['versions']\\)\\) for s in json.load\\(sys.stdin\\)['data']]\")",
+      "Bash(python3 -c ' *)",
+      "Bash(rm -f integration_test/tmp_shot_test.dart .s1.png .s2.png)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(echo \"ESLINT_EXIT=$?\")",
+      "Bash(git rm *)",
+      "Bash(lsof -ti:3333)",
+      "Bash(DATABASE_URL=\"file:./prisma/test.db\" PORT=3333 NODE_ENV=development node dist/src/main)",
+      "Bash(grep -n \"Produto criado pela importação\\\\|GET | \\\\`/products\\\\|/products\" docs/arquitetura.md)",
+      "Bash(sed -n '/model InputCategory/,/^}/p' api/prisma/schema.prisma)",
+      "Bash(sed -n '/^model Product /,/^}/p' api/prisma/schema.prisma)"
     ],
     "additionalDirectories": [
       "/tmp",
-      "/Users/thiagopiccoli/.claude/projects/-Users-thiagopiccoli-Projects-barter-fullstack"
+      "/Users/thiagopiccoli/.claude/projects/-Users-thiagopiccoli-Projects-barter-fullstack",
+      "/Users/thiagopiccoli/Projects/barter-fullstack/api/src/common"
     ]
   }
 }
