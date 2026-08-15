@@ -240,7 +240,6 @@ class AppData {
     required double grainPrice,
     DateTime? endsAt,
     double? targetSales,
-    double? targetProfit,
     double? targetSacks,
     int? targetBarters,
     String? note,
@@ -253,7 +252,6 @@ class AppData {
       grainPrice: grainPrice,
       endsAt: endsAt,
       targetSales: targetSales,
-      targetProfit: targetProfit,
       targetSacks: targetSacks,
       targetBarters: targetBarters,
       note: note,
@@ -266,21 +264,12 @@ class AppData {
   }
 
   /// Corrige um valor da versão vigente (o grão da safra inclusive).
-  static Future<void> updateVersionPrice(
-    String productId, {
-    double? price,
-    double? cost,
-  }) async {
+  static Future<void> updateVersionPrice(String productId, double price) async {
     final version = currentVersion;
     if (version == null) return;
-    currentVersion = await _program.updatePrice(
-      version.code,
-      productId,
-      price: price,
-      cost: cost,
-    );
+    currentVersion = await _program.updatePrice(version.code, productId, price);
     // O produto guarda o último valor publicado e ganha ponto no histórico.
-    if (price != null) await refreshCatalog();
+    await refreshCatalog();
   }
 
   /// Detalhe de uma versão, com metas e realizado.

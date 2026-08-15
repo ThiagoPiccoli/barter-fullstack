@@ -24,7 +24,6 @@ describe('Leitura da planilha do Barter', () => {
       unit: 'saco 50kg',
       productClass: 'Fertilizantes',
       price: 1185.5,
-      cost: 950,
       line: 2,
     });
     expect(rows[1].price).toBe(42.5);
@@ -47,8 +46,8 @@ describe('Leitura da planilha do Barter', () => {
         unit: 'saco 40kg',
         productClass: null,
         price: 320,
-        cost: 250,
         requiredPerHa: null,
+        unitPending: false,
       },
     ]);
   });
@@ -75,10 +74,8 @@ describe('Leitura da planilha do Barter', () => {
       name: 'HERBIC.2,4-D AGROIMPORT emb.20 l',
       productClass: 'HERBICIDAS',
       price: 5000,
-      // A lista do fornecedor não traz unidade nem custo: a embalagem vem na
-      // descrição, e o custo não é dado que ele compartilha.
-      unit: 'unidade',
-      cost: 0,
+      // Sem coluna de unidade: a embalagem sai da própria descrição.
+      unit: '20 L',
     });
     expect(rows[1].price).toBe(57.2761);
   });
@@ -97,7 +94,6 @@ describe('Leitura da planilha do Barter', () => {
       header,
       ['A', 'Sem preço', 'litro', '', '', '10'],
       ['B', 'Preço zerado', 'litro', '', '0', '0'],
-      ['C', 'Custo acima do preço', 'litro', '', '10', '90'],
       ['', '', '', '', '', ''],
       ['D', 'Ureia', 'saco', '', '185', '150'],
       ['D', 'Ureia de novo', 'saco', '', '190', '150'],
@@ -106,8 +102,7 @@ describe('Leitura da planilha do Barter', () => {
     expect(errors).toEqual([
       'Linha 2 (Sem preço): preço ausente ou ilegível.',
       'Linha 3 (Preço zerado): o preço precisa ser maior que zero.',
-      'Linha 4 (Custo acima do preço): o custo está acima do preço de venda.',
-      'Linha 7 (Ureia de novo): repetido — já aparece na linha 6.',
+      'Linha 6 (Ureia de novo): repetido — já aparece na linha 5.',
     ]);
   });
 
@@ -122,10 +117,22 @@ describe('Leitura da planilha do Barter', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('custo é opcional — sem ele a linha vale, com lucro zero', () => {
-    const { rows, errors } = parseSheet([header, ['X', 'Adjuvante', 'litro', '', '30', '']]);
-    expect(errors).toEqual([]);
-    expect(rows[0].cost).toBe(0);
+  /**
+   * A lista real não tem coluna de unidade: a embalagem vem no fim da
+   * descrição. Ver unit-from-name.ts.
+   */
+  it('sem coluna de unidade, a embalagem sai da descrição — e da classe', () => {
+    const { rows } = parseSheet([
+      ['classe', 'nome', 'preco'],
+      ['HERBICIDAS', 'HERBIC.AMINOL 806 emb.20 l', '19,90'],
+      ['FERTILIZANTES', 'ADUBO 10-20-10 CIBRA BIG-BAG', '3500'],
+      // Nome não diz nada; a CLASSE diz: fertilizante a peso é tonelada.
+      ['FERTILIZANTES', 'UREIA PLUS (45-00-00)', '2800'],
+      // Nem o nome nem a classe resolvem: entra marcado para revisão.
+      ['INOCULANTES', 'INOCULANTE GENÉRICO', '90'],
+    ]);
+    expect(rows.map((r) => r.unit)).toEqual(['20 L', 'big-bag', 'tonelada', 'unidade']);
+    expect(rows.map((r) => r.unitPending)).toEqual([false, false, false, true]);
   });
 
   describe('parseNumber', () => {
@@ -145,10 +152,10 @@ describe('Leitura da planilha do Barter', () => {
   it('lê um .xlsx de verdade, respeitando colunas vazias no meio', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Tabela');
-    sheet.addRow(['codigo', 'nome', 'unidade', 'categoria', 'preco', 'custo']);
-    // A coluna "categoria" vem vazia: se o leitor pulasse a célula em branco, o
-    // preço escorregaria para a coluna do custo.
-    sheet.addRow(['URE-45', 'Ureia 45%', 'saco 50kg', null, 185.5, 150]);
+    sheet.addRow(['codigo', 'nome', 'unidade', 'classe', 'preco']);
+    // A coluna "classe" vem vazia: se o leitor pulasse a célula em branco, o
+    // preço escorregaria para a coluna anterior.
+    sheet.addRow(['URE-45', 'Ureia 45%', 'saco 50kg', null, 185.5]);
     const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
 
     const { rows, errors } = parseSheet(await readWorkbook(Buffer.from(buffer)));
@@ -156,7 +163,6 @@ describe('Leitura da planilha do Barter', () => {
     expect(rows[0]).toMatchObject({
       name: 'Ureia 45%',
       price: 185.5,
-      cost: 150,
       productClass: null,
     });
   });

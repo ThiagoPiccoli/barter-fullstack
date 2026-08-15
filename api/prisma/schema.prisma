@@ -1,9 +1,11 @@
 // Schema do Barter — permuta de grãos por insumos.
 //
-// Observações de domínio (mesmas regras da versão anterior):
-// - Enums viram String (SQLite não tem enum): role admin|consultant,
+// Observações de domínio:
+// - Os "enums" são String: role admin|consultant|manager|committee|biller,
 //   type grain|input, kind grain|input, status pending|approved|denied,
-//   ruleType none|percentOfTotal|valuePerHa.
+//   ruleType none|percentOfTotal|valuePerHa. Vieram assim do SQLite, que não
+//   tem enum, e continuam assim de propósito — a validação mora nos DTOs
+//   (`@IsIn`) e um valor novo não pede migration nem deploy coordenado.
 // - Permuta é registro HISTÓRICO: nomes/preços ficam desnormalizados
 //   (snapshots) e os FKs usam SetNull para o histórico sobreviver a exclusões.
 
@@ -12,7 +14,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 /// Usuário que loga no app: admin (gerencia e revisa) ou consultant (consultor,
@@ -80,19 +82,21 @@ model Producer {
   barters Barter[]
 }
 
-/// CLASSE do insumo — a taxonomia do negócio (fungicidas, herbicidas,
-/// sementes, seguro agrícola…). A lista é FIXA: ela nasce na migration e não
-/// tem rota que crie, renomeie ou exclua.
+/// CLASSE do insumo — a taxonomia com que o FORNECEDOR organiza a lista de
+/// preços (herbicidas, inseticidas, fungicidas, fertilizantes, fertilizantes
+/// foliares, óleos e adjuvantes, inoculantes…).
 ///
-/// É fixa porque classe não é gosto de quem cadastra: ela é o vocabulário com
-/// que a cooperativa fala de mix, de exigência mínima e de relatório. Quando
-/// era editável, cada carga de planilha inventava uma pasta nova ("Defensivo",
-/// "DEFENSIVOS", "Defensivos Foliares") e o mínimo por classe passava a medir
-/// conjuntos diferentes a cada versão do Barter.
+/// A lista nasce do arquivo: a carga em massa cria a classe que ainda não
+/// existe, e é assim que ela acompanha o fornecedor sem depender de migration.
+/// O que NÃO existe é criar, renomear ou excluir classe pelo app — quem define
+/// a taxonomia é a lista de preços, não quem cadastra.
 ///
-/// O que continua editável é a REGRA de mínimo de cada classe
-/// (percentOfTotal >= ruleValue % do custo, ou valuePerHa >= R$ × área): ela é
-/// decisão comercial e muda de safra para safra.
+/// O casamento é por nome normalizado (sem acento, sem caixa, sem espaço
+/// repetido) ou pelo slug: é isso que impede "Defensivo", "DEFENSIVOS" e
+/// "Defensivos Foliares" de virarem três classes medindo mínimos diferentes.
+///
+/// A REGRA de mínimo (percentOfTotal >= ruleValue % do custo, ou valuePerHa
+/// >= R$ × área) é decisão comercial do admin e muda de safra para safra.
 model ProductClass {
   id Int @id @default(autoincrement())
 
@@ -133,6 +137,18 @@ model Product {
   /// carga em massa: sem ele, "Ureia 45%" e "UREIA 45 %" viram dois cadastros a
   /// cada arquivo importado.
   sku String? @unique
+
+  /// A UNIDADE deste item entrou como palpite e precisa de revisão.
+  ///
+  /// A lista de preços não tem coluna de unidade: a embalagem vem no fim da
+  /// descrição (`emb.20 l`, `BIG-BAG`) e, quando ela não vem, no padrão da
+  /// classe. Sobrando o que nem assim se resolve, o item entra com "unidade" e
+  /// esta marca — que é o que permite achá-lo depois, em vez de a unidade
+  /// errada aparecer no comprovante do produtor sem ninguém saber de onde veio.
+  ///
+  /// Some quando o admin escreve a unidade (ou quando uma carga seguinte
+  /// consegue lê-la).
+  unitPending Boolean @default(false)
 
   priceHistory  PriceHistoryEntry[]
   items         BarterItem[]
@@ -191,8 +207,10 @@ model BarterVersion {
 
   /// Metas de encerramento (null = sem meta). Medem o realizado das permutas
   /// APROVADAS da versão; ao atingir, o painel avisa e o admin decide.
+  ///
+  /// Não há meta de lucro: sem custo na lista de preços, ela seria a de vendas
+  /// com outro nome.
   targetSales   Float?
-  targetProfit  Float?
   targetSacks   Float?
   targetBarters Int?
 
@@ -210,8 +228,13 @@ model BarterVersion {
   @@unique([seasonId, number])
 }
 
-/// Uma LINHA da tabela de valores da versão: o preço e o custo de um insumo
-/// naquele lançamento. O custo é o que torna a meta de lucro calculável.
+/// Uma LINHA da tabela de valores da versão: o preço de um insumo naquele
+/// lançamento.
+///
+/// Não há custo aqui: a lista de preços do fornecedor traz o preço de venda, e
+/// só. O Barter mede VENDAS — margem exigiria um dado que a operação não tem, e
+/// um custo zerado faria "lucro" e "faturamento" mostrarem o mesmo número com
+/// nomes diferentes.
 ///
 /// Nome e unidade são snapshot pelo mesmo motivo do BarterItem: a tabela
 /// precisa continuar legível depois que o produto sair do catálogo.
@@ -224,7 +247,6 @@ model VersionPrice {
   productName String
   unit        String
   price       Float
-  cost        Float         @default(0)
 
   @@unique([versionId, productId])
 }
@@ -273,11 +295,9 @@ model Barter {
   @@index([versionId])
 }
 
-/// Item da permuta com snapshots imutáveis de nome/unidade/preço.
-///
-/// `unitCost` é o custo do insumo na versão em que a permuta foi fechada. Ele é
-/// congelado aqui, e não lido da tabela da versão, porque o lucro apurado de
-/// uma permuta não pode mudar quando o admin corrigir um custo depois.
+/// Item da permuta com snapshots imutáveis de nome/unidade/preço. O preço é
+/// congelado aqui — e não lido da tabela da versão — porque publicar a versão
+/// seguinte não pode reescrever o que já foi acordado.
 model BarterItem {
   id          Int      @id @default(autoincrement())
   barterId    Int
@@ -289,7 +309,6 @@ model BarterItem {
   unit        String
   quantity    Float
   unitValue   Float
-  unitCost    Float    @default(0)
 }
 
 /// Trilha de AUDITORIA dos atos sensíveis: quem provisionou, redefiniu senha,

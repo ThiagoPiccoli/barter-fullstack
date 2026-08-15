@@ -156,7 +156,7 @@ class _VersionPriceTable extends StatefulWidget {
 /// Como ordenar a tabela de valores. "Menor margem" existe porque é a pergunta
 /// que o admin faz de verdade ao revisar um lançamento: onde a margem está
 /// apertada demais.
-enum _ValueSort { name, price, marginDesc, marginAsc }
+enum _ValueSort { name, priceDesc, priceAsc }
 
 class _VersionPriceTableState extends State<_VersionPriceTable> {
   /// Classe escolhida (null = todas). A tabela da versão não carrega a classe:
@@ -198,14 +198,11 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
       case _ValueSort.name:
         filtered.sort((a, b) => a.productName.compareTo(b.productName));
         break;
-      case _ValueSort.price:
+      case _ValueSort.priceDesc:
         filtered.sort((a, b) => b.price.compareTo(a.price));
         break;
-      case _ValueSort.marginDesc:
-        filtered.sort((a, b) => b.margin.compareTo(a.margin));
-        break;
-      case _ValueSort.marginAsc:
-        filtered.sort((a, b) => a.margin.compareTo(b.margin));
+      case _ValueSort.priceAsc:
+        filtered.sort((a, b) => a.price.compareTo(b.price));
         break;
     }
     return filtered;
@@ -250,9 +247,8 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
           onSort: (value) => setState(() => _sort = value),
           sortOptions: const {
             _ValueSort.name: 'Nome (A–Z)',
-            _ValueSort.price: 'Maior preço',
-            _ValueSort.marginDesc: 'Maior margem',
-            _ValueSort.marginAsc: 'Menor margem',
+            _ValueSort.priceDesc: 'Maior preço',
+            _ValueSort.priceAsc: 'Menor preço',
           },
           current: _sort,
         ),
@@ -303,12 +299,10 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
     switch (_sort) {
       case _ValueSort.name:
         return 'Nome';
-      case _ValueSort.price:
+      case _ValueSort.priceDesc:
         return 'Maior preço';
-      case _ValueSort.marginDesc:
-        return 'Maior margem';
-      case _ValueSort.marginAsc:
-        return 'Menor margem';
+      case _ValueSort.priceAsc:
+        return 'Menor preço';
     }
   }
 }
@@ -387,7 +381,6 @@ class _VersionPriceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final marginPct = row.price > 0 ? row.margin / row.price * 100 : 0.0;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -421,12 +414,6 @@ class _VersionPriceCard extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Custo ${formatCurrency(row.cost)} • margem ${formatCurrency(row.margin)}'
-                    '${row.price > 0 ? ' (${marginPct.toStringAsFixed(0)}%)' : ''}',
-                    style: TextStyle(fontSize: 11, color: AppColors.textMedium),
-                  ),
                 ],
               ),
             ),
@@ -443,7 +430,6 @@ class _VersionPriceCard extends StatelessWidget {
                       productId: row.productId,
                       productName: row.productName,
                       price: row.price,
-                      cost: row.cost,
                       onUpdated: onUpdate,
                     ),
                     style: TextButton.styleFrom(
@@ -483,6 +469,10 @@ enum _HistorySort { name, price, up, down }
 class _HistoryListState extends State<_HistoryList> {
   /// null = todos; senão, só grãos ou só insumos.
   ProductType? _type;
+
+  /// Só os itens com unidade a revisar — o filtro que resolve a lista de uma
+  /// vez depois de uma carga.
+  bool _onlyPending = false;
   _HistorySort _sort = _HistorySort.name;
 
   /// Variação (%) do último valor publicado contra o primeiro ponto da linha
@@ -522,6 +512,9 @@ class _HistoryListState extends State<_HistoryList> {
   Widget build(BuildContext context) {
     final products = _apply();
     final total = AppData.grains.length + AppData.inputs.length;
+    final pendentes = [...AppData.grains, ...AppData.inputs]
+        .where((p) => p.unitPending)
+        .length;
 
     return Column(
       children: [
@@ -542,6 +535,14 @@ class _HistoryListState extends State<_HistoryList> {
               selected: _type == ProductType.input,
               onTap: () => setState(() => _type = ProductType.input),
             ),
+            // Só aparece quando há o que revisar: filtro que devolveria lista
+            // vazia é ruído na barra.
+            if (pendentes > 0)
+              _FilterChipData(
+                label: 'Sem unidade ($pendentes)',
+                selected: _onlyPending,
+                onTap: () => setState(() => _onlyPending = !_onlyPending),
+              ),
           ],
           sortLabel: _sortLabel,
           onSort: (value) => setState(() => _sort = value),
@@ -686,6 +687,23 @@ class _HistoryCard extends StatelessWidget {
                             ),
                             child: Text('fora do Barter',
                                 style: TextStyle(fontSize: 10, color: AppColors.textMedium)),
+                          ),
+                        ],
+                        // A unidade entrou como palpite: o aviso fica no item,
+                        // e não só num relatório, porque é aqui que se resolve.
+                        if (product.unitPending) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppColors.pending.withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text('sem unidade',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.pending)),
                           ),
                         ],
                       ],

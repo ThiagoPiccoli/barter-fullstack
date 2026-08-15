@@ -70,6 +70,11 @@ quantidade) só medem — quem encerra é o admin, com um toque. As duas regras
 moram juntas em [version-progress.ts](../api/src/seasons/version-progress.ts)
 (`isOpenAt`), que é o lugar de inverter isso se um dia a meta precisar travar.
 
+**O Barter mede vendas, não lucro.** A lista de preços do fornecedor traz preço
+de VENDA e mais nada — não há custo em lugar nenhum do modelo. Enquanto houve
+(com custo zerado), "lucro" e "faturamento" mostravam o mesmo número com nomes
+diferentes, que é pior do que um número a menos.
+
 E as regras de acesso — **cinco papéis**, definidos em um só lugar
 ([roles.ts](../api/src/common/roles.ts)):
 
@@ -109,7 +114,7 @@ havia arquivo nenhum onde se lesse o que um faturista pode.
 
 # PARTE 1 — Backend (`api/`)
 
-**Stack:** NestJS 11 · Prisma 7 (adapter `better-sqlite3`) · SQLite · TypeScript.
+**Stack:** NestJS 11 · Prisma 7 (adapter `pg`) · PostgreSQL · TypeScript.
 Sem JWT, sem Passport, sem bcrypt: autenticação é token opaco em tabela, hash de
 senha com `scrypt` nativo do Node.
 
@@ -346,12 +351,40 @@ Publicar uma versão é: **planilha .xlsx com os insumos + valor da saca digitad
 fornecedor — é a cotação com que a empresa decide receber.
 
 A leitura da planilha ([version-import.ts](../api/src/seasons/version-import.ts))
-é escrita para planilha de gente: cabeçalho em qualquer ordem, com ou sem
-acento, número com vírgula e "R$", linha em branco e rodapé no fim. Ela é
-dividida em duas partes de propósito — `readWorkbook` (a única que conhece
-`exceljs`) e `parseSheet` (a regra, testável sem arquivo). **Erro em qualquer
-linha recusa o arquivo inteiro**, com o número da linha na mensagem: meia-tabela
-publicada some com insumos sem ninguém perceber.
+é escrita para a planilha REAL do fornecedor — 656 itens, quatro colunas
+(`Família`, `Código`, `Descrição`, `Preço Venda (R$)`) e cabeçalho na segunda
+linha. Ela aguenta cabeçalho em qualquer ordem, com ou sem acento, **unidade
+entre parênteses** (`(R$)` deixava um "r" grudado no nome normalizado e
+derrubava o arquivo inteiro), número com vírgula, linha em branco e rodapé no
+fim. É dividida em duas partes de propósito — `readWorkbook` (a única que
+conhece `exceljs`) e `parseSheet` (a regra, testável sem arquivo). **Erro em
+qualquer linha recusa o arquivo inteiro**, com o número da linha na mensagem:
+meia-tabela publicada some com insumos sem ninguém perceber.
+
+**A embalagem sai da descrição, em três degraus.**
+[unit-from-name.ts](../api/src/seasons/unit-from-name.ts):
+
+1. a **medida no nome** — `emb.20 l` → `20 L`, `10KG` → `10 kg`. Vale a
+   **última** do nome (as primeiras são concentração do princípio ativo:
+   `SC630`, `480 SL`), e medida seguida de barra é concentração, não embalagem
+   (`100g/L`). Resolve 558 dos 656;
+2. a **embalagem por extenso** — `BIG-BAG`, `BB`, `B-B`, `mist.` → `big-bag` e
+   `granel`. Mais 86;
+3. o **padrão da classe** — fertilizante a peso é `tonelada`. Os 12 últimos
+   (ureia, DAP, cloreto de potássio, calcário). Não é chute: o preço deles está
+   na mesma faixa dos que vêm em big-bag, e um big-bag É uma tonelada.
+
+Total: **656 de 656**. O que um arquivo futuro trouxer sem pista entra com
+"unidade" e `unitPending` — o item aparece marcado no Histórico, com filtro
+próprio e contagem no aviso da publicação. Escrever a unidade encerra a
+pendência, e a carga seguinte **não** desfaz a revisão do admin.
+
+**As classes vêm do arquivo.** A coluna `Família` é a taxonomia do fornecedor, e
+a carga cria a classe que ainda não existe (foi assim que `FERTILIZANTES
+FOLIARES`, `OLEOS e ADJUVANTES` e `INOCULANTES` entraram). O casamento é por
+nome normalizado ou slug — é isso que impede "HERBICIDAS", "Herbicidas" e
+"herbicidas " de virarem três classes medindo mínimos diferentes. O que não
+existe é criar classe pelo app: quem define a taxonomia é a lista de preços.
 
 Todo item tem **código** (`sku`): o do fornecedor quando existe, um gerado
 (`INS-0007`, `GRA-0003`) quando o admin não informa — nenhum item fica sem, e é
@@ -377,8 +410,10 @@ abertas, o catálogo e a versão discordariam, e quem precifica é a versão.
 
 [schema.prisma](../api/prisma/schema.prisma). Dois padrões merecem atenção:
 
-**Enums são `String`** (SQLite não tem enum): `role`, `type`, `kind`, `status`,
-`ruleType`. A validação de valores fica nos DTOs (`@IsIn`).
+**Enums são `String`**: `role`, `type`, `kind`, `status`, `ruleType`. Vieram
+assim do SQLite, que não tem enum, e ficaram: a validação mora nos DTOs
+(`@IsIn`), e um valor novo não pede migration nem deploy coordenado entre banco
+e aplicação.
 
 **Permuta é registro histórico.** `BarterItem` guarda `productName`, `unit`,
 `unitValue` e `unitCost` como *snapshot*; `Barter` guarda `consultantName`,
@@ -868,7 +903,8 @@ Se for ler tudo em ordem, sugiro:
 | mudar validade da sessão | `TOKEN_TTL_DAYS` no `.env` | nada |
 | um endpoint novo | módulo (controller+service+dto) + serializer | repositório novo + campo no `AppData` |
 | deixar o consultor ver R$ | nada (já vem no JSON) | trocar as flags `showValue` |
-| trocar SQLite por Postgres | `datasource` no schema, trocar o adapter em `prisma.service.ts`, rodar migrations | nada |
+| ler outra coluna da planilha | `COLUMNS` em `version-import.ts` (+ spec) | nada |
+| outro padrão de embalagem no nome | `UNITS`/`PACKAGES` em `unit-from-name.ts` (+ spec) | nada |
 | mudar mensagem de erro | a exceção no service | nada (o app só exibe) |
 
 ---
@@ -893,10 +929,11 @@ Coisas verdadeiras sobre o código hoje, para você não interpretar como bug:
   por permuta criada. A corrida entre ler e gravar está tratada com retry
   (`createWithCode`), mas a leitura continua crescendo com o ano.
 - **Nome de arquivo enganoso** no app (`consultants_screen`) — ver 2.6.
-- **Uma instância só.** `better-sqlite3` roda dentro do processo: duas
-  instâncias da API sobre o mesmo arquivo não se coordenam. Adequado para uma
-  cooperativa, e escolhido de propósito — mas é o teto de escala horizontal
-  hoje. O caminho de saída é Postgres (ver "Produção" no `api/README.md`).
+- **Uma dúzia de itens entra sem embalagem.** `unit-from-name.ts` lê 644 dos
+  656 da lista real; o que sobra é adubo vendido a peso (ureia, DAP, calcário),
+  cujo nome não diz embalagem nenhuma. Eles entram como "unidade" e se acertam
+  um a um na tela do item. Chutar seria pior: unidade errada vai para o
+  comprovante do produtor.
 - **Paginação por offset.** Se registros forem criados entre uma página e a
   seguinte, a janela desloca. Autocorrige no refresh seguinte; para volume
   maior, o caminho é cursor.

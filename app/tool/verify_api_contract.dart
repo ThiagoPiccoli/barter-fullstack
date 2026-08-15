@@ -96,13 +96,11 @@ Future<void> _run() async {
       detail.priceHistory.length == detail.priceHistoryCount && detail.hasFullHistory,
       '${detail.priceHistory.length} ponto(s) em ${detail.name}');
 
-  // A lista de classes é FIXA no servidor: se ela chegar diferente disto, ou a
-  // migration não rodou, ou alguém abriu uma porta para alterá-la.
-  check(
-      'as nove classes do negócio chegam na ordem',
-      classes.map((c) => c.slug).join(',') ==
-          'fungicidas,inseticidas,herbicidas,sementes,fertilizantes,biologicos,'
-              'nutricao,seguro-agricola,oleos-adjuvantes',
+  // As classes vêm da LISTA DE PREÇOS: a carga em massa cria a que não existe.
+  // O que se confere aqui é a forma (slug estável + nome de exibição) e a
+  // ordem de exibição, não um conjunto fixo — ele muda com o fornecedor.
+  check('as classes chegam com slug e nome', classes.isNotEmpty &&
+      classes.every((c) => c.slug.isNotEmpty && c.name.isNotEmpty),
       classes.map((c) => c.name).join(' · '));
 
   final created = await catalog.createProduct(
@@ -138,9 +136,11 @@ Future<void> _run() async {
     check('a permuta aponta a versão em que foi fechada',
         barters.every((b) => b.versionCode.isNotEmpty));
 
+    // O realizado vem sempre; as metas, só as que o admin definiu ao publicar
+    // — uma versão sem meta nenhuma é um lançamento legítimo.
     final detail = await program.findVersion(current.code);
-    check('o detalhe traz o realizado das metas', detail.goals.isNotEmpty,
-        '${detail.goals.length} meta(s)');
+    check('o detalhe traz o realizado da versão', detail.realizedBarters >= 0,
+        '${detail.realizedBarters} permuta(s) aprovada(s), ${detail.goals.length} meta(s)');
   }
 
   final seasons = await program.listSeasons();

@@ -70,11 +70,6 @@ export class VersionPriceDto {
   @IsNumber()
   @IsPositive()
   price!: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  cost?: number;
 }
 
 /**
@@ -93,12 +88,6 @@ export class VersionLimitsDto {
   @IsNumber()
   @IsPositive()
   targetSales?: number;
-
-  @IsOptional()
-  @NumberFromText()
-  @IsNumber()
-  @IsPositive()
-  targetProfit?: number;
 
   @IsOptional()
   @NumberFromText()
@@ -157,13 +146,7 @@ export class ImportVersionDto extends VersionLimitsDto {
 
 /** Correção pontual de um valor dentro da versão vigente. */
 export class UpdateVersionPriceDto {
-  @IsOptional()
   @IsNumber()
   @IsPositive()
-  price?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  cost?: number;
+  price!: number;
 }

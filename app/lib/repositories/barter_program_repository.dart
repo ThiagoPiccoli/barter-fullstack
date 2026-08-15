@@ -62,7 +62,6 @@ class BarterProgramRepository {
     required double grainPrice,
     DateTime? endsAt,
     double? targetSales,
-    double? targetProfit,
     double? targetSacks,
     int? targetBarters,
     String? note,
@@ -76,7 +75,6 @@ class BarterProgramRepository {
         'grainPrice': '$grainPrice',
         if (endsAt != null) 'endsAt': endsAt.toUtc().toIso8601String(),
         if (targetSales != null) 'targetSales': '$targetSales',
-        if (targetProfit != null) 'targetProfit': '$targetProfit',
         if (targetSacks != null) 'targetSacks': '$targetSacks',
         if (targetBarters != null) 'targetBarters': '$targetBarters',
         if (note != null && note.isNotEmpty) 'note': note,
@@ -90,17 +88,13 @@ class BarterProgramRepository {
   /// o valor da saca — é o mesmo caminho, de propósito.
   Future<BarterVersionModel> updatePrice(
     String versionCode,
-    String productId, {
-    double? price,
-    double? cost,
-  }) async {
-    // Só o que veio: mandar `cost: null` apagaria o custo de quem só quis
-    // corrigir o preço.
-    final body = <String, dynamic>{};
-    if (price != null) body['price'] = price;
-    if (cost != null) body['cost'] = cost;
-
-    final data = await api.put('/barter-versions/$versionCode/prices/$productId', body: body);
+    String productId,
+    double price,
+  ) async {
+    final data = await api.put(
+      '/barter-versions/$versionCode/prices/$productId',
+      body: {'price': price},
+    );
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 }

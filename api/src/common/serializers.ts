@@ -115,6 +115,9 @@ function productFields(product: Product) {
     // tabela da versão vigente (ver toBarterVersionJson).
     currentPrice: product.currentPrice,
     sku: product.sku,
+    // "a unidade deste item é palpite" — o app mostra o aviso e oferece o
+    // filtro para o admin resolver a lista de uma vez.
+    unitPending: product.unitPending,
     requiredPerHa: product.requiredPerHa,
     classId: product.classId,
   };
@@ -177,7 +180,6 @@ export function toVersionPriceJson(price: VersionPrice) {
     productName: price.productName,
     unit: price.unit,
     price: price.price,
-    cost: price.cost,
   };
 }
 
@@ -214,7 +216,6 @@ export function toBarterVersionJson(
     startsAt: version.startsAt,
     endsAt: version.endsAt,
     targetSales: version.targetSales,
-    targetProfit: version.targetProfit,
     targetSacks: version.targetSacks,
     targetBarters: version.targetBarters,
     sourceFile: version.sourceFile,
@@ -234,7 +235,6 @@ export function toBarterItemJson(item: BarterItem) {
     unit: item.unit,
     quantity: item.quantity,
     unitValue: item.unitValue,
-    unitCost: item.unitCost,
   };
 }
 

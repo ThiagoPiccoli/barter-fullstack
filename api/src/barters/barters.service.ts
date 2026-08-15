@@ -204,7 +204,6 @@ export class BartersService {
         unit: version.season.grainUnit,
         quantity: sacks,
         unitValue: version.grainPrice,
-        unitCost: 0,
       },
       ...products.map((product) => ({
         productId: product.id,
@@ -213,9 +212,6 @@ export class BartersService {
         unit: product.unit,
         quantity: quantities.get(product.id)!,
         unitValue: valueOf.get(product.id)!.price,
-        // O custo é congelado junto com o preço: sem ele, corrigir um custo
-        // depois reescreveria o lucro de permutas já fechadas.
-        unitCost: valueOf.get(product.id)!.cost,
       })),
     ];
 

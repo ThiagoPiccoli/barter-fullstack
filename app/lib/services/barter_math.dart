@@ -79,21 +79,6 @@ double sacksToCover(double cost, double grainPrice) {
   return _roundTo(cost / grainPrice, 10000);
 }
 
-/// Um item já fechado da permuta: quanto, por qual preço e a que custo.
-abstract class CostedItem {
-  double get quantity;
-  double get unitValue;
-  double get unitCost;
-}
-
-/// Margem (R$) dos insumos de uma permuta: (preço − custo) × quantidade.
-/// É a conta que a meta de lucro do Barter acompanha, e o custo vem congelado
-/// no item — corrigir um custo hoje não reescreve o lucro de ontem.
-double itemsProfit(Iterable<CostedItem> items) => _roundTo(
-      items.fold(0.0, (sum, item) => sum + item.quantity * (item.unitValue - item.unitCost)),
-      100,
-    );
-
 /// Quantidade mínima obrigatória de um insumo: taxa por hectare × área (2 casas).
 double minQuantityFor(double requiredPerHa, double areaHa) {
   if (requiredPerHa <= 0) return 0;

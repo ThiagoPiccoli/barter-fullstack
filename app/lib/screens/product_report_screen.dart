@@ -59,14 +59,38 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
     return version.grainId == product.id || version.priceOf(product.id) != null;
   }
 
-  /// Troca o CÓDIGO do item. Ele é único no catálogo e é o que se digita na
-  /// busca — por isso a recusa do servidor (código já usado) aparece inteira.
-  Future<void> _editCode(ProductModel product) async {
-    final controller = TextEditingController(text: product.sku ?? '');
+  /// Troca o CÓDIGO do item — único no catálogo e chave da busca.
+  Future<void> _editCode(ProductModel product) => _editField(
+        product,
+        field: 'sku',
+        title: 'Código do item',
+        label: 'Código',
+        icon: Icons.qr_code_2,
+        current: product.sku ?? '',
+        hint: 'Use o código do fornecedor quando houver: é ele que casa a '
+            'planilha com este cadastro na próxima carga.',
+        uppercase: true,
+      );
+
+  /// Um campo de texto do cadastro, editado em diálogo.
+  ///
+  /// A recusa do servidor aparece inteira (código repetido, por exemplo): ela
+  /// diz de quem é o código, e essa é a informação que resolve.
+  Future<void> _editField(
+    ProductModel product, {
+    required String field,
+    required String title,
+    required String label,
+    required IconData icon,
+    required String current,
+    required String hint,
+    bool uppercase = false,
+  }) async {
+    final controller = TextEditingController(text: current);
     final novo = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Código do item'),
+        title: Text(title),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -76,18 +100,12 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
             TextField(
               controller: controller,
               autofocus: true,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(
-                labelText: 'Código',
-                prefixIcon: Icon(Icons.qr_code_2),
-              ),
+              textCapitalization:
+                  uppercase ? TextCapitalization.characters : TextCapitalization.none,
+              decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
             ),
             const SizedBox(height: 8),
-            Text(
-              'Use o código do fornecedor quando houver: é ele que casa a '
-              'planilha com este cadastro na próxima carga.',
-              style: TextStyle(fontSize: 11, color: AppColors.textLight),
-            ),
+            Text(hint, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
           ],
         ),
         actions: [
@@ -99,10 +117,10 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
         ],
       ),
     );
-    if (novo == null || novo.isEmpty || novo == product.sku) return;
+    if (novo == null || novo.isEmpty || novo == current) return;
 
     try {
-      await AppData.updateProductFields(product, {'sku': novo});
+      await AppData.updateProductFields(product, {field: novo});
       if (mounted) setState(() {});
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
@@ -117,7 +135,6 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
       productId: product.id,
       productName: product.name,
       price: row?.price ?? version.grainPrice,
-      cost: row?.cost,
       // Corrigir o valor acrescenta um ponto na linha do tempo: a tela precisa
       // do detalhe de novo, não de um rebuild do que já estava em mãos.
       onUpdated: _loadDetail,
@@ -288,9 +305,6 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
                         fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               ],
             ),
-            const SizedBox(height: 4),
-            Text('Unidade: ${product.unit}',
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
             const Divider(height: 20),
             _registrationRow(
               icon: Icons.qr_code_2,
@@ -298,6 +312,26 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
               active: product.sku != null,
               action: 'Alterar',
               onPressed: () => _editCode(product),
+            ),
+            const Divider(height: 20),
+            // A unidade costuma vir pronta da planilha (a embalagem sai da
+            // descrição), mas alguns itens não dizem a embalagem em lugar
+            // nenhum — adubo a peso, por exemplo. Para esses, é aqui que se
+            // acerta: a unidade aparece em toda permuta e no comprovante.
+            _registrationRow(
+              icon: Icons.straighten,
+              label: 'Unidade: ${product.unit}',
+              active: product.unit != 'unidade',
+              action: 'Alterar',
+              onPressed: () => _editField(
+                product,
+                field: 'unit',
+                title: 'Unidade do item',
+                label: 'Unidade',
+                icon: Icons.straighten,
+                current: product.unit,
+                hint: 'Como o item é vendido: "20 L", "big-bag", "tonelada".',
+              ),
             ),
             if (isInput) ...[
               const Divider(height: 20),

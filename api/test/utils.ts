@@ -23,15 +23,30 @@ export async function createTestApp(): Promise<INestApplication> {
 
 /**
  * Restaura o dataset de demonstração (apaga tudo e re-semeia) com os MESMOS
- * ids a cada teste. `deleteMany()` não reseta o contador de autoincrement do
- * SQLite — sem isso, os ids cresceriam a cada teste em vez de recomeçar em 1,
- * quebrando os testes que fixam ids do seed (ex.: produtor 1 = Antônio).
+ * ids a cada teste.
+ *
+ * `deleteMany()` não volta a sequência do autoincrement: sem reiniciá-la, os
+ * ids cresceriam a cada spec em vez de recomeçar em 1, e os testes que fixam id
+ * do seed (produtor 1 = Antônio, produto 5 = NPK) passariam a apontar para
+ * outro registro. Por isso as sequências do Postgres são zeradas ANTES de
+ * semear — `RESTART IDENTITY` num TRUNCATE de todas as tabelas faria o mesmo,
+ * mas exigiria listá-las na ordem das FKs, que é o que o seed já sabe fazer.
  */
 export async function resetDb(app: INestApplication): Promise<void> {
   const prisma = app.get(PrismaService);
   await seedDatabase(prisma);
-  await prisma.$executeRawUnsafe('DELETE FROM sqlite_sequence');
+  await restartSequences(prisma);
   await seedDatabase(prisma);
+}
+
+/** Todas as sequências de id do schema public voltam a 1. */
+async function restartSequences(prisma: PrismaService): Promise<void> {
+  const sequences = await prisma.$queryRawUnsafe<{ sequencename: string }[]>(
+    `SELECT sequencename FROM pg_sequences WHERE schemaname = 'public'`,
+  );
+  for (const { sequencename } of sequences) {
+    await prisma.$executeRawUnsafe(`ALTER SEQUENCE "${sequencename}" RESTART WITH 1`);
+  }
 }
 
 /** Loga (senha padrão do seed: 123456) e devolve o token Bearer. */

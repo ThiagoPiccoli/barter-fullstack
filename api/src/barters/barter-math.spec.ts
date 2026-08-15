@@ -2,7 +2,6 @@ import {
   classRequired,
   classSpend,
   inputCost,
-  itemsProfit,
   minQuantityFor,
   sacksToCover,
   type PricedInput,
@@ -31,19 +30,6 @@ describe('BarterMath', () => {
   it('grão sem preço não gera sacas (evita divisão por zero)', () => {
     expect(sacksToCover(1000, 0)).toBe(0);
     expect(sacksToCover(1000, -5)).toBe(0);
-  });
-
-  /* Espelhado em app/test/barter_math_test.dart — os MESMOS números. */
-  it('margem é (preço − custo) × quantidade, a 2 casas', () => {
-    expect(
-      itemsProfit([
-        { quantity: 300, unitValue: 115.0, unitCost: 89.7 },
-        { quantity: 150, unitValue: 18.9, unitCost: 14.74 },
-      ]),
-    ).toBe(8214);
-    // Sem custo informado, a margem é o preço inteiro.
-    expect(itemsProfit([{ quantity: 10, unitValue: 12.5, unitCost: 0 }])).toBe(125);
-    expect(itemsProfit([])).toBe(0);
   });
 
   it('gasto por classe considera apenas os insumos dela', () => {

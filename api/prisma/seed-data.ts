@@ -19,6 +19,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.season.deleteMany();
   await prisma.priceHistoryEntry.deleteMany();
   await prisma.product.deleteMany();
+  await prisma.productClass.deleteMany();
   await prisma.producer.deleteMany();
   await prisma.accessToken.deleteMany();
   await prisma.auditLog.deleteMany();
@@ -198,28 +199,27 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
   /* ── Classes de produto ───────────────────────────────────────────── */
   //
-  // A LISTA não nasce aqui: ela vem da migration, igual em dev, teste e
-  // produção — classe é vocabulário do negócio, não dado de demonstração. O
-  // que o dataset faz é ligar as REGRAS de mínimo vigentes e pegar os ids.
-  const classOf = async (slug: string) => {
-    const found = await prisma.productClass.findUnique({ where: { slug } });
-    if (!found) throw new Error(`Classe ${slug} não existe — rode as migrations.`);
-    return found;
-  };
-  const withRule = async (slug: string, ruleType: string, ruleValue: number) =>
-    prisma.productClass.update({ where: { slug }, data: { ruleType, ruleValue } });
+  // As classes NASCEM DO ARQUIVO do fornecedor: é a lista de preços que define
+  // a taxonomia, e a carga em massa cria a que ainda não existe. Aqui o
+  // dataset de demonstração cria as que os produtos abaixo usam — os nomes são
+  // os mesmos da lista real, para uma carga de verdade reconhecê-las em vez de
+  // duplicar.
+  const mkClass = async (slug: string, name: string, position: number, rule?: [string, number]) =>
+    prisma.productClass.create({
+      data: {
+        slug,
+        name,
+        position,
+        ruleType: rule?.[0] ?? 'none',
+        ruleValue: rule?.[1] ?? 0,
+      },
+    });
 
-  // Todas voltam a "sem exigência" antes: re-semear não pode herdar a regra
-  // que um teste anterior deixou ligada.
-  await prisma.productClass.updateMany({ data: { ruleType: 'none', ruleValue: 0 } });
-  await withRule('fertilizantes', 'percentOfTotal', 30);
-  await withRule('herbicidas', 'percentOfTotal', 10);
-
-  const fertilizantes = await classOf('fertilizantes');
-  const herbicidas = await classOf('herbicidas');
-  const inseticidas = await classOf('inseticidas');
-  const fungicidas = await classOf('fungicidas');
-  const sementes = await classOf('sementes');
+  const herbicidas = await mkClass('herbicidas', 'HERBICIDAS', 1, ['percentOfTotal', 10]);
+  const inseticidas = await mkClass('inseticidas', 'INSETICIDAS', 2);
+  const fungicidas = await mkClass('fungicidas', 'FUNGICIDAS', 3);
+  const fertilizantes = await mkClass('fertilizantes', 'FERTILIZANTES', 4, ['percentOfTotal', 30]);
+  const sementes = await mkClass('sementes', 'SEMENTES', 5);
 
   /* ── Produtos + histórico de valores (dez/2025..jun/2026, dia 5) ──── */
   const historyDates = [
@@ -362,9 +362,6 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // reajustados, a segunda vigente. É nela que uma permuta nova cai.
   const inputs = products.filter((product) => product.type === 'input');
 
-  /** Margem de demonstração: o custo é 78% do preço de venda. */
-  const costOf = (price: number) => Math.round(price * 0.78 * 100) / 100;
-
   const mkVersion = async (args: {
     seasonId: number;
     number: number;
@@ -375,7 +372,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     startsAt: Date;
     closedAt?: Date;
     note: string;
-    targets?: { sales?: number; profit?: number; sacks?: number; barters?: number };
+    targets?: { sales?: number; sacks?: number; barters?: number };
   }) =>
     prisma.barterVersion.create({
       data: {
@@ -390,7 +387,6 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         closedById: args.closedAt ? admin.id : null,
         note: args.note,
         targetSales: args.targets?.sales ?? null,
-        targetProfit: args.targets?.profit ?? null,
         targetSacks: args.targets?.sacks ?? null,
         targetBarters: args.targets?.barters ?? null,
         prices: {
@@ -399,7 +395,6 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
             productName: product.name,
             unit: product.unit,
             price: product.prices[args.priceIndex],
-            cost: costOf(product.prices[args.priceIndex]),
           })),
         },
       },
@@ -490,7 +485,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     priceIndex: 6,
     startsAt: at(2026, 1, 8),
     note: 'Tabela vigente da safra de soja.',
-    targets: { sales: 500000, profit: 110000, sacks: 5000, barters: 40 },
+    targets: { sales: 500000, sacks: 5000, barters: 40 },
   });
 
   /* ── Permutas históricas (mesmos números do mock) ─────────────────── */
@@ -502,8 +497,6 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     unit: p.unit,
     quantity,
     unitValue,
-    // O grão é a moeda da permuta, não uma compra: ele não tem custo.
-    unitCost: 0,
   });
   const inputItem = (p: Ref, quantity: number, unitValue: number) => ({
     productId: p.id,
@@ -512,7 +505,6 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     unit: p.unit,
     quantity,
     unitValue,
-    unitCost: costOf(unitValue),
   });
 
   const barters = [

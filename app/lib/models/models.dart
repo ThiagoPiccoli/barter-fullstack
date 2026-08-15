@@ -1,5 +1,3 @@
-import '../services/barter_math.dart';
-
 /// Papéis do sistema. Os nomes técnicos são os MESMOS que a API grava em
 /// `user.role` (ver api/src/common/roles.ts) — este enum é a tradução deles
 /// para o app, e não uma segunda lista para manter em dia de cabeça.
@@ -197,20 +195,12 @@ BarterStatus _asStatus(dynamic v) {
 /// Item de uma permuta. Serve tanto para o grão entregue quanto para o
 /// insumo retirado. [unitValue] é o valor de referência (R$) por unidade no
 /// momento da permuta — é o que permite converter grão em insumo.
-class BarterItem implements CostedItem {
+class BarterItem {
   final String productId;
   final String productName;
   final String unit;
-  @override
   final double quantity;
-  @override
   final double unitValue;
-
-  /// Custo (R$) do item na versão do Barter em que a permuta foi fechada.
-  /// Congelado junto com o preço — é o que permite apurar a margem depois sem
-  /// que uma correção de custo reescreva permutas antigas.
-  @override
-  final double unitCost;
 
   const BarterItem({
     required this.productId,
@@ -218,7 +208,6 @@ class BarterItem implements CostedItem {
     required this.unit,
     required this.quantity,
     required this.unitValue,
-    this.unitCost = 0,
   });
 
   factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
@@ -227,7 +216,6 @@ class BarterItem implements CostedItem {
         unit: json['unit'] as String,
         quantity: _asDouble(json['quantity']),
         unitValue: _asDouble(json['unitValue']),
-        unitCost: _asDouble(json['unitCost']),
       );
 
   /// Valor total de troca deste item (R$).
@@ -314,11 +302,6 @@ class BarterModel {
   /// Folga do pagamento (R$): grãos pagos menos custo dos insumos. ~0 quando o
   /// pagamento cobre exatamente os insumos; nunca deveria ficar negativo.
   double get balance => grainCredit - inputCost;
-
-  /// Margem (R$) desta permuta: (preço − custo) × quantidade dos insumos, com
-  /// os valores congelados na versão em que ela foi fechada. É o que soma na
-  /// meta de lucro do Barter. Espelha `itemsProfit` do servidor.
-  double get profit => itemsProfit(inputs);
 
   /// Total de sacas do grão de pagamento a entregar.
   double get totalGrainQty => grains.fold(0.0, (sum, i) => sum + i.quantity);
@@ -415,6 +398,14 @@ class ProductModel {
   /// O código como se lê na tela (vazio vira travessão).
   String get codeLabel => sku?.isNotEmpty == true ? sku! : '—';
 
+  /// A UNIDADE deste item é palpite e precisa de revisão.
+  ///
+  /// A lista de preços não tem coluna de unidade: a embalagem sai da descrição
+  /// (`emb.20 l`, `BIG-BAG`) e, quando ela não aparece, do padrão da classe. O
+  /// que nem assim se resolve entra com "unidade" e marcado — melhor uma dúzia
+  /// de itens pedindo revisão do que uma unidade inventada no comprovante.
+  final bool unitPending;
+
   const ProductModel({
     required this.id,
     required this.name,
@@ -427,6 +418,7 @@ class ProductModel {
     this.requiredPerHa = 0,
     this.classId,
     this.sku,
+    this.unitPending = false,
   });
 
   /// O item atende a uma busca por nome OU por código.
@@ -562,12 +554,12 @@ class ProductClassModel {
 }
 
 /// Em que unidade uma meta do Barter é medida. Espelha `GOAL_KIND` da API.
+///
+/// Não há lucro: a lista de preços do fornecedor traz preço de VENDA e mais
+/// nada. Sem custo, "lucro" seria o faturamento com outro nome.
 enum GoalKind {
   /// R$ em insumos retirados nas permutas aprovadas.
   sales,
-
-  /// R$ de margem (preço − custo).
-  profit,
 
   /// Sacas do grão comprometidas.
   sacks,
@@ -612,8 +604,6 @@ class BarterGoal {
     switch (kind) {
       case GoalKind.sales:
         return 'Vendas';
-      case GoalKind.profit:
-        return 'Lucro';
       case GoalKind.sacks:
         return 'Sacas';
       case GoalKind.barters:
@@ -622,7 +612,7 @@ class BarterGoal {
   }
 
   /// Metas em R$ e metas em contagem se leem de formas diferentes.
-  bool get isMoney => kind == GoalKind.sales || kind == GoalKind.profit;
+  bool get isMoney => kind == GoalKind.sales;
 }
 
 /// O valor de um insumo dentro de uma versão do Barter — uma linha da tabela.
@@ -631,14 +621,12 @@ class VersionPriceModel {
   final String productName;
   final String unit;
   final double price;
-  final double cost;
 
   const VersionPriceModel({
     required this.productId,
     required this.productName,
     required this.unit,
     required this.price,
-    required this.cost,
   });
 
   factory VersionPriceModel.fromJson(Map<String, dynamic> json) => VersionPriceModel(
@@ -646,11 +634,7 @@ class VersionPriceModel {
         productName: json['productName'] as String,
         unit: json['unit'] as String,
         price: _asDouble(json['price']),
-        cost: _asDouble(json['cost']),
       );
-
-  /// Margem unitária (R$). Só o admin vê — o consultor nunca lê valor.
-  double get margin => price - cost;
 }
 
 /// O BARTER LANÇADO: uma versão da safra (ex.: S2026.02).
@@ -691,7 +675,6 @@ class BarterVersionModel {
   /// Metas e realizado — só chegam para quem gerencia o Barter.
   final List<BarterGoal> goals;
   final double realizedSales;
-  final double realizedProfit;
   final double realizedSacks;
   final int realizedBarters;
 
@@ -716,7 +699,6 @@ class BarterVersionModel {
     this.note,
     this.goals = const [],
     this.realizedSales = 0,
-    this.realizedProfit = 0,
     this.realizedSacks = 0,
     this.realizedBarters = 0,
   });
@@ -750,7 +732,6 @@ class BarterVersionModel {
           .map(BarterGoal.fromJson)
           .toList(),
       realizedSales: _asDouble(realized['sales']),
-      realizedProfit: _asDouble(realized['profit']),
       realizedSacks: _asDouble(realized['sacks']),
       realizedBarters: (realized['barters'] as num?)?.toInt() ?? 0,
     );

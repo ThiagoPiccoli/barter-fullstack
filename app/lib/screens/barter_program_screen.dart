@@ -94,7 +94,6 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
         grainPrice: result.grainPrice,
         endsAt: result.endsAt,
         targetSales: result.targetSales,
-        targetProfit: result.targetProfit,
         targetSacks: result.targetSacks,
         targetBarters: result.targetBarters,
         note: result.note,
@@ -104,10 +103,16 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
       if (!mounted) return;
       setState(() => _loading = false);
       widget.onChanged();
+      // Quantos itens entraram sem unidade legível. É o número que manda o
+      // admin à aba Histórico antes de o consultor pedir "3 unidades" de um
+      // produto que se vende em bombona.
+      final pendentes = AppData.inputs.where((p) => p.unitPending).length;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('${brand.copy.programTitle} ${version.code} publicado com '
-            '${version.prices.length} insumo(s).'),
-        backgroundColor: AppColors.approved,
+            '${version.prices.length} insumo(s).'
+            '${pendentes > 0 ? ' $pendentes sem unidade — revise no Histórico.' : ''}'),
+        backgroundColor: pendentes > 0 ? AppColors.pending : AppColors.approved,
+        duration: Duration(seconds: pendentes > 0 ? 6 : 4),
       ));
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -693,7 +698,6 @@ class _PublishRequest {
   final double grainPrice;
   final DateTime? endsAt;
   final double? targetSales;
-  final double? targetProfit;
   final double? targetSacks;
   final int? targetBarters;
   final String? note;
@@ -705,7 +709,6 @@ class _PublishRequest {
     required this.grainPrice,
     this.endsAt,
     this.targetSales,
-    this.targetProfit,
     this.targetSacks,
     this.targetBarters,
     this.note,
@@ -738,7 +741,6 @@ class _PublishSheetState extends State<_PublishSheet> {
     text: widget.previous?.grainPrice.toStringAsFixed(2).replaceAll('.', ',') ?? '',
   );
   final _sales = TextEditingController();
-  final _profit = TextEditingController();
   final _sacks = TextEditingController();
   final _barters = TextEditingController();
   final _note = TextEditingController();
@@ -747,7 +749,6 @@ class _PublishSheetState extends State<_PublishSheet> {
   void dispose() {
     _grainPrice.dispose();
     _sales.dispose();
-    _profit.dispose();
     _sacks.dispose();
     _barters.dispose();
     _note.dispose();
@@ -811,7 +812,6 @@ class _PublishSheetState extends State<_PublishSheet> {
         grainPrice: grainPrice,
         endsAt: _endsAt,
         targetSales: _number(_sales),
-        targetProfit: _number(_profit),
         targetSacks: _number(_sacks),
         targetBarters: _number(_barters)?.round(),
         note: _note.text.trim().isEmpty ? null : _note.text.trim(),
@@ -910,12 +910,6 @@ class _PublishSheetState extends State<_PublishSheet> {
               children: [
                 Expanded(child: _target(_sales, 'Vendas (R\$)')),
                 const SizedBox(width: 10),
-                Expanded(child: _target(_profit, 'Lucro (R\$)')),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
                 Expanded(child: _target(_sacks, 'Sacas')),
                 const SizedBox(width: 10),
                 Expanded(child: _target(_barters, 'Permutas')),
@@ -1093,13 +1087,9 @@ Future<void> showVersionPriceDialog(
   required String productId,
   required String productName,
   required double price,
-  double? cost,
   required VoidCallback onUpdated,
 }) {
   final priceCtrl = TextEditingController(text: price.toStringAsFixed(2).replaceAll('.', ','));
-  final costCtrl = TextEditingController(
-    text: cost == null ? '' : cost.toStringAsFixed(2).replaceAll('.', ','),
-  );
   final version = AppData.currentVersion;
 
   return showDialog(
@@ -1121,17 +1111,6 @@ Future<void> showVersionPriceDialog(
             decoration: const InputDecoration(labelText: 'Preço (R\$)', prefixIcon: Icon(Icons.sell_outlined)),
             autofocus: true,
           ),
-          if (cost != null) ...[
-            const SizedBox(height: 12),
-            TextField(
-              controller: costCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: 'Custo (R\$)',
-                prefixIcon: Icon(Icons.inventory_outlined),
-              ),
-            ),
-          ],
           const SizedBox(height: 8),
           Text(
             'As permutas já registradas não mudam — elas guardam o valor do momento em que foram fechadas.',
@@ -1143,13 +1122,10 @@ Future<void> showVersionPriceDialog(
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
         ElevatedButton(
           onPressed: () async {
-            final newPrice = double.tryParse(priceCtrl.text.replaceAll('.', '').replaceAll(',', '.'));
-            if (newPrice == null || newPrice <= 0) return;
-            final newCost = cost == null
-                ? null
-                : double.tryParse(costCtrl.text.replaceAll('.', '').replaceAll(',', '.'));
+            final novo = double.tryParse(priceCtrl.text.replaceAll('.', '').replaceAll(',', '.'));
+            if (novo == null || novo <= 0) return;
             try {
-              await AppData.updateVersionPrice(productId, price: newPrice, cost: newCost);
+              await AppData.updateVersionPrice(productId, novo);
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               onUpdated();

@@ -57,31 +57,6 @@ export function sacksToCover(cost: number, grainPrice: number): number {
 }
 
 /**
- * Um item já fechado da permuta: quanto foi retirado, por qual preço e a que
- * custo. É a forma dos snapshots do BarterItem.
- */
-export interface CostedItem {
-  quantity: number;
-  unitValue: number;
-  unitCost: number;
-}
-
-/**
- * Margem (R$) dos insumos de uma permuta: (preço − custo) × quantidade.
- *
- * O custo vem congelado no item, não da tabela da versão: o lucro apurado de
- * uma permuta fechada não pode mudar porque alguém corrigiu um custo depois.
- * É esta conta que a meta de lucro do Barter acompanha.
- */
-export function itemsProfit(items: CostedItem[]): number {
-  const total = items.reduce(
-    (sum, item) => sum + item.quantity * (item.unitValue - item.unitCost),
-    0,
-  );
-  return Math.round(total * 100) / 100;
-}
-
-/**
  * Quantidade mínima obrigatória de um insumo para uma propriedade:
  * taxa por hectare × área, arredondada a 2 casas (regra do app).
  */

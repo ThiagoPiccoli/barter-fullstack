@@ -24,7 +24,6 @@ void main() {
             'unit': 'saca 60kg',
             'quantity': 80.4444,
             'unitValue': 148.5,
-            'unitCost': 0,
           },
           {
             'kind': 'input',
@@ -33,7 +32,6 @@ void main() {
             'unit': 'saco 50kg',
             'quantity': 48,
             'unitValue': 115.0,
-            'unitCost': 90.0,
           },
         ],
       };
@@ -57,11 +55,10 @@ void main() {
             'productName': 'NPK',
             'unit': 'saco 50kg',
             'price': 115.0,
-            'cost': 90.0,
           },
         ],
         if (withGoals) ...{
-          'realized': {'sales': 5520.0, 'profit': 1200.0, 'sacks': 80.4, 'barters': 1},
+          'realized': {'sales': 5520.0, 'sacks': 80.4, 'barters': 1},
           'goals': [
             {'kind': 'sales', 'target': 10000, 'realized': 5520.0, 'ratio': 0.552, 'met': false},
             {'kind': 'volumeExotico', 'target': 5, 'realized': 5, 'ratio': 1, 'met': true},
@@ -79,11 +76,9 @@ void main() {
       expect(barter.referenceGrainName, 'Soja');
     });
 
-    test('guarda a versão do Barter em que foi fechada e apura a margem', () {
+    test('guarda a versão do Barter em que foi fechada', () {
       final barter = BarterModel.fromJson(barterJson(status: 'approved'));
       expect(barter.versionCode, 'S2026.02');
-      // 48 × (115 − 90) = 1.200 — só os insumos entram; o grão é a moeda.
-      expect(barter.profit, closeTo(1200.0, 0.001));
     });
 
     /// Permutas anteriores ao lançamento por versões não têm o campo. Elas
@@ -116,7 +111,6 @@ void main() {
       expect(version.grainPrice, 148.5);
       expect(version.isOpen, isTrue);
       expect(version.priceOf('5')?.price, 115.0);
-      expect(version.priceOf('5')?.margin, 25.0);
       // Insumo fora da tabela não é permutável nesta gestão.
       expect(version.priceOf('9'), isNull);
     });

@@ -1,7 +1,7 @@
 # Barter API
 
 Backend do **Barter** (permuta de grãos por insumos) em **NestJS 11** + **Prisma
-7**, com SQLite em desenvolvimento/teste. É a autoridade das regras de negócio:
+7**, com PostgreSQL. É a autoridade das regras de negócio:
 o app Flutter só mostra a prévia, quem valida e calcula é aqui.
 
 ## Onde fica
@@ -311,7 +311,7 @@ src/
 ├── auth/          # login/logout por token opaco (hash SHA-256 no banco),
 │                  # hash de senha (scrypt), guard global + @Public()
 ├── common/        # AdminGuard, @CurrentUser(), EnvelopeInterceptor, ValidationPipe
-├── prisma/        # PrismaService (driver adapter better-sqlite3) como provider global
+├── prisma/        # PrismaService (driver adapter pg) como provider global
 ├── producers/      services/products/categories/barters/  # um módulo por recurso:
 │                  # controller fino → service com a regra → PrismaService
 prisma/
@@ -329,7 +329,7 @@ test/
 ## Decisões específicas do NestJS
 
 - **Prisma 7** move a `DATABASE_URL` do `schema.prisma` para `prisma.config.ts`
-  e exige um *driver adapter* explícito (`@prisma/adapter-better-sqlite3`) — daí
+  e exige um *driver adapter* explícito (`@prisma/adapter-pg`) — daí
   o `PrismaService` construir o `PrismaClient` com esse adapter.
 - **Tokens de acesso** são opacos: o valor cru vai ao cliente, o banco guarda
   só o SHA-256 (`AccessToken.hash`). Logout apaga a linha — revogação real.
@@ -343,13 +343,10 @@ test/
 - **Login não denuncia quem existe**: e-mail desconhecido paga o mesmo custo de
   scrypt de uma verificação real. Sem isso a resposta voltaria rápido demais e
   o tempo diria o que a mensagem genérica esconde.
-- **SQLite em WAL** com `busy_timeout` (ver `PrismaService`): leitura e escrita
-  deixam de se bloquear, e uma escrita concorrente espera pelo lock em vez de
-  devolver "database is locked" na cara do usuário.
-- **Testes e2e usam banco próprio** (`.env.test`, `prisma/test.db`) e resetam
-  os ids de autoincrement do SQLite a cada teste (`DELETE FROM
-  sqlite_sequence`) — sem isso, `deleteMany()` não reinicia o contador e os
-  testes que fixam ids do seed quebrariam a partir do segundo teste.
+- **Testes e2e usam banco próprio** (`.env.test` → `barter_test`) e reiniciam
+  as sequências de id a cada teste (ver `resetDb` em `test/utils.ts`) — sem
+  isso, `deleteMany()` não volta o contador e os testes que fixam ids do seed
+  (produtor 1 = Antônio) passariam a apontar para outro registro.
 
 ## Produção
 
@@ -368,16 +365,28 @@ Já vem resolvido: cabeçalhos de segurança (helmet), limite de corpo (256kb),
 CORS fechado por padrão em produção, limite de requisições por IP, log de uma
 linha por requisição e filtro global de erro que não vaza detalhe interno.
 
-### Uma instância só
+### Banco de dados
 
-O SQLite via `better-sqlite3` roda **dentro do processo**: duas instâncias da
-API sobre o mesmo arquivo não se coordenam. Para uma cooperativa isso é
-suficiente e simplifica a operação — mas é uma decisão consciente, não um
-descuido. O código não depende dela: a geração do código público da permuta,
-por exemplo, já trata a colisão de corrida que só apareceria com mais de um
-processo (ver `createWithCode` em `barters.service.ts`).
+**PostgreSQL.** A troca aconteceu ANTES da primeira carga real, de propósito:
+sem dado de produção, o custo foi reescrever as migrations; com dado, seria
+janela de parada e script de transferência. O que o SQLite não dava não era
+desempenho — era operação: ele roda dentro do processo, então duas instâncias
+da API sobre o mesmo arquivo não se coordenam, e sem isso não há deploy sem
+downtime, réplica de leitura nem backup online.
 
-Para escalar horizontalmente, troque para Postgres: mude `provider` em
-`prisma/schema.prisma`, troque o driver adapter em
-`src/prisma/prisma.service.ts` (ex.: `@prisma/adapter-pg`) e rode
-`prisma migrate dev`. Os services não mudam.
+Local, com o cluster da própria máquina:
+
+```bash
+createdb barter_dev && createdb barter_test
+cp .env.example .env          # ajuste DATABASE_URL com seu usuário
+npx prisma migrate deploy && npm run db:seed
+```
+
+Em produção, aponte `DATABASE_URL` para o banco gerenciado **com TLS**
+(`?sslmode=require`). O pool é o do `pg` (10 conexões por instância); atrás de
+um PaaS que multiplique instâncias, some as conexões antes de escolher o plano
+do banco.
+
+Referência de carga real: publicar a lista de preços do fornecedor — 656 itens,
+com criação de produto, classe e ponto de histórico para cada um — leva **~400
+ms**, e os 656 entram com unidade lida do próprio arquivo.

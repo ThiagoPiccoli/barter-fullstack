@@ -125,7 +125,7 @@ describe('Barters (e2e)', () => {
       });
 
     expect(response.status).toBe(422);
-    expect(response.body.message).toContain('Fertilizantes');
+    expect(response.body.message).toContain('FERTILIZANTES');
   });
 
   it('produtor precisa pertencer à carteira de quem registra', async () => {

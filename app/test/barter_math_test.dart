@@ -9,19 +9,6 @@ import 'package:agrobarter_app/services/barter_math.dart';
 /// senão a tela passa a prometer um número e o servidor a gravar outro.
 ///
 /// Ao mexer em qualquer um dos dois, mexa no outro junto.
-/// Um item fechado da permuta, na forma mínima que a margem exige. No app real
-/// quem cumpre este contrato é o `BarterItem`.
-class _Item implements CostedItem {
-  @override
-  final double quantity;
-  @override
-  final double unitValue;
-  @override
-  final double unitCost;
-
-  const _Item({required this.quantity, required this.unitValue, required this.unitCost});
-}
-
 void main() {
   // Referência: permuta PRM-2026-001 do dataset de demonstração.
   const inputs = [
@@ -42,20 +29,6 @@ void main() {
   test('grão sem preço não gera sacas (evita divisão por zero)', () {
     expect(sacksToCover(1000, 0), 0);
     expect(sacksToCover(1000, -5), 0);
-  });
-
-  /* Espelhado em api/src/barters/barter-math.spec.ts — os MESMOS números. */
-  test('margem é (preço − custo) × quantidade, a 2 casas', () {
-    expect(
-      itemsProfit(const [
-        _Item(quantity: 300, unitValue: 115.0, unitCost: 89.7),
-        _Item(quantity: 150, unitValue: 18.9, unitCost: 14.74),
-      ]),
-      8214,
-    );
-    // Sem custo informado, a margem é o preço inteiro.
-    expect(itemsProfit(const [_Item(quantity: 10, unitValue: 12.5, unitCost: 0)]), 125);
-    expect(itemsProfit(const []), 0);
   });
 
   test('gasto por classe considera apenas os insumos dela', () {

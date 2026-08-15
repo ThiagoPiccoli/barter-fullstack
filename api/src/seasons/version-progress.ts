@@ -6,7 +6,7 @@
  * - `endsAt` é uma DATA que o admin marcou. Ela trava: passada a data, a API
  *   recusa permuta nova. O admin decidiu com hora marcada, e um acordo fechado
  *   fora da vigência publicada não teria por que valer.
- * - as METAS (vendas, lucro, sacas, quantidade) apenas MEDEM. Atingir a meta
+ * - as METAS (vendas, sacas, quantidade) apenas MEDEM. Atingir a meta
  *   acende o alerta no painel; quem encerra é o admin. Nada fecha sozinho de
  *   madrugada, porque o realizado é uma leitura de negócio — pode haver uma
  *   permuta na fila que muda a conta, e desligar a operação por conta própria é
@@ -15,14 +15,11 @@
  * Se um dia a meta precisar travar como a data, o lugar é `isOpenAt`.
  */
 
-import { itemsProfit } from '../barters/barter-math';
-
-/** Item já precificado E custeado de uma permuta (o snapshot do BarterItem). */
+/** Item já precificado de uma permuta (o snapshot do BarterItem). */
 export interface CountedItem {
   kind: string;
   quantity: number;
   unitValue: number;
-  unitCost: number;
 }
 
 /** Uma permuta, reduzida ao que as metas precisam. */
@@ -31,12 +28,16 @@ export interface CountedBarter {
   items: CountedItem[];
 }
 
-/** O realizado de uma versão, nas quatro unidades em que se pode pôr meta. */
+/**
+ * O realizado de uma versão, nas três unidades em que se pode pôr meta.
+ *
+ * Não há lucro. A lista de preços do fornecedor traz o preço de VENDA e mais
+ * nada; sem custo, "lucro" seria o faturamento com outro nome — um número que
+ * parece outro e engana quem lê o painel.
+ */
 export interface Realized {
   /** R$ em insumos retirados. */
   sales: number;
-  /** R$ de margem: (preço − custo) × quantidade dos insumos. */
-  profit: number;
   /** Sacas do grão comprometidas. */
   sacks: number;
   /** Quantidade de permutas. */
@@ -46,14 +47,12 @@ export interface Realized {
 /** As metas da versão. `null` em qualquer uma = sem meta naquela unidade. */
 export interface Targets {
   targetSales: number | null;
-  targetProfit: number | null;
   targetSacks: number | null;
   targetBarters: number | null;
 }
 
 export const GOAL_KIND = {
   sales: 'sales',
-  profit: 'profit',
   sacks: 'sacks',
   barters: 'barters',
 } as const;
@@ -86,7 +85,6 @@ export function realizedFrom(barters: CountedBarter[]): Realized {
 
   return {
     sales: round2(inputs.reduce((sum, item) => sum + item.quantity * item.unitValue, 0)),
-    profit: itemsProfit(inputs),
     sacks: round2(sacks),
     barters: approved.length,
   };
@@ -96,7 +94,6 @@ export function realizedFrom(barters: CountedBarter[]): Realized {
 export function goalsOf(targets: Targets, realized: Realized): Goal[] {
   const pairs: [GoalKind, number | null, number][] = [
     [GOAL_KIND.sales, targets.targetSales, realized.sales],
-    [GOAL_KIND.profit, targets.targetProfit, realized.profit],
     [GOAL_KIND.sacks, targets.targetSacks, realized.sacks],
     [GOAL_KIND.barters, targets.targetBarters, realized.barters],
   ];

@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { unitFor } from './unit-from-name';
 
 /**
  * A PLANILHA que lança um Barter.
@@ -8,6 +9,9 @@ import ExcelJS from 'exceljs';
  * linhas conferidas, e é escrito para aguentar planilha de gente: cabeçalho em
  * qualquer ordem, com ou sem acento, número com vírgula, "R$" no meio do valor,
  * linhas em branco e uma nota de rodapé no fim.
+ *
+ * O que ela NÃO traz é custo: a lista do fornecedor tem preço de venda e mais
+ * nada. Por isso o Barter mede vendas, não lucro.
  *
  * A separação em duas etapas é de propósito:
  *
@@ -29,8 +33,14 @@ export interface ImportRow {
   unit: string;
   /** Nome (ou slug) da CLASSE do insumo, como veio na planilha. */
   productClass: string | null;
+
+  /**
+   * A unidade NÃO pôde ser determinada: nem a planilha traz coluna, nem o nome
+   * diz a embalagem, nem a classe tem padrão. O item entra com "unidade" e
+   * marcado para o admin escrever depois — ver Product.unitPending.
+   */
+  unitPending: boolean;
   price: number;
-  cost: number;
   /** Exigência por hectare, quando a planilha traz a coluna. */
   requiredPerHa: number | null;
 }
@@ -47,7 +57,6 @@ const COLUMNS = {
   unit: ['unidade', 'un', 'und', 'unid', 'medida', 'embalagem'],
   productClass: ['classe', 'categoria', 'pasta', 'grupo', 'familia', 'linha'],
   price: ['preco', 'valor', 'precovenda', 'valorvenda', 'venda', 'precounitario'],
-  cost: ['custo', 'custounitario', 'precocusto', 'compra', 'valorcusto'],
   requiredPerHa: ['exigenciaha', 'exigencia', 'minimoha', 'minimoporha', 'dose', 'doseha'],
 } as const;
 
@@ -168,21 +177,6 @@ export function parseSheet(matrix: string[][]): ImportResult {
       continue;
     }
 
-    const costText = at(row, 'cost');
-    const cost = costText ? parseNumber(costText) : 0;
-    if (cost === null) {
-      errors.push(`Linha ${line} (${name}): custo ilegível.`);
-      continue;
-    }
-    if (cost < 0) {
-      errors.push(`Linha ${line} (${name}): o custo não pode ser negativo.`);
-      continue;
-    }
-    if (cost > price) {
-      errors.push(`Linha ${line} (${name}): o custo está acima do preço de venda.`);
-      continue;
-    }
-
     const sku = at(row, 'sku') || null;
     const key = (sku ?? name).toLowerCase();
     const previous = seen.get(key);
@@ -199,10 +193,9 @@ export function parseSheet(matrix: string[][]): ImportResult {
       line,
       sku,
       name,
-      unit: at(row, 'unit') || 'unidade',
+      ...unitOf(at(row, 'unit'), name, at(row, 'productClass') || null),
       productClass: at(row, 'productClass') || null,
       price,
-      cost,
       requiredPerHa: requiredPerHa !== null && requiredPerHa > 0 ? requiredPerHa : null,
     });
   }
@@ -211,6 +204,24 @@ export function parseSheet(matrix: string[][]): ImportResult {
     errors.push('A planilha não tem nenhuma linha de produto.');
   }
   return { rows, errors };
+}
+
+/**
+ * A unidade do item e o sinal de que ela é confiável.
+ *
+ * Ordem: coluna da planilha → embalagem escondida no nome (`emb.20 l`,
+ * `BIG-BAG`) → padrão da classe (fertilizante a peso é tonelada). Falhando
+ * tudo, o item entra com "unidade" e MARCADO: é melhor uma dúzia de itens
+ * pedindo revisão do que 656 com uma unidade inventada.
+ */
+function unitOf(
+  fromSheet: string,
+  name: string,
+  productClass: string | null,
+): { unit: string; unitPending: boolean } {
+  if (fromSheet) return { unit: fromSheet, unitPending: false };
+  const read = unitFor({ name, productClass });
+  return read ? { unit: read, unitPending: false } : { unit: 'unidade', unitPending: true };
 }
 
 /** O texto de uma célula, seja ela número, fórmula, data ou texto rico. */

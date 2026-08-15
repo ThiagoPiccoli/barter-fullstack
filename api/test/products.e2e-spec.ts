@@ -211,22 +211,23 @@ describe('Products & Classes (e2e)', () => {
       .expect(404);
   });
 
-  it('a lista vem completa e na ordem do negócio', async () => {
+  /**
+   * A lista de classes vem do ARQUIVO do fornecedor — a carga em massa cria a
+   * que não existe. O dataset de demonstração traz as que os produtos dele
+   * usam, na ordem de exibição.
+   */
+  it('as classes vêm na ordem de exibição, não na ordem do banco', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/classes')
       .set('Authorization', await asUser(JOAO));
 
     expect(response.status).toBe(200);
     expect(response.body.data.map((c: { slug: string }) => c.slug)).toEqual([
-      'fungicidas',
-      'inseticidas',
       'herbicidas',
-      'sementes',
+      'inseticidas',
+      'fungicidas',
       'fertilizantes',
-      'biologicos',
-      'nutricao',
-      'seguro-agricola',
-      'oleos-adjuvantes',
+      'sementes',
     ]);
   });
 
@@ -239,7 +240,7 @@ describe('Products & Classes (e2e)', () => {
       .send({ ruleType: 'percentOfTotal', ruleValue: 15 });
     expect(ok.status).toBe(200);
     expect(ok.body.data).toMatchObject({
-      slug: 'fungicidas',
+      slug: 'herbicidas',
       ruleType: 'percentOfTotal',
       ruleValue: 15,
     });

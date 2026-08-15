@@ -88,8 +88,13 @@ export class ProductsService {
     if (sku) await this.ensureFreeSku(sku, id);
     return this.prisma.product.update({
       where: { id },
-      // Código vazio não apaga o que existe: quem quer trocar, digita outro.
-      data: { ...dto, ...(sku ? { sku } : { sku: undefined }) },
+      data: {
+        ...dto,
+        // Código vazio não apaga o que existe: quem quer trocar, digita outro.
+        ...(sku ? { sku } : { sku: undefined }),
+        // Escrever a unidade é exatamente a revisão que a marca pedia.
+        ...(dto.unit ? { unitPending: false } : {}),
+      },
       include: withHistory,
     });
   }

@@ -21,7 +21,6 @@ export type VersionProgress = { realized: Realized; goals: Goal[] };
 export interface ResolvedPrice {
   product: Product;
   price: number;
-  cost: number;
   /** Unidade desta versão, quando a planilha traz uma diferente do cadastro. */
   unit?: string;
 }
@@ -202,7 +201,7 @@ export class SeasonsService {
       where: { versionId: version.id },
       select: {
         status: true,
-        items: { select: { kind: true, quantity: true, unitValue: true, unitCost: true } },
+        items: { select: { kind: true, quantity: true, unitValue: true } },
       },
     });
     const realized = realizedFrom(barters);
@@ -289,7 +288,7 @@ export class SeasonsService {
         for (const row of kept) {
           const product = byId.get(row.productId!);
           if (product) {
-            prices.push({ product, price: row.price, cost: row.cost, unit: row.unit });
+            prices.push({ product, price: row.price, unit: row.unit });
           }
         }
       }
@@ -369,7 +368,6 @@ export class SeasonsService {
           startsAt: now,
           endsAt,
           targetSales: limits.targetSales ?? null,
-          targetProfit: limits.targetProfit ?? null,
           targetSacks: limits.targetSacks ?? null,
           targetBarters: limits.targetBarters ?? null,
           sourceFile,
@@ -380,7 +378,6 @@ export class SeasonsService {
               productName: row.product.name,
               unit: row.unit ?? row.product.unit,
               price: row.price,
-              cost: row.cost,
             })),
           },
         },
@@ -471,17 +468,15 @@ export class SeasonsService {
     productId: number,
     dto: UpdateVersionPriceDto,
   ): Promise<VersionWithPrices> {
-    if (dto.price === undefined && dto.cost === undefined) {
-      throw new UnprocessableEntityException('Informe o preço e/ou o custo');
-    }
     const version = await this.findVersion(code);
     if (version.status !== 'active') {
       throw new UnprocessableEntityException('Só a versão vigente pode ser corrigida');
     }
 
     const isGrain = version.season.grainId === productId;
-    if (isGrain && dto.price === undefined) {
-      throw new UnprocessableEntityException('Informe o novo valor da saca');
+    const row = version.prices.find((price) => price.productId === productId);
+    if (!isGrain && !row) {
+      throw new UnprocessableEntityException('Este produto não está na tabela desta versão');
     }
 
     const now = new Date();
@@ -489,60 +484,39 @@ export class SeasonsService {
       if (isGrain) {
         await tx.barterVersion.update({
           where: { id: version.id },
-          data: { grainPrice: dto.price! },
+          data: { grainPrice: dto.price },
         });
       } else {
-        const row = version.prices.find((price) => price.productId === productId);
-        if (!row) {
-          throw new UnprocessableEntityException('Este produto não está na tabela desta versão');
-        }
-        await tx.versionPrice.update({
-          where: { id: row.id },
-          data: {
-            ...(dto.price !== undefined ? { price: dto.price } : {}),
-            ...(dto.cost !== undefined ? { cost: dto.cost } : {}),
-          },
-        });
+        await tx.versionPrice.update({ where: { id: row!.id }, data: { price: dto.price } });
       }
 
-      if (dto.price !== undefined) {
-        await tx.product.update({
-          where: { id: productId },
-          data: {
-            currentPrice: dto.price,
-            priceHistory: {
-              create: {
-                price: dto.price,
-                changedBy: `Barter ${version.code}`,
-                changedById: admin.id,
-                changedAt: now,
-              },
+      // O produto guarda o último valor publicado e ganha o ponto na linha do
+      // tempo — é dela que vive o relatório de preço do item.
+      await tx.product.update({
+        where: { id: productId },
+        data: {
+          currentPrice: dto.price,
+          priceHistory: {
+            create: {
+              price: dto.price,
+              changedBy: `Barter ${version.code}`,
+              changedById: admin.id,
+              changedAt: now,
             },
           },
-        });
-      }
+        },
+      });
     });
 
-    const updated = await this.findVersion(code);
-    const label =
-      version.prices.find((price) => price.productId === productId)?.productName ??
-      version.season.grainName;
     await this.audit.record({
       actor: admin,
       action: AUDIT_ACTION.versionPriceChanged,
       targetType: 'version',
       targetId: version.id,
       targetLabel: version.code,
-      detail:
-        `${label}: ` +
-        [
-          dto.price !== undefined ? `preço ${dto.price.toFixed(2)}` : null,
-          dto.cost !== undefined ? `custo ${dto.cost.toFixed(2)}` : null,
-        ]
-          .filter(Boolean)
-          .join(', '),
+      detail: `${row?.productName ?? version.season.grainName}: ${dto.price.toFixed(2)}`,
     });
-    return updated;
+    return this.findVersion(code);
   }
 
   /* ── Apoio ─────────────────────────────────────────────────────────── */
@@ -569,7 +543,7 @@ export class SeasonsService {
           `${product.name} não é um insumo — o grão da safra tem valor próprio`,
         );
       }
-      return { product, price: row.price, cost: row.cost ?? 0 };
+      return { product, price: row.price };
     });
   }
 
@@ -598,16 +572,17 @@ export class SeasonsService {
     );
     const byName = new Map(products.map((product) => [normalizeName(product.name), product]));
 
-    // A classe da planilha precisa ser UMA DAS QUE EXISTEM. Antes, um nome
-    // desconhecido criava uma pasta nova — e era assim que "Defensivo",
-    // "DEFENSIVOS" e "Defensivos Foliares" viravam três conjuntos diferentes,
-    // cada um medindo um mínimo diferente. Aceita nome ou slug, com ou sem
-    // acento; o que não estiver na lista é erro do arquivo.
+    // A CLASSE vem do arquivo: quem define a taxonomia é a lista de preços do
+    // fornecedor, não quem cadastra. O que a chave normalizada protege é o
+    // outro extremo — "HERBICIDAS", "Herbicidas" e "herbicidas " são a MESMA
+    // classe, e sem isso cada carga criaria uma cópia, com o mínimo de cada uma
+    // medindo um conjunto diferente.
     const classByKey = new Map<string, number>();
     for (const productClass of classes) {
       classByKey.set(normalizeName(productClass.name), productClass.id);
       classByKey.set(normalizeName(productClass.slug), productClass.id);
     }
+    let nextPosition = classes.reduce((max, c) => Math.max(max, c.position), 0);
 
     const resolved: ResolvedPrice[] = [];
     for (const row of rows) {
@@ -617,13 +592,9 @@ export class SeasonsService {
 
       let classId: number | null = null;
       if (row.productClass) {
-        classId = classByKey.get(normalizeName(row.productClass)) ?? null;
-        if (classId === null) {
-          throw new UnprocessableEntityException(
-            `Linha ${row.line} (${row.name}): a classe "${row.productClass}" não existe. ` +
-              `Use uma destas: ${classes.map((c) => c.name).join(', ')}.`,
-          );
-        }
+        classId =
+          classByKey.get(normalizeName(row.productClass)) ??
+          (await this.createClass(row.productClass, ++nextPosition, classByKey));
       }
 
       if (!product) {
@@ -636,6 +607,7 @@ export class SeasonsService {
             requiredPerHa: row.requiredPerHa ?? 0,
             classId,
             sku: row.sku,
+            unitPending: row.unitPending,
           },
         });
         bySku.set((row.sku ?? '').toLowerCase(), product);
@@ -648,6 +620,13 @@ export class SeasonsService {
         const patch: Partial<Product> = {};
         if (!product.sku && row.sku) patch.sku = row.sku;
         if (classId && product.classId !== classId) patch.classId = classId;
+        // Unidade só é reescrita quando a atual é PALPITE e a planilha trouxe
+        // uma de verdade. O contrário — sobrescrever o que o admin escreveu —
+        // desfaria a revisão a cada carga.
+        if (product.unitPending && !row.unitPending) {
+          patch.unit = row.unit;
+          patch.unitPending = false;
+        }
         if (row.requiredPerHa !== null && row.requiredPerHa !== product.requiredPerHa) {
           patch.requiredPerHa = row.requiredPerHa;
         }
@@ -656,10 +635,37 @@ export class SeasonsService {
         }
       }
 
-      resolved.push({ product, price: row.price, cost: row.cost, unit: row.unit });
+      resolved.push({ product, price: row.price, unit: row.unit });
     }
     return resolved;
   }
+
+  /**
+   * Classe nova, vinda da planilha. Nasce SEM regra de mínimo: a regra é
+   * decisão comercial do admin, e uma classe que chegasse travando o envio da
+   * permuta seria uma decisão tomada por um arquivo.
+   *
+   * O nome fica como o fornecedor escreve (`FERTILIZANTES FOLIARES`); o slug é
+   * a forma estável, sem acento nem espaço — é por ele que o código se refere à
+   * classe se o nome de exibição mudar um dia.
+   */
+  private async createClass(
+    name: string,
+    position: number,
+    cache: Map<string, number>,
+  ): Promise<number> {
+    const created = await this.prisma.productClass.create({
+      data: { name: name.trim(), slug: slugify(name), position },
+    });
+    cache.set(normalizeName(created.name), created.id);
+    cache.set(normalizeName(created.slug), created.id);
+    return created.id;
+  }
+}
+
+/** `FERTILIZANTES FOLIARES` → `fertilizantes-foliares`. */
+function slugify(value: string): string {
+  return normalizeName(value).replace(/\s+/g, '-');
 }
 
 /** Nome comparável: sem acento, sem caixa e sem espaço repetido. */

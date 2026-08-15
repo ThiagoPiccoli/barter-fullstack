@@ -37,9 +37,9 @@ describe('Barter — safra e versões (e2e)', () => {
   const tabela = (price: number) => ({
     grainPrice: 150,
     prices: [
-      { productId: 5, price, cost: price * 0.8 },
-      { productId: 6, price: 18.9, cost: 15 },
-      { productId: 7, price: 42, cost: 33 },
+      { productId: 5, price },
+      { productId: 6, price: 18.9 },
+      { productId: 7, price: 42 },
     ],
   });
 
@@ -60,7 +60,7 @@ describe('Barter — safra e versões (e2e)', () => {
     expect(response.body.data.prices).toHaveLength(5);
   });
 
-  it('a permuta nasce amarrada à versão vigente e congela preço E custo', async () => {
+  it('a permuta nasce amarrada à versão vigente e congela o preço', async () => {
     const response = await http()
       .post('/api/v1/barters')
       .set('Authorization', await asUser(JOAO))
@@ -69,7 +69,7 @@ describe('Barter — safra e versões (e2e)', () => {
     expect(response.status).toBe(201);
     expect(response.body.data.versionCode).toBe('S2026.02');
     const npk = response.body.data.items.find((i: { productId: number }) => i.productId === 5);
-    expect(npk).toMatchObject({ unitValue: 115, unitCost: 89.7 });
+    expect(npk).toMatchObject({ unitValue: 115 });
     // O grão vem da safra: o consultor não escolheu nada.
     const grain = response.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
     expect(grain).toMatchObject({ productName: 'Soja', unitValue: 148.5 });
@@ -192,18 +192,18 @@ describe('Barter — safra e versões (e2e)', () => {
       const response = await http()
         .put('/api/v1/barter-versions/S2026.02/prices/5')
         .set('Authorization', admin)
-        .send({ price: 120, cost: 100 });
+        .send({ price: 120 });
 
       expect(response.status).toBe(200);
       const npk = response.body.data.prices.find((p: { productId: number }) => p.productId === 5);
-      expect(npk).toMatchObject({ price: 120, cost: 100 });
+      expect(npk).toMatchObject({ price: 120 });
 
       const nova = await http()
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
       const item = nova.body.data.items.find((i: { productId: number }) => i.productId === 5);
-      expect(item).toMatchObject({ unitValue: 120, unitCost: 100 });
+      expect(item).toMatchObject({ unitValue: 120 });
     });
 
     it('o valor da saca é corrigido pelo mesmo caminho (o grão é o produto da safra)', async () => {
@@ -272,7 +272,6 @@ describe('Barter — safra e versões (e2e)', () => {
       // Só as quatro metas do seed viram barra; o realizado sai das aprovadas.
       expect(response.body.data.goals.map((g: { kind: string }) => g.kind)).toEqual([
         'sales',
-        'profit',
         'sacks',
         'barters',
       ]);
@@ -300,15 +299,15 @@ describe('Barter — safra e versões (e2e)', () => {
     const planilha = async (linhas: (string | number | null)[][]) => {
       const workbook = new ExcelJS.Workbook();
       const sheet = workbook.addWorksheet('Tabela');
-      sheet.addRow(['codigo', 'nome', 'unidade', 'classe', 'preco', 'custo']);
+      sheet.addRow(['codigo', 'nome', 'unidade', 'classe', 'preco']);
       linhas.forEach((linha) => sheet.addRow(linha));
       return Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
     };
 
     it('carrega a tabela em massa e cria o insumo que ainda não existia', async () => {
       const arquivo = await planilha([
-        ['NPK-0414', 'Fertilizante NPK 04-14-08', 'saco 50kg', 'Fertilizantes', 125, 100],
-        ['ADJ-01', 'Adjuvante Novo', 'litro', 'Óleos e adjuvantes', 30, 22],
+        ['NPK-0414', 'Fertilizante NPK 04-14-08', 'saco 50kg', 'Fertilizantes', 125],
+        ['ADJ-01', 'Adjuvante Novo', 'litro', 'OLEOS e ADJUVANTES', 30],
       ]);
 
       const response = await http()
@@ -335,8 +334,81 @@ describe('Barter — safra e versões (e2e)', () => {
       expect(nomes.filter((n: string) => n === 'Fertilizante NPK 04-14-08')).toHaveLength(1);
     });
 
+    /**
+     * A lista real não tem coluna de unidade — a embalagem vem no fim da
+     * descrição. O que o nome não diz, a classe diz; e o que nem a classe
+     * resolve entra MARCADO, para o admin escrever depois em vez de a unidade
+     * errada aparecer no comprovante do produtor.
+     */
+    it('lê a embalagem da descrição, cai para o padrão da classe e marca o resto', async () => {
+      const arquivo = await planilha([
+        ['A-1', 'HERBIC.AMINOL 806 emb.20 l', '', 'HERBICIDAS', 19.9],
+        ['A-2', 'ADUBO 10-20-10 CIBRA BIG-BAG', '', 'FERTILIZANTES', 3140],
+        ['A-3', 'UREIA PLUS (45-00-00)', '', 'FERTILIZANTES', 3470],
+        ['A-4', 'INOCULANTE SEM PISTA', '', 'INOCULANTES', 90],
+      ]);
+
+      await http()
+        .post('/api/v1/seasons/S2026/versions/import')
+        .set('Authorization', await asUser(ADMIN))
+        .field('grainPrice', '150')
+        .attach('file', arquivo, 'tabela.xlsx')
+        .expect(201);
+
+      const produtos = await http()
+        .get('/api/v1/products?type=input')
+        .set('Authorization', await asUser(ADMIN));
+      const bySku = (sku: string) => produtos.body.data.find((p: { sku: string }) => p.sku === sku);
+
+      expect(bySku('A-1')).toMatchObject({ unit: '20 L', unitPending: false });
+      expect(bySku('A-2')).toMatchObject({ unit: 'big-bag', unitPending: false });
+      // O nome não diz nada; a classe diz: fertilizante a peso é tonelada.
+      expect(bySku('A-3')).toMatchObject({ unit: 'tonelada', unitPending: false });
+      // Nem nome nem classe: entra marcado, e é isso que o admin filtra depois.
+      expect(bySku('A-4')).toMatchObject({ unit: 'unidade', unitPending: true });
+    });
+
+    it('escrever a unidade encerra a pendência — e a carga seguinte não a desfaz', async () => {
+      const admin = await asUser(ADMIN);
+      const arquivo = await planilha([['B-1', 'INOCULANTE SEM PISTA', '', 'INOCULANTES', 90]]);
+      await http()
+        .post('/api/v1/seasons/S2026/versions/import')
+        .set('Authorization', admin)
+        .field('grainPrice', '150')
+        .attach('file', arquivo, 'tabela.xlsx')
+        .expect(201);
+
+      const produtos = await http().get('/api/v1/products?type=input').set('Authorization', admin);
+      const item = produtos.body.data.find((p: { sku: string }) => p.sku === 'B-1');
+      expect(item.unitPending).toBe(true);
+
+      const revisado = await http()
+        .put(`/api/v1/products/${item.id}`)
+        .set('Authorization', admin)
+        .send({ unit: 'dose 100 mL' });
+      expect(revisado.body.data).toMatchObject({ unit: 'dose 100 mL', unitPending: false });
+
+      // A carga seguinte traz o mesmo item ilegível: a revisão do admin fica.
+      await http()
+        .post('/api/v1/seasons/S2026/versions/import')
+        .set('Authorization', admin)
+        .field('grainPrice', '150')
+        .attach(
+          'file',
+          await planilha([['B-1', 'INOCULANTE SEM PISTA', '', 'INOCULANTES', 95]]),
+          'tabela.xlsx',
+        )
+        .expect(201);
+
+      const depois = await http().get('/api/v1/products?type=input').set('Authorization', admin);
+      expect(depois.body.data.find((p: { sku: string }) => p.sku === 'B-1')).toMatchObject({
+        unit: 'dose 100 mL',
+        unitPending: false,
+      });
+    });
+
     it('planilha com erro não publica nada, e a mensagem diz a linha', async () => {
-      const arquivo = await planilha([['X', 'Sem preço', 'litro', '', null, 10]]);
+      const arquivo = await planilha([['X', 'Sem preço', 'litro', '', null]]);
 
       const response = await http()
         .post('/api/v1/seasons/S2026/versions/import')
@@ -374,8 +446,7 @@ describe('Barter — safra e versões (e2e)', () => {
      * sujo: um insumo sem preço que ninguém pediu e ninguém veria para limpar.
      */
     describe('publicação recusada não deixa rastro no catálogo', () => {
-      const fantasma = () =>
-        planilha([['ZZZ-01', 'Insumo Fantasma', 'litro', 'Biológicos', 99, 70]]);
+      const fantasma = () => planilha([['ZZZ-01', 'Insumo Fantasma', 'litro', 'Biológicos', 99]]);
 
       const catalogo = async () => {
         const produtos = await http()
@@ -417,7 +488,7 @@ describe('Barter — safra e versões (e2e)', () => {
 
     it('carryOver mantém na tabela nova os insumos que o arquivo não trouxe', async () => {
       const arquivo = await planilha([
-        ['NPK-0414', 'Fertilizante NPK 04-14-08', 'saco 50kg', 'Fertilizantes', 125, 100],
+        ['NPK-0414', 'Fertilizante NPK 04-14-08', 'saco 50kg', 'Fertilizantes', 125],
       ]);
 
       const response = await http()
