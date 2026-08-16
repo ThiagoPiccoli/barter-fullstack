@@ -66,3 +66,20 @@ export function minQuantityFor(requiredPerHa: number, areaHa: number): number {
   }
   return Math.round(requiredPerHa * areaHa * 100) / 100;
 }
+
+/**
+ * Quantidade na precisão em que ela é GRAVADA (2 casas).
+ *
+ * Existia só no app (`roundQuantity`, em barter_math.dart), aplicada ao que o
+ * consultor digita. O servidor aceitava o número como viesse — e é ele quem
+ * grava. Quem chamasse a API direto, ou um app de versão diferente, registrava
+ * `12,3456` de insumo: o item ficava assim no banco, a tela e o comprovante
+ * mostravam `12,35`, e a conta impressa não fechava com a gravada.
+ *
+ * Duas casas porque é a precisão da unidade de venda — não se retira meio
+ * milésimo de saco. E o arredondamento é o mesmo dos dois lados (ver o teste
+ * de meio centavo em barter-math.spec.ts).
+ */
+export function roundQuantity(quantity: number): number {
+  return Math.round(quantity * 100) / 100;
+}

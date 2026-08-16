@@ -3,6 +3,7 @@ import {
   classSpend,
   inputCost,
   minQuantityFor,
+  roundQuantity,
   sacksToCover,
   type PricedInput,
 } from './barter-math';
@@ -68,10 +69,16 @@ describe('BarterMath', () => {
    * quantidade mínima e o envio ser recusado por estar abaixo dela.
    */
   it('arredondamento casa com o do app (mesmos casos de meio centavo)', () => {
+    expect(roundQuantity(0.015)).toBe(0.02);
+    expect(roundQuantity(0.045)).toBe(0.05);
     expect(minQuantityFor(0.015, 1)).toBe(0.02);
-    expect(minQuantityFor(0.045, 1)).toBe(0.05);
-    expect(minQuantityFor(2.675, 1)).toBe(2.68);
-    expect(minQuantityFor(1.005, 1)).toBe(1.0);
+
+    // Casos em que o binário já resolve para baixo sozinho — aqui os dois
+    // sempre concordaram, e continuam concordando.
+    expect(roundQuantity(2.675)).toBe(2.68);
+    expect(roundQuantity(1.005)).toBe(1.0);
+    expect(roundQuantity(0.1 + 0.2)).toBe(0.3);
+
     expect(sacksToCover(1, 3)).toBe(0.3333);
   });
 });

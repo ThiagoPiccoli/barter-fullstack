@@ -15,15 +15,15 @@
     "lint": "eslint \"{src,test,prisma,scripts}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:cov": "dotenv -e .env.test -- jest --config ./jest.coverage.config.js --runInBand",
-    "pretest:cov": "dotenv -e .env.test -- prisma migrate deploy",
+    "test:cov": "dotenv -e .env.test.local -e .env.test -- jest --config ./jest.coverage.config.js --runInBand",
+    "pretest:cov": "dotenv -e .env.test.local -e .env.test -- prisma migrate deploy",
     "test:cov:unit": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "dotenv -e .env.test -- jest --config ./test/jest-e2e.json --runInBand",
+    "test:e2e": "dotenv -e .env.test.local -e .env.test -- jest --config ./test/jest-e2e.json --runInBand",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset --force && npm run db:seed",
     "password:reset": "ts-node scripts/reset-password.ts",
-    "pretest:e2e": "dotenv -e .env.test -- prisma migrate deploy"
+    "pretest:e2e": "dotenv -e .env.test.local -e .env.test -- prisma migrate deploy"
   },
   "//overrides": [
     "Correções de segurança em dependências de TERCEIROS — pacotes que não são",

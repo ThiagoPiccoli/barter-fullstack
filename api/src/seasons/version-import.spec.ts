@@ -106,6 +106,59 @@ describe('Leitura da planilha do Barter', () => {
     ]);
   });
 
+  /**
+   * A REGRESSÃO: a linha repetida precisa ser pega pelas mesmas chaves com que
+   * o catálogo casa o produto (sku, e nome normalizado sem acento).
+   *
+   * Comparando `nome.toLowerCase()`, como era antes, `Ureia 45%` e `Uréia  45%`
+   * passavam daqui como dois produtos e chegavam no `resolveImported` como um
+   * só — duas linhas de preço para o mesmo produto, o que estoura o índice
+   * único `[versionId, productId]`. O que o admin via era "Já existe um
+   * registro com estes dados.", sem linha nenhuma, sobre um arquivo que este
+   * leitor tinha acabado de aprovar. E os produtos já criados ficavam para trás.
+   */
+  it('recusa nomes que só diferem por ACENTO — o catálogo os trata como um', () => {
+    const { errors } = parseSheet([
+      header,
+      ['', 'Ureia 45%', 'saco', '', '185', ''],
+      ['', 'Uréia 45%', 'saco', '', '190', ''],
+    ]);
+    expect(errors).toEqual(['Linha 3 (Uréia 45%): repetido — já aparece na linha 2.']);
+  });
+
+  it('recusa nomes que só diferem por ESPAÇO repetido', () => {
+    const { errors } = parseSheet([
+      header,
+      ['', 'Ureia 45%', 'saco', '', '185', ''],
+      ['', 'Ureia  45%', 'saco', '', '190', ''],
+    ]);
+    expect(errors).toEqual(['Linha 3 (Ureia  45%): repetido — já aparece na linha 2.']);
+  });
+
+  /**
+   * SKUs diferentes não salvam nomes iguais. O casamento tenta o sku primeiro,
+   * mas cai no nome quando ele não bate com nada no cadastro — e aí as duas
+   * linhas resolvem para o mesmo produto do mesmo jeito.
+   */
+  it('recusa o mesmo nome sob códigos de fornecedor diferentes', () => {
+    const { errors } = parseSheet([
+      header,
+      ['URE-1', 'Ureia 45%', 'saco', '', '185', ''],
+      ['URE-2', 'Ureia 45%', 'saco', '', '190', ''],
+    ]);
+    expect(errors).toEqual(['Linha 3 (Ureia 45%): repetido — já aparece na linha 2.']);
+  });
+
+  it('nomes de verdade diferentes continuam passando', () => {
+    const { rows, errors } = parseSheet([
+      header,
+      ['A', 'Ureia 45%', 'saco', '', '185', ''],
+      ['B', 'Ureia 46%', 'saco', '', '190', ''],
+    ]);
+    expect(errors).toEqual([]);
+    expect(rows).toHaveLength(2);
+  });
+
   it('ignora linha em branco e o rodapé de observações', () => {
     const { rows, errors } = parseSheet([
       header,
@@ -199,9 +252,15 @@ describe('Leitura da planilha do Barter', () => {
       expect(rows).toHaveLength(MAX_VERSION_PRICES);
     });
 
+    // Os números saem da CONSTANTE, não escritos à mão: fixá-los aqui fazia
+    // estes dois testes reprovarem por o teto ter mudado — que é uma decisão,
+    // não um defeito —, escondendo o que eles de fato guardam (que a contagem é
+    // de produtos e a mensagem diz quantos vieram).
     it('um produto além do máximo é recusado, dizendo quantos vieram', () => {
       const { errors } = parseSheet(tableWith(MAX_VERSION_PRICES + 1));
-      expect(errors.join(' ')).toMatch(/20001 produtos — o limite é 20000/);
+      expect(errors.join(' ')).toContain(
+        `A tabela tem ${MAX_VERSION_PRICES + 1} produtos — o limite é ${MAX_VERSION_PRICES}`,
+      );
     });
 
     it('arquivo com linhas demais é recusado antes de virar matriz', async () => {
@@ -213,7 +272,9 @@ describe('Leitura da planilha do Barter', () => {
       }
       const buffer = Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
 
-      await expect(readWorkbook(buffer)).rejects.toThrow(/linhas — o limite é 20100/);
+      await expect(readWorkbook(buffer)).rejects.toThrow(
+        new RegExp(`linhas — o limite é ${MAX_VERSION_PRICES + 100}`),
+      );
     });
 
     /**

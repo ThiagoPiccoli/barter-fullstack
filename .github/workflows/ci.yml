@@ -59,6 +59,10 @@ jobs:
     # dotenv-cli NÃO sobrepõe variável que já existe no ambiente. É o que deixa
     # a suíte usar o Postgres do runner aqui e o banco local na máquina de quem
     # desenvolve, com o mesmo arquivo.
+    #
+    # A precedência completa, do mais forte para o mais fraco: esta variável de
+    # job → `.env.test.local` (o de cada máquina, não versionado) → `.env.test`
+    # (o padrão versionado). Aqui só a primeira existe, e é a que vale.
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/barter_test
 

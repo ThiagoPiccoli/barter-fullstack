@@ -412,6 +412,12 @@ test/
   isso, `deleteMany()` não volta o contador e os testes que fixam ids do seed
   (produtor 1 = Antônio) passariam a apontar para outro registro.
 
+  O `.env.test` é versionado e traz o padrão `postgres:postgres`. Se o seu
+  cluster local atende por outro usuário, crie `api/.env.test.local` (não
+  versionado) com a sua `DATABASE_URL` — ela vence a do arquivo padrão, e a
+  variável de ambiente vence as duas, que é como o CI aponta para o Postgres
+  dele.
+
 ## Produção
 
 Copie `.env.example` para `.env` — ele documenta cada variável. O essencial:

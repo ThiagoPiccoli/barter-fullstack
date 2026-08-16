@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { normalizeName } from './product-name';
 import { unitFor } from './unit-from-name';
 
 /**
@@ -144,7 +145,22 @@ export function parseSheet(matrix: string[][]): ImportResult {
   const columns = mapColumns(matrix[headerIndex]);
   const rows: ImportRow[] = [];
   const errors: string[] = [];
-  const seen = new Map<string, number>();
+
+  /**
+   * O que já apareceu, pelas DUAS chaves com que o catálogo casa a linha.
+   *
+   * Não é zelo: são exatamente as duas chaves do `resolveImported`, que procura
+   * o produto primeiro pelo `sku` e, não achando, pelo nome normalizado. Uma
+   * linha que colida em qualquer uma delas resolve para o MESMO produto — e
+   * duas linhas para um produto só violam o índice `[versionId, productId]`
+   * lá na frente, quando já não há número de linha para mostrar a ninguém.
+   *
+   * O nome é comparado sem acento e sem espaço repetido (ver product-name.ts)
+   * porque é assim que o catálogo o compara. Comparar aqui de um jeito e ali
+   * de outro era o defeito.
+   */
+  const seenBySku = new Map<string, number>();
+  const seenByName = new Map<string, number>();
 
   const at = (row: string[], key: ColumnKey): string => {
     const index = columns[key];
@@ -178,13 +194,17 @@ export function parseSheet(matrix: string[][]): ImportResult {
     }
 
     const sku = at(row, 'sku') || null;
-    const key = (sku ?? name).toLowerCase();
-    const previous = seen.get(key);
+    const nameKey = normalizeName(name);
+    const skuKey = sku?.toLowerCase();
+
+    const previous =
+      (skuKey !== undefined ? seenBySku.get(skuKey) : undefined) ?? seenByName.get(nameKey);
     if (previous !== undefined) {
       errors.push(`Linha ${line} (${name}): repetido — já aparece na linha ${previous}.`);
       continue;
     }
-    seen.set(key, line);
+    if (skuKey !== undefined) seenBySku.set(skuKey, line);
+    seenByName.set(nameKey, line);
 
     const requiredText = at(row, 'requiredPerHa');
     const requiredPerHa = requiredText ? parseNumber(requiredText) : null;
@@ -264,10 +284,26 @@ function cellText(value: ExcelJS.CellValue): string {
  * `rowCount`, que inclui cabeçalho e preâmbulo, então uma tabela de exatamente
  * 20.000 preços passava por JSON e era recusada por arquivo.
  *
- * A maior lista de fornecedor que passou por aqui tem 656 itens: folga de
- * trinta vezes.
+ * O NÚMERO, porém, precisa ser entregável pelos DOIS, e 20.000 não era por
+ * nenhum. Medido:
+ *
+ * - por JSON, 20.000 itens dão 595 KB e esbarram no limite de 256 KB do corpo
+ *   (BODY_LIMIT, em app.setup.ts): 413 antes de a validação sequer rodar. O
+ *   teto real daquele caminho ficava perto de 8.600, não em 20.000;
+ * - por planilha, 20.000 linhas cabiam no arquivo (0,55 MB contra os 5 MB do
+ *   upload) e chegavam até a gravação, onde estouravam o prazo da transação —
+ *   P2028 aos 5 s, entregue ao admin como 500 "Erro inesperado no servidor".
+ *
+ * Ou seja: a constante era compartilhada, e ainda assim cada caminho parava num
+ * lugar diferente — o oposto do que ela existe para garantir. A gravação agora
+ * é em lote e a transação tem prazo explícito (ver seasons.service.ts), mas o
+ * teto continua tendo de caber no mais estreito dos dois caminhos.
+ *
+ * 5.000 passa com folga pelos dois: 145 KB de JSON contra os 256 KB do corpo. A
+ * maior lista de fornecedor que passou por aqui tem 656 itens — sete vezes de
+ * folga sobre o uso real, que é o que este teto existe para proteger.
  */
-export const MAX_VERSION_PRICES = 20_000;
+export const MAX_VERSION_PRICES = 5_000;
 
 /**
  * As duas GUARDAS DE MEMÓRIA da planilha já aberta — outra pergunta, outros

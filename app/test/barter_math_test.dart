@@ -76,5 +76,7 @@ void main() {
     expect(roundQuantity(2.675), 2.68);
     expect(roundQuantity(1.005), 1.0);
     expect(roundQuantity(0.1 + 0.2), 0.3);
+
+    expect(sacksToCover(1, 3), 0.3333);
   });
 }

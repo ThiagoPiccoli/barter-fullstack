@@ -13,6 +13,7 @@ import {
   classSpend,
   inputCost,
   minQuantityFor,
+  roundQuantity,
   sacksToCover,
   type PricedInput,
 } from './barter-math';
@@ -121,10 +122,17 @@ export class BartersService {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
 
-    // Consolida quantidades por produto (payload pode repetir ids).
+    // Consolida quantidades por produto (payload pode repetir ids) e as leva à
+    // precisão em que serão GRAVADAS. Arredondar aqui, e não só no app, é o que
+    // faz o item registrado ser o mesmo número que o comprovante imprime: o app
+    // já mandava 2 casas, mas quem manda é este lado, e ele aceitava qualquer
+    // precisão de quem chamasse a API direto.
     const quantities = new Map<number, number>();
     for (const item of dto.inputs) {
       quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
+    }
+    for (const [productId, quantity] of quantities) {
+      quantities.set(productId, roundQuantity(quantity));
     }
 
     const products = await this.prisma.product.findMany({

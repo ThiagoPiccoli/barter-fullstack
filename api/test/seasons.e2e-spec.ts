@@ -1,6 +1,8 @@
 import type { INestApplication } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import request from 'supertest';
+import { PrismaService } from '../src/prisma/prisma.service';
+import { MAX_VERSION_PRICES } from '../src/seasons/version-import';
 import { ADMIN, BACK_OFFICE, JOAO, createTestApp, loginAs, resetDb } from './utils';
 
 /**
@@ -101,6 +103,66 @@ describe('Barter — safra e versões (e2e)', () => {
       const grain = permutaNova.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
       expect(grain.unitValue).toBe(150);
       expect(grain.quantity).toBe(106.84);
+    });
+
+    /**
+     * O MESMO teto do caminho da planilha, entregue por JSON.
+     *
+     * É o que a constante compartilhada promete e não cumpria: 20.000 itens
+     * davam 595 KB e batiam no limite de 256 KB do corpo, devolvendo 413 antes
+     * de qualquer validação. Compartilhar a constante não bastava — ela
+     * precisava caber nos dois caminhos.
+     */
+    it(`publica ${MAX_VERSION_PRICES} preços por JSON — o mesmo teto da planilha`, async () => {
+      const admin = await asUser(ADMIN);
+      const prisma = app.get(PrismaService);
+      await prisma.product.createMany({
+        data: Array.from({ length: MAX_VERSION_PRICES }, (_, i) => ({
+          name: `Insumo JSON ${i}`,
+          unit: 'kg',
+          type: 'input',
+          currentPrice: 10,
+        })),
+      });
+      const insumos = await prisma.product.findMany({
+        where: { type: 'input', name: { startsWith: 'Insumo JSON ' } },
+        select: { id: true },
+        take: MAX_VERSION_PRICES,
+      });
+
+      const response = await http()
+        .post('/api/v1/seasons/S2026/versions')
+        .set('Authorization', admin)
+        .send({
+          grainPrice: 150,
+          prices: insumos.map((produto, i) => ({ productId: produto.id, price: 10 + i })),
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.prices).toHaveLength(MAX_VERSION_PRICES);
+    }, 120_000);
+
+    /**
+     * Produto repetido no corpo é recusado com o id na mensagem. Quem barrava
+     * antes era o índice único `[versionId, productId]`, e o admin recebia "Já
+     * existe um registro com estes dados." — verdadeiro e inútil.
+     */
+    it('recusa o mesmo produto duas vezes na tabela, dizendo qual', async () => {
+      const response = await http()
+        .post('/api/v1/seasons/S2026/versions')
+        .set('Authorization', await asUser(ADMIN))
+        .send({
+          grainPrice: 150,
+          prices: [
+            { productId: 5, price: 100 },
+            { productId: 6, price: 18.9 },
+            { productId: 5, price: 200 },
+          ],
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('repete');
+      expect(response.body.message).toContain('5');
     });
 
     /**
@@ -485,6 +547,70 @@ describe('Barter — safra e versões (e2e)', () => {
         expect(await catalogo()).not.toContain('Insumo Fantasma');
       });
     });
+
+    /**
+     * A ATOMICIDADE da importação, no ponto em que ela realmente faltava.
+     *
+     * O casamento com o catálogo CRIA produto e pasta, e isso acontecia fora de
+     * qualquer transação — a publicação vinha depois, separada. Falhando a
+     * publicação, os cadastros recém-criados ficavam para trás e nenhuma versão
+     * saía: o admin lia "Erro inesperado no servidor" e o catálogo dele tinha
+     * mudado assim mesmo.
+     *
+     * O gatilho aqui é o `sku` do GRÃO. A busca por código só enxerga insumos,
+     * então uma linha com `GRA-0001` não casa com nada, entra como produto novo
+     * e esbarra no índice único de `sku` na hora de gravar — depois de a pasta
+     * nova já ter sido criada. É essa pasta que este teste procura.
+     */
+    it('falha no meio da gravação desfaz também as PASTAS que a planilha criou', async () => {
+      const admin = await asUser(ADMIN);
+      const pastas = async () => {
+        const response = await http().get('/api/v1/classes').set('Authorization', admin);
+        return response.body.data.map((c: { name: string }) => c.name);
+      };
+      expect(await pastas()).not.toContain('Pasta Inédita');
+
+      const response = await http()
+        .post('/api/v1/seasons/S2026/versions/import')
+        .set('Authorization', admin)
+        .field('grainPrice', '150')
+        .attach(
+          'file',
+          await planilha([['GRA-0001', 'Insumo de Código Tomado', 'litro', 'Pasta Inédita', 99]]),
+          'tabela.xlsx',
+        );
+
+      expect(response.status).toBe(422);
+      expect(await pastas()).not.toContain('Pasta Inédita');
+    });
+
+    /**
+     * O TETO DECLARADO, entregue de verdade — nos dois caminhos.
+     *
+     * Publicar a tabela cheia estourava o prazo da transação (P2028 aos 5 s) e
+     * voltava como 500, porque a linha do tempo de preços era gravada com um
+     * UPDATE por produto, em série. O que este teste guarda não é a velocidade:
+     * é que o número que o sistema anuncia como limite seja um número que ele
+     * consegue gravar.
+     */
+    it(`publica ${MAX_VERSION_PRICES} preços por planilha — o teto declarado`, async () => {
+      const linhas = Array.from({ length: MAX_VERSION_PRICES }, (_, i) => [
+        `CARGA-${i}`,
+        `Insumo de carga ${i}`,
+        'kg',
+        'Fertilizantes',
+        10 + i,
+      ]);
+
+      const response = await http()
+        .post('/api/v1/seasons/S2026/versions/import')
+        .set('Authorization', await asUser(ADMIN))
+        .field('grainPrice', '150')
+        .attach('file', await planilha(linhas), 'tabela-cheia.xlsx');
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.prices).toHaveLength(MAX_VERSION_PRICES);
+    }, 120_000);
 
     it('carryOver mantém na tabela nova os insumos que o arquivo não trouxe', async () => {
       const arquivo = await planilha([

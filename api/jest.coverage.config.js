@@ -3,10 +3,10 @@
  *
  * O `npm test` mede só a unidade, e o relatório que saía dele era enganoso ao
  * ponto de não servir para nada: ele contava TODOS os arquivos de `src/` como
- * alvo, mas rodava apenas os `*.spec.ts`. Os 132 testes e2e — que são onde
- * services e controllers realmente são exercitados — ficavam de fora da
- * execução e dentro do denominador. Daí `barters.service.ts` aparecer com 0%
- * enquanto existia uma suíte inteira de permuta passando por ele.
+ * alvo, mas rodava apenas os `*.spec.ts`. Os testes e2e — que são onde services
+ * e controllers realmente são exercitados — ficavam de fora da execução e
+ * dentro do denominador. Daí `barters.service.ts` aparecer com 0% enquanto
+ * existia uma suíte inteira de permuta passando por ele.
  *
  * Um número errado é pior que nenhum: ele convida a "melhorar a cobertura"
  * escrevendo teste onde já havia, e a discutir meta sobre um valor que ninguém
@@ -36,8 +36,12 @@ module.exports = {
     // O que não é código de decisão sai do denominador: as próprias specs, os
     // módulos do Nest (só fiação de DI) e os DTOs (declaração de decorators).
     // Mantê-los dentro empurrava o número para baixo sem apontar risco nenhum.
+    //
+    // Os DTOs estavam nesta lista só no comentário: a linha que os exclui não
+    // existia, e ninguém percebeu porque o texto já dizia que sim.
     '!src/**/*.spec.ts',
     '!src/**/*.module.ts',
+    '!src/**/dto/*.ts',
     '!src/main.ts',
   ],
   coverageDirectory: 'coverage',

@@ -77,6 +77,35 @@ describe('Barters (e2e)', () => {
     expect(grains[0].unitValue).toBe(148.5);
   });
 
+  /**
+   * A quantidade é GRAVADA em 2 casas, e quem arredonda é o servidor.
+   *
+   * O app já mandava arredondado (`roundQuantity`, em barter_math.dart), mas
+   * quem grava é este lado — e ele aceitava a precisão que viesse. Uma chamada
+   * direta à API registrava `48,1234` de insumo: o banco guardava isso, a tela
+   * e o comprovante mostravam `48,12`, e o valor impresso não fechava com o
+   * gravado.
+   */
+  it('arredonda a quantidade em 2 casas — a precisão em que ela é gravada', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(JOAO))
+      .send({
+        ...validPayload,
+        inputs: [
+          { productId: 5, quantity: 48.1234 },
+          { productId: 6, quantity: 300.005 },
+          { productId: 7, quantity: 18 },
+        ],
+      });
+
+    expect(response.status).toBe(201);
+    const porProduto = (id: number) =>
+      response.body.data.items.find((i: { productId: number }) => i.productId === id).quantity;
+    expect(porProduto(5)).toBe(48.12);
+    expect(porProduto(6)).toBe(300.01);
+  });
+
   it('preço enviado pelo cliente é ignorado: quem precifica é o banco', async () => {
     const adulterado = {
       ...validPayload,
