@@ -186,11 +186,31 @@ papel (papel alheio responde 404).
 variáveis de ambiente) e a senha se recupera por `npm run password:reset`. Não
 há ninguém acima do admin para autorizar a criação de outro.
 
+### O que vale como senha
+
+A regra mora em um arquivo só — [`src/auth/password-policy.ts`](src/auth/password-policy.ts) —
+e vale para os três caminhos que definem senha: o cadastro de usuário, a troca
+da própria senha e o script de emergência do servidor.
+
+| Regra | Por quê |
+|---|---|
+| No mínimo **10 caracteres** | Comprimento é o que protege; abaixo disso não há o que discutir |
+| No mínimo **5 caracteres diferentes** | `ababababab` tem dez caracteres e a força de dois |
+| Fora da **lista de senhas conhecidas** | Senha vazada não é fraca por ser curta, é fraca por ser conhecida |
+| Sem **corrida de teclado** (`qwertyuiop`, `9876543210`) | O que a mão faz sozinha, o atacante tenta primeiro |
+| Sem o **nome do sistema** nem o **seu próprio nome/e-mail** | É o primeiro chute contra uma conta específica |
+| **Nenhuma exigência** de maiúscula, número ou símbolo | Regra de composição não gera senha forte, gera `Senha@123` |
+
+O desenho segue o [NIST SP 800-63B](https://pages.nist.gov/800-63-3/sp800-63b.html)
+(§5.1.1.2). O passo seguinte — conferir contra a base do *Have I Been Pwned* —
+está anotado no próprio arquivo: ele exige dar acesso de saída à internet para
+a API, que é decisão de operação.
+
 ### Senha de primeira entrada
 
 Ao criar um usuário de qualquer papel, o servidor **sorteia uma senha só dele** e a devolve
 **uma única vez**, no corpo da resposta (`provisionalPassword`, algo como
-`K7NP-4TQX`). O admin dita esse valor para o consultor; depois disso ele não
+`K7NP-4TQX-M9BD`). O admin dita esse valor para o consultor; depois disso ele não
 pode mais ser lido — o banco guarda apenas o hash.
 
 A aleatoriedade não é capricho. Enquanto essa senha foi um valor fixo igual
@@ -212,7 +232,51 @@ npm run password:reset                        # lista as contas cadastradas
 npm run password:reset -- admin@empresa.com   # sorteia uma senha provisória
 ```
 
-A senha definida por aí também é provisória: exige troca no primeiro login.
+A senha definida por aí também é provisória: exige troca no primeiro login, e
+passa pela mesma política das outras.
+
+### Quanto tempo uma sessão dura
+
+Duas mortes, respondendo perguntas diferentes:
+
+- **Prazo absoluto** (`TOKEN_TTL_DAYS`, padrão 30): esta sessão já é velha demais.
+- **Inatividade** (`TOKEN_IDLE_DAYS`, padrão 7): este aparelho ainda está com
+  quem deveria? É a que resolve o celular perdido — sem ela, um aparelho
+  esquecido no sábado seguiria valendo por até um mês.
+
+Quem usa o app na rotina nunca esbarra na segunda: cada requisição regrava o
+"visto por último" (no máximo uma vez por hora, para não pôr um `UPDATE` no
+caminho crítico de toda chamada). O que expira é apagado na primeira tentativa
+de uso e, para as sessões que ninguém tenta usar de novo — aparelho trocado, app
+desinstalado —, uma varredura a cada seis horas limpa a sobra
+([`session-cleanup.service.ts`](src/auth/session-cleanup.service.ts)).
+
+### Quando a conta descansa
+
+Dez senhas erradas seguidas e a conta recusa tentativas por 15 minutos — **até a
+senha certa**. Acertar antes disso zera o contador.
+
+Isto existe porque o limite por IP protege o *servidor*, não a *conta*: dez
+tentativas por minuto por IP viram muitas por minuto quando saem de muitos IPs,
+e a conta do admin é alvo conhecido de qualquer um que veja a tela de login.
+
+A troca que este desenho aceita, dita por inteiro: **quem souber um e-mail
+consegue manter aquela conta trancada** errando a senha de propósito. É por isso
+que a trava dura quinze minutos e não "até o admin liberar" — o incômodo passa
+sozinho e a adivinhação não sobrevive a ele. Uma trava permanente trocaria o
+roubo de conta por uma negação de serviço confiável.
+
+**Definir uma senha nova destranca a conta na hora** — pelo reset do admin, pelo
+`npm run password:reset` ou pela troca da própria senha. Os três provam a
+identidade do titular, e sem isso o reset entregaria uma credencial que não
+entra: a trava é conferida *antes* da senha, então a provisória recém-ditada ao
+telefone seria recusada por até quinze minutos sem que nada explicasse por quê.
+O contador de tentativas zera junto, senão o primeiro engano ao digitar a senha
+nova trancaria tudo outra vez. A regra mora em
+[`src/auth/lockout.ts`](src/auth/lockout.ts), num arquivo só, porque a trava é
+escrita em um lugar e apagada em quatro.
+
+Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=session`.
 
 ## Rotas (prefixo `/api/v1`)
 
@@ -357,13 +421,29 @@ Copie `.env.example` para `.env` — ele documenta cada variável. O essencial:
 | `NODE_ENV=production` | Desliga o dataset de demonstração (ele criaria contas com senha pública) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Primeiro acesso, criado só se o banco estiver vazio |
 | `CORS_ORIGINS` | Origens liberadas. Sem ela, nenhuma origem externa passa (o app mobile não depende disso) |
-| `TRUST_PROXY` | **Obrigatório atrás de nginx/Cloudflare/PaaS.** Sem isto o limite por IP conta o IP do proxy e todos os usuários somados disputam as mesmas 10 tentativas de login por minuto |
+| `TRUST_PROXY` | **Obrigatório atrás de nginx/Cloudflare/PaaS.** Sem isto o limite por IP conta o IP do proxy e todos os usuários somados disputam as mesmas 10 tentativas de login por minuto. O servidor avisa na subida se ela faltar em produção |
 | `PASSWORD_COST` | Custo do scrypt (padrão 16). Nunca abaixe em produção |
+| `TOKEN_TTL_DAYS` / `TOKEN_IDLE_DAYS` | Prazo absoluto (30) e inatividade (7) da sessão |
 | `SWAGGER=on` | Abre a documentação, que em produção fica fechada por padrão |
 
 Já vem resolvido: cabeçalhos de segurança (helmet), limite de corpo (256kb),
-CORS fechado por padrão em produção, limite de requisições por IP, log de uma
-linha por requisição e filtro global de erro que não vaza detalhe interno.
+CORS fechado por padrão em produção, limite de requisições por IP, bloqueio
+temporário da conta que erra a senha, sessão que morre por prazo e por
+inatividade, log de uma linha por requisição, trilha de auditoria dos atos
+sensíveis (inclusive entradas e tentativas) e filtro global de erro que não
+vaza detalhe interno.
+
+**O que ainda falta para publicar** — assinatura do APK, credencial de
+distribuição e o resto da esteira de release — está em
+[`docs/RELEASE.md`](../docs/RELEASE.md).
+
+### Sonda de saúde
+
+`GET /health` (fora do `/api/v1`, pública) toca o banco com um `SELECT 1` e
+responde `{"status":"ok","database":"ok"}` — ou **503** se o Postgres não
+responder. Aponte o balanceador e o orquestrador para ela, e não para `/`: a
+raiz devolve 200 com o processo de pé e o banco inalcançável, que é o pior
+estado possível para uma verificação de saúde.
 
 ### Banco de dados
 

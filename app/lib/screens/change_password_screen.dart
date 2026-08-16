@@ -131,8 +131,16 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                 icon: Icons.lock_reset,
                 obscure: _obscure,
                 onToggle: () => setState(() => _obscure = !_obscure),
+                // Só o comprimento é conferido aqui, e de propósito: a regra
+                // inteira (lista de senhas conhecidas, sequências de teclado,
+                // não conter o próprio nome) mora no servidor, em
+                // api/src/auth/password-policy.ts. Copiá-la para o Dart criaria
+                // uma segunda cópia que envelhece sozinha — e o app passaria a
+                // recusar senha que a API aceita, ou pior, o contrário. O que o
+                // servidor recusar volta com a frase pronta em pt-BR, que esta
+                // tela já exibe.
                 validator: (v) {
-                  if (v == null || v.length < 6) return 'Use ao menos 6 caracteres';
+                  if (v == null || v.length < 10) return 'Use ao menos 10 caracteres';
                   if (v == _current.text) return 'A nova senha precisa ser diferente da atual';
                   return null;
                 },

@@ -28,10 +28,44 @@ jobs:
     defaults:
       run:
         working-directory: api
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+    # O BANCO DO CI.
+    #
+    # A API deixou de falar com um arquivo SQLite e passou a falar com um
+    # Postgres, e o runner não tem um. Sem este serviço o `prisma generate`
+    # morria na primeira linha (`prisma.config.ts` exige DATABASE_URL) e o
+    # portão inteiro caía ANTES de rodar lint, build ou teste algum — vermelho
+    # desde a migração, com o `distribute.yml` pulando por consequência.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: barter_test
+        ports:
+          - 5432:5432
+        # Sem isto os passos começam antes de o Postgres aceitar conexão, e a
+        # falha aparece como "connection refused" intermitente.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # No NÍVEL DO JOB de propósito: os quatro passos abaixo precisam da variável
+    # (`prisma generate`, `build`, `test` e `test:e2e`). O `.env.test` continua
+    # valendo para o resto — PASSWORD_COST, os limites de requisição —, porque o
+    # dotenv-cli NÃO sobrepõe variável que já existe no ambiente. É o que deixa
+    # a suíte usar o Postgres do runner aqui e o banco local na máquina de quem
+    # desenvolve, com o mesmo arquivo.
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/barter_test
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -46,20 +80,51 @@ jobs:
       # Sem `--fix`: no CI o lint precisa REPROVAR, não consertar em silêncio um
       # arquivo que ninguém vai commitar (o script `npm run lint` conserta, e é
       # isso que se quer na máquina de quem escreve).
+      #
+      # `prisma/` e `scripts/` entram na lista porque é onde moram o
+      # provisionamento do primeiro admin e a redefinição de senha pela linha de
+      # comando — código de segurança que estava fora do portão.
       - name: Lint
-        run: npx eslint "src/**/*.ts" "test/**/*.ts"
+        run: npx eslint "src/**/*.ts" "test/**/*.ts" "prisma/**/*.ts" "scripts/**/*.ts"
 
       - name: Compilar (o que o tsc pega e o jest não)
         run: npm run build
 
-      - name: Testes de unidade
-        run: npm test
+      # AS DUAS SUÍTES numa execução só (jest `projects`), com cobertura.
+      #
+      # `test:cov` roda exatamente os mesmos testes que `npm test` e
+      # `npm run test:e2e` rodam separadamente — só que instrumentados e de uma
+      # vez. Rodar por aqui mantém os dois portões e ainda imprime o número real
+      # de cobertura a cada build; rodar as suítes duas vezes (uma para gatear,
+      # outra para medir) seria o dobro do tempo pelo mesmo resultado.
+      #
+      # E mantém a configuração de cobertura VIVA: enquanto ela existia só como
+      # um script que ninguém chamava, o relatório podia apodrecer sem que nada
+      # reclamasse — foi assim que ele passou a medir só a suíte de unidade
+      # contra o código inteiro e a devolver 25%, quando o valor é 92%.
+      #
+      # `pretest:cov` aplica as migrations no Postgres do serviço acima.
+      # `.env.test` é versionado de propósito: ele não guarda segredo nenhum, e
+      # é o que dá à suíte os valores que ela precisa (PASSWORD_COST baixo, os
+      # limites de requisição folgados). O DATABASE_URL dele vale na máquina de
+      # quem desenvolve; aqui quem vale é o do job.
+      - name: Testes (unidade + e2e, com cobertura)
+        run: npm run test:cov
 
-      # `pretest:e2e` aplica as migrations no banco de teste. `.env.test` é
-      # versionado de propósito: ele não guarda segredo nenhum, e é o que
-      # permite a suíte rodar aqui sem configuração.
-      - name: Testes e2e
-        run: npm run test:e2e
+      # VARREDURA DE DEPENDÊNCIA — por último de propósito.
+      #
+      # É um portão de cadeia de suprimentos, não de corretude: um aviso
+      # publicado durante a noite reprova o build sem que uma linha do projeto
+      # tenha mudado. Rodando depois dos testes, esse dia ainda mostra o
+      # resultado das suítes em vez de escondê-lo atrás de um alarme de
+      # terceiro — e continua bloqueando a distribuição, que é o ponto.
+      #
+      # `--audit-level=high` porque o alarme precisa significar alguma coisa:
+      # reprovar em `low` treina todo mundo a ignorar o passo. O que estiver
+      # preso dentro de dependência alheia se resolve com `overrides` no
+      # package.json, que é onde os de hoje estão documentados.
+      - name: Auditoria de dependências
+        run: npm audit --audit-level=high
 
   app:
     name: App (Flutter)
@@ -68,7 +133,7 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: subosito/flutter-action@v2
         with:

@@ -150,7 +150,9 @@ describe('Usuários — uma rota por papel (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/auth/password')
         .set(auth)
-        .send({ currentPassword: provisoria, newPassword: 'senha-nova-123' })
+        // Não pode conter o nome de quem escolhe (fullName é "Pessoa Nova"),
+        // então nada de "…-nova-…": ver src/auth/password-policy.ts.
+        .send({ currentPassword: provisoria, newPassword: 'trilha-do-cerrado-9' })
         .expect(200);
 
       // E agora entra, no papel que a rota deu.

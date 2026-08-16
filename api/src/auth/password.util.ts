@@ -140,9 +140,16 @@ const UNAMBIGUOUS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
  * definir a senha definitiva, e o admin não tinha como retomar a conta. A
  * senha nasce diferente a cada consultor, é mostrada uma única vez a quem
  * criou o cadastro e morre na primeira troca.
+ *
+ * TRÊS BLOCOS, e não dois. O sorteio de dois blocos já era forte (cerca de 40
+ * bits), mas produzia 9 caracteres — abaixo do piso que a política exige de
+ * quem digita a sua (ver MIN_PASSWORD_LENGTH). Um sistema que gera uma senha
+ * que ele mesmo recusaria é uma contradição que alguém vai encontrar do jeito
+ * ruim. O bloco a mais custa quatro letras a quem dita no telefone e sobe o
+ * sorteio para cerca de 59 bits.
  */
 export function generateProvisionalPassword(): string {
   const pick = () => UNAMBIGUOUS[randomInt(UNAMBIGUOUS.length)];
   const block = (size: number) => Array.from({ length: size }, pick).join('');
-  return `${block(4)}-${block(4)}`;
+  return `${block(4)}-${block(4)}-${block(4)}`;
 }

@@ -35,6 +35,18 @@ model User {
   /// para o acesso rápido continuar direto.
   mustChangePassword Boolean @default(false)
 
+  /// Tentativas de senha erradas SEGUIDAS. Zera no acerto; ao chegar no teto,
+  /// a conta descansa (ver lockedUntil e MAX_FAILED_ATTEMPTS em auth.service).
+  failedLoginAttempts Int @default(0)
+
+  /// Até quando esta conta recusa tentativa de senha, mesmo a correta.
+  ///
+  /// O limite por IP sozinho não protege UMA conta: dez tentativas por minuto
+  /// por IP viram muitas por minuto vindas de muitos IPs, e a conta do admin é
+  /// alvo conhecido. Este campo é a trava do outro lado — por conta, não por
+  /// origem.
+  lockedUntil DateTime?
+
   tokens  AccessToken[]
   wallet  Producer[]
   barters Barter[]      @relation("ConsultantBarters")
@@ -54,7 +66,19 @@ model AccessToken {
   /// aqui, mesmo que ninguém faça logout. Ver TOKEN_TTL_DAYS.
   expiresAt DateTime
 
+  /// Última vez que este token foi USADO — a segunda morte da sessão.
+  ///
+  /// O prazo absoluto acima resolve "esta sessão é velha demais"; ele não
+  /// resolve o aparelho que sumiu do bolso na semana passada e cujo token ainda
+  /// tem três semanas de vida. A inatividade resolve: sessão parada há
+  /// TOKEN_IDLE_DAYS morre, e quem usa o app todo dia não é incomodado.
+  ///
+  /// A escrita é represada (ver TOUCH_INTERVAL_MS no AuthGuard): sem isso, toda
+  /// requisição autenticada da API viraria também um UPDATE.
+  lastUsedAt DateTime @default(now())
+
   @@index([expiresAt])
+  @@index([lastUsedAt])
 }
 
 /// Produtor (cliente) designado nas permutas; pertence à CARTEIRA de um

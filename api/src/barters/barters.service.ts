@@ -233,11 +233,19 @@ export class BartersService {
    *
    * O código é decidido lendo o maior já usado e somando um, e entre a leitura
    * e a gravação existe uma fresta: dois registros simultâneos podem escolher
-   * o mesmo número. Hoje isso não acontece porque o SQLite serializa as
-   * escritas dentro do processo, mas essa é uma garantia do BANCO ATUAL, não
-   * do código — bastaria uma segunda instância, ou uma troca para Postgres,
-   * para a corrida aparecer. O índice único em `code` transforma a colisão
-   * numa falha limpa, e aqui ela vira simplesmente "pegue o próximo".
+   * o mesmo número.
+   *
+   * Essa corrida é REAL hoje. Enquanto o banco era SQLite, um comentário aqui
+   * dizia que ela não acontecia porque as escritas eram serializadas dentro do
+   * processo — e avisava que trocar para Postgres a traria de volta. A troca
+   * aconteceu: sob `READ COMMITTED`, duas transações simultâneas leem o mesmo
+   * máximo e escolhem o mesmo número, e com mais de uma instância da API isso
+   * deixa de depender de sorte.
+   *
+   * Quem resolve não é o banco, é este par: o índice único em `code` transforma
+   * a colisão numa falha limpa (P2002), e o laço abaixo a trata como "pegue o
+   * próximo". Cinco tentativas cobrem uma concorrência muito acima da real —
+   * permuta é registrada por gente, uma de cada vez.
    */
   private async createWithCode(
     data: Omit<Prisma.BarterUncheckedCreateInput, 'code'>,

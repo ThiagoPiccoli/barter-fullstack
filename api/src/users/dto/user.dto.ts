@@ -1,4 +1,5 @@
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsStrongPassword } from '../../auth/password-policy';
 
 /**
  * Forma do cadastro de usuário. Vale hoje para os quatro papéis provisionáveis
@@ -31,11 +32,18 @@ export class CreateUserDto {
   @MaxLength(120)
   branch!: string;
 
-  /** Opcional: sem ela, o servidor sorteia a senha de primeira entrada. */
+  /**
+   * Opcional: sem ela, o servidor sorteia a senha de primeira entrada — e é o
+   * caminho preferido, porque o sorteio produz senha melhor do que a que o
+   * admin escolheria digitando.
+   *
+   * Quando vem preenchida, vale a mesma regra de todo o resto (ver
+   * password-policy.ts). Como `email` e `fullName` estão neste mesmo corpo, a
+   * conferência de contexto acontece aqui mesmo: não dá para cadastrar o
+   * consultor João Silva com a senha `joaosilva01`.
+   */
   @IsOptional()
-  @IsString()
-  @MinLength(6)
-  @MaxLength(64)
+  @IsStrongPassword()
   password?: string;
 }
 

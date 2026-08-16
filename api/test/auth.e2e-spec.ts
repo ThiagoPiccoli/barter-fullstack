@@ -1,8 +1,9 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { passwordProblem } from '../src/auth/password-policy';
 import { hashToken } from '../src/auth/token.util';
-import { ADMIN, JOAO, createTestApp, loginAs, resetDb } from './utils';
+import { ADMIN, JOAO, SEED_PASSWORD, createTestApp, loginAs, resetDb } from './utils';
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
@@ -16,7 +17,7 @@ describe('Auth (e2e)', () => {
   it('login devolve token e o papel do usuário', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: JOAO, password: '123456' });
+      .send({ email: JOAO, password: SEED_PASSWORD });
 
     expect(response.status).toBe(200);
     expect(response.body.data.token).toBeDefined();
@@ -69,6 +70,53 @@ describe('Auth (e2e)', () => {
     expect(await prisma.accessToken.count({ where: { hash: hashToken(token) } })).toBe(0);
   });
 
+  /**
+   * A SEGUNDA morte da sessão. O prazo acima responde "esta sessão já é velha
+   * demais"; esta responde "este aparelho ainda está com quem deveria?".
+   *
+   * Sem ela, o celular perdido no sábado continua sendo uma sessão válida por
+   * até um mês — e é justamente no aparelho perdido que o prazo longo dói.
+   */
+  it('sessão parada tempo demais também morre, mesmo dentro do prazo', async () => {
+    const token = await loginAs(app, JOAO);
+    const prisma = app.get(PrismaService);
+    const oitoDias = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+
+    // O prazo absoluto continua lá na frente: quem mata aqui é a inatividade.
+    await prisma.accessToken.update({
+      where: { hash: hashToken(token) },
+      data: { lastUsedAt: oitoDias },
+    });
+
+    await request(app.getHttpServer())
+      .get('/api/v1/me')
+      .set({ Authorization: `Bearer ${token}` })
+      .expect(401);
+
+    expect(await prisma.accessToken.count({ where: { hash: hashToken(token) } })).toBe(0);
+  });
+
+  /** Usar o app mantém a sessão viva — é o outro lado da regra acima. */
+  it('sessão usada ontem continua valendo', async () => {
+    const token = await loginAs(app, JOAO);
+    const prisma = app.get(PrismaService);
+
+    await prisma.accessToken.update({
+      where: { hash: hashToken(token) },
+      data: { lastUsedAt: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+    });
+
+    await request(app.getHttpServer())
+      .get('/api/v1/me')
+      .set({ Authorization: `Bearer ${token}` })
+      .expect(200);
+
+    // E o uso REGRAVA o "visto por último": sem isso a sessão envelheceria
+    // mesmo em uso diário, e morreria com o app aberto na mão do consultor.
+    const sessao = await prisma.accessToken.findUnique({ where: { hash: hashToken(token) } });
+    expect(Date.now() - sessao!.lastUsedAt.getTime()).toBeLessThan(60_000);
+  });
+
   it('troca de senha exige a senha atual', async () => {
     const token = await loginAs(app, JOAO);
     const response = await request(app.getHttpServer())
@@ -85,7 +133,7 @@ describe('Auth (e2e)', () => {
     await request(app.getHttpServer())
       .post('/api/v1/auth/password')
       .set({ Authorization: `Bearer ${antiga}` })
-      .send({ currentPassword: '123456', newPassword: 'nova-senha-123' })
+      .send({ currentPassword: SEED_PASSWORD, newPassword: 'nova-senha-123' })
       .expect(200);
 
     // A sessão que trocou continua valendo; a outra caiu.
@@ -101,7 +149,7 @@ describe('Auth (e2e)', () => {
     // A senha antiga não abre mais; a nova abre.
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: JOAO, password: '123456' })
+      .send({ email: JOAO, password: SEED_PASSWORD })
       .expect(400);
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')
@@ -143,7 +191,7 @@ describe('Auth (e2e)', () => {
   it('usuários do seed entram direto (o acesso rápido da demo continua valendo)', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: ADMIN, password: '123456' })
+      .send({ email: ADMIN, password: SEED_PASSWORD })
       .expect(200);
     expect(response.body.data.user.mustChangePassword).toBe(false);
   });
@@ -251,7 +299,7 @@ describe('Auth (e2e)', () => {
       expect(first).not.toBe(second);
 
       // As senhas fixas que já valeram não abrem mais nenhuma conta nova.
-      for (const guess of ['123456', 'senha', first.toLowerCase()]) {
+      for (const guess of ['123456', 'senha', SEED_PASSWORD, first.toLowerCase()]) {
         await request(app.getHttpServer())
           .post('/api/v1/auth/login')
           .send({ email: 'dois@agrobarter.com.br', password: guess })
@@ -326,6 +374,127 @@ describe('Auth (e2e)', () => {
         .post('/api/v1/consultants/1/reset-password')
         .set({ Authorization: `Bearer ${await loginAs(app, ADMIN)}` })
         .expect(404);
+    });
+  });
+
+  /**
+   * O dataset de demonstração não pode nascer fora da própria política.
+   *
+   * A checagem é contra CADA usuário semeado, e não contra a senha sozinha,
+   * porque metade da política é contextual: ela recusa a senha que contenha o
+   * nome ou o e-mail de quem a usa. Uma conta nova no seed chamada, digamos,
+   * "Demo Agro" passaria despercebida numa conferência a olho — e este teste
+   * quebra na hora.
+   *
+   * Vale lembrar por que isto importa fora do ambiente de desenvolvimento: o
+   * dataset só é bloqueado por `NODE_ENV === 'production'`, então uma
+   * homologação que esqueça a variável sobe com estas contas de verdade.
+   */
+  it('todas as contas do seed usam uma senha que passa na política', async () => {
+    const users = await app.get(PrismaService).user.findMany();
+    expect(users.length).toBeGreaterThan(0);
+
+    for (const user of users) {
+      expect({ email: user.email, problema: passwordProblem(SEED_PASSWORD, user) }).toEqual({
+        email: user.email,
+        problema: null,
+      });
+    }
+  });
+
+  /**
+   * A TRAVA POR TENTATIVAS NÃO PODE SOBREVIVER A UMA SENHA NOVA.
+   *
+   * O login confere a trava ANTES da senha. Enquanto os caminhos que definem
+   * uma senha nova não a limpavam, o reset entregava uma credencial que não
+   * entrava: o admin ditava a provisória ao telefone e ela era recusada por até
+   * quinze minutos, sem que nada na resposta dissesse por quê.
+   *
+   * E o caso não era raro — é o mais provável de todos, porque quem procura o
+   * admin é justamente quem acabou de errar a senha dez vezes.
+   */
+  describe('redefinir a senha devolve o acesso de verdade', () => {
+    const JOAO_ID = 2;
+
+    /** Erra o suficiente para a conta descansar. */
+    async function lockOut(email: string): Promise<void> {
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ email, password: `errada-${attempt}` })
+          .expect(400);
+      }
+      // A senha CERTA também é recusada: é isso que caracteriza a trava.
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email, password: SEED_PASSWORD })
+        .expect(400);
+    }
+
+    it('o reset do admin destranca a conta bloqueada', async () => {
+      const adminToken = await loginAs(app, ADMIN);
+      await lockOut(JOAO);
+
+      const reset = await request(app.getHttpServer())
+        .post(`/api/v1/consultants/${JOAO_ID}/reset-password`)
+        .set({ Authorization: `Bearer ${adminToken}` })
+        .expect(200);
+
+      // A provisória entra NA HORA. Sem CLEARED_LOCKOUT no reset, este login
+      // levava 400 e o consultor ficava sem acesso com a senha na mão.
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: reset.body.data.provisionalPassword as string })
+        .expect(200);
+    });
+
+    it('trocar a própria senha destranca a conta bloqueada', async () => {
+      // A sessão nasce ANTES da trava: quem já estava dentro não é expulso por
+      // alguém errando a senha dele de propósito lá fora.
+      const token = await loginAs(app, JOAO);
+      await lockOut(JOAO);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/password')
+        .set({ Authorization: `Bearer ${token}` })
+        .send({ currentPassword: SEED_PASSWORD, newPassword: 'chuva-de-outubro' })
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: 'chuva-de-outubro' })
+        .expect(200);
+    });
+
+    /** O contador também zera — senão o primeiro engano tranca tudo de novo. */
+    it('depois do reset a conta recomeça com o contador zerado', async () => {
+      const adminToken = await loginAs(app, ADMIN);
+
+      // Nove erros: um passo antes da trava, sem chegar nela.
+      for (let attempt = 0; attempt < 9; attempt++) {
+        await request(app.getHttpServer())
+          .post('/api/v1/auth/login')
+          .send({ email: JOAO, password: `errada-${attempt}` })
+          .expect(400);
+      }
+
+      const reset = await request(app.getHttpServer())
+        .post(`/api/v1/consultants/${JOAO_ID}/reset-password`)
+        .set({ Authorization: `Bearer ${adminToken}` })
+        .expect(200);
+      const provisional = reset.body.data.provisionalPassword as string;
+
+      // Um engano ao digitar a provisória ditada por telefone. Com o contador
+      // herdado, ESTE erro seria o décimo e trancaria a conta.
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: 'digitei-errado' })
+        .expect(400);
+
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: provisional })
+        .expect(200);
     });
   });
 });

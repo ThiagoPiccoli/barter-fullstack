@@ -5,8 +5,8 @@ Monorepo com o app e o backend do agroBarter:
 ```
 barter-fullstack/
 ├── app/   Flutter (clone do barter-app original, integrado à API)
-├── api/   NestJS 11 + Prisma 7 + SQLite (dev) — regras de negócio autoritativas
-└── docs/  Revisão de frontend e decisões de arquitetura
+├── api/   NestJS 11 + Prisma 7 + PostgreSQL — regras de negócio autoritativas
+└── docs/  Arquitetura, decisões e o que falta para publicar (RELEASE.md)
 ```
 
 > O projeto original (`~/Projects/barter-app`) permanece intocado, com dados
@@ -50,14 +50,14 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333       # emulador Android
 
 | Papel    | E-mail                      | Senha  |
 |----------|-----------------------------|--------|
-| Admin    | admin@agrobarter.com.br         | 123456 |
-| Gerente  | gerente@agrobarter.com.br       | 123456 |
-| Comitê   | comite@agrobarter.com.br        | 123456 |
-| Faturista | faturista@agrobarter.com.br    | 123456 |
-| Consultor | joao.silva@agrobarter.com.br   | 123456 |
-| Consultor | ana.ferreira@agrobarter.com.br | 123456 |
+| Admin    | admin@agrobarter.com.br         | demo-2026-agro |
+| Gerente  | gerente@agrobarter.com.br       | demo-2026-agro |
+| Comitê   | comite@agrobarter.com.br        | demo-2026-agro |
+| Faturista | faturista@agrobarter.com.br    | demo-2026-agro |
+| Consultor | joao.silva@agrobarter.com.br   | demo-2026-agro |
+| Consultor | ana.ferreira@agrobarter.com.br | demo-2026-agro |
 
-(Os demais consultores do dataset também logam com `123456`.)
+(Os demais consultores do dataset também logam com `demo-2026-agro`.)
 
 Isso vale **só para o dataset de demonstração**, que não é carregado com
 `NODE_ENV=production`. Consultores criados pelo admin recebem uma senha
@@ -68,10 +68,16 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 30 testes de unidade (matemática, throttling, setup, erros)
-cd api && npm run test:e2e  # 65 testes funcionais da API (auth, escopo, regras, contrato de erro)
-cd app && flutter test      # 15 testes (matemática espelhada, parsers, abertura do app)
+cd api && npm test          # 127 testes de unidade (matemática, senha, sessão, throttling, setup)
+cd api && npm run test:e2e  # 135 testes funcionais da API (auth, escopo, regras, contrato de erro)
+cd api && npm run test:cov  # as duas suítes juntas, com cobertura (92% de statements)
+cd app && flutter test      # 35 testes (matemática espelhada, parsers, abertura do app)
 ```
+
+> `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
+> número honesto: medir apenas a unidade contra o código inteiro devolvia 25%,
+> porque os testes que exercitam services e controllers ficavam fora da conta e
+> dentro do denominador. É o mesmo comando que o CI usa.
 
 Com a API no ar, dois testes de ponta a ponta:
 
@@ -127,10 +133,20 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   remonta as páginas para manter o cache completo, porque o painel do admin
   soma sacas e valores sobre todas as permutas. Quando isso deixar de caber, a
   API já está pronta para as telas carregarem sob demanda.
-- **SQLite em dev/test, Postgres pronto**: o Prisma schema usa `provider =
-  "sqlite"`; trocar para Postgres é mudar o provider, o driver adapter em
-  `src/prisma/prisma.service.ts` e rodar `prisma migrate dev` de novo — os
-  services não mudam.
+- **PostgreSQL, em todos os ambientes**: dev, teste e produção usam o mesmo
+  banco (Prisma 7 + driver adapter `@prisma/adapter-pg`). Antes era SQLite
+  embutido no processo, e a troca aconteceu **antes da primeira carga real** de
+  propósito: sem dado de produção, o custo foi reescrever migrations; com dado,
+  seria janela de parada e script de transferência. O que o SQLite não dava não
+  era desempenho — era operação: duas instâncias sobre o mesmo arquivo não se
+  coordenam, então não havia deploy sem downtime, réplica de leitura nem backup
+  online.
+- **A conta é do servidor, a sessão tem fim**: senha com `scrypt` (parâmetros
+  gravados junto ao hash, reescrita sozinha quando o custo sobe) e política
+  única em `api/src/auth/password-policy.ts`; token opaco guardado só como
+  SHA-256, que morre por prazo **e** por inatividade; conta que erra a senha dez
+  vezes descansa quinze minutos; entrar, falhar e ser bloqueado deixam rastro na
+  trilha de auditoria. Detalhes em `api/README.md`.
 
 ## Por que trocamos AdonisJS por NestJS
 

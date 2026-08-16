@@ -7,6 +7,7 @@ import {
   FATURISTA,
   GERENTE,
   JOAO,
+  SEED_PASSWORD,
   createTestApp,
   loginAs,
   resetDb,
@@ -42,7 +43,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     for (const [email, role] of cases) {
       const response = await request(app.getHttpServer())
         .post('/api/v1/auth/login')
-        .send({ email, password: '123456' });
+        .send({ email, password: SEED_PASSWORD });
       expect(response.status).toBe(200);
       expect(response.body.data.user.role).toBe(role);
       expect(response.body.data.user.mustChangePassword).toBe(false);

@@ -215,19 +215,78 @@ Leia nesta ordem: [token.util.ts](../api/src/auth/token.util.ts) →
 [auth.guard.ts](../api/src/auth/auth.guard.ts).
 
 ```
-login  → gera 32 bytes aleatórios (base64url)
-       → grava no banco APENAS o SHA-256 + expiresAt (TOKEN_TTL_DAYS, padrão 30)
-       → devolve o valor cru ao app
+login  → confere se a conta não está de castigo (10 erros seguidos = 15 min)
+       → gera 32 bytes aleatórios (base64url)
+       → grava no banco APENAS o SHA-256 + expiresAt + lastUsedAt
+       → devolve o valor cru ao app, e registra a entrada na trilha
 
 request→ AuthGuard faz SHA-256 do Bearer e procura a linha
-       → não achou → 401 · venceu → apaga a linha e 401
-       → achou → req.user = usuário
+       → não achou → 401
+       → venceu (prazo OU parada tempo demais) → apaga a linha e 401
+       → achou → regrava lastUsedAt (no máximo 1x/hora) e req.user = usuário
 
 logout → apaga a linha (revogação REAL, não é só o cliente esquecer)
 ```
 
 Consequências que aparecem no app: excluir um consultor derruba as sessões dele
 em cascata; trocar a senha derruba as outras sessões e mantém a atual.
+
+### As duas mortes de uma sessão
+
+`expiresAt` e `lastUsedAt` respondem perguntas diferentes, e é por isso que
+existem os dois:
+
+| | Responde | Padrão |
+|---|---|---|
+| `TOKEN_TTL_DAYS` | Esta sessão já é velha demais? | 30 dias |
+| `TOKEN_IDLE_DAYS` | Este aparelho ainda está com quem deveria? | 7 dias |
+
+Sem a segunda, um celular perdido no sábado continua sendo uma sessão válida
+por até um mês — e é justamente no aparelho perdido que o prazo longo dói. Quem
+usa o app na rotina nunca chega perto do limite de inatividade.
+
+A regravação do `lastUsedAt` é **represada** (`TOUCH_INTERVAL_MS`, uma hora):
+sem isso, toda requisição autenticada da API viraria também um `UPDATE`, no
+caminho crítico, para mover um relógio em alguns milissegundos.
+
+O guard só apaga a sessão de quem TENTA usá-la. A que ninguém tenta de novo
+(aparelho trocado, app desinstalado, consultor que saiu) ficaria no banco para
+sempre — daí a varredura de seis em seis horas em
+[session-cleanup.service.ts](../api/src/auth/session-cleanup.service.ts). Não é
+segurança: é não guardar dado de autenticação que não serve mais.
+
+### Quando a conta descansa
+
+Dez senhas erradas seguidas e a conta recusa tentativas por 15 minutos, **até a
+senha certa**; acertar antes zera o contador. O limite por IP protege o
+*servidor*; este protege a *conta*, que é o alvo de quem sabe um e-mail.
+
+A troca aceita aqui está escrita por inteiro em
+[lockout.ts](../api/src/auth/lockout.ts): quem souber um e-mail consegue manter
+aquela conta trancada de propósito. A trava dura quinze minutos justamente por
+isso — uma trava permanente trocaria o roubo de conta por uma negação de serviço
+confiável, o que é um péssimo negócio.
+
+**Definir senha nova destranca.** A trava é escrita em UM lugar (o login que
+erra) e apagada em QUATRO: o login que acerta, a troca da própria senha, o reset
+do admin e o script de emergência. Enquanto o que apagava era um par de campos
+digitado à mão, três desses quatro esqueciam — e o reset entregava uma senha que
+o login recusava, porque a trava é conferida antes dela. Por isso o estado
+"conta sem histórico de erro" é uma constante exportada (`CLEARED_LOCKOUT`), e
+não dois campos repetidos: era exatamente a repetição que divergia.
+
+### O que vale como senha
+
+Uma regra, um arquivo:
+[password-policy.ts](../api/src/auth/password-policy.ts), usada pelo cadastro,
+pela troca da própria senha, pelo script de emergência e pelo provisionamento do
+primeiro admin. Dez caracteres, cinco distintos, fora da lista de conhecidas,
+sem corrida de teclado, sem conter o nome do sistema nem o de quem escolhe — e
+**nenhuma** exigência de maiúscula/número/símbolo, seguindo o NIST SP 800-63B:
+regra de composição não gera senha forte, gera `Senha@123`.
+
+O DTO não alcança a parte contextual (o corpo da troca de senha não traz nome
+nem e-mail); quem a completa é o `AuthService`, que sabe de quem é a conta.
 
 ### Senha provisória — a trava que atravessa tudo
 
@@ -452,7 +511,7 @@ mínimos por hectare.
 [main.ts](../api/src/main.ts) bifurca por `NODE_ENV`:
 
 - **dev** → [seed-if-empty.ts](../api/prisma/seed-if-empty.ts): banco vazio
-  recebe o dataset de demonstração (senha `123456`). Banco com dados não é tocado.
+  recebe o dataset de demonstração (senha `demo-2026-agro`). Banco com dados não é tocado.
 - **produção** → [bootstrap-admin.ts](../api/prisma/bootstrap-admin.ts): nada de
   dataset público; o primeiro admin vem de `ADMIN_EMAIL`/`ADMIN_PASSWORD` e
   nasce com senha provisória.
@@ -481,6 +540,7 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | Método | Rota | Quem pode | Observação |
 |---|---|---|---|
 | GET | `/` | público | sinal de vida, sem envelope |
+| GET | `/health` | público | sonda: toca o banco (`SELECT 1`) ou 503. Fora do prefixo e sem envelope |
 | POST | `/auth/login` | público | throttle apertado |
 | POST | `/auth/logout` | autenticado* | revoga o token |
 | GET | `/me` | autenticado* | é aqui que o app vê `mustChangePassword` |
@@ -552,14 +612,23 @@ lista filtrada, e quem olhasse não tinha como perceber.
 - `npm test` → unidade, ao lado do código (`*.spec.ts`): matemática da permuta,
   a leitura da planilha ([version-import.spec.ts](../api/src/seasons/version-import.spec.ts)),
   metas e vigência ([version-progress.spec.ts](../api/src/seasons/version-progress.spec.ts)),
+  a política de senha ([password-policy.spec.ts](../api/src/auth/password-policy.spec.ts)),
+  a validade da sessão ([token.util.spec.ts](../api/src/auth/token.util.spec.ts)),
   throttling, setup do app e o filtro de exceção.
-- `npm run test:e2e` → [test/](../api/test/), banco próprio (`prisma/test.db`
-  via `.env.test`), sobe a app com o mesmo `setupApp`. Cobre auth, escopo por
+- `npm run test:e2e` → [test/](../api/test/), banco próprio (`barter_test` via
+  `.env.test`), sobe a app com o mesmo `setupApp`. Cobre auth, escopo por
   papel, as regras de permuta, o lançamento do Barter
   ([seasons.e2e-spec.ts](../api/test/seasons.e2e-spec.ts): publicar, uma vigente
   só, permuta antiga intacta, planilha com erro, encerramento), o contrato de
   erro e — em [auth.e2e-spec.ts](../api/test/auth.e2e-spec.ts) — o cenário
   completo de sequestro e retomada de conta.
+- Vale destacar dois que não seguem o formato dos outros:
+  [route-policy.e2e-spec.ts](../api/test/route-policy.e2e-spec.ts) percorre a
+  árvore de controllers que o Nest registrou de verdade e exige que a política
+  de acesso de **cada rota** seja exatamente a da tabela escrita nele — rota
+  nova só passa depois que alguém decide, por escrito, quem pode chamá-la; e o
+  bloco `sessão` de [audit.e2e-spec.ts](../api/test/audit.e2e-spec.ts), que
+  prende o rastro de entrada, falha e bloqueio de conta.
 - `.env.test` baixa `PASSWORD_COST` para a suíte rodar em segundos: o custo
   real do scrypt (~170ms por login) é proposital em produção, mas cem logins
   de teste não podem pagá-lo.
@@ -938,8 +1007,14 @@ Coisas verdadeiras sobre o código hoje, para você não interpretar como bug:
   seguinte, a janela desloca. Autocorrige no refresh seguinte; para volume
   maior, o caminho é cursor.
 - **A planilha é lida inteira na memória** (multer em memória + `exceljs`), com
-  teto de 5 MB por upload. Suficiente para tabela de fornecedor; um arquivo de
-  centenas de milhares de linhas pediria leitura em fluxo.
+  teto de 5 MB por upload **e** de 20 mil linhas depois de aberta. Os dois tetos
+  não são o mesmo: 5 MB medem o arquivo COMPRIMIDO, e `.xlsx` é um zip — 20 mil
+  linhas cabem em 300 KB. O teto de linhas protege tudo o que vem depois
+  (matriz, `parseSheet`, um upsert por linha); o pico da própria leitura
+  continua limitado só pelos 5 MB, porque fechar isso pediria leitura em fluxo,
+  que o `exceljs` não faz a partir de buffer em memória. Como a rota exige um
+  admin autenticado, o que sobra é o arquivo grande por engano — e esse os tetos
+  pegam.
 - **Produto criado pela importação sobrevive a uma publicação que falhe *dentro
   da transação*.** O casamento com o catálogo continua acontecendo antes dela —
   é o que permite a planilha cadastrar item novo. O que mudou é que as

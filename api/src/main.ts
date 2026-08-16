@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { bootstrapAdmin } from '../prisma/bootstrap-admin';
+import { SEED_PASSWORD } from '../prisma/seed-data';
 import { seedIfEmpty } from '../prisma/seed-if-empty';
 import { AppModule } from './app.module';
 import { setupApp } from './app.setup';
@@ -19,14 +20,19 @@ async function bootstrap() {
     // Em produção o dataset de demonstração NUNCA roda: ele criaria contas com
     // senha pública num servidor exposto. O primeiro admin vem do ambiente.
     const result = await bootstrapAdmin(prisma);
-    if (result === 'created') {
+    if (result.status === 'created') {
       logger.log(
         `Admin inicial criado (${process.env.ADMIN_EMAIL}) — troque a senha no primeiro login.`,
       );
-    } else if (result === 'missing-env') {
+    } else if (result.status === 'missing-env') {
       logger.warn(
         'Banco vazio e sem ADMIN_EMAIL/ADMIN_PASSWORD definidos: nenhum usuário foi criado. ' +
           'Defina as duas variáveis e reinicie para provisionar o primeiro acesso.',
+      );
+    } else if (result.status === 'weak-password') {
+      logger.error(
+        `ADMIN_PASSWORD recusada: ${result.reason}. Nenhum usuário foi criado — ` +
+          'escolha outra senha e reinicie. A primeira conta é a que tem mais poder no sistema.',
       );
     }
   } else {
@@ -34,7 +40,7 @@ async function bootstrap() {
     // demonstração automaticamente. Bancos já populados não são tocados.
     const seeded = await seedIfEmpty(prisma);
     if (seeded) {
-      logger.log('Banco vazio — dataset de demonstração carregado (senha: 123456).');
+      logger.log(`Banco vazio — dataset de demonstração carregado (senha: ${SEED_PASSWORD}).`);
     }
   }
 

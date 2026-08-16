@@ -1,5 +1,5 @@
 import { Transform, Type } from 'class-transformer';
-import { parseNumber } from '../version-import';
+import { MAX_VERSION_PRICES, parseNumber } from '../version-import';
 
 /**
  * Número que pode chegar como TEXTO — e como o Brasil escreve.
@@ -19,6 +19,7 @@ const NumberFromText = (): PropertyDecorator =>
     return parseNumber(value) ?? value;
   });
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsDateString,
@@ -117,8 +118,17 @@ export class PublishVersionDto extends VersionLimitsDto {
   @IsPositive()
   grainPrice!: number;
 
+  /**
+   * A MESMA constante que a planilha usa (MAX_VERSION_PRICES, em
+   * version-import.ts) — importada, não copiada. Os dois caminhos publicam a
+   * mesma tabela, e um limite diferente em cada um significaria que o arquivo
+   * recusa o que o JSON aceita.
+   */
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_VERSION_PRICES, {
+    message: `A tabela de valores não pode passar de ${MAX_VERSION_PRICES.toLocaleString('pt-BR')} itens`,
+  })
   @ValidateNested({ each: true })
   @Type(() => VersionPriceDto)
   prices!: VersionPriceDto[];

@@ -32,8 +32,19 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // ATENÇÃO — assinatura de release pendente. Ver docs/RELEASE.md (item 1).
+            //
+            // A keystore de debug não é secreta: senha conhecida e a MESMA em
+            // toda máquina. Enquanto o release for assinado com ela, qualquer
+            // um consegue produzir um "agroBarter atualizado" que o aparelho de
+            // um testador aceita instalar por cima do legítimo — e o
+            // distribute.yml entrega este APK aos testadores a cada push
+            // aprovado na main. É também bloqueio duro para a Play Store.
+            //
+            // Mantido como está de propósito, até o release entrar na pauta:
+            // trocar isto exige decidir de quem é a conta da loja e onde a
+            // chave fica guardada, e uma chave de release perdida não se
+            // recupera.
             signingConfig = signingConfigs.getByName("debug")
         }
     }

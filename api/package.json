@@ -12,16 +12,54 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/src/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,test,prisma,scripts}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
+    "test:cov": "dotenv -e .env.test -- jest --config ./jest.coverage.config.js --runInBand",
+    "pretest:cov": "dotenv -e .env.test -- prisma migrate deploy",
+    "test:cov:unit": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "dotenv -e .env.test -- jest --config ./test/jest-e2e.json --runInBand",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset --force && npm run db:seed",
     "password:reset": "ts-node scripts/reset-password.ts",
     "pretest:e2e": "dotenv -e .env.test -- prisma migrate deploy"
+  },
+  "//overrides": [
+    "Correções de segurança em dependências de TERCEIROS — pacotes que não são",
+    "nossos e cuja versão vulnerável vem presa dentro de outra biblioteca.",
+    "Sem isto, `npm audit` acusa e não há o que atualizar: quem escolhe a versão",
+    "é o pacote de cima, e ele ainda não subiu.",
+    "",
+    "CADA UM É ESCOPADO ao pacote que tem o problema, e isso importa. Escrito",
+    "solto ('js-yaml': '^5'), um override alcança TODA cópia da árvore — e aqui",
+    "havia três pacotes pedindo js-yaml 3.x/4.x (@eslint/eslintrc, cosmiconfig,",
+    "@istanbuljs/load-nyc-config) que passavam a receber a 5.x sem terem pedido.",
+    "Consertar uma dependência empurrando um major goela abaixo de outras três",
+    "troca um alarme por três incompatibilidades silenciosas: a v4 do js-yaml,",
+    "por exemplo, removeu safeLoad, que é o que a v3 usa.",
+    "",
+    "js-yaml: @nestjs/swagger prende a 5.2.1 (versão exata), e as <=5.2.1 têm",
+    "parsing exponencial em coleções de fluxo (negação de serviço). A 5.2.2",
+    "corrigiu — mesmo major, então é subir de patch, não trocar de biblioteca.",
+    "O intervalo é ~5.2.2: pega a correção e os patches seguintes, sem deixar a",
+    "árvore escorregar para uma minor que ninguém avaliou.",
+    "",
+    "uuid: o exceljs pede a ^8.3.0, que não confere limites de buffer em v3/v5/v6.",
+    "O exceljs só usa v4 (cf-rule-ext-xform.js), então a falha nem é alcançada",
+    "por aqui — o override existe para o alarme apontar problema de verdade em",
+    "vez de virar ruído que ninguém lê. A 11.x mantém `require('uuid').v4`.",
+    "",
+    "REVISAR quando @nestjs/swagger e exceljs subirem as suas: um override que",
+    "sobreviveu ao problema que o motivou é dívida silenciosa."
+  ],
+  "overrides": {
+    "@nestjs/swagger": {
+      "js-yaml": "~5.2.2"
+    },
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

@@ -126,11 +126,42 @@ export function setupApp(app: INestApplication): void {
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(requestLogger());
 
-  app.setGlobalPrefix('api/v1', { exclude: ['/'] });
+  // `/health` fica FORA do prefixo com a raiz: sonda de balanceador e de
+  // orquestrador aponta para um caminho fixo, e ele não deve mudar quando a
+  // API versionar para /api/v2.
+  app.setGlobalPrefix('api/v1', { exclude: ['/', '/health'] });
   app.enableCors(corsOptions());
   const server = app.getHttpAdapter().getInstance() as Application;
   server.set('trust proxy', trustProxySetting());
 
   const warning = passwordCostWarning();
   if (warning) new Logger('Auth').warn(warning);
+
+  const proxyWarning = trustProxyWarning();
+  if (proxyWarning) new Logger('Bootstrap').warn(proxyWarning);
+}
+
+/**
+ * Avisa sobre a configuração de proxy que falha em SILÊNCIO.
+ *
+ * Sem TRUST_PROXY, o Express enxerga o IP de quem fala direto com ele — atrás
+ * de um nginx ou de um PaaS, isso é o IP do PROXY, o mesmo para todo mundo. O
+ * limitador de requisições continua funcionando, contando certinho... o mundo
+ * inteiro como um cliente só. As dez tentativas de login por minuto passam a
+ * ser dez para TODOS os usuários somados: o primeiro a errar a senha tira os
+ * outros do ar, e a proteção contra adivinhação deixa de existir.
+ *
+ * Nada nesse arranjo produz erro — nem no log, nem na resposta. O aviso na
+ * subida é a única chance de alguém perceber, e por isso ele nasce junto com o
+ * de PASSWORD_COST: os dois são configurações cujo defeito só aparece no dia em
+ * que importa.
+ */
+function trustProxyWarning(): string | null {
+  if (process.env.NODE_ENV !== 'production') return null;
+  if (process.env.TRUST_PROXY?.trim()) return null;
+  return (
+    'TRUST_PROXY não definida: o limite por IP vai contar o IP de quem fala direto com a API. ' +
+    'Se houver proxy na frente (nginx, Cloudflare, PaaS), todos os usuários somados disputam o ' +
+    'mesmo limite — defina o NÚMERO DE SALTOS (ex.: TRUST_PROXY=1). Sem proxy, ignore este aviso.'
+  );
 }

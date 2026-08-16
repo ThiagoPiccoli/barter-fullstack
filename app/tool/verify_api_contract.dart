@@ -16,6 +16,7 @@
 // tela nenhuma, só o contrato de dados.
 import 'dart:io';
 
+import 'package:agrobarter_app/data/demo_seed.dart';
 import 'package:agrobarter_app/models/models.dart';
 import 'package:agrobarter_app/repositories/barter_program_repository.dart';
 import 'package:agrobarter_app/repositories/barter_repository.dart';
@@ -54,7 +55,7 @@ Future<void> _run() async {
   /* ── Sessão ───────────────────────────────────────────────────────── */
   final login = await api.post('/auth/login', body: {
     'email': 'admin@agrobarter.com.br',
-    'password': '123456',
+    'password': demoSeedPassword,
   }) as Map<String, dynamic>;
   api.token = login['token'] as String;
   final admin = UserModel.fromJson(login['user'] as Map<String, dynamic>);

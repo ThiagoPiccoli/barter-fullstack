@@ -18,6 +18,26 @@ describe('Contrato de erro (e2e)', () => {
   beforeEach(() => resetDb(app));
   afterAll(() => app.close());
 
+  /**
+   * A SONDA DE SAÚDE.
+   *
+   * A raiz (`GET /`) devolve 200 com o processo de pé e o banco inalcançável —
+   * o pior estado possível para uma verificação: o balanceador continuaria
+   * mandando tráfego para a instância que vai falhar em todas as requisições.
+   * Por isso `/health` toca o banco de verdade.
+   */
+  describe('/health', () => {
+    it('responde sem token e diz que o banco respondeu', async () => {
+      const response = await request(app.getHttpServer()).get('/health').expect(200);
+      expect(response.body).toEqual({ status: 'ok', database: 'ok' });
+    });
+
+    /** Fora do /api/v1 de propósito: a sonda não muda quando a API versionar. */
+    it('fica fora do prefixo da API', async () => {
+      await request(app.getHttpServer()).get('/api/v1/health').expect(404);
+    });
+  });
+
   it('JSON malformado responde 400 em português, não a mensagem crua do motor', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/auth/login')

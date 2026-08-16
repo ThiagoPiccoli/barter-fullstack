@@ -13,10 +13,32 @@ export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** Validade da sessão em dias (TOKEN_TTL_DAYS, padrão 30). */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function days(variable: string, fallback: number): number {
+  const configured = Number(process.env[variable]);
+  return Number.isFinite(configured) && configured > 0 ? configured : fallback;
+}
+
+/** Validade máxima da sessão em dias (TOKEN_TTL_DAYS, padrão 30). */
 export function tokenTtlDays(): number {
-  const configured = Number(process.env.TOKEN_TTL_DAYS);
-  return Number.isFinite(configured) && configured > 0 ? configured : 30;
+  return days('TOKEN_TTL_DAYS', 30);
+}
+
+/**
+ * Quantos dias uma sessão sobrevive SEM SER USADA (TOKEN_IDLE_DAYS, padrão 7).
+ *
+ * As duas datas respondem perguntas diferentes, e é por isso que existem as
+ * duas. O prazo absoluto responde "esta sessão já é velha demais"; a
+ * inatividade responde "este aparelho ainda está com quem deveria?". Sem a
+ * segunda, um celular perdido no sábado continua sendo uma sessão válida por
+ * até um mês — e é justamente no aparelho perdido que o prazo longo dói.
+ *
+ * Sete dias não incomoda quem usa o app na rotina: o consultor que abre o
+ * aplicativo durante a semana nunca chega perto do limite.
+ */
+export function tokenIdleDays(): number {
+  return days('TOKEN_IDLE_DAYS', 7);
 }
 
 /**
@@ -24,5 +46,10 @@ export function tokenTtlDays(): number {
  * aparelho entre aberturas, então a sessão precisa ter fim mesmo sem logout.
  */
 export function tokenExpiry(from: Date = new Date()): Date {
-  return new Date(from.getTime() + tokenTtlDays() * 24 * 60 * 60 * 1000);
+  return new Date(from.getTime() + tokenTtlDays() * DAY_MS);
+}
+
+/** A sessão passou tempo demais parada? */
+export function isIdle(lastUsedAt: Date, now: Date = new Date()): boolean {
+  return now.getTime() - lastUsedAt.getTime() >= tokenIdleDays() * DAY_MS;
 }

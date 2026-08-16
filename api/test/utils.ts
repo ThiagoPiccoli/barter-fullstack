@@ -1,15 +1,16 @@
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { seedDatabase } from '../prisma/seed-data';
+import { SEED_PASSWORD, seedDatabase } from '../prisma/seed-data';
 import { AppModule } from '../src/app.module';
 import { setupApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 /**
  * Sobe a aplicação real (mesmos guards/pipes/interceptor globais do
- * AppModule + setupApp compartilhado com o main.ts). O banco é o SQLite de
- * teste apontado pela DATABASE_URL do script test:e2e.
+ * AppModule + setupApp compartilhado com o main.ts). O banco é o PostgreSQL de
+ * teste apontado pela DATABASE_URL — o `barter_test` do `.env.test` na máquina
+ * de quem desenvolve, e o serviço do runner no CI.
  */
 export async function createTestApp(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -49,11 +50,20 @@ async function restartSequences(prisma: PrismaService): Promise<void> {
   }
 }
 
-/** Loga (senha padrão do seed: 123456) e devolve o token Bearer. */
+/**
+ * A senha do dataset de demonstração, reexportada para as specs.
+ *
+ * Vem do seed e não de um literal repetido: enquanto cada spec escrevia
+ * `'123456'` na mão, trocar a senha de demonstração exigia caçar o valor por
+ * oito arquivos — e um esquecido só aparece como um 400 misterioso.
+ */
+export { SEED_PASSWORD } from '../prisma/seed-data';
+
+/** Loga com a senha do seed e devolve o token Bearer. */
 export async function loginAs(app: INestApplication, email: string): Promise<string> {
   const response = await request(app.getHttpServer())
     .post('/api/v1/auth/login')
-    .send({ email, password: '123456' });
+    .send({ email, password: SEED_PASSWORD });
   return response.body.data.token as string;
 }
 

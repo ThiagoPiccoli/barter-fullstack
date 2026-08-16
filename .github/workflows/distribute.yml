@@ -6,6 +6,12 @@
 #
 # Agora ele espera o CI: `workflow_run` só entrega o APK depois que as duas
 # suítes passaram. Suíte vermelha não vira build na mão dos testadores.
+# PENDÊNCIAS DE RELEASE — ver docs/RELEASE.md antes de publicar de verdade:
+#   1. o APK sai assinado com a chave de DEBUG (item 1, o mais grave);
+#   2. `--token` do firebase-tools está descontinuado (item 2);
+#   3. o build não define API_URL, então o APK aponta para localhost (item 3).
+# Nada disso atrapalha o desenvolvimento; tudo isso bloqueia a publicação.
+
 name: Build and distribute APK
 
 on:
@@ -24,7 +30,7 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # O commit que o CI aprovou, não o topo da branch: entre a aprovação
           # e este job pode ter entrado outro push, e o APK distribuído seria

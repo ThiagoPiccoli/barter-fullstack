@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { parseNumber, parseSheet, readWorkbook } from './version-import';
+import { MAX_VERSION_PRICES, parseNumber, parseSheet, readWorkbook } from './version-import';
 
 /**
  * A planilha que chega do fornecedor não é um CSV bem-comportado. Estes testes
@@ -169,5 +169,70 @@ describe('Leitura da planilha do Barter', () => {
 
   it('arquivo que não é planilha vira erro legível, não um stack trace', async () => {
     await expect(readWorkbook(Buffer.from('isto não é um xlsx'))).rejects.toThrow(/\.xlsx/);
+  });
+
+  /**
+   * OS DOIS TETOS, que respondem perguntas diferentes.
+   *
+   * O de NEGÓCIO conta produtos e é o mesmo do `PublishVersionDto` — publicar
+   * por planilha não pode esbarrar num limite que publicar por JSON não tem.
+   * O de MEMÓRIA conta linhas e células do arquivo cru: o limite de 5 MB do
+   * upload mede o `.xlsx` COMPRIMIDO, e ele é um zip — 20 mil linhas cabem em
+   * menos de 300 KB.
+   */
+  describe('tetos', () => {
+    /** Uma matriz de produtos, direto — sem pagar a geração de um zip. */
+    const tableWith = (products: number): string[][] => [
+      ['nome', 'preco'],
+      ...Array.from({ length: products }, (_, i) => [`Item ${i}`, '10,00']),
+    ];
+
+    /**
+     * A REGRESSÃO que motivou a separação dos dois tetos. Antes, o teto de
+     * linhas era comparado contra `rowCount` — que inclui o cabeçalho —, então
+     * uma tabela de exatamente 20.000 produtos tinha 20.001 linhas e era
+     * recusada. Por JSON, a mesma tabela passava.
+     */
+    it('uma tabela com o máximo exato de produtos é aceita', () => {
+      const { rows, errors } = parseSheet(tableWith(MAX_VERSION_PRICES));
+      expect(errors).toEqual([]);
+      expect(rows).toHaveLength(MAX_VERSION_PRICES);
+    });
+
+    it('um produto além do máximo é recusado, dizendo quantos vieram', () => {
+      const { errors } = parseSheet(tableWith(MAX_VERSION_PRICES + 1));
+      expect(errors.join(' ')).toMatch(/20001 produtos — o limite é 20000/);
+    });
+
+    it('arquivo com linhas demais é recusado antes de virar matriz', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Tabela');
+      sheet.addRow(['nome', 'preco']);
+      for (let linha = 0; linha < MAX_VERSION_PRICES + 200; linha++) {
+        sheet.addRow([`Item ${linha}`, '10,00']);
+      }
+      const buffer = Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
+
+      await expect(readWorkbook(buffer)).rejects.toThrow(/linhas — o limite é 20100/);
+    });
+
+    /**
+     * A planilha LARGA. Antes as colunas eram truncadas em 64 sem aviso: a
+     * coluna de preço na posição 70 sumia da matriz, e o admin recebia "não
+     * encontrei o cabeçalho" sobre um arquivo que tinha o cabeçalho. Agora a
+     * largura é lida inteira, e quem contém o exagero é o teto de células.
+     */
+    it('planilha larga é lida inteira, sem truncar a coluna de preço', async () => {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet('Tabela');
+      const padding = Array.from({ length: 70 }, (_, i) => `col${i}`);
+      sheet.addRow([...padding, 'nome', 'preco']);
+      sheet.addRow([...padding.map(() => ''), 'Ureia 45%', '185,50']);
+      const buffer = Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
+
+      const { rows, errors } = parseSheet(await readWorkbook(buffer));
+      expect(errors).toEqual([]);
+      expect(rows[0]).toMatchObject({ name: 'Ureia 45%', price: 185.5 });
+    });
   });
 });

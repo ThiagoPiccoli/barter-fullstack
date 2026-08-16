@@ -110,8 +110,10 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /auth/logout', policy: 'any-authenticated' },
         { route: 'POST /auth/password', policy: 'any-authenticated' },
 
-        // Sinal de vida, fora do prefixo.
+        // Sinal de vida e sonda de saúde, as duas fora do prefixo e as duas
+        // públicas: sonda não carrega credencial.
         { route: 'GET /', policy: 'public' },
+        { route: 'GET /health', policy: 'public' },
 
         // Trilha de auditoria.
         { route: 'GET /audit-logs', policy: 'capability:audit.read' },

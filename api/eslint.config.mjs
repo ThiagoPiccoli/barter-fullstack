@@ -29,6 +29,12 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
+      // O `_` na frente é a forma de dizer "este parâmetro existe para a
+      // ASSINATURA, não para ser usado" — é o caso dos tratadores do Express
+      // (`_request`, `_response`) e dos decorators do Nest (`_data`). Sem esta
+      // linha, a regra aceita o padrão no meio da lista e reclama quando ele é
+      // o último parâmetro, que é uma distinção sem diferença.
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'prettier/prettier': ['error', { endOfLine: 'auto' }],
     },
   },

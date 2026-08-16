@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../data/app_data.dart';
+import '../data/demo_seed.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import '../branding/active_brand.dart';
@@ -67,11 +68,11 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  /// Preenche o formulário com uma conta do seed (senha 123456), sem entrar:
-  /// quem confere qual papel está prestes a abrir é quem toca em "Entrar".
+  /// Preenche o formulário com uma conta do seed, sem entrar: quem confere qual
+  /// papel está prestes a abrir é quem toca em "Entrar".
   void _fill(String mailbox) {
     _emailCtrl.text = '$mailbox@${brand.identity.emailDomain}';
-    _passCtrl.text = '123456';
+    _passCtrl.text = demoSeedPassword;
   }
 
   /// Não há recuperação por e-mail: quem provisiona e redefine senhas é o

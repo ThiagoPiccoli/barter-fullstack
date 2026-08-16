@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
+import { CLEARED_LOCKOUT } from '../auth/lockout';
 import { generateProvisionalPassword, hashPassword } from '../auth/password.util';
 import { ROLE_LABELS, type ManagedRole } from '../common/roles';
 import { PrismaService } from '../prisma/prisma.service';
@@ -107,6 +108,13 @@ export class UserProvisioningService {
    * Derruba TODAS as sessões abertas da conta — sem isso, redefinir a senha
    * não expulsaria quem já estava dentro, e o reset não resolveria nada no
    * caso que mais importa.
+   *
+   * E DESTRANCA a conta (CLEARED_LOCKOUT). Sem isso o reset entregava uma senha
+   * que não entrava: a trava por tentativas erradas é checada no login ANTES da
+   * senha, então a conta bloqueada continuava recusando por até quinze minutos
+   * a senha provisória que o admin acabara de ditar ao telefone. O caso não é
+   * hipotético — é o mais provável de todos, porque quem procura o admin
+   * costuma ser exatamente quem acabou de errar a senha dez vezes.
    */
   async resetPassword(actor: User, role: ManagedRole, id: number): Promise<ProvisionedUser> {
     const target = await this.findWithRole(role, id);
@@ -118,6 +126,7 @@ export class UserProvisioningService {
         data: {
           password: await hashPassword(provisionalPassword),
           mustChangePassword: true,
+          ...CLEARED_LOCKOUT,
         },
       }),
       this.prisma.accessToken.deleteMany({ where: { userId: target.id } }),

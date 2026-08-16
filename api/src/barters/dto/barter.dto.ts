@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
@@ -37,8 +38,18 @@ export class CreateBarterDto {
   @IsPositive()
   producerId!: number;
 
+  /**
+   * O teto não é sobre o negócio — é sobre o custo de uma requisição.
+   *
+   * Sem ele, o limite de 256 KB do corpo ainda deixa passar milhares de itens,
+   * e cada um custa uma validação aninhada, uma entrada no `IN (...)` e uma
+   * linha de permuta. A maior permuta real tem algumas dezenas de insumos, e
+   * 200 é folga suficiente para nenhum consultor esbarrar nisto — quem
+   * esbarrar não está registrando permuta.
+   */
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayMaxSize(200, { message: 'Uma permuta não pode ter mais de 200 insumos' })
   @ValidateNested({ each: true })
   @Type(() => BarterInputDto)
   inputs!: BarterInputDto[];

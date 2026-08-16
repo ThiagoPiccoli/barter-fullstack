@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
+import 'package:agrobarter_app/data/demo_seed.dart';
 import 'package:agrobarter_app/main.dart' as app;
 import 'package:agrobarter_app/services/token_storage.dart';
 
@@ -27,8 +28,8 @@ void main() {
 
   Future<void> login(WidgetTester tester, String email) async {
     await tester.enterText(find.byType(TextField).first, email);
-    // Login real: a senha é obrigatória (todos os usuários do seed: 123456).
-    await tester.enterText(find.byType(TextField).at(1), '123456');
+    // Login real: a senha é obrigatória (todos os usuários do seed).
+    await tester.enterText(find.byType(TextField).at(1), demoSeedPassword);
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.widgetWithText(ElevatedButton, 'Entrar'));

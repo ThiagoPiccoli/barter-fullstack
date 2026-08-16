@@ -203,6 +203,17 @@ export function parseSheet(matrix: string[][]): ImportResult {
   if (rows.length === 0 && errors.length === 0) {
     errors.push('A planilha não tem nenhuma linha de produto.');
   }
+
+  // O teto de NEGÓCIO, conferido sobre os produtos de verdade — não sobre
+  // linhas de arquivo. É este número que precisa ser o mesmo do `@ArrayMaxSize`
+  // do PublishVersionDto: os dois caminhos publicam a mesma tabela, e quem
+  // publica por planilha não pode esbarrar num limite que quem publica por JSON
+  // não tem.
+  if (rows.length > MAX_VERSION_PRICES) {
+    errors.push(
+      `A tabela tem ${rows.length} produtos — o limite é ${MAX_VERSION_PRICES} por versão.`,
+    );
+  }
   return { rows, errors };
 }
 
@@ -243,6 +254,54 @@ function cellText(value: ExcelJS.CellValue): string {
   return '';
 }
 
+/**
+ * QUANTOS ITENS DE PREÇO uma versão do Barter aceita — o teto de NEGÓCIO.
+ *
+ * É a mesma constante que o `PublishVersionDto` usa no `@ArrayMaxSize`, e essa
+ * partilha é o ponto: os dois caminhos publicam a MESMA tabela, um por JSON e
+ * outro por planilha, e um limite diferente em cada um significa que o arquivo
+ * recusa o que o JSON aceita. Já significou — a checagem daqui comparava contra
+ * `rowCount`, que inclui cabeçalho e preâmbulo, então uma tabela de exatamente
+ * 20.000 preços passava por JSON e era recusada por arquivo.
+ *
+ * A maior lista de fornecedor que passou por aqui tem 656 itens: folga de
+ * trinta vezes.
+ */
+export const MAX_VERSION_PRICES = 20_000;
+
+/**
+ * As duas GUARDAS DE MEMÓRIA da planilha já aberta — outra pergunta, outros
+ * números.
+ *
+ * O limite de 5 MB do upload (ver seasons.controller.ts) mede o arquivo
+ * COMPRIMIDO, e `.xlsx` é um zip: alguns megabytes de XML repetitivo
+ * descomprimem para muito mais. Sem um segundo teto, uma planilha absurda —
+ * gerada por engano num export, ou de propósito — viraria uma matriz de
+ * milhões de células antes de qualquer regra de negócio ser consultada.
+ *
+ * `MAX_SHEET_ROWS` sobra sobre o teto de preços de propósito: o cabeçalho não é
+ * a primeira linha (ver findHeader — planilha de fornecedor abre com o nome da
+ * empresa e a data), e ainda há rodapé. Recusar em `MAX_VERSION_PRICES` exatas
+ * reprovaria uma tabela cheia só porque ela tem um título em cima. Quem conta
+ * os PREÇOS é o parseSheet, no fim, onde a contagem é a de verdade.
+ *
+ * `MAX_SHEET_CELLS` limita o PRODUTO linhas × colunas, que é o que consome
+ * memória. Uma planilha estreita e comprida e uma larga e curta cabem nos dois
+ * limites de dimensão e ainda assim explodem na multiplicação — era essa a
+ * fresta que a versão anterior fechava truncando colunas em silêncio, o que
+ * trocava um estouro de memória por uma leitura errada sem aviso.
+ *
+ * O QUE ISTO NÃO FAZ: o `load()` abaixo já descomprimiu o arquivo inteiro
+ * quando a contagem acontece — o pico de memória da leitura em si continua
+ * limitado apenas pelos 5 MB comprimidos. Fechar isso de vez pede leitura em
+ * streaming (`ExcelJS.stream.xlsx.WorkbookReader`), que não funciona a partir
+ * de buffer em memória nesta versão da biblioteca. Como a rota exige um
+ * usuário com `barter.manage` — ou seja, um admin autenticado —, o caso que
+ * sobra é o arquivo grande por engano, e é esse que os tetos pegam.
+ */
+const MAX_SHEET_ROWS = MAX_VERSION_PRICES + 100;
+const MAX_SHEET_CELLS = 1_000_000;
+
 /** Lê a primeira aba do arquivo como uma matriz de texto. */
 export async function readWorkbook(buffer: Buffer): Promise<string[][]> {
   const workbook = new ExcelJS.Workbook();
@@ -255,13 +314,35 @@ export async function readWorkbook(buffer: Buffer): Promise<string[][]> {
   const sheet = workbook.worksheets[0];
   if (!sheet) throw new Error('A planilha está vazia.');
 
+  if (sheet.rowCount > MAX_SHEET_ROWS) {
+    throw new Error(
+      `A planilha tem ${sheet.rowCount} linhas — o limite é ${MAX_SHEET_ROWS}. ` +
+        'Confira se o arquivo é a tabela de valores mesmo.',
+    );
+  }
+
+  // A largura é lida INTEIRA, sem corte. Truncar aqui deslocava silenciosamente
+  // a leitura de uma planilha larga: a coluna de preço na posição 70 saía da
+  // matriz, e o erro que chegava ao admin falava de cabeçalho ausente num
+  // arquivo que tinha o cabeçalho na cara dele. Quem impede o exagero é o teto
+  // de células abaixo, que recusa em vez de mutilar.
+  const width = sheet.columnCount;
+  const cells = sheet.rowCount * width;
+  if (cells > MAX_SHEET_CELLS) {
+    throw new Error(
+      `A planilha tem ${sheet.rowCount} linhas × ${width} colunas — grande demais para ler ` +
+        `de uma vez (o limite é ${MAX_SHEET_CELLS.toLocaleString('pt-BR')} células). ` +
+        'Confira se o arquivo é a tabela de valores mesmo.',
+    );
+  }
+
   const matrix: string[][] = [];
   sheet.eachRow({ includeEmpty: true }, (row) => {
     const cells: string[] = [];
     // `eachCell` pula as vazias; o índice manual mantém as colunas alinhadas —
     // uma célula em branco no meio não pode deslocar o preço para a coluna do
     // custo.
-    const count = Math.max(row.cellCount, sheet.columnCount);
+    const count = Math.max(row.cellCount, width);
     for (let column = 1; column <= count; column++) {
       cells.push(cellText(row.getCell(column).value));
     }

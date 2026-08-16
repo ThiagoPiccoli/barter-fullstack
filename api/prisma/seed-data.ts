@@ -4,8 +4,24 @@ import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
 
 /**
+ * A senha de todas as contas de demonstração.
+ *
+ * Era `123456` — que é, literalmente, o primeiro item da lista de senhas
+ * proibidas em src/auth/password-policy.ts. Um sistema que cria contas com uma
+ * senha que ele próprio recusaria é uma contradição, e ela não era só estética:
+ * o dataset só é bloqueado por `NODE_ENV === 'production'`, então um ambiente
+ * de homologação que esquecesse essa variável nascia com contas administrativas
+ * abertas na senha mais tentada do mundo.
+ *
+ * A daqui passa na mesma política das outras: dez caracteres, variedade
+ * suficiente, fora da lista, sem sequência de teclado e sem conter o nome do
+ * sistema nem o de nenhum usuário do dataset.
+ */
+export const SEED_PASSWORD = 'demo-2026-agro';
+
+/**
  * Dataset de demonstração — reproduz o mock original do app (mesmos números
- * das permutas PRM-2026-001..008). Senha de todos os usuários: 123456.
+ * das permutas PRM-2026-001..008). Senha de todos os usuários: SEED_PASSWORD.
  *
  * Usado pelo `prisma db seed` e pelos testes e2e (reset por spec), por isso
  * apaga tudo antes de inserir.
@@ -28,7 +44,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const at = (year: number, month: number, day: number, hour = 0, minute = 0) =>
     new Date(Date.UTC(year, month - 1, day, hour, minute));
 
-  const password = await hashPassword('123456');
+  const password = await hashPassword(SEED_PASSWORD);
 
   /* ── Usuários ─────────────────────────────────────────────────────── */
   const mkUser = (data: {

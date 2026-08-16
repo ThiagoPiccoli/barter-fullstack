@@ -1,2 +1,8 @@
 .DS_Store
 node_modules/
+
+# Logs do ambiente de desenvolvimento. O `dev.sh` escreve o `.dev-api.log` a
+# cada execução (ver a variável API_LOG lá dentro), então versioná-lo punha
+# ruído de runtime em todo diff — e o arquivo chegou a ser commitado uma vez,
+# com 191 linhas de churn.
+*.log

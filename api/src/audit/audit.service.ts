@@ -15,6 +15,21 @@ export const AUDIT_ACTION = {
   userPasswordReset: 'user.password-reset',
   userDeleted: 'user.deleted',
   barterReviewed: 'barter.reviewed',
+  /**
+   * ENTRADA no sistema — e as tentativas que não entraram.
+   *
+   * A trilha registrava muito bem o que se faz DEPOIS de entrar, e nada sobre
+   * o entrar. É a primeira pergunta de qualquer investigação ("quem estava
+   * dentro na terça à noite?") e a única evidência de ataque em andamento: dez
+   * falhas seguidas na conta do admin não se parecem com nada no registro de
+   * atos administrativos, porque nenhum ato aconteceu.
+   *
+   * O log HTTP mostra `POST /auth/login 400`, mas ele vai para a saída padrão,
+   * é volátil e não sabe de QUEM era a conta.
+   */
+  sessionStarted: 'session.started',
+  sessionFailed: 'session.failed',
+  sessionLocked: 'session.locked',
   // O lançamento do Barter decide POR QUANTO a cooperativa troca insumo por
   // grão: publicar uma versão, corrigir um preço dentro dela e encerrá-la
   // valem tanto quanto aprovar uma permuta, e pelo mesmo motivo — é dinheiro.
@@ -27,13 +42,33 @@ export const AUDIT_ACTION = {
 
 export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];
 
+/**
+ * Quem praticou o ato, quando não há um `User` para apontar.
+ *
+ * Existe por causa da tentativa de login em e-mail que não existe: alguém agiu,
+ * e é exatamente esse alguém que interessa registrar, mas não há conta nenhuma
+ * a que ele corresponda. Forçar um `User` aqui obrigaria a inventar um.
+ */
+export interface AuditActor {
+  id?: number | null;
+  name: string;
+  role: string;
+}
+
 export interface AuditEntry {
-  actor: User;
+  actor: User | AuditActor;
   action: AuditAction;
-  targetType: 'user' | 'barter' | 'season' | 'version';
+  targetType: 'user' | 'barter' | 'season' | 'version' | 'session';
   targetId?: number | null;
   targetLabel: string;
   detail?: string;
+}
+
+/** O ator no formato da trilha, venha ele de uma conta ou de um instantâneo. */
+function actorSnapshot(actor: User | AuditActor): AuditActor {
+  return 'fullName' in actor
+    ? { id: actor.id, name: actor.fullName, role: actor.role }
+    : { id: actor.id ?? null, name: actor.name, role: actor.role };
 }
 
 @Injectable()
@@ -56,12 +91,13 @@ export class AuditService {
    * exigir isso, é aqui que muda.
    */
   async record(entry: AuditEntry): Promise<void> {
+    const actor = actorSnapshot(entry.actor);
     try {
       await this.prisma.auditLog.create({
         data: {
-          actorId: entry.actor.id,
-          actorName: entry.actor.fullName,
-          actorRole: entry.actor.role,
+          actorId: actor.id ?? null,
+          actorName: actor.name,
+          actorRole: actor.role,
           action: entry.action,
           targetType: entry.targetType,
           targetId: entry.targetId ?? null,

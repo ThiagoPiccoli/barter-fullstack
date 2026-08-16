@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import { CLEARED_LOCKOUT, isLocked } from '../src/auth/lockout';
 import { generateProvisionalPassword, hashPassword } from '../src/auth/password.util';
+import { passwordProblem } from '../src/auth/password-policy';
 
 /**
  * Redefinição de senha PELA LINHA DE COMANDO — a saída de emergência do
@@ -37,7 +39,16 @@ function parseArgs(argv: string[]): { email?: string; password?: string } {
 async function listAccounts(): Promise<void> {
   const users = await prisma.user.findMany({
     orderBy: [{ role: 'asc' }, { id: 'asc' }],
-    select: { id: true, email: true, fullName: true, role: true, mustChangePassword: true },
+    select: {
+      id: true,
+      email: true,
+      fullName: true,
+      role: true,
+      mustChangePassword: true,
+      // A trava aparece na listagem porque é ela que explica o sintoma que traz
+      // alguém até este script: "a senha está certa e não entra".
+      lockedUntil: true,
+    },
   });
 
   if (users.length === 0) {
@@ -50,8 +61,12 @@ async function listAccounts(): Promise<void> {
 
   console.log('Contas cadastradas:\n');
   for (const user of users) {
-    const pending = user.mustChangePassword ? '  (senha provisória pendente de troca)' : '';
-    console.log(`  [${user.role.padEnd(10)}] ${user.email}  — ${user.fullName}${pending}`);
+    const marks = [
+      user.mustChangePassword ? 'senha provisória pendente de troca' : null,
+      isLocked(user) ? 'BLOQUEADA por tentativas erradas' : null,
+    ].filter(Boolean);
+    const suffix = marks.length > 0 ? `  (${marks.join('; ')})` : '';
+    console.log(`  [${user.role.padEnd(10)}] ${user.email}  — ${user.fullName}${suffix}`);
   }
   console.log('\nPara redefinir:  npm run password:reset -- <e-mail>');
 }
@@ -64,16 +79,33 @@ async function resetFor(email: string, chosen?: string): Promise<number> {
     return 1;
   }
 
-  if (chosen !== undefined && chosen.length < 6) {
-    console.error('A senha precisa ter ao menos 6 caracteres.');
+  // A senha escolhida à mão passa pela MESMA regra do resto do sistema (ver
+  // src/auth/password-policy.ts). Antes daqui saía um piso próprio, de seis
+  // caracteres — e a exceção mais perigosa é justamente esta, que roda como
+  // root no servidor e costuma ser usada para a conta do admin.
+  const problem = chosen === undefined ? null : passwordProblem(chosen, user);
+  if (problem) {
+    console.error(`${problem}.`);
     return 1;
   }
 
   const password = chosen ?? generateProvisionalPassword();
+  const wasLocked = isLocked(user);
+
+  // CLEARED_LOCKOUT junto com a senha, e não como um segundo passo: esta é a
+  // saída de emergência do sistema, e ela precisa DEVOLVER O ACESSO. A trava
+  // por tentativas erradas é checada no login antes da senha, então sem isto o
+  // script entregava uma senha nova que continuava sendo recusada por até
+  // quinze minutos — justamente na conta do admin, que é quem não tem ninguém
+  // acima para destravá-la.
   await prisma.$transaction([
     prisma.user.update({
       where: { id: user.id },
-      data: { password: await hashPassword(password), mustChangePassword: true },
+      data: {
+        password: await hashPassword(password),
+        mustChangePassword: true,
+        ...CLEARED_LOCKOUT,
+      },
     }),
     prisma.accessToken.deleteMany({ where: { userId: user.id } }),
   ]);
@@ -81,7 +113,11 @@ async function resetFor(email: string, chosen?: string): Promise<number> {
   console.log(`\n  Conta ...... ${user.email} (${user.role})`);
   console.log(`  Senha ...... ${password}`);
   console.log('\nSenha PROVISÓRIA: será exigida uma troca no primeiro login.');
-  console.log('As sessões que estavam abertas nesta conta foram encerradas.\n');
+  console.log('As sessões que estavam abertas nesta conta foram encerradas.');
+  if (wasLocked) {
+    console.log('A conta estava BLOQUEADA por tentativas erradas — o bloqueio foi removido.');
+  }
+  console.log('');
   return 0;
 }
 
