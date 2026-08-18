@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/auth/password.util';
 import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
+import { TAX_REGIME, taxRateOf, type TaxRegime } from '../src/barters/tax-regime';
 import { normalizeName } from '../src/seasons/product-name';
 
 /**
@@ -211,15 +212,35 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
   // aqui para o dataset não precisar repetir o documento duas vezes.
-  type ProducerSeed = Omit<Prisma.ProducerUncheckedCreateInput, 'documentDigits'>;
-  const mkProducer = (data: ProducerSeed) =>
+  //
+  // `consultants` é LISTA: o mesmo produtor pode ser atendido por mais de um
+  // consultor (ver ProducerConsultant no schema). Joaquim Tavares, abaixo, é o
+  // caso do dataset — a região de Mandaguari é dividida entre Roberto e João, e
+  // os dois atendem o mesmo cliente.
+  type ProducerSeed = Omit<
+    Prisma.ProducerUncheckedCreateInput,
+    'documentDigits' | 'consultants'
+  > & { consultants: number[] };
+
+  const mkProducer = ({ consultants, ...data }: ProducerSeed) =>
     prisma.producer.create({
-      data: { ...data, documentDigits: documentDigitsOf(data.document) },
+      data: {
+        ...data,
+        documentDigits: documentDigitsOf(data.document),
+        // O vínculo nasce junto com o produtor, e por isso com a data dele: no
+        // dataset o compartilhamento é parte da história, não algo feito hoje.
+        consultants: {
+          create: consultants.map((consultantId) => ({
+            consultantId,
+            assignedAt: data.createdAt as Date,
+          })),
+        },
+      },
     });
 
   const antonio = await mkProducer({
     name: 'Antônio Carvalho',
-    consultantId: joao.id,
+    consultants: [joao.id],
     document: 'CPF 123.456.789-00',
     phone: '(44) 99800-1001',
     farmName: 'Fazenda Boa Vista',
@@ -229,7 +250,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const helena = await mkProducer({
     name: 'Helena Prado',
-    consultantId: ana.id,
+    consultants: [ana.id],
     document: 'CPF 234.567.890-11',
     phone: '(44) 99800-1002',
     farmName: 'Sítio das Águas',
@@ -237,9 +258,13 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     areaHa: 45,
     createdAt: at(2021, 5, 18),
   });
+  // O produtor COMPARTILHADO do dataset: Mandaguari é região dividida, e
+  // Roberto e João atendem os dois a Fazenda Santa Rita. É o caso que existe
+  // para as telas mostrarem uma carteira com mais de um nome — e para os testes
+  // separarem "vejo o meu" de "vejo só o meu".
   const joaquim = await mkProducer({
     name: 'Joaquim Tavares',
-    consultantId: roberto.id,
+    consultants: [roberto.id, joao.id],
     document: 'CNPJ 12.345.678/0001-90',
     phone: '(44) 99800-1003',
     farmName: 'Fazenda Santa Rita',
@@ -249,7 +274,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const claudia = await mkProducer({
     name: 'Cláudia Nunes',
-    consultantId: ana.id,
+    consultants: [ana.id],
     document: 'CPF 345.678.901-22',
     phone: '(44) 99800-1004',
     farmName: 'Fazenda Recanto',
@@ -259,7 +284,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const sebastiao = await mkProducer({
     name: 'Sebastião Ramos',
-    consultantId: joao.id,
+    consultants: [joao.id],
     document: 'CPF 456.789.012-33',
     phone: '(44) 99800-1005',
     farmName: 'Sítio Bela Vista',
@@ -269,7 +294,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const vanessa = await mkProducer({
     name: 'Vanessa Lopes',
-    consultantId: lucas.id,
+    consultants: [lucas.id],
     document: 'CNPJ 23.456.789/0001-01',
     phone: '(44) 99800-1006',
     farmName: 'Fazenda Três Irmãos',
@@ -279,7 +304,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const osmar = await mkProducer({
     name: 'Osmar Dutra',
-    consultantId: maria.id,
+    consultants: [maria.id],
     document: 'CPF 567.890.123-44',
     phone: '(44) 99800-1007',
     farmName: 'Fazenda Alto da Serra',
@@ -758,12 +783,26 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   ]);
   const pickupOverride = new Map([['PRM-2026-008', matriz]]);
 
+  // A FORMA de recolhimento escolhida no fechamento de cada permuta. O padrão é
+  // a comercialização; estas duas fecharam sobre a FOLHA, e existem para o
+  // dataset mostrar as duas alíquotas — uma de produtor CPF (fica só o Senar de
+  // 0,20%) e outra de CNPJ (0,25%). Sem elas, toda permuta sairia com o mesmo
+  // percentual e a linha de imposto passaria por certa mostrando sempre o mesmo
+  // número.
+  const taxRegimeOverride = new Map<string, TaxRegime>([
+    // Cláudia Nunes, CPF: sobra o Senar de 0,20%.
+    ['PRM-2026-004', TAX_REGIME.folha],
+    // Vanessa Lopes, CNPJ: sobra o Senar de 0,25%.
+    ['PRM-2026-007', TAX_REGIME.folha],
+  ]);
+
   for (const entry of barters) {
     const homeUnit = unitOfConsultant.get(entry.consultant.id)!;
     const unit = pickupOverride.get(entry.code) ?? homeUnit;
     // O destinatário é o gerente do CONSULTOR — a mesma regra que o
     // BartersService impõe, aqui só reproduzida para o dataset.
     const manager = managerOfConsultant.get(entry.consultant.id)!;
+    const taxRegime = taxRegimeOverride.get(entry.code) ?? TAX_REGIME.comercializacao;
 
     await prisma.barter.create({
       data: {
@@ -778,6 +817,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         unitId: unit.id,
         unitName: unit.name,
         status: entry.status,
+        // A mesma conta do BartersService: a forma escolhida no fechamento e a
+        // alíquota que ela produziu para este produtor.
+        taxRegime,
+        taxRate: taxRateOf(taxRegime, documentDigitsOf(entry.producer.document)),
         // O destinatário existe desde o envio; o parecer só nas que já passaram
         // pela etapa. As duas em `sentToManager` estão endereçadas e sem nota.
         managerId: manager.id,

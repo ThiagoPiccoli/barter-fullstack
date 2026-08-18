@@ -6,6 +6,7 @@ import {
   GERENTE,
   GERENTE_SUL,
   JOAO,
+  ROBERTO,
   UNIT,
   createTestApp,
   loginAs,
@@ -94,6 +95,91 @@ describe('Barters (e2e)', () => {
   });
 
   /**
+   * FUNRURAL/SENAR: a entrega de grão é comercialização de produção rural, e as
+   * DUAS FORMAS de recolhimento são escolhidas no fechamento da permuta.
+   *
+   * O que a permuta grava é a ALÍQUOTA que a escolha produziu — snapshot, como
+   * `producerName` e o preço do item. A alíquota muda por lei, e um comprovante
+   * reimpresso depois não pode mostrar outro imposto.
+   */
+  describe('imposto da entrega (Funrural/Senar)', () => {
+    const registrar = async (taxRegime?: string) =>
+      request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(JOAO))
+        .send(taxRegime ? { ...validPayload, taxRegime } : validPayload);
+
+    it('fechar sobre a comercialização aplica a alíquota cheia', async () => {
+      const response = await registrar('comercializacao');
+
+      expect(response.status).toBe(201);
+      // Antônio Carvalho é CPF: 1,32 + 0,11 + 0,20 = 1,63%.
+      expect(response.body.data.taxRegime).toBe('comercializacao');
+      expect(response.body.data.taxRate).toBe(1.63);
+    });
+
+    /**
+     * O ponto da funcionalidade: escolher a folha NÃO isenta a entrega. A parte
+     * previdenciária muda de base (vai para a folha de pagamento, que este
+     * sistema não conhece), e o Senar continua incidindo sobre a comercialização.
+     */
+    it('fechar sobre a folha deixa só o Senar sobre a entrega', async () => {
+      const response = await registrar('folha');
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.taxRegime).toBe('folha');
+      expect(response.body.data.taxRate).toBe(0.2);
+    });
+
+    it('permuta sem a escolha cai na comercialização', async () => {
+      const response = await registrar();
+      expect(response.body.data.taxRegime).toBe('comercializacao');
+      expect(response.body.data.taxRate).toBe(1.63);
+    });
+
+    it('forma de recolhimento que não existe é recusada', async () => {
+      const response = await registrar('presumido');
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('recolhimento');
+    });
+
+    /** PF ou PJ não é escolha: sai do documento do produtor da permuta. */
+    it('a mesma escolha cobra percentuais diferentes de CPF e CNPJ', async () => {
+      // Joaquim Tavares (id 3) é CNPJ e também é atendido pelo João. São 320 ha,
+      // então os mínimos por hectare sobem junto: 128 NPK, 800 glifosato, 48
+      // lambda.
+      const doCnpj = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(JOAO))
+        .send({
+          ...validPayload,
+          producerId: 3,
+          taxRegime: 'comercializacao',
+          inputs: [
+            { productId: 5, quantity: 128 },
+            { productId: 6, quantity: 800 },
+            { productId: 7, quantity: 48 },
+          ],
+        });
+
+      expect(doCnpj.status).toBe(201);
+      // CNPJ: 1,98 + 0,25 = 2,23%.
+      expect(doCnpj.body.data.taxRate).toBe(2.23);
+    });
+
+    /** A alíquota fica congelada: reler a permuta devolve o que foi registrado. */
+    it('a alíquota registrada não muda quando a permuta é relida', async () => {
+      const criada = await registrar('folha');
+      const relida = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${criada.body.data.code}`)
+        .set('Authorization', await asUser(JOAO));
+
+      expect(relida.body.data.taxRegime).toBe('folha');
+      expect(relida.body.data.taxRate).toBe(0.2);
+    });
+  });
+
+  /**
    * A quantidade é GRAVADA em 2 casas, e quem arredonda é o servidor.
    *
    * O app já mandava arredondado (`roundQuantity`, em barter_math.dart), mas
@@ -174,12 +260,45 @@ describe('Barters (e2e)', () => {
   });
 
   it('produtor precisa pertencer à carteira de quem registra', async () => {
-    // Helena Prado (id 2) é da carteira da Ana.
+    // Helena Prado (id 2) é atendida só pela Ana.
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters')
       .set('Authorization', await asUser(JOAO))
       .send({ ...validPayload, producerId: 2 });
     expect(response.status).toBe(403);
+  });
+
+  /**
+   * A carteira compartilhada não afrouxa a regra acima — ela muda a pergunta,
+   * de "é o dono?" para "está na carteira?". Joaquim Tavares (id 3, 320 ha) é
+   * atendido pelo Roberto E pelo João, e os dois registram permuta para ele.
+   * Cada permuta continua sendo de UM consultor: o que a registrou.
+   */
+  it('produtor compartilhado permuta pelos dois consultores', async () => {
+    // Mínimos para 320 ha: 128 sacos NPK, 800 L glifosato, 48 L lambda.
+    const payload = {
+      ...validPayload,
+      producerId: 3,
+      unitId: UNIT.filial34,
+      inputs: [
+        { productId: 5, quantity: 128 },
+        { productId: 6, quantity: 800 },
+        { productId: 7, quantity: 48 },
+      ],
+    };
+
+    for (const [email, nome] of [
+      [ROBERTO, 'Roberto Souza'],
+      [JOAO, 'João Silva'],
+    ]) {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(email))
+        .send(payload);
+      expect(response.status).toBe(201);
+      expect(response.body.data.producerName).toBe('Joaquim Tavares');
+      expect(response.body.data.consultantName).toBe(nome);
+    }
   });
 
   it('admin não registra permuta (ato do consultor da carteira)', async () => {

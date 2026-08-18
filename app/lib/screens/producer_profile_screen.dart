@@ -48,6 +48,13 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
     final atManager = barters.where((b) => b.awaitsManager).length;
     final sacks = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
+    // A carteira do produtor é lista: consultores dividem região e atendem o
+    // mesmo cliente. Consultor excluído já não tem nome para mostrar — some da
+    // linha em vez de virar um id solto.
+    final consultores = producer.consultantIds
+        .map((id) => AppData.consultantById(id)?.name)
+        .whereType<String>()
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -81,10 +88,16 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
           Card(
             child: Column(
               children: [
+                // O rótulo acompanha a contagem: a tela não pode dizer
+                // "consultor" mostrando três nomes.
                 InfoTile(
                   icon: Icons.work_outline,
-                  label: 'Carteira do consultor',
-                  value: AppData.consultantById(producer.consultantId)?.name ?? 'Sem consultor vinculado',
+                  label: consultores.length > 1
+                      ? 'Consultores que atendem'
+                      : 'Carteira do consultor',
+                  value: consultores.isEmpty
+                      ? 'Sem consultor vinculado'
+                      : consultores.join(' • '),
                 ),
                 const Divider(height: 1),
                 InfoTile(icon: Icons.badge_outlined, label: 'Documento', value: producer.document),

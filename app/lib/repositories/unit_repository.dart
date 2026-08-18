@@ -11,10 +11,13 @@ import '../services/api/api_client.dart';
 /// dezenas de unidades) e o app precisa dela inteira para montar o seletor da
 /// permuta. Mesmo critério do catálogo de classes.
 class UnitRepository {
-  Future<List<UnitModel>> list() async {
-    final data = await api.get('/units') as List;
-    return data.cast<Map<String, dynamic>>().map(UnitModel.fromJson).toList();
-  }
+  Future<List<UnitModel>> list() async => parse(await listRaw());
+
+  Future<List<Map<String, dynamic>>> listRaw() async =>
+      (await api.get('/units') as List).cast<Map<String, dynamic>>();
+
+  List<UnitModel> parse(List<Map<String, dynamic>> rows) =>
+      rows.map(UnitModel.fromJson).toList();
 
   Future<UnitModel> create(UnitModel unit) async {
     final data = await api.post('/units', body: _payload(unit));

@@ -81,7 +81,9 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
       name: consultant.name,
       barterCount: AppData.barters.where((b) => b.consultantId == consultant.id).length,
       onConfirm: () async {
-        // O servidor deixa a carteira sem dono e preserva o histórico.
+        // O servidor apaga os VÍNCULOS dele com os produtores e preserva o
+        // histórico. Produtor que outro consultor também atende continua
+        // atendido; o que era só dele fica esperando realocação.
         await AppData.deleteConsultant(consultant.id);
         if (mounted) Navigator.pop(context);
       },
@@ -223,7 +225,9 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                 style: TextStyle(fontSize: 12, color: AppColors.denied)),
           ],
           const SizedBox(height: 20),
-          // Carteira de produtores: os clientes que só este consultor atende.
+          // Carteira de produtores: os clientes que este consultor atende —
+          // inclusive os que ele divide com colegas, que por isso aparecem
+          // também na carteira deles.
           Text('Carteira de Produtores (${wallet.length})',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
           const SizedBox(height: 12),

@@ -81,9 +81,14 @@ model User {
   /// origem.
   lockedUntil DateTime?
 
-  tokens  AccessToken[]
-  wallet  Producer[]
-  barters Barter[]      @relation("ConsultantBarters")
+  tokens AccessToken[]
+
+  /// A CARTEIRA desta pessoa — os vínculos com os produtores que ela atende.
+  /// É lista de vínculos, não de produtores, porque o mesmo produtor pode estar
+  /// na carteira de vários consultores (ver ProducerConsultant).
+  wallet ProducerConsultant[]
+
+  barters Barter[] @relation("ConsultantBarters")
 
   /// Os consultores sob a gerência desta pessoa (só gerente tem). É por aqui
   /// que a permuta chega até ele: ela é endereçada ao gerente de quem a
@@ -158,13 +163,12 @@ model Unit {
   barters Barter[]
 }
 
-/// Produtor (cliente) designado nas permutas; pertence à CARTEIRA de um
-/// consultor. consultantId vira NULL se o consultor for excluído (aguarda realocação).
+/// Produtor (cliente) designado nas permutas; está na CARTEIRA de um ou mais
+/// consultores (ver ProducerConsultant). Fica sem nenhum — aguardando
+/// realocação — quando o último consultor vinculado é excluído.
 model Producer {
   id           Int      @id @default(autoincrement())
   name         String
-  consultantId Int?
-  consultant   User?    @relation(fields: [consultantId], references: [id], onDelete: SetNull)
   /// CPF/CNPJ como o admin digitou — é o que aparece na tela e no comprovante.
   document     String
   /// O mesmo documento reduzido a dígitos. É ELE que carrega a unicidade:
@@ -180,7 +184,46 @@ model Producer {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
+  /// Os consultores que atendem este produtor. Quem escreve esta lista é o
+  /// admin (ver CAPABILITY.producersManage).
+  consultants ProducerConsultant[]
+
   barters Barter[]
+}
+
+/// O VÍNCULO entre um produtor e um consultor que o atende — a carteira, agora
+/// como relação, e não como coluna.
+///
+/// Era `Producer.consultantId`: um produtor pertencia a exatamente uma
+/// carteira. A operação não é assim — consultores dividem região, e o mesmo
+/// produtor é atendido por mais de um. Com a coluna, o jeito de representar
+/// isso era cadastrar o produtor duas vezes, e aí a área cultivável passava a
+/// existir em dobro (os mínimos por hectare saem dela) e as permutas do mesmo
+/// cliente se partiam entre dois registros — exatamente o que a unicidade de
+/// `documentDigits` existe para impedir.
+///
+/// Os vínculos são IGUAIS entre si: não há dono nem principal. Qualquer
+/// consultor vinculado enxerga o produtor e registra permuta para ele; a
+/// permuta guarda quem a registrou (`Barter.consultantId`), que é onde a
+/// pergunta "de quem foi esta venda?" se responde.
+///
+/// A exclusão é Cascade dos dois lados: sumindo o consultor, some o vínculo
+/// dele — não o produtor. O produtor pode acabar sem nenhum consultor e ficar
+/// esperando realocação, que é o mesmo estado que o antigo SetNull produzia.
+model ProducerConsultant {
+  producerId   Int
+  producer     Producer @relation(fields: [producerId], references: [id], onDelete: Cascade)
+  consultantId Int
+  consultant   User     @relation(fields: [consultantId], references: [id], onDelete: Cascade)
+
+  /// Desde quando este consultor atende este produtor. O vínculo tem data
+  /// própria porque ele nasce depois do produtor: um compartilhamento feito
+  /// hoje não deve parecer que existe desde o cadastro do cliente.
+  assignedAt DateTime @default(now())
+
+  @@id([producerId, consultantId])
+  // A pergunta da listagem do consultor: "quais produtores são meus?".
+  @@index([consultantId])
 }
 
 /// CLASSE do insumo — a taxonomia com que o FORNECEDOR organiza a lista de
@@ -412,6 +455,25 @@ model Barter {
   unitName String @default("")
 
   status String @default("sentToManager")
+
+  /// O IMPOSTO DA ENTREGA — a entrega de grão é comercialização de produção
+  /// rural, e sobre ela incidem o Funrural e o Senar.
+  ///
+  /// `taxRegime` é a FORMA escolhida no fechamento desta permuta:
+  /// `comercializacao` (sobre a receita da venda) ou `folha` (sobre a folha de
+  /// pagamento — e aí sobre a entrega fica só o Senar). Ver
+  /// `src/barters/tax-regime.ts`.
+  ///
+  /// `taxRate` é a alíquota (%) que essa escolha produziu, e é SNAPSHOT pelo
+  /// mesmo motivo de `producerName` e do preço do item: a alíquota muda por lei
+  /// (a atual vale desde 1º/04/2026) e o que decide qual vale é a data da
+  /// comercialização. Recalculando na leitura, um comprovante emitido depois da
+  /// lei seguinte passaria a mostrar um imposto diferente do que foi acordado.
+  ///
+  /// `taxRate` 0 nas permutas anteriores a estes campos: elas não têm alíquota
+  /// registrada, e inventar uma seria afirmar um número que ninguém aplicou.
+  taxRegime String @default("comercializacao")
+  taxRate   Float  @default(0)
 
   /// O GERENTE A QUEM ESTA PERMUTA FOI ENVIADA — o gerente do consultor no
   /// momento do registro — e o parecer técnico dele sobre a negociação.

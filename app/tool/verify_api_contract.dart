@@ -26,6 +26,7 @@ import 'package:agrobarter_app/repositories/manager_repository.dart';
 import 'package:agrobarter_app/repositories/producer_repository.dart';
 import 'package:agrobarter_app/repositories/unit_repository.dart';
 import 'package:agrobarter_app/services/api/api_client.dart';
+import 'package:agrobarter_app/services/tax_regime.dart';
 
 int _failures = 0;
 
@@ -70,6 +71,55 @@ Future<void> _run() async {
   final producers = await ProducerRepository().list();
   check('permutas chegam completas', barters.isNotEmpty, '${barters.length} registro(s)');
   check('produtores chegam completos', producers.isNotEmpty, '${producers.length} registro(s)');
+
+  /* ── A carteira compartilhada ─────────────────────────────────────── */
+  // `consultantIds` é lista, e é o servidor quem decide quem atende quem. O
+  // app parsear um id só (ou um campo `consultantId` que não existe mais)
+  // deixaria a carteira do consultor vazia — ele abriria o app sem produtor
+  // nenhum para permutar, sem erro nenhum na tela.
+  check('a carteira do produtor chega como lista',
+      producers.every((p) => p.consultantIds.isNotEmpty),
+      '${producers.length} registro(s), nenhum sem consultor');
+
+  final compartilhados = producers.where((p) => p.consultantIds.length > 1).toList();
+  check('o dataset traz produtor atendido por mais de um consultor',
+      compartilhados.isNotEmpty,
+      compartilhados.map((p) => '${p.name} (${p.consultantIds.length})').join(' · '));
+
+  // O outro lado da mesma verdade: o produtor compartilhado aparece na lista
+  // escopada de CADA um dos consultores dele. É a rota que o consultor chama
+  // ao abrir o app, com o token dele — não a lista do admin filtrada no cliente.
+  final compartilhado = compartilhados.first;
+  for (final consultantId in compartilhado.consultantIds) {
+    final daCarteira = await api.getAll('/producers', query: {'consultantId': consultantId});
+    check('${compartilhado.name} está na carteira do consultor $consultantId',
+        daCarteira.any((p) => ProducerModel.fromJson(p).id == compartilhado.id));
+  }
+
+  /* ── Imposto da entrega (Funrural/Senar) ──────────────────────────── */
+  // A permuta guarda a FORMA de recolhimento escolhida no fechamento e a
+  // alíquota que ela produziu. Se os campos sumissem do contrato, o comprovante
+  // deixaria de mostrar o imposto sem erro nenhum na tela.
+  final comImposto = barters.where((b) => b.hasTax).toList();
+  check('a permuta registrada guarda a alíquota aplicada',
+      comImposto.isNotEmpty,
+      comImposto.map((b) => '${b.id}: ${b.taxRateLabel}').take(3).join(' · '));
+
+  final naFolha = barters.where((b) => b.taxRegime == TaxRegime.folha).toList();
+  check('o dataset traz permuta fechada sobre a folha',
+      naFolha.isNotEmpty,
+      naFolha.map((b) => '${b.id} (${b.taxRateLabel})').join(' · '));
+
+  // O espelho da tabela de alíquotas: `services/tax_regime.dart` precisa chegar
+  // ao MESMO percentual que o servidor gravou. Divergir aqui é a tela prever um
+  // imposto na fazenda e a permuta sair com outro.
+  final produtorDa = {for (final p in producers) p.id: p};
+  final conferiveis =
+      comImposto.where((b) => produtorDa.containsKey(b.producerId)).toList();
+  check('a alíquota local bate com a do servidor',
+      conferiveis.every((b) =>
+          taxRateOf(b.taxRegime, produtorDa[b.producerId]!.document) == b.taxRate),
+      '${conferiveis.length} permuta(s) conferida(s)');
 
   // Confere contra o meta.total que o servidor informa para a mesma coleção.
   final firstPage = await api.get('/barters', query: {'limit': '1'});

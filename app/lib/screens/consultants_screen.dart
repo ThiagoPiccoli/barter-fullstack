@@ -184,7 +184,6 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemBuilder: (_, i) {
         final p = list[i];
         final bs = AppData.barters.where((b) => b.producerId == p.id).toList();
-        final owner = AppData.consultantById(p.consultantId);
         return _PersonCard(
           initials: p.avatarInitials,
           name: p.name,
@@ -192,12 +191,10 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           accent: AppColors.primary,
           badgeIcon: Icons.agriculture,
           chips: [
-            // Dono da carteira: só o admin vê esta lista completa, então o
-            // vínculo produtor → consultor precisa estar visível aqui.
-            _StatChip(
-              label: 'Carteira: ${owner?.name.split(' ').first ?? 'sem consultor'}',
-              color: AppColors.input,
-            ),
+            // Quem atende: só o admin vê esta lista completa, então o vínculo
+            // produtor → consultores precisa estar visível aqui. Cabe um nome
+            // no cartão; o resto vira contagem, e o perfil mostra todos.
+            _StatChip(label: _walletLabel(p), color: AppColors.input),
             ..._statChips(bs),
           ],
           onTap: () async {
@@ -210,6 +207,18 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
         );
       },
     );
+  }
+
+  /// A carteira do produtor num selo de uma linha: "Carteira: João",
+  /// "Carteira: João +1" quando ele é dividido, "sem consultor" quando o
+  /// último vínculo caiu junto com a exclusão do consultor.
+  String _walletLabel(ProducerModel p) {
+    final nomes = AppData.consultantNamesFor(p);
+    if (nomes.isEmpty) return 'Carteira: sem consultor';
+    final primeiro = nomes.first.split(' ').first;
+    return nomes.length == 1
+        ? 'Carteira: $primeiro'
+        : 'Carteira: $primeiro +${nomes.length - 1}';
   }
 
   Widget _buildConsultantList(List<UserModel> list) {

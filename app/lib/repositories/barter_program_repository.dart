@@ -8,11 +8,16 @@ import '../services/api/api_client.dart';
 /// insumo. Todo o resto é do admin.
 class BarterProgramRepository {
   /// A versão vigente, ou null quando não há Barter lançado.
-  Future<BarterVersionModel?> current() async {
-    final data = await api.get('/barter-versions/current');
-    if (data == null) return null;
-    return BarterVersionModel.fromJson(data as Map<String, dynamic>);
-  }
+  Future<BarterVersionModel?> current() async => parseVersion(await currentRaw());
+
+  /// A mesma versão, ainda como veio da API. `null` aqui é resposta legítima do
+  /// servidor — significa que NÃO HÁ Barter aberto —, e é diferente de nunca ter
+  /// perguntado: quem distingue as duas é `AppData.lastSyncAt`.
+  Future<Map<String, dynamic>?> currentRaw() async =>
+      await api.get('/barter-versions/current') as Map<String, dynamic>?;
+
+  BarterVersionModel? parseVersion(Map<String, dynamic>? row) =>
+      row == null ? null : BarterVersionModel.fromJson(row);
 
   Future<List<SeasonModel>> listSeasons() async {
     final data = await api.get('/seasons') as List;

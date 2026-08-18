@@ -19,9 +19,14 @@ class BarterRepository {
     required String producerId,
     required String unitId,
     required Map<String, double> inputQuantities,
+    TaxRegime taxRegime = TaxRegime.comercializacao,
   }) async {
     final data = await api.post('/barters', body: {
       'producerId': int.parse(producerId),
+      // COMO o Funrural desta entrega é recolhido — a escolha do fechamento. A
+      // ALÍQUOTA que ela produz é do servidor: a tabela é lei, e o app
+      // instalado não pode ser a fonte dela.
+      'taxRegime': taxRegime.apiValue,
       // A unidade de retirada. Ela decide de qual gerente é o parecer, e a
       // permuta nasce esperando por ele.
       'unitId': int.parse(unitId),

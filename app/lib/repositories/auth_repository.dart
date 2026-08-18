@@ -6,6 +6,13 @@ import '../services/token_storage.dart';
 /// sessão e no [TokenStorage] para sobreviver ao fechamento do app; o usuário
 /// logado fica em AppData.currentUser.
 class AuthRepository {
+  /// O último `/me` cru, guardado para o cache offline gravar o usuário no
+  /// mesmo formato em que ele voltaria do servidor — ver
+  /// [CatalogRepository.listProductsRaw].
+  Map<String, dynamic>? _lastMe;
+
+  Map<String, dynamic>? get lastMeRaw => _lastMe;
+
   Future<UserModel> login(String email, String password) async {
     final data = await api.post('/auth/login', body: {
       'email': email,
@@ -14,7 +21,8 @@ class AuthRepository {
     final token = data['token'] as String;
     api.token = token;
     await TokenStorage.write(token);
-    return UserModel.fromJson(data['user'] as Map<String, dynamic>);
+    _lastMe = data['user'] as Map<String, dynamic>;
+    return UserModel.fromJson(_lastMe!);
   }
 
   /// Retoma a sessão guardada no aparelho. Devolve o usuário quando o token
@@ -35,7 +43,8 @@ class AuthRepository {
       // Sem o gatilho de sessão expirada: aqui ainda não há tela para onde
       // voltar, quem decide o destino é a tela de abertura.
       final data = await api.get('/me', signalSessionLoss: false);
-      return UserModel.fromJson(data as Map<String, dynamic>);
+      _lastMe = data as Map<String, dynamic>;
+      return UserModel.fromJson(_lastMe!);
     } on ApiException catch (e) {
       if (e.isAuthError) {
         await forget();

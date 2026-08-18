@@ -38,9 +38,10 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   late final TextEditingController _city;
   late final TextEditingController _area;
 
-  /// Consultor dono da carteira a que o produtor pertence. Obrigatório: todo
-  /// produtor nasce dentro da carteira de alguém.
-  String? _consultantId;
+  /// Os consultores que atendem este produtor. PELO MENOS UM: um produtor que
+  /// ninguém atende não aparece para ninguém. Pode ser mais de um — consultores
+  /// dividem região e atendem o mesmo cliente.
+  final Set<String> _consultantIds = {};
 
   bool get _isNew => widget.producer == null;
 
@@ -48,8 +49,13 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   void initState() {
     super.initState();
     final p = widget.producer;
-    // Se o consultor da carteira foi excluído, força o admin a escolher outro.
-    _consultantId = p != null && AppData.consultantById(p.consultantId) != null ? p.consultantId : null;
+    // Consultor excluído sai da lista: o vínculo dele já não existe no
+    // servidor, e mostrá-lo marcado prometeria salvar algo que seria recusado.
+    if (p != null) {
+      _consultantIds.addAll(
+        p.consultantIds.where((id) => AppData.consultantById(id) != null),
+      );
+    }
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
     _phone = TextEditingController(text: p?.phone ?? '');
@@ -83,7 +89,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     final draft = ProducerModel(
       id: old?.id ?? '',
       name: name,
-      consultantId: _consultantId!,
+      consultantIds: _consultantIds.toList(),
       document: _document.text.trim(),
       phone: _phone.text.trim(),
       farmName: _farm.text.trim(),
@@ -109,24 +115,9 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 14),
-              child: DropdownButtonFormField<String>(
-                initialValue: _consultantId,
-                decoration: const InputDecoration(
-                  labelText: 'Carteira do consultor',
-                  prefixIcon: Icon(Icons.badge_outlined, size: 20),
-                ),
-                items: AppData.consultants
-                    .map((s) => DropdownMenuItem(
-                          value: s.id,
-                          child: Text('${s.name} • ${s.branch}',
-                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 14)),
-                        ))
-                    .toList(),
-                onChanged: (v) => setState(() => _consultantId = v),
-                validator: (v) => v == null ? 'Escolha o consultor responsável' : null,
-              ),
+            _ConsultantWalletField(
+              selected: _consultantIds,
+              onChanged: () => setState(() {}),
             ),
             _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
             _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true),
@@ -153,12 +144,140 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             const SizedBox(height: 8),
             Text(
               'A área define os insumos obrigatórios e a quantidade mínima de cada '
-              'um nas novas permutas deste produtor. O produtor só aparece para o '
-              'consultor dono da carteira escolhida acima.',
+              'um nas novas permutas deste produtor. O produtor só aparece para os '
+              'consultores marcados acima.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A CARTEIRA do produtor: quais consultores o atendem.
+///
+/// Era um dropdown de escolha única, e a mudança para marcação múltipla é a
+/// própria funcionalidade — consultores dividem região e atendem o mesmo
+/// produtor. O dropdown obrigava a escolher um; a única forma de representar
+/// dois era cadastrar o produtor duas vezes, e aí a área cultivável passava a
+/// existir em dobro e as permutas do mesmo cliente se partiam entre dois
+/// registros.
+///
+/// É um [FormField] e não uma lista solta para a exigência de "pelo menos um"
+/// entrar no mesmo `validate()` dos outros campos — em vez de virar um `if`
+/// antes do salvamento, que é o tipo de conferência que se esquece de fazer
+/// quando aparece um segundo botão de salvar.
+class _ConsultantWalletField extends StatelessWidget {
+  /// O conjunto vivo de ids marcados — a tela é dona dele; este campo escreve
+  /// dentro e avisa por [onChanged].
+  final Set<String> selected;
+  final VoidCallback onChanged;
+
+  const _ConsultantWalletField({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final consultants = AppData.consultants;
+
+    return FormField<Set<String>>(
+      initialValue: selected,
+      validator: (_) =>
+          selected.isEmpty ? 'Marque pelo menos um consultor para atender este produtor' : null,
+      builder: (state) => Padding(
+        padding: const EdgeInsets.only(bottom: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                borderRadius: AppShape.field,
+                border: Border.all(
+                  color: state.hasError ? AppColors.denied : AppColors.borderSubtle,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+                    child: Row(
+                      children: [
+                        Icon(Icons.badge_outlined, size: 20, color: AppColors.textLight),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Consultores que atendem',
+                          style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                        ),
+                        const Spacer(),
+                        if (selected.isNotEmpty)
+                          Text(
+                            '${selected.length} marcado(s)',
+                            style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (consultants.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                      child: Text(
+                        'Nenhum consultor cadastrado ainda.',
+                        style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+                      ),
+                    )
+                  else
+                    // Teto de altura, e não a lista inteira: a carteira cresce
+                    // com a operação, e sem isto o formulário viraria uma rolagem
+                    // em que o botão de salvar some conforme a empresa contrata.
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 240),
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        padding: const EdgeInsets.only(bottom: 4),
+                        itemCount: consultants.length,
+                        itemBuilder: (_, i) {
+                          final c = consultants[i];
+                          return CheckboxListTile(
+                            value: selected.contains(c.id),
+                            dense: true,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                            title: Text(c.name,
+                                style: const TextStyle(fontSize: 14),
+                                overflow: TextOverflow.ellipsis),
+                            subtitle: Text(c.branch,
+                                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                                overflow: TextOverflow.ellipsis),
+                            onChanged: (marked) {
+                              if (marked == true) {
+                                selected.add(c.id);
+                              } else {
+                                selected.remove(c.id);
+                              }
+                              // O campo revalida na hora: desmarcar o último
+                              // precisa acusar na hora, e não só ao salvar.
+                              state.didChange(selected);
+                              state.validate();
+                              onChanged();
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (state.hasError)
+              Padding(
+                padding: const EdgeInsets.only(left: 12, top: 6),
+                child: Text(
+                  state.errorText!,
+                  style: TextStyle(fontSize: 12, color: AppColors.denied),
+                ),
+              ),
           ],
         ),
       ),

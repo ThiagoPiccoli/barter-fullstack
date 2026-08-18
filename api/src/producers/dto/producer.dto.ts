@@ -1,5 +1,8 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayNotEmpty,
+  ArrayUnique,
+  IsArray,
   IsInt,
   IsNumber,
   IsOptional,
@@ -18,10 +21,27 @@ export class ProducerDto {
   @MaxLength(120)
   name!: string;
 
-  /** Carteira: todo produtor nasce vinculado a um consultor. */
-  @IsInt()
-  @IsPositive()
-  consultantId!: number;
+  /**
+   * Os consultores que atendem este produtor — a carteira dele, que pode ser
+   * de mais de um (consultores dividem região).
+   *
+   * PELO MENOS UM, e é regra de negócio, não formalidade: produtor sem
+   * consultor nenhum não aparece para quem registra permuta, e um cadastro que
+   * ninguém enxerga é um cadastro perdido. (O produtor CHEGA a esse estado por
+   * outro caminho — a exclusão do último consultor vinculado —, e aí é o admin
+   * quem realoca.)
+   *
+   * `ArrayUnique` porque o vínculo é uma linha só por par: repetir o mesmo id
+   * no payload é engano de quem chama, e aceitá-lo em silêncio esbarraria na
+   * chave primária composta como erro de banco.
+   */
+  @IsArray()
+  @ArrayNotEmpty({ message: 'Escolha pelo menos um consultor para a carteira' })
+  @ArrayUnique({ message: 'O mesmo consultor aparece duas vezes na carteira' })
+  @Type(() => Number)
+  @IsInt({ each: true })
+  @IsPositive({ each: true })
+  consultantIds!: number[];
 
   /** CPF ou CNPJ. A pontuação é livre; o que importa é a contagem de dígitos. */
   @IsString()
@@ -51,9 +71,13 @@ export class ProducerDto {
 }
 
 /**
- * Filtros da listagem (o filtro por consultor é do admin). Um valor que não é
- * número é RECUSADO: antes ele virava NaN, o filtro sumia do `where` e a
- * resposta trazia todas as carteiras parecendo a carteira pedida.
+ * Filtros da listagem (o filtro por consultor é do admin). Continua no
+ * singular, e continua certo: a pergunta é "quem o consultor X atende?", e a
+ * resposta agora inclui os produtores que ele divide com outros.
+ *
+ * Um valor que não é número é RECUSADO: antes ele virava NaN, o filtro sumia
+ * do `where` e a resposta trazia todas as carteiras parecendo a carteira
+ * pedida.
  */
 export class ListProducersQuery extends PaginationQuery {
   @IsOptional()

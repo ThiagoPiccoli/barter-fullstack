@@ -212,6 +212,18 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               ),
             ),
           ),
+
+          // O IMPOSTO da entrega. Fica depois do total porque é consequência
+          // dele: a entrega de grão é comercialização de produção rural, e sobre
+          // ela incidem Funrural e Senar.
+          //
+          // Só aparece quando a permuta tem alíquota registrada — as fechadas
+          // antes deste campo não têm, e mostrar a de hoje nelas seria afirmar
+          // um imposto que ninguém aplicou.
+          if (_barter.hasTax) ...[
+            const SizedBox(height: 12),
+            _TaxCard(barter: _barter, showsCurrency: widget.isAdmin),
+          ],
           const SizedBox(height: 20),
 
           if (_awaitsMyOpinion) ...[
@@ -326,6 +338,68 @@ class _AwaitingOpinionCard extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// FUNRURAL E SENAR da entrega de grão desta permuta.
+///
+/// O valor é uma CONTA, não uma cobrança do sistema: quem recolhe é o produtor
+/// (ou o adquirente, por sub-rogação), e o que a permuta faz é dizer sobre
+/// quanto. Ele aparece aqui para a conversa acontecer no fechamento, e não na
+/// nota — a alíquota é a que foi registrada com a permuta.
+///
+/// Em R$ para a retaguarda; em SACAS para o consultor, que não vê moeda em lugar
+/// nenhum do app. É a mesma alíquota nos dois casos: percentual sobre a entrega.
+class _TaxCard extends StatelessWidget {
+  final BarterModel barter;
+  final bool showsCurrency;
+
+  const _TaxCard({required this.barter, required this.showsCurrency});
+
+  @override
+  Widget build(BuildContext context) {
+    final value = showsCurrency
+        ? formatCurrency(barter.taxAmount)
+        : '${formatSacks(barter.taxInSacks)} ${barter.referenceGrainName.toLowerCase()}';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.receipt_long_outlined, size: 18, color: AppColors.textLight),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Funrural + Senar (${barter.taxRateLabel})',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                const SizedBox(height: 2),
+                Text(
+                  // A FORMA escolhida no fechamento, por extenso: é ela que
+                  // explica por que o percentual é este e não o outro.
+                  '${barter.taxRegime.label} • incide sobre a entrega de grão, que '
+                  'é comercialização de produção rural. Recolhimento por conta do '
+                  'produtor.',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark)),
         ],
       ),
     );

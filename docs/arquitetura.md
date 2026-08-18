@@ -121,7 +121,7 @@ E as regras de acesso — **cinco papéis**, definidos em um só lugar
 | Gerente | `manager` | **só o time dele** | **parecer técnico** das permutas que recebe |
 | Comitê | `committee` | tudo | leitura (fluxo próprio em construção) |
 | Faturista | `biller` | tudo | leitura (fluxo próprio em construção) |
-| Consultor | `consultant` | só a **própria carteira** | registra permuta para os produtores dela |
+| Consultor | `consultant` | só a **própria carteira** | registra permuta para os produtores que atende |
 
 - O **gerente já escreve uma coisa**: o parecer técnico. Comitê e faturista
   seguem em leitura — não é esquecimento, as ações de cada um entram com a
@@ -432,7 +432,7 @@ Duas escolhas dentro dela:
 [barters.service.ts](../api/src/barters/barters.service.ts), método `create`.
 Vale ler linha a linha; a sequência é:
 
-1. **só o consultor registra permuta** (é ato do dono da carteira; admin e
+1. **só o consultor registra permuta** (é ato do consultor da carteira; admin e
    retaguarda levam 403) → a regra é uma *lista de permitidos*, para papel novo
    não entrar por omissão
 1b. **o consultor precisa ter gerente** → é a ele que a permuta será endereçada,
@@ -440,7 +440,8 @@ Vale ler linha a linha; a sequência é:
 2. **precisa haver Barter aberto** (`requireOpenVersion`) → é ele que traz o
    grão da safra e a tabela de valores; sem ele, 422 com "aguarde o próximo
    lançamento"
-3. **produtor precisa ser da carteira de quem registra** → 403
+3. **produtor precisa estar na carteira de quem registra** → 403 (a carteira é
+   compartilhável: basta ele atender o produtor, não ser o único a atendê-lo)
 4. quantidades repetidas no payload são **consolidadas por produto**
 5. preços vêm **da versão** — o payload nem tem campo de preço, e o `whitelist`
    do ValidationPipe descartaria se tivesse; insumo fora da tabela da versão é
@@ -464,6 +465,42 @@ leva 403 — é a política sobre o recurso que a tabela de capacidades não alc
 A matemática pura está separada em
 [barter-math.ts](../api/src/barters/barter-math.ts) — sem I/O, testada em
 [barter-math.spec.ts](../api/src/barters/barter-math.spec.ts).
+
+### O imposto da entrega — Funrural e Senar
+
+A entrega de grão é **comercialização de produção rural**: o produtor paga os
+insumos entregando grão, e essa entrega é uma venda como outra qualquer. Sobre
+ela incidem a contribuição previdenciária rural (o "Funrural") e a contribuição
+ao Senar.
+
+No FECHAMENTO da permuta escolhem-se as **duas formas de recolhimento** da parte
+previdenciária, e é isso que `Barter.taxRegime` guarda:
+
+| Forma | Produtor CPF | Produtor CNPJ |
+| --- | --- | --- |
+| `comercializacao` | **1,63%** (1,32 previdência + 0,11 RAT + 0,20 Senar) | **2,23%** (1,98 + 0,25 Senar) |
+| `folha` | **0,20%** (só o Senar) | **0,25%** (só o Senar) |
+
+Duas coisas que o desenho leva a sério:
+
+- **Escolher a folha não isenta a entrega.** A previdência muda de base (vai
+  para a folha de pagamento, ~23%, que este sistema não conhece), mas o Senar
+  continua incidindo sobre a receita da comercialização. Por isso `folha`
+  reduz a alíquota da entrega em vez de zerá-la.
+- **PF ou PJ não é pergunta.** Sai do documento do produtor da permuta (11
+  dígitos = CPF, 14 = CNPJ, ver `producers/document.ts`). Perguntar de novo
+  abriria a chance de o cadastro dizer CPF e o imposto ser calculado como PJ.
+
+A tabela vive em [`tax-regime.ts`](../api/src/barters/tax-regime.ts), com o
+espelho Dart em [`tax_regime.dart`](../app/lib/services/tax_regime.dart) — mesma
+relação (e mesmo par de testes) de `barter-math`.
+
+`Barter.taxRate` é **snapshot**, como `producerName` e o preço do item: as
+alíquotas acima valem desde 1º/04/2026 (LC 224/2025), quem decide qual se aplica
+é a data da comercialização, e um comprovante reimpresso depois da lei seguinte
+não pode passar a mostrar outro imposto. Permutas anteriores ao campo ficam com
+`0` — e as telas leem esse zero para **omitir** a linha do imposto, em vez de
+afirmar um número que ninguém aplicou.
 
 ## 1.5b O lançamento: safra, versões e a planilha
 
@@ -556,13 +593,14 @@ corrigir um custo hoje reescreveria a margem apurada ontem.
 
 ```
 User ─┬─< AccessToken        (sessões revogáveis)
-      ├─< Producer           (carteira; SetNull se o consultor sai)
+      ├─< ProducerConsultant (carteira; Cascade — some o vínculo, não o produtor)
       ├─< User               (time: o gerente e os consultores dele)
       ├─< Barter             (registrou; SetNull)
       └─< Barter             (recebeu para parecer; SetNull)
 Unit ─┬─< User               (lotação)
       └─< Barter             (local de retirada; SetNull, unitName fica)
-Producer ─< Barter
+Producer ─┬─< ProducerConsultant   (quem o atende — N:N com User)
+          └─< Barter
 Season ─< BarterVersion ─┬─< VersionPrice >─ Product   (a tabela de valores)
                          └─< Barter                     (SetNull; versionCode fica)
 ProductClass ─< Product ─┬─< PriceHistoryEntry
@@ -580,6 +618,39 @@ que aparece na tela e no comprovante) e `documentDigits`, só os dígitos, com
 é justamente o cadastro em duplicidade que a regra existe para impedir. Um
 produtor duplicado divide a carteira ao meio e faz a área contar em dobro nos
 mínimos por hectare.
+
+Esse mesmo `documentDigits` é metade da conta do imposto da permuta: é a
+contagem de dígitos que diz se o produtor é pessoa física ou jurídica, e disso
+depende a alíquota do Funrural. A outra metade — a forma de recolhimento — é
+escolhida no fechamento da permuta (ver *O imposto da entrega*, em 1.5).
+
+### A carteira é N:N
+
+`ProducerConsultant` liga produtor e consultor, e a carteira deixou de ser uma
+coluna (`Producer.consultantId`) por causa da operação: **consultores dividem
+região e atendem o mesmo produtor**. Com um consultor por produtor, a única
+forma de representar isso era cadastrar o produtor duas vezes — exatamente o
+cadastro em duplicidade do parágrafo acima, com a área contando em dobro e as
+permutas do mesmo cliente partidas entre dois registros.
+
+Os vínculos são **iguais entre si**: não há dono nem principal. Todo consultor
+vinculado enxerga o produtor e registra permuta para ele; quem responde "de
+quem foi esta venda?" é a permuta, que guarda o consultor que a registrou
+(`Barter.consultantId`). Escrever a lista é ato do admin
+(`CAPABILITY.producersManage`) — o consultor não se acrescenta a uma carteira,
+nem tira alguém dela.
+
+A exclusão é `Cascade` dos dois lados: sai o consultor, sai o vínculo dele — não
+o produtor. Um produtor pode ficar **sem nenhum** consultor e esperar
+realocação (é o estado que o antigo `SetNull` produzia); até lá, só a retaguarda
+o enxerga. O caminho contrário, criar um produtor sem consultor, é recusado no
+DTO: cadastro que ninguém vê é cadastro perdido.
+
+A migration
+[`20260818141058_produtor_em_varias_carteiras`](../api/prisma/migrations/20260818141058_produtor_em_varias_carteiras/migration.sql)
+copia os vínculos existentes para a tabela nova **antes** de dropar a coluna —
+na ordem inversa da que o `prisma migrate diff` gera, que deixaria todo produtor
+sem consultor nenhum.
 
 ## 1.7 Ambiente, seed e primeiro acesso
 
@@ -627,7 +698,7 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST | `/auth/logout` | autenticado* | revoga o token |
 | GET | `/me` | autenticado* | é aqui que o app vê `mustChangePassword` |
 | POST | `/auth/password` | autenticado* | exige a senha atual |
-| GET | `/producers` `?consultantId=` | escopado | consultor: só a carteira; retaguarda: todas |
+| GET | `/producers` `?consultantId=` | escopado | consultor: os que atende; retaguarda: todos |
 | GET | `/producers/:id` | escopado | |
 | POST/PUT/DELETE | `/producers` | admin | |
 | GET/POST/PUT/DELETE | `/consultants` | admin | consultores |
@@ -790,7 +861,9 @@ main.dart
                     ├─ TokenStorage.read()  (Keychain / cofre do Android)
                     └─ GET /me
         ├─ null           → LoginScreen
-        ├─ erro de rede   → tela de "tentar novamente" (NÃO descarta o token)
+        ├─ erro de rede   → OfflineCache.load()
+        │                     ├─ pacote gravado → entra OFFLINE (isOffline = true)
+        │                     └─ sem pacote     → "tentar novamente" (NÃO descarta o token)
         └─ usuário        → destinationFor(user)
                               ├─ mustChangePassword → ChangePasswordScreen(forced)
                               ├─ admin              → AdminMainScreen
@@ -814,6 +887,11 @@ Dois detalhes que explicam decisões do código:
 - [session.dart](../app/lib/services/session.dart) usa `GlobalKey` do Navigator
   e do ScaffoldMessenger porque quem descobre o 401 é a camada de dados, que não
   tem `BuildContext`.
+- **Um 401 nunca chega ao desvio offline.** `AuthRepository.restore()` já o trata
+  esquecendo a sessão e devolvendo `null`, então o que sobra no `catch` é falta
+  de rede ou API fora do ar — e nenhuma das duas invalida sessão. Isso é o que
+  torna o desvio seguro: ele não transforma "sua conta foi revogada" em "entre
+  offline". Ver 2.4b.
 
 ## 2.4 `AppData` — o cache
 
@@ -821,9 +899,11 @@ Dois detalhes que explicam decisões do código:
 públicas (`currentUser`, `consultants`, `producers`, `grains`, `inputs`,
 `categories`, `barters`).
 
-- **Hidratação**: no login (ou na retomada) `refreshAll()` dispara catálogo,
-  produtores, permutas e — se admin — consultores, em paralelo. O dataset é
-  pequeno (cooperativa), então carregar tudo de uma vez deixa o app instantâneo.
+- **Hidratação**: no login (ou na retomada) `refreshAll()` dispara, em paralelo,
+  o `syncOfflinePackage()` (versão, catálogo, classes, carteira, unidades — e é
+  ele que grava o cache do aparelho, ver 2.4b), as permutas e — se admin —
+  consultores, gerentes e safras. O dataset é pequeno (cooperativa), então
+  carregar tudo de uma vez deixa o app instantâneo.
 - **Com senha provisória não hidrata**: o servidor recusaria com 403, e o erro
   apareceria na cara de quem ainda vai definir a senha (`_hydrateIfCleared`).
 - **Mutações**: sempre `API primeiro, cache depois` — `createBarter`,
@@ -832,6 +912,76 @@ públicas (`currentUser`, `consultants`, `producers`, `grains`, `inputs`,
   em vez de remendado: excluir consultor → `refreshProducers()` (produtores
   ficaram sem dono); excluir categoria → `refreshCatalog()` (insumos foram
   desvinculados).
+
+## 2.4b O pacote offline — o Barter guardado no aparelho
+
+[offline_cache.dart](../app/lib/services/offline_cache.dart). Montar uma permuta
+exige **cinco** coisas, e nenhuma delas é a simulação:
+
+| dado | para quê |
+| --- | --- |
+| versão vigente (tabela + `grainPrice`) | converter insumos em sacas |
+| catálogo de insumos | unidade, classe e `requiredPerHa` de cada item |
+| classes de produto | as regras de mínimo |
+| carteira de produtores | a **área**, que define os mínimos por hectare |
+| unidades | a etapa de retirada |
+
+Enquanto elas só existiam em memória, a simulação vivia offline mas **montar**
+uma não: fechar o app apagava o cache, e reabrir sem sinal parava na tela de
+abertura — o trabalho guardado estava a salvo e o consultor não alcançava nem
+ele.
+
+**As cinco viajam juntas, e só `AppData.syncOfflinePackage()` escreve o cache.**
+Uma versão cuja tabela referencia um catálogo de outro momento produz um número
+de sacas que nunca existiu; buscá-las na mesma viagem é o que impede o pacote de
+ficar internamente incoerente. Os refreshes avulsos (`refreshCatalog`,
+`refreshProducers`, …) continuam existindo e mexem **só na memória**.
+
+**O que é guardado é o JSON CRU, não os modelos.** Os dois caminhos — servidor e
+aparelho — atravessam o mesmo `fromJson`, e o app não ganha uma segunda gramática
+para o mesmo dado. Por isso os repositórios expõem pares
+`listProdutosRaw()` / `parseProducts()`: um endereço só, duas formas. Um `toJson`
+escrito à mão poderia divergir do parser em silêncio, e o sintoma seria a permuta
+montada offline sair com outro número.
+
+**Só o consultor grava o pacote** — é ele que vai a campo. Gravar para o admin
+encheria o cofre com a base inteira sem que nada fosse usar.
+
+**Sair apaga o pacote, não as simulações.** Carteira e tabela não têm por que
+continuar no aparelho depois que a pessoa se desconectou; a simulação é trabalho
+dela, e reaparece no próximo login.
+
+### O que uma sessão offline vale
+
+Ela é o cache dizendo **quem estava logado**, não o servidor confirmando que
+ainda está — offline essa confirmação não existe. O que se ganha é ler os
+próprios dados e montar simulação; o que continua impossível é **encaminhar**,
+que sempre exigiu rede. Conta revogada nesse meio-tempo aparece como 401 na
+primeira chamada real, e o app volta ao login: a permuta não entra, e é isso que
+precisa ser verdade.
+
+Senha ainda provisória **não** abre offline: defini-la é uma conversa com o
+servidor, e deixar entrar só levaria a uma tela incapaz de concluir nada.
+
+### "Fechado" e "não baixei" são telas diferentes
+
+`currentVersion == null` significa duas coisas opostas, e confundi-las é caro:
+"o servidor respondeu que não há Barter aberto" é fato do negócio; "ninguém nunca
+perguntou" é pendência do aparelho, e só ela se resolve conectando. Quem separa é
+**`AppData.lastSyncAt`** — null só antes da primeira sincronização bem-sucedida.
+O construtor usa isso para mostrar *"Baixe o Barter uma vez"* com um botão
+**Baixar agora**, em vez de mandar embora quem só precisava de sinal por um
+minuto.
+
+A [`OfflineBanner`](../app/lib/widgets/common_widgets.dart) mostra a **data da
+tabela**, e não só o aviso de que não há rede: a diferença entre "estou sem
+sinal" e "estou simulando com os valores de terça" é a segunda, e é ela que o
+consultor precisa antes de dizer um número ao produtor.
+
+**Sobre o tamanho:** um catálogo de cooperativa dá algumas centenas de KB de
+JSON, que o cofre guarda sem reclamar. Se crescer a ponto de incomodar, muda só
+o de dentro do `OfflineCache` — o contrato (grava tudo, lê tudo) é o mesmo de um
+banco local.
 
 ## 2.5 Modelos
 
@@ -911,7 +1061,8 @@ regra do domínio:
 - **Faixa do Barter vigente** no topo: `S2026.02 • pagamento em soja`, sem R$.
 - **Etapa 1 — produtor**. Vem primeiro porque a **área da propriedade** define
   quais insumos são obrigatórios e em que quantidade. A lista é
-  `AppData.producersForConsultant(consultantId)` — a carteira.
+  `AppData.producersForConsultant(consultantId)` — a carteira, incluindo os
+  produtores que ele divide com outros consultores.
 - **Etapa 2 — unidade de retirada**. Onde o produtor vai buscar os insumos.
   Qualquer uma serve, inclusive de outra praça: é um combinado com o produtor, e
   não muda quem analisa a permuta. É etapa própria, e não um campo no rodapé da
@@ -933,12 +1084,10 @@ regra do domínio:
   vê R$. Lista vazia diz QUAL recorte a esvaziou e oferece limpar.
 - **Não há etapa de grão.** Ele é o da safra; as sacas saem de
   `version.grainPrice`.
-- **Envio**: `AppData.createBarter` manda `producerId`, `unitId` e
-  `[{productId, quantity}]`. O diálogo de sucesso mostra **a permuta devolvida
-  pelo servidor**, não a prévia local. Se o Barter tiver fechado no meio do
-  caminho, o erro do servidor aparece e a tela recarrega a vigência. O diálogo
-  de sucesso diz **a quem** a permuta foi enviada — dizer "enviada para análise
-  do administrador" passou a ser falso.
+- **Guardar é o único desfecho.** O construtor não envia mais nada: ele grava a
+  simulação no aparelho, sem falar com o servidor. Encaminhar ao gerente — com a
+  checagem de serviço, a conferência dos valores e o `POST` — é um ato próprio na
+  aba de simulações, ver [2.7b](#27b-simulações--o-carrinho-e-o-único-caminho-até-o-gerente).
 
 ### Por que a matemática está duplicada
 
@@ -954,6 +1103,13 @@ O que segura as duas cópias juntas é um par de testes:
 números**. Mudou uma regra, mude nos dois lugares — um dos testes vai cair se
 você esquecer.
 
+A tabela de alíquotas do Funrural/Senar segue a mesma disciplina, e pelo mesmo
+motivo: o consultor escolhe a forma de recolhimento e mostra o imposto da
+entrega **na fazenda, sem sinal**. [`tax-regime.ts`](../api/src/barters/tax-regime.ts) e
+[`tax_regime.dart`](../app/lib/services/tax_regime.dart) têm os mesmos números,
+com os mesmos testes dos dois lados — e quem grava a alíquota na permuta
+continua sendo o servidor, no envio.
+
 **O arredondamento é parte do contrato, não detalhe.** A tela usava
 `toStringAsFixed(2)`, o caminho natural em Dart; o servidor usa
 `Math.round(v * 100) / 100`. Eles arredondam por bases diferentes (decimal vs
@@ -961,6 +1117,102 @@ binário) e discordam em 4,2% dos valores — sempre em meio centavo. Meio centa
 é exatamente o bastante para a tela mostrar a quantidade mínima de um insumo e
 o servidor recusar o envio por ela estar abaixo do mínimo. Por isso o espelho
 Dart reproduz a fórmula do servidor em vez de usar o idioma local.
+
+## 2.7b Simulações — o carrinho, e o único caminho até o gerente
+
+O consultor monta a permuta **na fazenda**, e é exatamente lá que pode não haver
+sinal. Enquanto o `POST /barters` era o único caminho, o trabalho dele dependia
+de rede no momento em que ele estava mais longe dela — e uma falha de envio
+jogava fora tudo o que ele tinha montado, item por item.
+
+Por isso **toda permuta agora nasce como simulação**. O construtor tem um só
+desfecho — guardar, no aparelho, sem falar com o servidor. Encaminhar ao gerente
+é um ato próprio, feito na aba **Simulações**, e é lá que a rede entra.
+
+| peça | papel |
+| --- | --- |
+| [barter_simulation.dart](../app/lib/models/barter_simulation.dart) | o modelo, com itens de nome congelado e parse tolerante |
+| [simulation_storage.dart](../app/lib/services/simulation_storage.dart) | um documento JSON no cofre do sistema |
+| [simulation_check.dart](../app/lib/services/simulation_check.dart) | a conferência de pré-envio (pura) e o `SendResult` |
+| `AppData.reviewSimulation` / `sendSimulation` | busca os dados frescos e encaminha |
+| aba **Simulações** em [barters_screen.dart](../app/lib/screens/barters_screen.dart) | a lista, o resumo, o envio e o descarte |
+| `NewBarterScreen(simulation:)` | retomar uma simulação no construtor |
+
+**Simulação não é permuta, e a diferença é o ponto.** Nada nela vale como
+acordo: `simulatedSacks` é o que se via no dia em que foi montada. O que vale é
+o que o servidor devolve no envio. Guardar o número simulado não é redundância —
+é o que permite **perceber** que a conta mudou enquanto a simulação esperava.
+
+### Os três tempos do encaminhamento
+
+1. **O serviço responde?** `reviewSimulation` busca versão, carteira, unidades e
+   catálogo. É essa a "checagem de disponibilidade", e ela é feita **buscando os
+   dados**, não perguntando ao sistema operacional se há rede: um aparelho num
+   wi-fi sem rota para a API passa num teste de conectividade e falha no envio
+   logo depois. A única pergunta que interessa é "o servidor respondeu?", e a
+   resposta vem junto com os dados de que a conferência precisa.
+2. **O que mudou?** — [`checkSimulation`](../app/lib/services/simulation_check.dart).
+   O que **impede** o envio é dito e para por ali (Barter fechado, produtor fora
+   da carteira, unidade desativada, insumo que saiu da tabela). O que apenas
+   **muda o número** é mostrado lado a lado — *Simulado: 58 sc → Agora: 69,6 sc*
+   — e quem decide é o consultor, que foi quem combinou o número com o produtor.
+3. **Envia**, e só depois do sucesso a simulação some.
+
+**A conferência é sobre o RESULTADO, não sobre a causa.** Trocar a versão do
+Barter é de longe o motivo mais comum de a conta mudar, mas quem decide se há
+algo a avisar é a comparação das sacas. Isso não é preciosismo: `updatePrice`
+altera o valor **dentro** da versão vigente, inclusive a cotação da saca
+([seasons.service.ts](../api/src/seasons/seasons.service.ts)) — comparar só o
+`versionCode` deixaria esse caso passar em silêncio.
+
+**Barter novo não bloqueia: refaz.** Quando a versão virou, a simulação é
+reconstruída com os mesmos insumos e quantidades na tabela vigente, e a versão
+refeita é **gravada antes de perguntar** — se o consultor recuar no diálogo, o
+trabalho não se perde.
+
+### As regras que não são óbvias
+
+- **`sendSimulation` apaga a simulação só depois do sucesso.** Rede caída,
+  Barter encerrado ou mínimo de classe faltando deixam tudo intacto para
+  corrigir e tentar de novo.
+- **Existe um terceiro desfecho: o incerto.** O `POST` chega, a permuta é criada
+  e a *resposta* se perde. O app veria um erro e o consultor tocaria "Encaminhar"
+  de novo — duas permutas idênticas na mesa do gerente. Quando o erro é de
+  transporte (`statusCode == 0`, e só nele: uma recusa de negócio veio com
+  resposta e portanto não gravou nada), `sendSimulation` **confere no servidor**
+  se a permuta entrou, casando por produtor e horário. Não dando para afirmar,
+  `SendResult.uncertain` manda conferir a aba "No gerente" antes de reenviar.
+  **A correção definitiva é uma chave de idempotência no `POST`** — o servidor
+  reconheceria o reenvio —, e ela exige uma coluna nova; até lá, é melhor
+  perguntar do que duplicar em silêncio.
+- **`SimulationStorage.saveAll` devolve `bool`, e ele é olhado.** É o único
+  lugar do app em que engolir a falha seria pior que o erro: o consultor veria a
+  confirmação e perderia a permuta ao fechar o app.
+- **`mySimulations` filtra por dono.** O aparelho é compartilhado em algumas
+  praças, e a permuta nasce em nome de quem envia.
+- **Logout não apaga o disco**, só a cópia em memória (`_clearCache`).
+- **`_canSave` não exige as classes cumpridas.** Guardar permuta incompleta é o
+  ponto; quem cobra o mínimo é o envio, e antes dele o servidor.
+- **`ConsultantMainScreen._go` recria a aba de permutas a cada acesso.** O
+  `IndexedStack` guarda a instância viva e não roda o `build` de novo — a aba
+  abriria com a contagem anterior, sem a simulação recém-guardada.
+- **Barter fechado com simulação aberta** diz que ela continua guardada. Sem essa
+  frase, a tela em branco no lugar da permuta montada afirma o contrário, e o
+  consultor remonta tudo do zero quando o Barter reabrir.
+
+**Abrir o app do zero sem sinal funciona** desde que o aparelho tenha
+sincronizado uma vez — ver [2.4b](#24b-o-pacote-offline--o-barter-guardado-no-aparelho).
+O consultor baixa o pacote num login com rede e, a partir daí, monta e guarda
+simulações offline quantas vezes quiser.
+
+**O que ainda não é offline:** as permutas JÁ ENVIADAS não são cacheadas, de
+propósito — elas são do servidor, e uma lista velha de permutas alheias vale
+menos que a ausência dela; o que o consultor precisa em campo são as simulações,
+que vêm de outro lugar. E o pacote grava **preços em R$** no aparelho de um papel
+que não vê R$: não é exposição nova (`/products` já devolve preço a qualquer
+autenticado, e o cofre é criptografado), mas sai da RAM e passa a existir em
+disco. Reduzir isso exigiria a API devolver ao consultor as sacas já resolvidas
+por insumo, em vez do preço.
 
 ## 2.8 Privacidade por papel
 

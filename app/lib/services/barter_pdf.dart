@@ -80,6 +80,17 @@ class BarterPdf {
           _grainsTable(barter, showValues),
           pw.SizedBox(height: 18),
           _totalBox(barter, showValues),
+          // O IMPOSTO da entrega, logo abaixo do total: a entrega de grão é
+          // comercialização de produção rural, e o comprovante que não o
+          // menciona deixa o produtor descobrir a diferença na nota fiscal.
+          //
+          // Só nas permutas que têm alíquota registrada — as anteriores ao campo
+          // não têm, e imprimir a de hoje nelas seria afirmar um imposto que não
+          // foi aplicado.
+          if (barter.hasTax) ...[
+            pw.SizedBox(height: 8),
+            _taxLine(barter, showValues),
+          ],
           // O parecer vem ANTES da observação do administrador porque é essa a
           // ordem em que os dois foram escritos — o comprovante conta a
           // história da permuta na sequência em que ela aconteceu.
@@ -413,6 +424,31 @@ class BarterPdf {
           ),
         ],
       ),
+    );
+  }
+
+  /// FUNRURAL E SENAR sobre a entrega — a alíquota registrada com a permuta.
+  ///
+  /// Uma linha, e não uma caixa em destaque: o compromisso do documento é o
+  /// total a entregar, e o imposto é informação de apoio. Diz "estimativa" por
+  /// honestidade — o recolhimento é do produtor (ou do adquirente, por
+  /// sub-rogação) e acontece na nota, não aqui.
+  static pw.Widget _taxLine(BarterModel barter, bool showValues) {
+    final value = showValues
+        ? formatCurrency(barter.taxAmount)
+        : '${formatSacks(barter.taxInSacks)} de ${barter.referenceGrainName.toLowerCase()}';
+    return pw.Row(
+      children: [
+        pw.Expanded(
+          child: pw.Text(
+            _s('Funrural + Senar (${barter.taxRateLabel}) sobre a entrega, '
+                '${barter.taxRegime.label.toLowerCase()} - estimativa'),
+            style: pw.TextStyle(fontSize: 8, color: _textMedium),
+          ),
+        ),
+        pw.Text(_s(value),
+            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _textMedium)),
+      ],
     );
   }
 

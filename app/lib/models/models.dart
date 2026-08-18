@@ -1,3 +1,7 @@
+import '../services/tax_regime.dart';
+
+export '../services/tax_regime.dart' show TaxRegime, TaxRegimeApi;
+
 /// Papéis do sistema. Os nomes técnicos são os MESMOS que a API grava em
 /// `user.role` (ver api/src/common/roles.ts) — este enum é a tradução deles
 /// para o app, e não uma segunda lista para manter em dia de cabeça.
@@ -171,10 +175,15 @@ class ProducerModel {
   final String id;
   final String name;
 
-  /// Consultor dono da CARTEIRA a que este produtor pertence. Cada produtor
-  /// pertence a exatamente um consultor: o consultor só vê (e permuta com) os
-  /// produtores da própria carteira; o admin vê todas as carteiras.
-  final String consultantId;
+  /// Os consultores que ATENDEM este produtor — a carteira dele.
+  ///
+  /// É lista porque consultores dividem região: o mesmo produtor pode ser
+  /// atendido por vários, e todos eles o veem e permutam com ele. Cada permuta
+  /// continua sendo de um consultor só — o que a registrou.
+  ///
+  /// Vazia quando o último consultor vinculado foi excluído: o produtor espera
+  /// realocação e, até lá, só a retaguarda o enxerga.
+  final List<String> consultantIds;
 
   /// CPF ou CNPJ.
   final String document;
@@ -196,7 +205,7 @@ class ProducerModel {
   const ProducerModel({
     required this.id,
     required this.name,
-    required this.consultantId,
+    required this.consultantIds,
     required this.document,
     required this.phone,
     required this.farmName,
@@ -209,8 +218,10 @@ class ProducerModel {
   factory ProducerModel.fromJson(Map<String, dynamic> json) => ProducerModel(
         id: _asId(json['id']),
         name: json['name'] as String,
-        // '' quando o consultor da carteira foi excluído (aguarda realocação).
-        consultantId: _asId(json['consultantId']),
+        // Vazia quando o último consultor vinculado foi excluído (aguarda
+        // realocação) — e o app precisa desenhar essa lista vazia, não quebrar.
+        consultantIds:
+            ((json['consultantIds'] ?? const []) as List).map(_asId).toList(),
         document: json['document'] as String,
         phone: (json['phone'] ?? '') as String,
         farmName: json['farmName'] as String,
@@ -219,6 +230,11 @@ class ProducerModel {
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
       );
+
+  /// Este consultor atende o produtor? É a pergunta que a carteira passou a
+  /// responder quando deixou de ser um id só — e a que o servidor faz antes de
+  /// aceitar uma permuta.
+  bool isAttendedBy(String consultantId) => consultantIds.contains(consultantId);
 
   /// Localização resumida (ex.: "Fazenda Boa Vista – Maringá/PR").
   String get location => '$farmName – $city';
@@ -332,6 +348,21 @@ class BarterModel {
   final BarterStatus status;
   final List<BarterItem> grains;
   final List<BarterItem> inputs;
+
+  /// O IMPOSTO DA ENTREGA — a entrega de grão é comercialização de produção
+  /// rural, e sobre ela incidem o Funrural e o Senar.
+  ///
+  /// [taxRegime] é a FORMA de recolhimento escolhida no fechamento desta
+  /// permuta; [taxRate] é a alíquota (%) que ela produziu.
+  ///
+  /// A alíquota fica congelada no registro, e não é recalculada na hora de
+  /// mostrar: ela muda por lei, e o comprovante de uma permuta fechada não pode
+  /// passar a mostrar outro imposto. Zero nas permutas anteriores ao campo — e
+  /// aí a linha do imposto não aparece, porque não houve alíquota aplicada a
+  /// elas.
+  final TaxRegime taxRegime;
+  final double taxRate;
+
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -366,6 +397,8 @@ class BarterModel {
     required this.status,
     required this.grains,
     required this.inputs,
+    this.taxRegime = TaxRegime.comercializacao,
+    this.taxRate = 0,
     required this.createdAt,
     this.updatedAt,
     this.managerId = '',
@@ -400,6 +433,8 @@ class BarterModel {
           .where((i) => i['kind'] == 'input')
           .map(BarterItem.fromJson)
           .toList(),
+      taxRegime: taxRegimeFrom(json['taxRegime']),
+      taxRate: _asDouble(json['taxRate']),
       createdAt: _asDate(json['createdAt']),
       updatedAt: _asDateOrNull(json['reviewedAt']),
       managerId: _asId(json['managerId']),
@@ -421,6 +456,28 @@ class BarterModel {
   /// Folga do pagamento (R$): grãos pagos menos custo dos insumos. ~0 quando o
   /// pagamento cobre exatamente os insumos; nunca deveria ficar negativo.
   double get balance => grainCredit - inputCost;
+
+  /// Esta permuta tem imposto registrado? Falso nas anteriores ao campo, e é o
+  /// que as telas leem para não inventar uma linha de imposto para elas.
+  bool get hasTax => taxRate > 0;
+
+  /// Funrural/Senar sobre a entrega de grão (R$).
+  ///
+  /// A base é [grainCredit] — o valor do grão entregue —, e não o custo dos
+  /// insumos: o que o produtor comercializa é o grão. Os dois são praticamente
+  /// iguais na permuta (o pagamento cobre o custo), mas a base do imposto é a
+  /// venda, e é dela que ela precisa sair.
+  ///
+  /// Zero para quem não vê R$: os itens chegam sem valor unitário, e é
+  /// [taxInSacks] que serve a essa tela.
+  double get taxAmount => taxAmountOf(grainCredit, taxRate);
+
+  /// O mesmo imposto medido em SACAS do grão de pagamento — a unidade do
+  /// consultor, que não enxerga R$ em lugar nenhum do app.
+  double get taxInSacks => taxAmountOf(totalGrainQty, taxRate);
+
+  /// A alíquota como se lê (ex.: "1,63%").
+  String get taxRateLabel => '${taxRate.toStringAsFixed(2).replaceAll('.', ',')}%';
 
   /// Total de sacas do grão de pagamento a entregar.
   double get totalGrainQty => grains.fold(0.0, (sum, i) => sum + i.quantity);

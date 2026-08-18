@@ -21,7 +21,7 @@ export class ClassesController {
   @Get()
   @AnyRole()
   async index() {
-    return (await this.classes.list()).map(toProductClassJson);
+    return (await this.classes.list()).map((productClass) => toProductClassJson(productClass));
   }
 
   @Put(':id/rule')

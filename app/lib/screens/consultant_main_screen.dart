@@ -25,13 +25,36 @@ class _ConsultantMainScreenState extends State<ConsultantMainScreen> {
     super.initState();
     _screens = [
       _ConsultantDashboardTab(consultant: widget.consultant, onNavigate: _go),
-      BartersScreen(isAdmin: false, consultantId: widget.consultant.id),
+      _bartersTab(),
       NewBarterScreen(consultant: widget.consultant),
       _ConsultantProfileTab(consultant: widget.consultant),
     ];
   }
 
-  void _go(int i) => setState(() => _selectedIndex = i);
+  /// `consultant` (e não só o id) é o que liga a aba de SIMULAÇÕES: retomar uma
+  /// simulação abre o construtor de permuta, que precisa da carteira e do
+  /// gerente de quem está montando.
+  Widget _bartersTab() => BartersScreen(
+        isAdmin: false,
+        consultantId: widget.consultant.id,
+        consultant: widget.consultant,
+      );
+
+  /// Vai para uma aba, RECRIANDO as duas que leem o cache a cada abertura.
+  ///
+  /// O [IndexedStack] guarda a instância de cada aba viva, e o `build` de uma
+  /// aba parada não roda de novo só porque ela voltou a aparecer. Enquanto as
+  /// duas eram permutas do servidor isso não incomodava; com a simulação passou
+  /// a incomodar muito: guardar em "Nova Permuta" e trocar para a lista mostraria
+  /// a aba "Simulações" com a contagem anterior — e sem a que acabou de sair.
+  void _go(int i) {
+    setState(() {
+      if (i == 1) _screens[1] = _bartersTab();
+      // Construtor de permuta: estado limpo a cada acesso.
+      if (i == 2) _screens[2] = NewBarterScreen(consultant: widget.consultant);
+      _selectedIndex = i;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -39,17 +62,7 @@ class _ConsultantMainScreenState extends State<ConsultantMainScreen> {
       body: IndexedStack(index: _selectedIndex, children: _screens),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
-        onTap: (i) {
-          if (i == 2) {
-            // Recria o construtor de permuta a cada acesso (estado limpo).
-            setState(() {
-              _screens[2] = NewBarterScreen(consultant: widget.consultant);
-              _selectedIndex = i;
-            });
-          } else {
-            setState(() => _selectedIndex = i);
-          }
-        },
+        onTap: _go,
         type: BottomNavigationBarType.fixed,
         selectedItemColor: AppColors.primary,
         unselectedItemColor: AppColors.textLight,
@@ -119,6 +132,14 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
         child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Antes de tudo: se o app abriu pelo pacote gravado, o consultor
+          // precisa saber disso antes de ler qualquer número da tela.
+          if (AppData.isOffline) ...[
+            const Padding(
+              padding: EdgeInsets.only(bottom: 12),
+              child: OfflineBanner(),
+            ),
+          ],
           DashboardHeader(
             greetingName: consultant.name.split(' ')[0],
             subtitle: consultant.branch,
@@ -177,6 +198,40 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             ),
           ),
           const SizedBox(height: 20),
+
+          // Uma simulação esquecida é uma permuta que o gerente nunca vai ver —
+          // e que ninguém no sistema tem como cobrar, porque ela só existe neste
+          // aparelho. O aviso é a única coisa que a torna visível.
+          if (AppData.mySimulations.isNotEmpty) ...[
+            InkWell(
+              onTap: () => onNavigate(1),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.pendingBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.pending.withValues(alpha: 0.30)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.bookmark_border, size: 20, color: AppColors.pending),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${AppData.mySimulations.length} simulação(ões) guardada(s) neste '
+                        'aparelho, ainda não encaminhada(s) ao gerente.',
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.pending),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, size: 20, color: AppColors.pending),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
 
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,

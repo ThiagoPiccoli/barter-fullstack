@@ -23,14 +23,14 @@ export class BartersController {
   @Get()
   @AnyRole() // escopo por linha: consultor vê as suas (service)
   async index(@CurrentUser() user: User, @Query() query: ListBartersQuery) {
-    return (await this.bartersService.listFor(user, query)).map(toBarterJson);
+    return (await this.bartersService.listFor(user, query)).map((b) => toBarterJson(b, user));
   }
 
   /** Detalhe pelo código público (ex.: PRM-2026-001). */
   @Get(':code')
   @AnyRole() // idem: o service recusa permuta de carteira alheia
   async show(@CurrentUser() user: User, @Param('code') code: string) {
-    return toBarterJson(await this.bartersService.findFor(user, code));
+    return toBarterJson(await this.bartersService.findFor(user, code), user);
   }
 
   /**
@@ -41,7 +41,7 @@ export class BartersController {
   @Post()
   @RequireCapability(CAPABILITY.bartersRegister)
   async store(@CurrentUser() user: User, @Body() dto: CreateBarterDto) {
-    return toBarterJson(await this.bartersService.create(user, dto));
+    return toBarterJson(await this.bartersService.create(user, dto), user);
   }
 
   /**
@@ -59,7 +59,7 @@ export class BartersController {
     @Param('code') code: string,
     @Body() dto: BarterOpinionDto,
   ) {
-    return toBarterJson(await this.bartersService.giveOpinion(manager, code, dto));
+    return toBarterJson(await this.bartersService.giveOpinion(manager, code, dto), manager);
   }
 
   /** Revisão do admin: aprova/nega uma pendente, com observação opcional. */
@@ -71,6 +71,6 @@ export class BartersController {
     @Param('code') code: string,
     @Body() dto: ReviewBarterDto,
   ) {
-    return toBarterJson(await this.bartersService.review(admin, code, dto));
+    return toBarterJson(await this.bartersService.review(admin, code, dto), admin);
   }
 }

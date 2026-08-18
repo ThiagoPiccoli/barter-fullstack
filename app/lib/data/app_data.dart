@@ -1,4 +1,9 @@
+import '../models/barter_simulation.dart';
 import '../models/models.dart';
+import '../services/api/api_client.dart';
+import '../services/offline_cache.dart';
+import '../services/simulation_check.dart';
+import '../services/simulation_storage.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/barter_program_repository.dart';
 import '../repositories/barter_repository.dart';
@@ -52,6 +57,31 @@ class AppData {
   static List<ProductClassModel> classes = [];
   static List<BarterModel> barters = [];
 
+  /// As SIMULAÇÕES gravadas neste aparelho — permutas montadas que ainda não
+  /// foram enviadas ao gerente.
+  ///
+  /// É a única lista do cache que NÃO vem da API: ela é lida do aparelho, e por
+  /// isso continua respondendo quando não há sinal. Guarda as simulações de
+  /// todos os consultores que já usaram este aparelho; quem separa por dono é
+  /// [mySimulations].
+  static List<BarterSimulation> simulations = [];
+
+  /// O app está rodando com o pacote GRAVADO no aparelho, sem ter conseguido
+  /// falar com o servidor nesta abertura.
+  ///
+  /// Muda o que as telas dizem, não o que elas deixam fazer: montar e guardar
+  /// simulação funciona igual, e encaminhar ao gerente sempre exigiu rede.
+  static bool isOffline = false;
+
+  /// Quando o pacote do Barter foi baixado pela última vez — null se este
+  /// aparelho NUNCA sincronizou.
+  ///
+  /// É o que separa duas telas que pareciam a mesma: "não há Barter aberto"
+  /// (o servidor respondeu, e a resposta foi nenhuma) de "ainda não baixei o
+  /// Barter" (ninguém perguntou). A primeira é um fato do negócio; a segunda é
+  /// uma pendência do aparelho, e só ela se resolve conectando.
+  static DateTime? lastSyncAt;
+
   /// A versão VIGENTE do Barter, ou null quando não há lançamento aberto.
   ///
   /// É o dado mais importante do cache para o consultor: sem ela não há grão,
@@ -81,7 +111,13 @@ class AppData {
   static Future<UserModel> login(String email, String password) async {
     final user = await _auth.login(email, password);
     currentUser = user;
+    // As simulações vêm ANTES da hidratação, e fora dela: elas são do aparelho,
+    // e [refreshAll] é o passo que depende de rede. Carregá-las junto faria o
+    // trabalho guardado offline sumir da tela justamente quando a API não
+    // responde — que é quando ele é a única coisa que o consultor ainda tem.
+    await loadSimulations();
     await _hydrateIfCleared(user);
+    isOffline = false;
     return user;
   }
 
@@ -99,11 +135,73 @@ class AppData {
   /// servidor). Falhas de rede sobem como [ApiException] para a tela de
   /// abertura oferecer nova tentativa, sem descartar a sessão.
   static Future<UserModel?> restoreSession() async {
-    final user = await _auth.restore();
-    if (user == null) return null;
-    currentUser = user;
-    await _hydrateIfCleared(user);
-    return user;
+    await loadSimulations();
+    try {
+      final user = await _auth.restore();
+      if (user == null) return null;
+      currentUser = user;
+      await _hydrateIfCleared(user);
+      isOffline = false;
+      return user;
+    } on ApiException {
+      // O servidor não respondeu. Um 401 não chega aqui: [AuthRepository.restore]
+      // já o trata esquecendo a sessão e devolvendo null, então o que sobra é
+      // falta de rede ou API fora do ar — e nenhuma das duas invalida sessão.
+      final cached = await _restoreFromCache();
+      if (cached == null) rethrow;
+      return cached;
+    }
+  }
+
+  /// Abre o app com o pacote gravado no aparelho.
+  ///
+  /// É o caminho de quem liga o celular na lavoura: sem isto, a tela de abertura
+  /// parava em "tentar novamente" e o consultor não alcançava nem as simulações
+  /// que ele mesmo tinha guardado.
+  ///
+  /// **O que esta sessão vale.** Ela é o cache dizendo quem estava logado, não o
+  /// servidor confirmando que ainda está — offline, essa confirmação não existe.
+  /// O que se ganha é ler os próprios dados e montar simulação; o que continua
+  /// impossível é ENCAMINHAR, que sempre exigiu rede. Se a conta tiver sido
+  /// revogada nesse meio-tempo, o 401 aparece na primeira chamada real e o app
+  /// volta ao login — a permuta não entra, e é isso que precisa ser verdade.
+  static Future<UserModel?> _restoreFromCache() async {
+    final package = await OfflineCache.load();
+    final row = package?.user;
+    if (package == null || row == null) return null;
+
+    final UserModel user;
+    try {
+      user = UserModel.fromJson(row);
+    } catch (_) {
+      return null;
+    }
+    // Senha ainda provisória não abre offline: definir a senha é uma conversa
+    // com o servidor, e deixar entrar aqui só levaria a uma tela que não
+    // consegue concluir nada.
+    if (user.mustChangePassword) return null;
+
+    // O `/me` pode ter passado e a hidratação, não — nesse caso o usuário fresco
+    // vale mais do que o gravado, e só as listas vêm do pacote.
+    currentUser ??= user;
+    _applyPackage(package);
+    isOffline = true;
+    return currentUser;
+  }
+
+  /// Repõe o cache em memória a partir do pacote gravado. As permutas já
+  /// enviadas ficam vazias de propósito: elas são do servidor, e uma lista
+  /// desatualizada de permutas alheias vale menos do que a ausência dela — o que
+  /// o consultor precisa offline são as SIMULAÇÕES, que vêm de outro lugar.
+  static void _applyPackage(OfflinePackage package) {
+    final products = _catalog.parseProducts(package.products);
+    grains = products.where((p) => p.type == ProductType.grain).toList();
+    inputs = products.where((p) => p.type == ProductType.input).toList();
+    classes = _catalog.parseClasses(package.classes);
+    producers = _producers.parse(package.producers);
+    units = _units.parse(package.units);
+    currentVersion = _program.parseVersion(package.version);
+    lastSyncAt = package.savedAt;
   }
 
   /// Troca a senha do usuário logado e atualiza [currentUser] — é o que apaga
@@ -116,6 +214,10 @@ class AppData {
 
   static Future<void> logout() async {
     await _auth.logout();
+    // O pacote sai junto: carteira e tabela do Barter não têm por que continuar
+    // no aparelho depois que a pessoa se desconectou. As SIMULAÇÕES ficam — elas
+    // são trabalho dela, e reaparecem no próximo login.
+    await OfflineCache.clear();
     _clearCache();
   }
 
@@ -123,6 +225,7 @@ class AppData {
   /// servidor já rejeitou o token (401).
   static Future<void> discardSession() async {
     await _auth.forget();
+    await OfflineCache.clear();
     _clearCache();
   }
 
@@ -138,6 +241,14 @@ class AppData {
     barters = [];
     currentVersion = null;
     seasons = [];
+    isOffline = false;
+    lastSyncAt = null;
+    // Só a CÓPIA EM MEMÓRIA cai; o aparelho continua com as simulações
+    // gravadas. Sair do app (ou tomar um 401 por sessão expirada) não pode
+    // apagar o trabalho de campo de ninguém — no próximo login,
+    // [loadSimulations] o traz de volta. Limpar aqui é só para a sessão seguinte
+    // não herdar a lista da anterior sem ter lido o disco.
+    simulations = [];
   }
 
   /* ── Cargas / refresh ───────────────────────────────────────────────── */
@@ -145,15 +256,57 @@ class AppData {
   static Future<void> refreshAll() async {
     final isAdmin = currentUser?.role == UserRole.admin;
     await Future.wait([
-      refreshCatalog(),
-      refreshProducers(),
-      refreshUnits(),
+      syncOfflinePackage(),
       refreshBarters(),
-      refreshBarterVersion(),
       if (isAdmin) refreshConsultants(),
       if (isAdmin) refreshManagers(),
       if (isAdmin) refreshSeasons(),
     ]);
+  }
+
+  /// Baixa AS CINCO COISAS que montar uma permuta exige — versão vigente,
+  /// catálogo, classes, carteira e unidades — e as grava no aparelho.
+  ///
+  /// Elas viajam juntas de propósito, e este é o único lugar que escreve o
+  /// cache. Uma versão cuja tabela referencia um catálogo de outro momento
+  /// produz um número de sacas que nunca existiu; buscar as cinco na mesma
+  /// viagem é o que impede o pacote de ficar internamente incoerente. Os
+  /// refreshes avulsos abaixo continuam existindo para quem só quer atualizar a
+  /// memória, e não tocam no disco.
+  ///
+  /// Só o consultor precisa do pacote gravado — é ele que vai a campo. Gravar
+  /// para o admin encheria o cofre com a base inteira sem que nada fosse usar.
+  static Future<void> syncOfflinePackage() async {
+    final results = await Future.wait([
+      _catalog.listProductsRaw(),
+      _catalog.listClassesRaw(),
+      _producers.listRaw(),
+      _units.listRaw(),
+      _program.currentRaw(),
+    ]);
+
+    final productRows = results[0] as List<Map<String, dynamic>>;
+    final classRows = results[1] as List<Map<String, dynamic>>;
+    final producerRows = results[2] as List<Map<String, dynamic>>;
+    final unitRows = results[3] as List<Map<String, dynamic>>;
+    final versionRow = results[4] as Map<String, dynamic>?;
+
+    final package = OfflinePackage(
+      savedAt: DateTime.now(),
+      user: _auth.lastMeRaw,
+      version: versionRow,
+      products: productRows,
+      classes: classRows,
+      producers: producerRows,
+      units: unitRows,
+    );
+
+    _applyPackage(package);
+    isOffline = false;
+
+    if (currentUser?.role == UserRole.consultant) {
+      await OfflineCache.save(package);
+    }
   }
 
   /// As unidades de retirada. Todo papel carrega — sem elas o consultor não
@@ -215,13 +368,26 @@ class AppData {
     return null;
   }
 
-  /// Carteira de produtores visível para um usuário: consultor enxerga apenas
-  /// os próprios; admin (consultantId null) enxerga todos. O servidor já aplica
-  /// essa regra — aqui é apenas um filtro sobre o cache.
+  /// Carteira de produtores visível para um usuário: consultor enxerga os que
+  /// ATENDE — os próprios e os que divide com colegas —; admin (consultantId
+  /// null) enxerga todos. O servidor já aplica essa regra; aqui é apenas um
+  /// filtro sobre o cache.
   static List<ProducerModel> producersForConsultant(String? consultantId) {
     if (consultantId == null) return List.of(producers);
-    return producers.where((p) => p.consultantId == consultantId).toList();
+    return producers.where((p) => p.isAttendedBy(consultantId)).toList();
   }
+
+  /// Os nomes dos consultores que atendem o produtor, para as telas mostrarem
+  /// a carteira por extenso.
+  ///
+  /// Um id sem nome é PULADO, não vira "?": só o admin tem a lista de
+  /// consultores carregada, e nas telas dele a ausência significa consultor
+  /// excluído — cujo vínculo já não existe mais no servidor.
+  static List<String> consultantNamesFor(ProducerModel producer) => producer.consultantIds
+      .map(consultantById)
+      .whereType<UserModel>()
+      .map((c) => c.name)
+      .toList();
 
   /// Busca um consultor pelo id (null se não encontrado). Só o admin tem a
   /// lista de consultores carregada.
@@ -265,14 +431,171 @@ class AppData {
     required String producerId,
     required String unitId,
     required Map<String, double> inputQuantities,
+    TaxRegime taxRegime = TaxRegime.comercializacao,
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
       unitId: unitId,
       inputQuantities: inputQuantities,
+      taxRegime: taxRegime,
     );
     barters.insert(0, barter);
     return barter;
+  }
+
+  /* ── Simulações (o aparelho é a autoridade; só o envio fala com a API) ─ */
+
+  /// Simulações do consultor logado, da mais recente para a mais antiga.
+  ///
+  /// Filtrar por dono não é zelo excessivo: o aparelho é compartilhado em
+  /// algumas praças, e a permuta nasce em nome de QUEM ENVIA. Mostrar a
+  /// simulação de um colega convidaria a enviá-la pela pessoa errada, e o
+  /// servidor não teria como perceber — para ele seria uma permuta comum de quem
+  /// clicou.
+  static List<BarterSimulation> get mySimulations {
+    final me = currentUser?.id;
+    if (me == null) return const [];
+    final mine = simulations.where((item) => item.consultantId == me).toList();
+    mine.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return mine;
+  }
+
+  static BarterSimulation? simulationById(String id) {
+    for (final item in simulations) {
+      if (item.id == id) return item;
+    }
+    return null;
+  }
+
+  /// Lê as simulações do aparelho. Não lança e não depende de rede.
+  static Future<void> loadSimulations() async {
+    simulations = await SimulationStorage.load();
+  }
+
+  /// Grava (ou reescreve) uma simulação. Devolve `false` quando o aparelho
+  /// recusou a gravação — a tela precisa dizer isso, ver
+  /// [SimulationStorage.saveAll].
+  ///
+  /// A memória é atualizada MESMO quando o disco falha: perder também a sessão
+  /// em curso não ajudaria ninguém, e assim o consultor ainda consegue enviar a
+  /// permuta enquanto o app estiver aberto.
+  static Future<bool> saveSimulation(BarterSimulation simulation) async {
+    final index = simulations.indexWhere((item) => item.id == simulation.id);
+    if (index == -1) {
+      simulations.add(simulation);
+    } else {
+      simulations[index] = simulation;
+    }
+    return SimulationStorage.saveAll(simulations);
+  }
+
+  static Future<bool> deleteSimulation(String id) async {
+    simulations.removeWhere((item) => item.id == id);
+    return SimulationStorage.saveAll(simulations);
+  }
+
+  /// A CHECAGEM DE PRÉ-ENVIO: fala com a API, rebaixa tudo o que a conferência
+  /// precisa e devolve o que mudou desde que a simulação foi montada.
+  ///
+  /// É aqui que "checar a disponibilidade do serviço" acontece — e ela é feita
+  /// BUSCANDO OS DADOS, não perguntando ao sistema operacional se há rede. Um
+  /// aparelho conectado a um wi-fi de sede sem rota para a API, ou a API fora do
+  /// ar, passariam num teste de conectividade e falhariam no envio logo depois.
+  /// A única pergunta que interessa é "o servidor respondeu?", e a resposta vem
+  /// junto com os dados de que a conferência precisa — uma viagem, não duas.
+  ///
+  /// Lança [ApiException] quando o serviço não responde: nesse caso nada foi
+  /// enviado, e a simulação continua intacta no aparelho.
+  static Future<SimulationCheck> reviewSimulation(BarterSimulation simulation) async {
+    await syncOfflinePackage();
+
+    final producer = producerById(simulation.producerId);
+    return checkSimulation(
+      simulation,
+      version: currentVersion,
+      producerInWallet:
+          producer != null && producer.isAttendedBy(currentUser?.id ?? ''),
+      unitExists: unitById(simulation.unitId) != null,
+    );
+  }
+
+  /// Envia uma simulação: registra a permuta de verdade e, SÓ ENTÃO, apaga a
+  /// simulação.
+  ///
+  /// A ordem é a regra inteira. O envio pode falhar por rede, por Barter
+  /// encerrado ou por mínimo de classe não atingido — e em qualquer um desses
+  /// casos a simulação tem de continuar lá, intacta, para o consultor corrigir e
+  /// tentar de novo. Quem apaga é o sucesso, nunca a tentativa.
+  ///
+  /// ## O caso incerto, e por que ele tem tratamento próprio
+  ///
+  /// Existe uma falha que não é sucesso nem recusa: o `POST` chega ao servidor,
+  /// a permuta é criada e a RESPOSTA se perde no caminho (timeout de 15s, rede
+  /// que caiu no meio). O app vê um erro; o servidor tem a permuta. Tocar
+  /// "Enviar" de novo criaria uma SEGUNDA permuta idêntica na mesa do gerente, e
+  /// nada no sistema diria qual das duas é a verdadeira.
+  ///
+  /// O risco não é teórico aqui: simulação existe justamente para ser enviada de
+  /// onde o sinal é ruim. Por isso, quando o erro é de transporte
+  /// (`statusCode == 0`, e só nele — uma recusa de negócio veio com resposta e
+  /// portanto não gravou nada), este método vai CONFERIR no servidor se a
+  /// permuta entrou antes de dar o envio por perdido.
+  ///
+  /// A conferência é um casamento por produtor + horário, e é heurística por
+  /// natureza. A correção definitiva é uma chave de idempotência no `POST`, que
+  /// deixaria o servidor reconhecer o reenvio — e que exige uma coluna nova.
+  /// Enquanto ela não existe, é melhor perguntar do que duplicar em silêncio.
+  static Future<SendResult> sendSimulation(BarterSimulation simulation) async {
+    final startedAt = DateTime.now();
+    try {
+      final barter = await createBarter(
+        producerId: simulation.producerId,
+        unitId: simulation.unitId,
+        inputQuantities: simulation.inputQuantities,
+        taxRegime: simulation.taxRegime,
+      );
+      await deleteSimulation(simulation.id);
+      return SendResult.sent(barter);
+    } on ApiException catch (error) {
+      if (error.statusCode != 0) return SendResult.refused(error.message);
+
+      final existing = await _findRegistered(simulation, startedAt);
+      if (existing == null) return SendResult.uncertain(error.message);
+
+      await deleteSimulation(simulation.id);
+      return SendResult.sent(existing, reconciled: true);
+    }
+  }
+
+  /// A permuta desta simulação já está no servidor?
+  ///
+  /// Casa por produtor e por horário: uma permuta deste consultor, para este
+  /// produtor, criada depois que a tentativa começou. A margem de dois minutos é
+  /// para o relógio do aparelho, que não é o do servidor — sem ela, um celular
+  /// alguns segundos adiantado nunca encontraria a permuta que acabou de criar.
+  ///
+  /// Se nem esta consulta responder, devolve null: aí não dá para afirmar nada,
+  /// e é isso que [SendResult.uncertain] diz ao consultor.
+  static Future<BarterModel?> _findRegistered(
+    BarterSimulation simulation,
+    DateTime startedAt,
+  ) async {
+    final me = currentUser?.id;
+    if (me == null) return null;
+    try {
+      await refreshBarters();
+    } on ApiException {
+      return null;
+    }
+    final since = startedAt.subtract(const Duration(minutes: 2));
+    for (final barter in barters) {
+      if (barter.consultantId == me &&
+          barter.producerId == simulation.producerId &&
+          !barter.createdAt.isBefore(since)) {
+        return barter;
+      }
+    }
+    return null;
   }
 
   /* ── Unidades (admin cadastra; gerente responde por elas) ───────────── */

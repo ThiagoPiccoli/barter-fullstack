@@ -8,8 +8,9 @@ import 'package:agrobarter_app/services/token_storage.dart';
 
 /// Tour de ponta a ponta contra a API REAL (exige o servidor no ar com o
 /// seed fresco: `cd api && npm run db:reset && npm run start:dev`):
-/// 1. Carteira de produtores: cada consultor só vê os próprios produtores na
-///    Nova Permuta; o admin vê todos nos Cadastros (com o dono da carteira).
+/// 1. Carteira de produtores: cada consultor só vê na Nova Permuta os que
+///    atende — inclusive o produtor COMPARTILHADO, que está na carteira de
+///    dois; o admin vê todos nos Cadastros, com a carteira de cada um.
 /// 2. Permuta criada de verdade no servidor + PDF de controle na finalização.
 ///
 /// Atenção: o teste grava a permuta PRM-2026-009 no banco de desenvolvimento;
@@ -78,6 +79,9 @@ void main() {
     await goToTab(tester, 'Nova Permuta');
     expect(find.text('Antônio Carvalho'), findsOneWidget);
     expect(find.text('Sebastião Ramos'), findsOneWidget);
+    // Joaquim Tavares é atendido pelo João E pelo Roberto — região dividida.
+    // Ele aparece aqui e também na carteira do Roberto, e é o mesmo cadastro.
+    expect(find.text('Joaquim Tavares'), findsOneWidget);
     expect(find.text('Helena Prado'), findsNothing);
     expect(find.text('Osmar Dutra'), findsNothing);
     expect(find.text('Vanessa Lopes'), findsNothing);
@@ -97,9 +101,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('João Silva'));
     await tester.pumpAndSettle();
-    await scrollTo(tester, find.text('Carteira de Produtores (2)'));
+    // Três: os dois só dele mais o compartilhado com o Roberto.
+    await scrollTo(tester, find.text('Carteira de Produtores (3)'));
     await scrollTo(tester, find.text('Antônio Carvalho'));
     expect(find.text('Sebastião Ramos'), findsOneWidget);
+    expect(find.text('Joaquim Tavares'), findsOneWidget);
     await shot('03-admin-perfil-consultor-carteira');
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -118,15 +124,38 @@ void main() {
     // Não existe mais etapa de grão: o Barter vigente já diz em que grão se
     // paga, e a faixa no topo mostra qual versão está valendo.
     expect(find.textContaining('Pagamento em'), findsOneWidget);
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Enviar Permuta'));
+
+    // Etapa 2: a unidade de retirada. Qualquer uma serve — ela é logística e
+    // não muda de quem é o parecer.
+    expect(find.textContaining('Etapa 2'), findsOneWidget);
+    await tester.tap(find.byType(ListTile).first);
     await tester.pumpAndSettle();
-    expect(find.text('Confirmar Permuta'), findsOneWidget);
-    await tester.tap(find.text('Confirmar e Enviar'));
+    await shot('05-ana-insumos');
+
+    // O construtor tem UM desfecho: guardar a simulação, sem tocar na rede.
+    // Encaminhar ao gerente é ato próprio, na aba de simulações.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Guardar simulação'));
+    await tester.pumpAndSettle();
+
+    await goToTab(tester, 'Permutas');
+    await tester.tap(find.textContaining('Simulações'));
+    await tester.pumpAndSettle();
+    expect(find.text('Helena Prado'), findsOneWidget);
+    expect(find.text('Não enviada'), findsOneWidget);
+    await shot('06-ana-simulacao-guardada');
+
+    // Encaminhar: confere serviço e valores, mostra o resumo, e só então grava.
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Encaminhar'));
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+    expect(find.text('Encaminhar ao gerente?'), findsOneWidget);
+    await shot('07-ana-resumo-do-envio');
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Encaminhar'));
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(find.text('Permuta Enviada!'), findsOneWidget);
     expect(find.text('Gerar PDF'), findsOneWidget);
-    await shot('05-permuta-enviada-com-pdf');
+    await shot('08-permuta-enviada-com-pdf');
 
     // Gera o PDF: abre a folha de compartilhamento nativa do iOS. O marcador
     // avisa o host para capturar a tela inteira via simctl (a folha é nativa,

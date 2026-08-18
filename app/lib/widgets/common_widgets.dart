@@ -51,6 +51,51 @@ String formatSacks(double v) {
 String formatDate(DateTime d) =>
     '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 
+/// Data e hora curtas: 16/08 às 14:32. Usada onde a HORA importa tanto quanto o
+/// dia — a idade da tabela com que se está simulando offline, por exemplo.
+String formatDateTime(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')} às '
+    '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+/// Uma linha de "rótulo → valor" dentro de um diálogo, com uma variante em
+/// destaque para a linha que interessa (o total de sacas).
+///
+/// Mora aqui, e não na tela, porque os dois momentos que precisam dela ficaram
+/// em telas diferentes: o construtor guarda a simulação, e a aba de simulações é
+/// que a envia — mas o resumo que o consultor lê é o mesmo nos dois.
+class DialogLine extends StatelessWidget {
+  final String label, value;
+  final bool bold;
+  const DialogLine(this.label, this.value, {super.key, this.bold = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: bold ? AppColors.primary : AppColors.textMedium,
+                  fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
+                )),
+          ),
+          const SizedBox(width: 8),
+          Text(value,
+              style: TextStyle(
+                fontSize: bold ? 15 : 12,
+                color: bold ? AppColors.primary : AppColors.textDark,
+                fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+              )),
+        ],
+      ),
+    );
+  }
+}
+
 class StatusBadge extends StatelessWidget {
   final BarterStatus status;
   const StatusBadge({super.key, required this.status});
@@ -402,6 +447,59 @@ class ChangePasswordButton extends StatelessWidget {
 /// Botão de "Sair" padrão para a AppBar de qualquer tela de nível principal
 /// (abas do admin e do consultor). Garante o mesmo ícone, rótulo e confirmação
 /// em todo o app.
+/// A faixa de MODO OFFLINE: o app está rodando com o pacote gravado no
+/// aparelho, sem ter falado com o servidor nesta abertura.
+///
+/// Ela mostra a DATA da tabela, e não só o aviso de que não há rede. É a
+/// diferença entre "estou sem sinal" e "estou simulando com os valores de terça"
+/// — e é a segunda que o consultor precisa saber antes de dizer um número ao
+/// produtor. Sem a data, uma tabela de três semanas atrás parece a de hoje.
+///
+/// Some sozinha: só aparece com [AppData.isOffline], que a primeira
+/// sincronização bem-sucedida desliga.
+class OfflineBanner extends StatelessWidget {
+  const OfflineBanner({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!AppData.isOffline) return const SizedBox.shrink();
+    final at = AppData.lastSyncAt;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.pendingBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.pending.withValues(alpha: 0.30)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.cloud_off_outlined, size: 18, color: AppColors.pending),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Trabalhando offline',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending)),
+                Text(
+                  at == null
+                      ? 'Você pode simular, mas não encaminhar ao gerente.'
+                      : 'Tabela de ${formatDateTime(at)}. Dá para simular; '
+                          'encaminhar ao gerente exige sinal.',
+                  style: TextStyle(fontSize: 11, color: AppColors.pending),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LogoutButton extends StatelessWidget {
   const LogoutButton({super.key});
 

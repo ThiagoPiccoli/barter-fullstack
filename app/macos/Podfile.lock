@@ -1,4 +1,7 @@
 PODS:
+  - file_picker_darwin (1.0.0):
+    - Flutter
+    - FlutterMacOS
   - flutter_secure_storage_darwin (10.0.0):
     - Flutter
     - FlutterMacOS
@@ -7,11 +10,14 @@ PODS:
     - FlutterMacOS
 
 DEPENDENCIES:
+  - file_picker_darwin (from `Flutter/ephemeral/.symlinks/plugins/file_picker_darwin/darwin`)
   - flutter_secure_storage_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - printing (from `Flutter/ephemeral/.symlinks/plugins/printing/macos`)
 
 EXTERNAL SOURCES:
+  file_picker_darwin:
+    :path: Flutter/ephemeral/.symlinks/plugins/file_picker_darwin/darwin
   flutter_secure_storage_darwin:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin
   FlutterMacOS:
@@ -20,6 +26,7 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/printing/macos
 
 SPEC CHECKSUMS:
+  file_picker_darwin: 65c8ed1d70cc2ea0b81ae1840db93f8d9c051d19
   flutter_secure_storage_darwin: acdb3f316ed05a3e68f856e0353b133eec373a23
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
   printing: c4cf83c78fd684f9bc318e6aadc18972aa48f617

@@ -68,10 +68,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 131 testes de unidade (matemática, senha, sessão, throttling, setup)
-cd api && npm run test:e2e  # 141 testes funcionais da API (auth, escopo, regras, contrato de erro)
+cd api && npm test          # 135 testes de unidade (matemática, senha, sessão, throttling, setup)
+cd api && npm run test:e2e  # 173 testes funcionais da API (auth, escopo, regras, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura (92% de statements)
-cd app && flutter test      # 35 testes (matemática espelhada, parsers, abertura do app)
+cd app && flutter test      # 48 testes (matemática espelhada, parsers, formulários, abertura)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o

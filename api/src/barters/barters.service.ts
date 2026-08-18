@@ -17,6 +17,7 @@ import {
   sacksToCover,
   type PricedInput,
 } from './barter-math';
+import { TAX_REGIME, taxRateOf } from './tax-regime';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
 import { ROLE } from '../common/roles';
@@ -175,11 +176,21 @@ export class BartersService {
       );
     }
 
-    const producer = await this.prisma.producer.findUnique({ where: { id: dto.producerId } });
+    // 2. O produtor precisa estar na carteira de QUEM REGISTRA. A carteira é
+    //    compartilhável (o mesmo produtor é atendido por vários consultores,
+    //    ver ProducerConsultant), então a pergunta é de pertencimento à lista —
+    //    e não mais igualdade com um dono único. A permuta continua sendo de um
+    //    consultor só: o que a registrou.
+    const producer = await this.prisma.producer.findUnique({
+      where: { id: dto.producerId },
+      include: {
+        consultants: { where: { consultantId: consultant.id }, select: { consultantId: true } },
+      },
+    });
     if (!producer) {
       throw new UnprocessableEntityException('Produtor não encontrado');
     }
-    if (producer.consultantId !== consultant.id) {
+    if (producer.consultants.length === 0) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
 
@@ -292,6 +303,10 @@ export class BartersService {
       })),
     ];
 
+    // A FORMA de recolhimento escolhida no fechamento. Ausente vale
+    // `comercializacao`: é o regime de quem não fez a opção formal pela folha.
+    const taxRegime = dto.taxRegime ?? TAX_REGIME.comercializacao;
+
     return this.createWithCode({
       versionId: version.id,
       versionCode: version.code,
@@ -302,6 +317,12 @@ export class BartersService {
       producerName: producer.name,
       unitId: unit.id,
       unitName: unit.name,
+      // O IMPOSTO DA ENTREGA: a forma escolhida no fechamento, e a alíquota que
+      // ela produz para ESTE produtor (CPF ou CNPJ muda o percentual). A
+      // alíquota é congelada aqui — a entrega é comercialização de produção
+      // rural, e o que vale é a tabela do dia. Ver `tax-regime.ts`.
+      taxRegime,
+      taxRate: taxRateOf(taxRegime, producer.documentDigits),
       // O destinatário é gravado no ENVIO. Trocar o gerente do consultor depois
       // vale para as próximas permutas; esta continua na mesa de quem a
       // recebeu. Ver o comentário de `managerId` no schema.

@@ -50,8 +50,20 @@
     "por aqui — o override existe para o alarme apontar problema de verdade em",
     "vez de virar ruído que ninguém lê. A 11.x mantém `require('uuid').v4`.",
     "",
-    "REVISAR quando @nestjs/swagger e exceljs subirem as suas: um override que",
-    "sobreviveu ao problema que o motivou é dívida silenciosa."
+    "deepmerge-ts: o prisma prende a 7.1.5 dentro do @prisma/config, e as <8.0.0",
+    "estouram a pilha ao mesclar objeto que referencia a si mesmo (negação de",
+    "serviço). Aqui isso é a CLI, não o servidor: quem carrega o @prisma/config é",
+    "o `prisma generate`/`migrate`, lendo o nosso prisma.config.ts — não há grafo",
+    "recursivo nem entrada de fora do projeto para alcançar a falha. O override",
+    "existe porque a 7.9.1 é a última do prisma e ela ainda não subiu, então o",
+    "alarme não tem como sair sozinho, e `npm audit fix --force` \"resolve\"",
+    "DESCENDO o prisma para a 6.12.0 — um major inteiro para trás no que gera o",
+    "client e aplica as migrations. O escopo é o prisma porque é a única entrada",
+    "do pacote na árvore, e a 8.x mantém o formato (CJS + ESM) e o export nomeado",
+    "`deepmerge`, que é tudo que o @prisma/config usa dele.",
+    "",
+    "REVISAR quando @nestjs/swagger, exceljs e prisma subirem as suas: um",
+    "override que sobreviveu ao problema que o motivou é dívida silenciosa."
   ],
   "overrides": {
     "@nestjs/swagger": {
@@ -59,6 +71,9 @@
     },
     "exceljs": {
       "uuid": "^11.1.1"
+    },
+    "prisma": {
+      "deepmerge-ts": "^8.0.1"
     }
   },
   "dependencies": {

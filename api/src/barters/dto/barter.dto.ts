@@ -14,6 +14,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { PaginationQuery } from '../../common/pagination';
+import { TAX_REGIMES, TAX_REGIME_MESSAGE } from '../tax-regime';
+import type { TaxRegime } from '../tax-regime';
 
 export class BarterInputDto {
   @IsInt()
@@ -69,6 +71,20 @@ export class CreateBarterDto {
   @ValidateNested({ each: true })
   @Type(() => BarterInputDto)
   inputs!: BarterInputDto[];
+
+  /**
+   * COMO o Funrural desta entrega é recolhido: `comercializacao` (sobre a
+   * receita da venda) ou `folha` (sobre a folha de pagamento). É a escolha do
+   * fechamento — ver `tax-regime.ts`.
+   *
+   * Opcional, e o ausente vale `comercializacao`: é o que se aplica a quem não
+   * fez a opção formal pela folha, e não um chute. Exigi-lo recusaria a permuta
+   * de qualquer cliente da API que ainda não conheça o campo — inclusive as
+   * versões do app já instaladas.
+   */
+  @IsOptional()
+  @IsIn(TAX_REGIMES, { message: TAX_REGIME_MESSAGE })
+  taxRegime?: TaxRegime;
 }
 
 export class ReviewBarterDto {

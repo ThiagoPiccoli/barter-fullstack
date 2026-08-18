@@ -75,6 +75,21 @@ export const CAPABILITY = {
   bartersReview: 'barters.review',
   /** Ler a trilha de auditoria. */
   auditRead: 'audit.read',
+  /**
+   * VER VALORES EM R$ — preços de catálogo, tabela da versão e cotação da saca.
+   *
+   * O consultor não a tem, e isso não é enfeite de tela: para ele a permuta é
+   * "insumos retirados → sacas do grão", e a API passa a devolver os valores JÁ
+   * CONVERTIDOS em sacas (`sacksPerUnit`). Antes, esconder R$ era decisão do
+   * app enquanto o JSON os carregava — bastava um `curl` com o token dele para
+   * ler a tabela inteira do fornecedor, e o cache offline ainda os gravava no
+   * aparelho.
+   *
+   * Repare que ela é de LEITURA e mora ao lado de `barterManage`, que é quem
+   * DECIDE os valores. Um dia alguém vai poder ver sem poder mexer (auditoria,
+   * um gerente comercial) — e é esta linha que responde por isso.
+   */
+  pricesRead: 'prices.read',
 } as const;
 
 export type Capability = (typeof CAPABILITY)[keyof typeof CAPABILITY];
@@ -102,17 +117,30 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersReadAll,
     CAPABILITY.bartersReview,
     CAPABILITY.auditRead,
+    CAPABILITY.pricesRead,
   ],
   // O gerente é o único com escopo de TIME: ele enxerga as permutas
   // endereçadas a ele, e não a operação inteira. Repare que `bartersReadAll`
   // NÃO está aqui — foi removida de propósito, não esquecida.
+  // A RETAGUARDA vê valores: o parecer do gerente e a revisão são sobre a
+  // negociação, e negociação sem R$ não se avalia. Quem fica de fora é só o
+  // consultor — ver `pricesRead`.
   [ROLE.manager]: [
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadTeam,
     CAPABILITY.bartersOpinion,
+    CAPABILITY.pricesRead,
   ],
-  [ROLE.committee]: [CAPABILITY.producersReadAll, CAPABILITY.bartersReadAll],
-  [ROLE.biller]: [CAPABILITY.producersReadAll, CAPABILITY.bartersReadAll],
+  [ROLE.committee]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadAll,
+    CAPABILITY.pricesRead,
+  ],
+  [ROLE.biller]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadAll,
+    CAPABILITY.pricesRead,
+  ],
   [ROLE.consultant]: [CAPABILITY.bartersRegister],
 };
 

@@ -76,7 +76,7 @@ Resposta: `{"data":{"token":"oat_...","user":{...}}}`. Copie o `token`.
 ```bash
 TOKEN="cole-o-token-aqui"
 
-# Listar produtores (admin vê todos; consultor vê só a própria carteira)
+# Listar produtores (admin vê todos; consultor vê só os que atende)
 curl http://localhost:3333/api/v1/producers -H "Authorization: Bearer $TOKEN"
 
 # Listar permutas
@@ -165,7 +165,9 @@ São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts
   tentativa de escrita hoje devolve 403, e isso é testado
   ([`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts)).
 - **consultant (consultor)** — loga no app e registra permutas **apenas para os
-  produtores da própria carteira**; nunca vê as carteiras dos colegas.
+  produtores que atende**. A carteira é compartilhável: consultores dividem
+  região, e o mesmo produtor pode ser atendido por vários — mas nenhum deles vê
+  os produtores que não atende. Quem monta a lista é o admin.
 - **produtor** — não loga: é um cadastro designado pelo consultor nas permutas.
 
 Quem impõe isso é o `AccessGuard` global, e ele **nega por padrão**: toda rota
@@ -354,7 +356,8 @@ aparência de lista filtrada.
 
 O servidor então:
 
-1. confere que o produtor pertence à carteira do consultor autenticado;
+1. confere que o produtor está na carteira do consultor autenticado (basta que
+   ele o atenda — o produtor pode ser atendido também por outros);
 2. exige todo insumo com taxa por hectare em pelo menos `taxa × área` do
    produtor (payload sem um insumo obrigatório é rejeitado);
 3. valida as regras de mínimo das pastas (`% do custo total` ou `R$/ha`);

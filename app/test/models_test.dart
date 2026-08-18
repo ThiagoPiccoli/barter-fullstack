@@ -85,6 +85,50 @@ void main() {
       expect(barter.versionCode, 'S2026.02');
     });
 
+    /// O imposto sai da alíquota GRAVADA na permuta, não do cadastro do produtor
+    /// na hora de mostrar: a alíquota muda por lei, e o comprovante de uma
+    /// permuta fechada não pode passar a mostrar outro número.
+    test('Funrural/Senar incide sobre a entrega de grão, na alíquota registrada', () {
+      final json = barterJson(status: 'approved')
+        ..['taxRegime'] = 'comercializacao'
+        ..['taxRate'] = 1.63;
+      final barter = BarterModel.fromJson(json);
+
+      expect(barter.hasTax, isTrue);
+      expect(barter.taxRegime, TaxRegime.comercializacao);
+      expect(barter.taxRateLabel, '1,63%');
+      // Entrega: 80,4444 sacas × R$ 148,50 = R$ 11.946,00 → 1,63% = R$ 194,72.
+      expect(barter.taxAmount, closeTo(194.72, 0.005));
+      // A mesma alíquota sobre as sacas, para quem não vê R$.
+      expect(barter.taxInSacks, closeTo(1.31, 0.005));
+    });
+
+    /// Fechar sobre a FOLHA não isenta a entrega: sobra o Senar, e é essa
+    /// diferença que a permuta guarda.
+    test('permuta fechada sobre a folha carrega a alíquota do Senar', () {
+      final json = barterJson(status: 'approved')
+        ..['taxRegime'] = 'folha'
+        ..['taxRate'] = 0.2;
+      final barter = BarterModel.fromJson(json);
+
+      expect(barter.taxRegime, TaxRegime.folha);
+      expect(barter.taxRateLabel, '0,20%');
+      // 80,4444 sacas × R$ 148,50 = R$ 11.946,00 → 0,20% = R$ 23,89.
+      expect(barter.taxAmount, closeTo(23.89, 0.005));
+    });
+
+    /// Permutas fechadas antes do campo não têm alíquota registrada. Inventar a
+    /// de hoje para elas seria afirmar um imposto que ninguém aplicou — a linha
+    /// não aparece, e é [hasTax] que as telas leem para isso.
+    test('permuta sem alíquota (dado antigo) não mostra imposto', () {
+      final barter = BarterModel.fromJson(barterJson());
+      expect(barter.hasTax, isFalse);
+      // O regime ausente cai no padrão legal, mas sem alíquota não há linha.
+      expect(barter.taxRegime, TaxRegime.comercializacao);
+      expect(barter.taxAmount, 0);
+      expect(barter.taxInSacks, 0);
+    });
+
     /// Permutas anteriores ao lançamento por versões não têm o campo. Elas
     /// continuam abrindo — o app só deixa de estampar a gestão.
     test('permuta sem versão (dado antigo) não quebra o parse', () {
@@ -297,6 +341,43 @@ void main() {
 
       expect(unit.id, '2');
       expect(unit.label, 'Filial 02 – Gran. Santa T. • Sarandi/PR');
+    });
+  });
+
+  /// A CARTEIRA do produtor é lista, e não um id: consultores dividem região e
+  /// atendem o mesmo cliente. O parse é onde essa mudança de contrato chega ao
+  /// app, e é aqui que ela precisa estar fixada.
+  group('ProducerModel', () {
+    Map<String, dynamic> producerJson({List<dynamic> consultantIds = const [2]}) => {
+          'id': 3,
+          'name': 'Joaquim Tavares',
+          'consultantIds': consultantIds,
+          'document': 'CNPJ 12.345.678/0001-90',
+          'phone': '(44) 99800-1003',
+          'farmName': 'Fazenda Santa Rita',
+          'city': 'Mandaguari/PR',
+          'areaHa': 320,
+          'initials': 'JT',
+          'createdAt': '2020-11-03T00:00:00.000Z',
+        };
+
+    test('o produtor compartilhado responde aos dois consultores', () {
+      final producer = ProducerModel.fromJson(producerJson(consultantIds: [4, 2]));
+
+      expect(producer.consultantIds, ['4', '2']);
+      expect(producer.isAttendedBy('2'), isTrue);
+      expect(producer.isAttendedBy('4'), isTrue);
+      expect(producer.isAttendedBy('3'), isFalse);
+      expect(producer.areaLabel, '320 ha');
+    });
+
+    /// Produtor que perdeu o último consultor (a conta foi excluída) espera
+    /// realocação. A tela do admin precisa desenhá-lo; quebrar no parse levaria
+    /// a lista inteira junto, que é exatamente o caso que ninguém testa.
+    test('carteira vazia é um estado, não um erro', () {
+      expect(ProducerModel.fromJson(producerJson(consultantIds: [])).consultantIds, isEmpty);
+      final semCampo = producerJson()..remove('consultantIds');
+      expect(ProducerModel.fromJson(semCampo).consultantIds, isEmpty);
     });
   });
 

@@ -24,9 +24,12 @@ export class BarterVersionsController {
    */
   @Get('current')
   @AnyRole()
-  async current() {
+  async current(@CurrentUser() user: User) {
     const version = await this.seasons.currentVersion();
-    return version ? toBarterVersionJson(version) : null;
+    // O usuário viaja junto porque é ele quem decide a UNIDADE dos valores: o
+    // consultor recebe a tabela em sacas por unidade, sem R$ e sem a cotação da
+    // saca. Ver `lensFor` em common/serializers.ts.
+    return version ? toBarterVersionJson(version, undefined, user) : null;
   }
 
   /** Detalhe de uma versão, com o realizado contra as metas. */

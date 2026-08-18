@@ -11,10 +11,21 @@ class CatalogRepository {
   /// o primeiro valor e a contagem (ver [ProductModel.priceHistory]). É a
   /// chamada que o app faz a cada login e a cada refresh, então ela não pode
   /// crescer junto com o número de versões publicadas.
-  Future<List<ProductModel>> listProducts() async {
-    final data = await api.get('/products') as List;
-    return data.cast<Map<String, dynamic>>().map(ProductModel.fromJson).toList();
-  }
+  Future<List<ProductModel>> listProducts() async =>
+      parseProducts(await listProductsRaw());
+
+  /// O MESMO catálogo, ainda como veio da API.
+  ///
+  /// O cache offline guarda o JSON CRU, e não os modelos: assim os dois lados
+  /// atravessam o mesmo `fromJson`, e o que o app lê do aparelho é idêntico ao
+  /// que ele leria do servidor. Um `toJson` escrito à mão daria uma segunda
+  /// gramática para o mesmo dado — e o dia em que ela divergisse do parser seria
+  /// o dia em que a permuta montada offline sairia com outro número.
+  Future<List<Map<String, dynamic>>> listProductsRaw() async =>
+      (await api.get('/products') as List).cast<Map<String, dynamic>>();
+
+  List<ProductModel> parseProducts(List<Map<String, dynamic>> rows) =>
+      rows.map(ProductModel.fromJson).toList();
 
   /// Um produto com a linha do tempo COMPLETA — o que o relatório de preço
   /// desenha. Buscado sob demanda, ao abrir a tela de um produto.
@@ -23,10 +34,14 @@ class CatalogRepository {
     return ProductModel.fromJson(data as Map<String, dynamic>);
   }
 
-  Future<List<ProductClassModel>> listClasses() async {
-    final data = await api.get('/classes') as List;
-    return data.cast<Map<String, dynamic>>().map(ProductClassModel.fromJson).toList();
-  }
+  Future<List<ProductClassModel>> listClasses() async =>
+      parseClasses(await listClassesRaw());
+
+  Future<List<Map<String, dynamic>>> listClassesRaw() async =>
+      (await api.get('/classes') as List).cast<Map<String, dynamic>>();
+
+  List<ProductClassModel> parseClasses(List<Map<String, dynamic>> rows) =>
+      rows.map(ProductClassModel.fromJson).toList();
 
   /// Cadastra um grão ou insumo. O servidor abre a linha do tempo de valores
   /// com o preço informado — todo produto nasce com um primeiro ponto.

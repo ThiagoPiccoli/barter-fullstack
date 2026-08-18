@@ -71,6 +71,17 @@ export const ADMIN = 'admin@agrobarter.com.br';
 export const JOAO = 'joao.silva@agrobarter.com.br';
 export const ANA = 'ana.ferreira@agrobarter.com.br';
 
+/**
+ * Roberto divide com o João o atendimento de Joaquim Tavares — o produtor
+ * COMPARTILHADO do dataset. Ele está aqui para os testes poderem olhar a mesma
+ * carteira pelos dois lados: um produtor em duas carteiras é a coisa que um
+ * consultor só não consegue demonstrar.
+ */
+export const ROBERTO = 'roberto.souza@agrobarter.com.br';
+
+/** Os ids dos consultores que os testes de carteira nomeiam. */
+export const CONSULTANT = { joao: 2, ana: 3, roberto: 4 } as const;
+
 /* Retaguarda (um por papel novo). */
 export const GERENTE = 'gerente@agrobarter.com.br';
 export const COMITE = 'comite@agrobarter.com.br';

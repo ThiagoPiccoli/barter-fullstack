@@ -13,7 +13,7 @@ import {
 import type { User } from '@prisma/client';
 import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
-import { toProductJson, toProductListJson } from '../common/serializers';
+import { lensFor, toProductJson, toProductListJson } from '../common/serializers';
 import { CreateProductDto, ListProductsQuery, UpdateProductDto } from './dto/product.dto';
 import { ProductsService } from './products.service';
 
@@ -31,15 +31,16 @@ export class ProductsController {
    */
   @Get()
   @AnyRole() // o catálogo é comum a todos os papéis
-  async index(@Query() query: ListProductsQuery) {
-    return (await this.productsService.list(query)).map(toProductListJson);
+  async index(@CurrentUser() user: User, @Query() query: ListProductsQuery) {
+    const lens = lensFor(user);
+    return (await this.productsService.list(query)).map((p) => toProductListJson(p, lens));
   }
 
   /** O produto com a linha do tempo completa — a fonte do relatório de preço. */
   @Get(':id')
   @AnyRole()
-  async show(@Param('id', ParseIntPipe) id: number) {
-    return toProductJson(await this.productsService.find(id));
+  async show(@CurrentUser() user: User, @Param('id', ParseIntPipe) id: number) {
+    return toProductJson(await this.productsService.find(id), lensFor(user));
   }
 
   @Post()

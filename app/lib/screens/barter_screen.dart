@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
+import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../services/barter_math.dart';
-import '../services/barter_pdf.dart';
+import '../services/tax_regime.dart';
 import '../widgets/class_avatar.dart';
 import '../widgets/filter_bar.dart';
 import '../widgets/common_widgets.dart';
@@ -22,7 +23,16 @@ import '../widgets/common_widgets.dart';
 /// montar um pedido que o servidor recusaria.
 class NewBarterScreen extends StatefulWidget {
   final UserModel consultant;
-  const NewBarterScreen({super.key, required this.consultant});
+
+  /// Uma SIMULAÇÃO sendo retomada, quando a tela foi aberta pela aba de
+  /// simulações.
+  ///
+  /// Null é o caso normal — a aba "Nova Permuta", com a tela em branco. Com uma
+  /// simulação, as três etapas já vêm respondidas e salvar REESCREVE esta mesma
+  /// simulação, em vez de deixar uma segunda cópia na lista.
+  final BarterSimulation? simulation;
+
+  const NewBarterScreen({super.key, required this.consultant, this.simulation});
   @override
   State<NewBarterScreen> createState() => _NewBarterScreenState();
 }
@@ -52,6 +62,46 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   String? _classId;
   bool _onlyChosen = false;
   _InputSort _sort = _InputSort.name;
+
+  /// A simulação que esta tela está escrevendo, quando já existe uma.
+  ///
+  /// Vem preenchida ao retomar uma simulação, e passa a existir no primeiro
+  /// "Salvar" de uma permuta nova. É ela que faz o segundo toque em "Salvar"
+  /// REESCREVER a simulação — sem isso, cada toque deixaria mais uma cópia da
+  /// mesma permuta na lista.
+  String? _simulationId;
+
+  /// COMO o Funrural desta entrega vai ser recolhido — a escolha do fechamento.
+  ///
+  /// Começa na comercialização porque é o que se aplica a quem não fez a opção
+  /// formal pela folha: a permuta não inventa um regime, ela mostra o padrão
+  /// para ser confirmado ou trocado. Ver `services/tax_regime.dart`.
+  TaxRegime _taxRegime = TaxRegime.comercializacao;
+
+  @override
+  void initState() {
+    super.initState();
+    final simulation = widget.simulation;
+    if (simulation == null) return;
+    _simulationId = simulation.id;
+    _taxRegime = simulation.taxRegime;
+    _producerId = simulation.producerId;
+    _unitId = simulation.unitId;
+    _inputQty.addAll(simulation.inputQuantities);
+
+    // A simulação é mais velha do que o cadastro: entre guardar e retomar, o
+    // produtor pode ter saído da carteira e a unidade pode ter sido desativada.
+    // A tela sozinha só voltaria para a etapa 1, sem dizer por quê — e o
+    // consultor concluiria que o app perdeu a simulação dele.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (_producer == null) {
+        _toast('${simulation.producerName} não está mais na sua carteira — escolha outro produtor.');
+      } else if (_unit == null) {
+        _toast('A unidade ${simulation.unitName} não está mais disponível — escolha outra.');
+      }
+    });
+  }
 
   /// O Barter vigente. Null (ou fechado) trava a tela inteira.
   BarterVersionModel? get _version => AppData.currentVersion;
@@ -95,6 +145,21 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final version = _version;
     return version == null ? 0 : sacksToCover(_inputCost, version.grainPrice);
   }
+
+  /// A alíquota (%) que a forma escolhida produz para ESTE produtor — CPF e
+  /// CNPJ recolhem percentuais diferentes, e o documento está no cadastro dele.
+  ///
+  /// É PREVISÃO: quem grava a alíquota é o servidor, no envio, com a tabela
+  /// daquele instante. Calculá-la aqui é o mesmo contrato do resto desta tela
+  /// (ver `barter_math.dart`) — o consultor precisa do número na fazenda, sem
+  /// sinal.
+  double get _taxRate {
+    final producer = _producer;
+    return producer == null ? 0 : taxRateOf(_taxRegime, producer.document);
+  }
+
+  String get _taxRateLabel =>
+      '${_taxRate.toStringAsFixed(2).replaceAll('.', ',')}%';
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
   /// taxa por hectare × área da propriedade. 0 se não há produtor ou exigência.
@@ -157,9 +222,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// não muda — a permuta vazia já é barrada por não ter insumo nenhum.
   bool _classMetOnScreen(ProductClassModel c) => _inputCost > 0 && _classMet(c);
 
-  /// Todas as exigências de classe foram cumpridas?
-  bool get _classesOk => _ruledClasses.every(_classMet);
-
   /// Classes ainda abaixo do mínimo (para avisar o consultor).
   List<ProductClassModel> get _unmetClasses =>
       _ruledClasses.where((c) => !_classMet(c)).toList();
@@ -181,8 +243,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// área com seus mínimos obrigatórios, calculados a partir da área dele.
   void _selectProducer(String id) {
     final p = AppData.producerById(id);
-    // Só aceita produtores da carteira do consultor logado.
-    if (p == null || p.consultantId != widget.consultant.id) return;
+    // Só aceita produtores da carteira do consultor logado — e a carteira é
+    // compartilhável, então a pergunta é "ele me atende?", não "ele é meu?".
+    if (p == null || !p.isAttendedBy(widget.consultant.id)) return;
     setState(() {
       _producerId = id;
       _searchQuery = '';
@@ -222,256 +285,111 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         _searchQuery = '';
       });
 
-  bool _submitting = false;
+  bool _saving = false;
 
-  bool get _canSubmit =>
-      !_submitting &&
-      (_version?.isOpen ?? false) &&
+  /// Dá para GUARDAR o que está montado?
+  ///
+  /// Repare no que NÃO está aqui: [_classesOk]. Guardar uma permuta incompleta é
+  /// o ponto da simulação — o consultor para no meio porque acabou o expediente,
+  /// porque falta combinar um item com o produtor, ou porque ainda vai conferir
+  /// o estoque. Exigir a permuta pronta para salvar deixaria o botão desligado
+  /// exatamente nas horas em que ele serve. Quem cobra o mínimo das classes é o
+  /// ENVIO, lá na aba de simulações, e antes dele o próprio servidor.
+  bool get _canSave =>
+      !_saving &&
       _producerId != null &&
       _unitId != null &&
-      _inputCost > 0 &&
-      _classesOk;
+      _inputQty.values.any((qty) => qty > 0);
 
-  /// Produtor e unidade já foram escolhidos; aqui só revisamos e enviamos.
-  Future<void> _onSubmitPressed() async {
-    if (_producerId == null || _unitId == null) return;
-    final confirmed = await _showSummaryDialog();
-    if (confirmed == true) await _submit();
-  }
+  /// Guarda a simulação NO APARELHO. Não fala com o servidor — nem aqui, nem em
+  /// lugar nenhum desta tela.
+  ///
+  /// É o único desfecho do construtor, e é de propósito: a permuta é montada na
+  /// fazenda, onde pode não haver sinal, e enviar dependia de rede no exato
+  /// momento em que o consultor estava mais longe dela. Toda permuta passa a
+  /// nascer como simulação; o envio ao gerente é um ato próprio, na aba de
+  /// simulações, onde a checagem de serviço e de valores cabe.
+  Future<void> _save() async {
+    final producer = _producer;
+    final unit = _unit;
+    final chosen = _inputQty.entries.where((entry) => entry.value > 0).toList();
+    if (producer == null || unit == null || chosen.isEmpty) {
+      _toast('Escolha o produtor, a unidade de retirada e ao menos um insumo.');
+      return;
+    }
 
-  /// Resumo completo da permuta antes de enviar: os insumos retirados e o total
-  /// de sacas a entregar — para o consultor revisar antes de finalizar.
-  Future<bool?> _showSummaryDialog() {
+    setState(() => _saving = true);
+    final now = DateTime.now();
     final version = _version;
-    final producer = _producer;
-    final unit = _unit;
-    final sacks = _sacksNeeded;
-    final inputs = _inputQty.entries.where((e) => e.value > 0).map((e) {
-      final p = _productById(e.key)!;
-      return BarterItem(
-        productId: p.id,
-        productName: p.name,
-        unit: p.unit,
-        quantity: e.value,
-        unitValue: AppData.priceOf(p.id),
-      );
-    }).toList();
-
-    if (version == null || producer == null || unit == null || inputs.isEmpty) {
-      return Future.value(false);
-    }
-
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.fact_check_outlined, color: AppColors.primary, size: 40),
-        title: Text('Confirmar ${brand.copy.barterTitle}'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _DialogLine('Produtor', producer.name),
-                _DialogLine('Retirada em', unit.name),
-                _DialogLine('Barter', version.code),
-                const SizedBox(height: 8),
-                Text('Insumos retirados',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppColors.inputBg,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    children: inputs
-                        .map((i) => _DialogLine(
-                              i.productName,
-                              _totalVolume(i),
-                            ))
-                        .toList(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppColors.primarySurface,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: _DialogLine(
-                    'Você vai entregar',
-                    '${formatSacks(sacks)} ${version.grainName.toLowerCase()}',
-                    bold: true,
-                  ),
-                ),
-              ],
-            ),
+    final simulation = BarterSimulation(
+      id: _simulationId ?? BarterSimulation.newId(),
+      consultantId: widget.consultant.id,
+      producerId: producer.id,
+      producerName: producer.name,
+      unitId: unit.id,
+      unitName: unit.name,
+      versionCode: version?.code ?? '',
+      // Nome e unidade de cada insumo vão CONGELADOS: sem rede o catálogo do
+      // AppData está vazio, e a lista de simulações mostraria uma coluna de ids
+      // justamente na situação em que ela é a única coisa que o consultor tem.
+      items: [
+        for (final entry in chosen)
+          SimulationItem(
+            productId: entry.key,
+            productName: _productById(entry.key)?.name ?? '',
+            unit: _productById(entry.key)?.unit ?? '',
+            quantity: entry.value,
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Revisar'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirmar e Enviar'),
-          ),
-        ],
-      ),
+      ],
+      simulatedSacks: _sacksNeeded,
+      grainName: version?.grainName ?? '',
+      taxRegime: _taxRegime,
+      createdAt: widget.simulation?.createdAt ?? now,
+      updatedAt: now,
     );
-  }
 
-  /// Volume total de um insumo, sem nenhum valor em R$. Quando a unidade traz um
-  /// peso (ex.: "saco 50kg"), soma o peso: 2 × 50kg = "100 kg". Caso contrário
-  /// (ex.: "litro"), mostra só a quantidade: "3 litro(s)".
-  String _totalVolume(BarterItem i) {
-    final match = RegExp(r'(\d+(?:[.,]\d+)?)\s*(kg|g|l|ml)', caseSensitive: false)
-        .firstMatch(i.unit);
-    if (match != null) {
-      final weight = double.parse(match.group(1)!.replaceAll(',', '.'));
-      final measure = match.group(2)!.toLowerCase();
-      return '${formatQty(i.quantity * weight)} $measure';
-    }
-    return '${formatQty(i.quantity)} ${i.unit}';
-  }
-
-  /// Envia a permuta para a API. O app mostra a prévia (sacas, mínimos), mas
-  /// quem precifica, valida os mínimos e calcula as sacas finais é o servidor
-  /// — a permuta exibida no diálogo de sucesso é a versão oficial devolvida.
-  Future<void> _submit() async {
-    final producer = _producer;
-    final unit = _unit;
-    final chosen = Map<String, double>.from(_inputQty)
-      ..removeWhere((_, qty) => qty <= 0);
-
-    if (producer == null) {
-      _toast('Selecione o produtor desta permuta.');
-      return;
-    }
-    if (unit == null) {
-      _toast('Selecione a unidade de retirada desta permuta.');
-      return;
-    }
-    if (chosen.isEmpty) {
-      _toast('Selecione ao menos um insumo para retirar.');
-      return;
-    }
-    final unmet = _unmetClasses;
-    if (unmet.isNotEmpty) {
-      _toast('Mínimo não atingido: ${unmet.map((c) => c.name).join(', ')}.');
-      return;
-    }
-
-    setState(() => _submitting = true);
-    final BarterModel barter;
-    try {
-      barter = await AppData.createBarter(
-        producerId: producer.id,
-        unitId: unit.id,
-        inputQuantities: chosen,
-      );
-    } on ApiException catch (e) {
-      if (mounted) {
-        setState(() => _submitting = false);
-        _toast(e.message);
-        // O Barter pode ter sido encerrado enquanto a permuta era montada:
-        // recarrega a vigência para a tela contar a verdade na hora.
-        _refreshVersion();
-      }
-      return;
-    }
+    final persisted = await AppData.saveSimulation(simulation);
     if (!mounted) return;
 
-    final sacks = barter.sacksToDeliver;
+    // Retomada a partir da lista: volta para ela, que é de onde o consultor veio
+    // e onde ele vai enviar.
+    if (widget.simulation != null) {
+      Navigator.pop(context, true);
+      return;
+    }
 
+    // Vindo da aba "Nova Permuta", a simulação foi ARQUIVADA e a tela volta a
+    // ficar em branco. Deixá-la preenchida sugeriria que ainda há algo pendente
+    // ali, e o consultor acabaria montando a próxima por cima da que guardou.
     setState(() {
-      _submitting = false;
+      _saving = false;
+      _simulationId = null;
       _inputQty.clear();
       _producerId = null;
       _unitId = null;
+      _searchQuery = '';
     });
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.swap_horiz, color: AppColors.approved, size: 48),
-        title: Text('${brand.copy.barterTitle} Enviada!'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('Permuta ${barter.id} registrada com sucesso.',
-                textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
-            const SizedBox(height: 8),
-            // O próximo passo agora tem NOME. Dizer "enviada para revisão do
-            // administrador" seria falso: ela está na mesa do gerente do
-            // consultor, e é dele que ele espera a resposta.
-            Text(
-              'Ela foi enviada a ${barter.managerLabel}, que dará o parecer técnico '
-              'antes de a permuta seguir para revisão.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.primarySurface,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Column(
-                children: [
-                  _DialogLine('Produtor', producer.name),
-                  _DialogLine('Retirada em', barter.unitLabel),
-                  if (barter.versionCode.isNotEmpty) _DialogLine('Barter', barter.versionCode),
-                  _DialogLine('Insumos retirados', '${barter.inputs.length} item(ns)'),
-                  const Divider(height: 14),
-                  _DialogLine(
-                    'Você vai entregar',
-                    '${formatSacks(sacks)} ${barter.referenceGrainName.toLowerCase()}',
-                    bold: true,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
-        actions: [
-          // Comprovante para controle: PDF do consultor, sem valores em R$.
-          OutlinedButton.icon(
-            onPressed: () => _sharePdf(barter, producer),
-            icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-            label: const Text('Gerar PDF'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+    _toast(persisted
+        ? 'Simulação de ${producer.name} guardada. Envie ao gerente em Minhas '
+            '${brand.copy.barterPluralTitle} › Simulações.'
+        : 'Simulação guardada só nesta sessão: o aparelho não permitiu gravá-la. '
+            'Envie-a antes de fechar o app.');
   }
 
-  Future<void> _sharePdf(BarterModel barter, ProducerModel producer) async {
-    try {
-      await BarterPdf.share(barter, producer: producer, showValues: false);
-    } catch (e) {
-      if (mounted) _toast('Não foi possível gerar o PDF: $e');
-    }
-  }
-
-  /// Recarrega o Barter vigente (e o catálogo, que depende da tabela dela).
+  /// Rebaixa o PACOTE do Barter — tabela, catálogo, classes, carteira e
+  /// unidades —, que é tudo o que esta tela lê, e o grava no aparelho.
+  ///
+  /// É o pacote inteiro e não só a versão: a tabela de valores referencia o
+  /// catálogo, e atualizar uma sem a outra deixaria a tela calculando sacas com
+  /// as duas metades de momentos diferentes.
   Future<void> _refreshVersion() async {
     try {
-      await AppData.refreshBarterVersion();
-    } on ApiException {
-      // Sem rede a tela continua com o que tinha; o envio é que decide.
+      await AppData.syncOfflinePackage();
+    } on ApiException catch (e) {
+      // Sem rede a tela continua com o que tinha — que agora pode vir do
+      // aparelho. Só avisa quem não tem nada: para quem já baixou uma vez, o
+      // silêncio é a resposta certa, porque a tela continua utilizável.
+      if (mounted && AppData.lastSyncAt == null) _toast(e.message);
     }
     if (mounted) setState(() {});
   }
@@ -496,7 +414,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Nova ${brand.copy.barterTitle}'),
+        title: Text(widget.simulation == null
+            ? 'Nova ${brand.copy.barterTitle}'
+            : 'Simulação • ${widget.simulation!.producerName}'),
         actions: const [LogoutButton()],
       ),
       // As três etapas, na ordem em que uma habilita a seguinte: o produtor
@@ -514,34 +434,83 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
   /// Sem Barter aberto não há o que montar: nem grão, nem valores, nem regra.
   /// A tela diz isso — e não deixa o consultor descobrir no envio.
+  ///
+  /// São TRÊS situações diferentes atrás da mesma tela vazia, e confundi-las é
+  /// caro. "Barter fechado" respondido a quem nunca baixou a tabela manda o
+  /// consultor embora achando que não há o que fazer — quando bastava conectar
+  /// uma vez. O que separa as duas é [AppData.lastSyncAt]: com ele, o servidor
+  /// já respondeu alguma vez, e a ausência de versão é um fato do negócio; sem
+  /// ele, ninguém nunca perguntou.
   Widget _buildClosedBarter() {
+    final version = _version;
+    final neverSynced = AppData.lastSyncAt == null;
+    final closed = version != null && !version.isOpen;
+
+    final String title;
+    final String body;
+    if (neverSynced) {
+      title = 'Baixe o ${brand.copy.programTitle} uma vez';
+      body = 'Este aparelho ainda não tem a tabela de valores. Conecte-se à '
+          'internet e atualize: depois disso você monta simulações offline, '
+          'inclusive abrindo o app sem sinal.';
+    } else if (closed) {
+      title = '${brand.copy.programTitle} encerrado';
+      body = 'A versão ${version.code} foi encerrada. Assim que o administrador '
+          'publicar a próxima, ela aparece aqui.';
+    } else {
+      title = '${brand.copy.programTitle} fechado no momento';
+      body = 'Não há lançamento aberto para registrar permutas. Assim que o '
+          'administrador publicar a próxima versão, ela aparece aqui.';
+    }
+
     return RefreshIndicator(
       onRefresh: _refreshVersion,
       color: AppColors.primary,
       child: ListView(
         padding: const EdgeInsets.all(32),
         children: [
-          const SizedBox(height: 60),
-          Icon(Icons.event_busy_outlined, size: 64, color: AppColors.textLight),
+          const SizedBox(height: 40),
+          Icon(neverSynced ? Icons.cloud_download_outlined : Icons.event_busy_outlined,
+              size: 64, color: AppColors.textLight),
           const SizedBox(height: 16),
           Text(
-            '${brand.copy.programTitle} fechado no momento',
+            title,
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textDark),
           ),
           const SizedBox(height: 8),
           Text(
-            'Não há lançamento aberto para registrar permutas. Assim que o '
-            'administrador publicar a próxima versão, ela aparece aqui.',
+            body,
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: AppColors.textMedium),
           ),
+          // Quem chegou aqui abrindo uma simulação precisa ouvir a outra metade:
+          // ela não se perdeu. Sem esta frase, a tela em branco no lugar da
+          // permuta que ele montou diz exatamente o contrário — e o consultor
+          // remonta tudo do zero quando o Barter reabrir.
+          if (widget.simulation != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.primarySurface,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                'Sua simulação continua guardada neste aparelho. Assim que houver '
+                '${brand.copy.programTitle} aberto, ela é refeita com os mesmos '
+                'insumos e volta a poder ser encaminhada.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: AppColors.primary),
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
           Center(
-            child: TextButton.icon(
+            child: FilledButton.icon(
               onPressed: _refreshVersion,
-              icon: const Icon(Icons.refresh, size: 18),
-              label: const Text('Verificar novamente'),
+              icon: Icon(neverSynced ? Icons.cloud_download_outlined : Icons.refresh, size: 18),
+              label: Text(neverSynced ? 'Baixar agora' : 'Verificar novamente'),
             ),
           ),
         ],
@@ -567,6 +536,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
     return Column(
       children: [
+        const OfflineBanner(),
         _BarterBanner(version: version),
         if (wallet.isEmpty)
           Expanded(child: _emptyWalletHint())
@@ -619,6 +589,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
     return Column(
       children: [
+        const OfflineBanner(),
         _BarterBanner(version: version),
         _buildProducerHeader(producer),
         Padding(
@@ -692,6 +663,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final inputCount = _inputQty.values.where((q) => q > 0).length;
     return Column(
       children: [
+        const OfflineBanner(),
         _BarterBanner(version: version),
         _buildProducerHeader(producer),
         _buildUnitHeader(unit),
@@ -1083,15 +1055,58 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                 ),
               ],
             ),
+            // O IMPOSTO DA ENTREGA, no fechamento da permuta: as duas formas de
+            // recolher o Funrural, e o que cada uma custa em sacas — a unidade
+            // em que o consultor enxerga a permuta (ele não vê R$).
+            //
+            // A escolha fica AQUI, junto do total, porque é onde a conversa
+            // acontece: o produtor pergunta "quanto eu entrego?" na fazenda, e a
+            // resposta honesta inclui o Funrural. Descobrir depois, na nota, era
+            // a diferença virar assunto no pior momento.
+            if (inputCount > 0) ...[
+              const SizedBox(height: 8),
+              _TaxRegimeChooser(
+                selected: _taxRegime,
+                rateLabel: _taxRateLabel,
+                taxInSacks: taxAmountOf(sacks, _taxRate),
+                grainName: version.grainName,
+                onChanged: (regime) => setState(() => _taxRegime = regime),
+              ),
+            ],
             const SizedBox(height: 8),
+            // UM botão, e não dois. Enviar ao gerente não mora mais aqui: a
+            // permuta é sempre guardada primeiro, e o envio é um ato próprio na
+            // aba de simulações, onde a checagem de serviço e de valores cabe.
+            // Duas saídas nesta tela reabririam o caminho que dependia de rede
+            // no pior lugar para depender dela.
             SizedBox(
               width: double.infinity,
               height: 44,
               child: ElevatedButton.icon(
-                onPressed: _canSubmit ? _onSubmitPressed : null,
-                icon: const Icon(Icons.swap_horiz, size: 18),
-                label: Text('Enviar ${brand.copy.barterTitle}'),
+                onPressed: _canSave ? _save : null,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : const Icon(Icons.bookmark_added_outlined, size: 18),
+                label: Text(_saving
+                    ? 'Guardando...'
+                    : widget.simulation == null
+                        ? 'Guardar simulação'
+                        : 'Salvar alterações'),
               ),
+            ),
+            const SizedBox(height: 6),
+            // Dito em voz alta porque é a pergunta que o botão sozinho deixa no
+            // ar — "então já foi para o gerente?". Vale com e sem sinal: ter
+            // rede não faz a permuta escapar; quem decide o momento é ele.
+            Text(
+              'Nada é enviado agora. Você encaminha ao gerente quando quiser, '
+              'em Minhas ${brand.copy.barterPluralTitle} › Simulações.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
           ],
         ),
@@ -1115,6 +1130,84 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// AS DUAS FORMAS DE RECOLHER O FUNRURAL, no fechamento da permuta.
+///
+/// A entrega de grão é comercialização de produção rural: sobre ela incidem o
+/// Funrural e o Senar. O que se escolhe aqui é a base da parte previdenciária —
+/// a receita da venda ou a folha de pagamento do produtor.
+///
+/// Escolher a FOLHA não isenta a entrega: o Senar continua saindo da
+/// comercialização, e é por isso que a alíquota cai (para 0,20% de CPF, 0,25%
+/// de CNPJ) em vez de zerar. O número ao lado existe justamente para essa
+/// diferença aparecer no momento da escolha, e não na nota fiscal.
+///
+/// PF ou PJ não é perguntado: sai do documento do produtor desta permuta.
+class _TaxRegimeChooser extends StatelessWidget {
+  final TaxRegime selected;
+
+  /// A alíquota resultante (ex.: "1,63%") e o quanto ela dá EM SACAS do grão —
+  /// o consultor não vê R$ em lugar nenhum do app.
+  final String rateLabel;
+  final double taxInSacks;
+  final String grainName;
+
+  final ValueChanged<TaxRegime> onChanged;
+
+  const _TaxRegimeChooser({
+    required this.selected,
+    required this.rateLabel,
+    required this.taxInSacks,
+    required this.grainName,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.receipt_long_outlined, size: 14, color: AppColors.textMedium),
+            const SizedBox(width: 6),
+            Text('Recolhimento do Funrural',
+                style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        SizedBox(
+          width: double.infinity,
+          child: SegmentedButton<TaxRegime>(
+            segments: const [
+              ButtonSegment(
+                value: TaxRegime.comercializacao,
+                label: Text('Comercialização', overflow: TextOverflow.ellipsis),
+              ),
+              ButtonSegment(
+                value: TaxRegime.folha,
+                label: Text('Folha de pagamento', overflow: TextOverflow.ellipsis),
+              ),
+            ],
+            selected: {selected},
+            showSelectedIcon: false,
+            style: const ButtonStyle(
+              textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+              visualDensity: VisualDensity.compact,
+            ),
+            onSelectionChanged: (escolha) => onChanged(escolha.first),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '+ ${formatSacks(taxInSacks)} ${grainName.toLowerCase()} de Funrural/Senar '
+          '($rateLabel) sobre a entrega — estimativa',
+          style: TextStyle(fontSize: 11, color: AppColors.textLight),
+        ),
+      ],
     );
   }
 }
@@ -1164,41 +1257,6 @@ class _BarterBanner extends StatelessWidget {
       '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
 }
 
-class _DialogLine extends StatelessWidget {
-  final String label, value;
-  final bool bold;
-  const _DialogLine(this.label, this.value, {this.bold = false});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: bold ? AppColors.primary : AppColors.textMedium,
-                  fontWeight: bold ? FontWeight.w700 : FontWeight.w400,
-                )),
-          ),
-          const SizedBox(width: 8),
-          Text(value,
-              style: TextStyle(
-                fontSize: bold ? 15 : 12,
-                color: bold ? AppColors.primary : AppColors.textDark,
-                fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
-              )),
-        ],
-      ),
-    );
-  }
-}
-
-/// Barra de progresso da regra de uma classe, para o consultor. Mostra o
-/// quanto falta para liberar o envio SEM expor valores em R\$ — só proporção.
 class _ClassRuleTile extends StatelessWidget {
   final String name;
   final String detail;
