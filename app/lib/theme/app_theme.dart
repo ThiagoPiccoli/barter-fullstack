@@ -39,6 +39,9 @@ class AppColors {
   static Color get onPrimaryOverlay => brand.palette.onPrimaryOverlay;
 
   // --- Estados da permuta -------------------------------------------------
+  /// Esperando o parecer do gerente da unidade — a primeira parada.
+  static Color get atManager => brand.palette.atManager;
+  static Color get atManagerBg => brand.palette.atManagerBg;
   static Color get approved => brand.palette.approved;
   static Color get pending => brand.palette.pending;
   static Color get denied => brand.palette.denied;

@@ -1,4 +1,12 @@
-import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsInt,
+  IsOptional,
+  IsPositive,
+  IsString,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { IsStrongPassword } from '../../auth/password-policy';
 
 /**
@@ -27,10 +35,16 @@ export class CreateUserDto {
   @MaxLength(30)
   phone?: string;
 
-  @IsString()
-  @MinLength(1)
-  @MaxLength(120)
-  branch!: string;
+  /**
+   * A UNIDADE em que a pessoa trabalha.
+   *
+   * Era `branch`, texto livre. Virou escolha de cadastro porque unidade deixou
+   * de ser rótulo e passou a ter dono: é ela que diz quem responde pelo quê. O
+   * campo `branch` continua saindo no JSON, escrito a partir daqui.
+   */
+  @IsInt()
+  @IsPositive()
+  unitId!: number;
 
   /**
    * Opcional: sem ela, o servidor sorteia a senha de primeira entrada — e é o
@@ -45,6 +59,29 @@ export class CreateUserDto {
   @IsOptional()
   @IsStrongPassword()
   password?: string;
+}
+
+/**
+ * O cadastro do CONSULTOR — o único papel com campo próprio até aqui.
+ *
+ * É o encaixe que o comentário do `CreateUserDto` previa: quando um papel
+ * precisa de um campo que os outros não têm, ele estende o DTO comum e só o
+ * controller dele troca a assinatura. `POST /billers` continua sem saber que
+ * gerente existe.
+ */
+export class CreateConsultantDto extends CreateUserDto {
+  /**
+   * O GERENTE deste consultor — obrigatório, e não por rigor de formulário.
+   *
+   * É a ele que as permutas do consultor são enviadas, e é ele quem escreve o
+   * parecer técnico. Um consultor sem gerente registraria permutas que nascem
+   * numa fila de ninguém: sem erro, sem alarme e sem a quem cobrar. Exigir aqui
+   * transforma isso num cadastro que não se conclui, em vez de num problema que
+   * só aparece semanas depois.
+   */
+  @IsInt()
+  @IsPositive()
+  managerId!: number;
 }
 
 /** Edição não troca senha nem papel — para isso existem rotas próprias. */
@@ -63,8 +100,14 @@ export class UpdateUserDto {
   @MaxLength(30)
   phone?: string;
 
-  @IsString()
-  @MinLength(1)
-  @MaxLength(120)
-  branch!: string;
+  @IsInt()
+  @IsPositive()
+  unitId!: number;
+}
+
+/** A edição do consultor troca o gerente — ver [CreateConsultantDto]. */
+export class UpdateConsultantDto extends UpdateUserDto {
+  @IsInt()
+  @IsPositive()
+  managerId!: number;
 }

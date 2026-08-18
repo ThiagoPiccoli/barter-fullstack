@@ -42,6 +42,38 @@ Consequências que aparecem no código inteiro:
 - sem Barter aberto, `POST /barters` responde 422 e o app mostra "Barter
   fechado". Não é erro, é estado.
 
+E, uma vez montada, a permuta **não vai direto para a análise**:
+
+```
+consultor registra ──▶ Enviada ao Gerente ──▶ Aguardando Revisão ──▶ Aprovada
+                       (parecer técnico)      (admin, hoje)        ↘ Negada
+```
+
+O nome da segunda etapa é **revisão**, e não "análise", porque é a palavra que o
+sistema já usava para ela: a rota é `POST /barters/:code/review` e os campos são
+`reviewedBy`/`reviewedAt`. Enquanto a tela dizia "em análise", ela dava um
+segundo nome à mesma coisa — e "análise" descreve igualmente bem o que o gerente
+faz no passo anterior, o que deixava as duas etapas indistinguíveis para quem lê.
+
+O consultor tem um **gerente**, e é a ele que a permuta chega. O gerente
+escreve um **parecer técnico** — texto, e só texto: ele não aprova nem nega — e
+é isso que faz a permuta seguir. Duas consequências que aparecem no código:
+
+- o cadastro do consultor **exige um gerente** ([user.dto.ts](../api/src/users/dto/user.dto.ts),
+  `CreateConsultantDto`). Um consultor sem gerente registraria permutas
+  endereçadas a ninguém: sem erro, sem alarme e sem a quem cobrar;
+- a permuta guarda **a quem foi enviada** (`Barter.managerId`, gravado no
+  registro). Trocar o gerente de um consultor vale para as próximas; as que já
+  estão na mesa de alguém continuam lá — o contrário faria uma permuta mudar de
+  mãos sem ninguém ter agido sobre ela.
+
+**A unidade de retirada não tem nada a ver com isso.** Ela é o lugar onde o
+produtor busca os insumos, escolhido pelo consultor a cada permuta, e pode ser
+qualquer uma — inclusive de outra praça. Ela não tem responsável, não roteia o
+parecer e não participa de mínimo nem de preço. Ela existe como cadastro, e não
+como o texto livre que era (`branch`), porque "Filial 02", "filial 02" e "F02"
+eram três lugares em qualquer lista ou relatório.
+
 Cinco regras derivam disso e aparecem nos dois lados do código:
 
 | Regra | Onde nasce | Onde é imposta de verdade |
@@ -52,17 +84,22 @@ Cinco regras derivam disso e aparecem nos dois lados do código:
 | CLASSE com regra de mínimo trava o envio | regra da classe | servidor ([barters.service.ts](../api/src/barters/barters.service.ts) passo 4) |
 | Sacas = custo ÷ valor da saca da versão | — | servidor ([barter-math.ts](../api/src/barters/barter-math.ts)) |
 
-**Classe é lista fixa.** Fungicidas, inseticidas, herbicidas, sementes,
-fertilizantes, biológicos, nutrição, seguro agrícola e óleos e adjuvantes — as
-nove nascem na migration `20260814140000_classes_fixas_de_produto` e não há
-rota que crie, renomeie ou exclua. Elas eram "pastas" que o admin cadastrava à
-vontade, e o preço disso aparecia na carga em massa: cada planilha inventava
-uma variação ("Defensivo", "DEFENSIVOS", "Defensivos Foliares") e o mínimo por
-classe passava a medir um conjunto diferente a cada versão do Barter — a regra
-continuava lá, medindo outra coisa. O que **é** editável é a REGRA de mínimo de
-cada classe (`PUT /classes/:id/rule`): ela é decisão comercial e muda de safra
-para safra. Classe nova entra por migration, junto com a decisão do que fazer
-com os produtos já classificados.
+**Classe vem da lista de preços.** A coluna `Família` do arquivo do fornecedor é
+a taxonomia, e a carga em massa cria a classe que ainda não existe — foi assim
+que `FERTILIZANTES FOLIARES`, `OLEOS e ADJUVANTES` e `INOCULANTES` entraram. O
+que NÃO existe é criar, renomear ou excluir classe pelo app: quem define o
+vocabulário é a lista, não quem cadastra. O casamento é por nome normalizado ou
+slug, e é isso que impede "Defensivo", "DEFENSIVOS" e "Defensivos Foliares" de
+virarem três classes medindo mínimos diferentes. O que o admin ajusta é a REGRA
+de mínimo de cada uma (`PUT /classes/:id/rule`) — decisão comercial, que muda de
+safra para safra.
+
+Cada classe tem **figura e cor próprias** no app
+([class_avatar.dart](../app/lib/widgets/class_avatar.dart)), indexadas pela
+posição dela na paleta da marca. Antes era o mesmo frasco repetido em todas as
+linhas: com 656 itens, um ícone que nunca muda ocupa a coluna onde o olho
+procura diferença e não oferece nenhuma. Classe nova aparece com o ícone
+genérico de insumo até alguém escolher a dela.
 
 **Data trava, meta avisa.** A `endsAt` da versão é uma decisão com hora marcada:
 passada a data, a API recusa permuta nova. As metas (vendas, lucro, sacas,
@@ -80,28 +117,45 @@ E as regras de acesso — **cinco papéis**, definidos em um só lugar
 
 | Papel | `role` | Enxerga | Faz hoje |
 |---|---|---|---|
-| Administrador | `admin` | tudo | cadastros, catálogo/preços, revisão das permutas |
-| Gerente | `manager` | tudo | leitura (fluxo próprio em construção) |
+| Administrador | `admin` | tudo | cadastros, unidades, catálogo/preços, revisão das permutas |
+| Gerente | `manager` | **só o time dele** | **parecer técnico** das permutas que recebe |
 | Comitê | `committee` | tudo | leitura (fluxo próprio em construção) |
 | Faturista | `biller` | tudo | leitura (fluxo próprio em construção) |
 | Consultor | `consultant` | só a **própria carteira** | registra permuta para os produtores dela |
 
-- Gerente, comitê e faturista **ainda não escrevem nada**. O acesso existe e é
-  testado ([rbac.e2e-spec.ts](../api/test/rbac.e2e-spec.ts)); as ações de cada
-  um entram junto com o contrato entre eles.
+- O **gerente já escreve uma coisa**: o parecer técnico. Comitê e faturista
+  seguem em leitura — não é esquecimento, as ações de cada um entram com a
+  etapa deles no fluxo, e até lá o correto é a linha vazia de escrita
+  ([rbac.e2e-spec.ts](../api/test/rbac.e2e-spec.ts)).
 
 Quem responde "o que cada papel pode" é **uma tabela só**,
 [policy.ts](../api/src/common/policy.ts):
 
 | Capacidade | Quem tem |
 |---|---|
-| `users.manage` · `producers.manage` · `catalog.manage` · `barter.manage` · `barters.review` · `audit.read` | admin |
-| `producers.readAll` · `barters.readAll` | admin, gerente, comitê, faturista |
+| `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `barters.review` · `audit.read` | admin |
+| `producers.readAll` | admin, gerente, comitê, faturista |
+| `barters.readAll` | admin, comitê, faturista |
+| `barters.readTeam` · `barters.opinion` | gerente |
 | `barters.register` | consultor |
 
 `barter.manage` (lançar safra e versões) é separada de `catalog.manage`
 (cadastro do produto e regra das classes) de propósito: uma decide **por
 quanto** se troca, a outra só mexe em nome, unidade e classe.
+
+**O gerente é o único com escopo de TIME.** Ele enxerga as permutas endereçadas
+a ele, e não a operação inteira: ele não é auditor — responde por um time, e a
+permuta de outro time não é assunto dele. Enquanto teve `barters.readAll`, a
+fila que pedia ação dele ficava misturada com tudo, e a tela não tinha como dar
+ênfase ao que era dele. Os três escopos vivem numa função só
+(`scopeFor` em [barters.service.ts](../api/src/barters/barters.service.ts)), e a
+listagem e o detalhe leem a MESMA — antes eram duas regras que podiam divergir.
+
+`barters.opinion` é o primeiro caso em que a capacidade **não basta**. Ela diz
+que gerente dá parecer; ela não diz que ESTE gerente dá parecer NESTA permuta —
+isso depende do recurso (a permuta foi endereçada a ele?) e mora no service. É
+o encaixe que o comentário no fim de [policy.ts](../api/src/common/policy.ts)
+previa, agora com um caso dentro dele.
 
 A rota declara a CAPACIDADE de que precisa (`@RequireCapability`), não quem
 entra; os services perguntam à mesma tabela (`can(user, ...)`) para decidir o
@@ -109,6 +163,7 @@ escopo por linha. Antes disso a autorização morava em dois lugares que não se
 falavam — o decorator e um `seesEverything()` dentro dos services —, e não
 havia arquivo nenhum onde se lesse o que um faturista pode.
 - **Produtor não é usuário** — ele não loga, é um cadastro.
+- **Unidade não é papel** — ela é um local de retirada, sem dono e sem alçada.
 
 ---
 
@@ -170,9 +225,13 @@ src/barters/
 └── dto/barter.dto.ts      forma do payload de entrada, com validação
 ```
 
-Os módulos existentes: `auth`, `producers`, `users`, `classes`, `products`,
-`seasons`, `barters`, `audit`. Mais `prisma` (o client como provider global) e
-`common` (peças compartilhadas).
+Os módulos existentes: `auth`, `producers`, `units`, `users`, `classes`,
+`products`, `seasons`, `barters`, `audit`. Mais `prisma` (o client como provider
+global) e `common` (peças compartilhadas).
+
+`units` é o CRUD mais simples do backend, e isso é uma afirmação sobre o
+domínio: a unidade é um lugar (nome + cidade). Se um dia ele ganhar um campo de
+responsável, é sinal de que o modelo mudou — não de que faltava um campo.
 
 `seasons` é o lançamento do Barter: **dois controllers, um service** —
 `/seasons` (a safra) e `/barter-versions` (a versão vigente e o histórico) —,
@@ -345,7 +404,8 @@ tomada de propósito.
 
 **A trilha de auditoria** ([audit/](../api/src/audit/)). Registra o que muda
 QUEM tem acesso e o que decide dinheiro: `user.created`, `user.updated`,
-`user.password-reset`, `user.deleted` e `barter.reviewed`. Lida em
+`user.password-reset`, `user.deleted`, `unit.*`, `barter.opinion` e
+`barter.reviewed`. Lida em
 `GET /audit-logs` (capacidade `audit.read`), sem rota que altere ou apague.
 
 Ela existe por causa do reset de senha: ele sorteia uma senha nova e derruba as
@@ -375,6 +435,8 @@ Vale ler linha a linha; a sequência é:
 1. **só o consultor registra permuta** (é ato do dono da carteira; admin e
    retaguarda levam 403) → a regra é uma *lista de permitidos*, para papel novo
    não entrar por omissão
+1b. **o consultor precisa ter gerente** → é a ele que a permuta será endereçada,
+   e o nome dele é gravado no registro
 2. **precisa haver Barter aberto** (`requireOpenVersion`) → é ele que traz o
    grão da safra e a tabela de valores; sem ele, 422 com "aguarde o próximo
    lançamento"
@@ -392,6 +454,12 @@ Vale ler linha a linha; a sequência é:
    `versionId` + `versionCode`
 10. tudo dentro de uma transação, com o código público `PRM-<ano>-NNN` gerado ali
     dentro para evitar corrida
+11. a permuta nasce em **`sentToManager`**, endereçada ao gerente do consultor,
+    com a unidade de retirada escolhida gravada (`unitId` + `unitName`)
+
+O passo seguinte é `giveOpinion`, no mesmo arquivo: o gerente **a quem ela foi
+enviada** escreve o parecer, e ela passa a `pending`. Um gerente de outro time
+leva 403 — é a política sobre o recurso que a tabela de capacidades não alcança.
 
 A matemática pura está separada em
 [barter-math.ts](../api/src/barters/barter-math.ts) — sem I/O, testada em
@@ -469,7 +537,10 @@ abertas, o catálogo e a versão discordariam, e quem precifica é a versão.
 
 [schema.prisma](../api/prisma/schema.prisma). Dois padrões merecem atenção:
 
-**Enums são `String`**: `role`, `type`, `kind`, `status`, `ruleType`. Vieram
+**Enums são `String`**: `role`, `type`, `kind`, `status`, `ruleType`. Foi o que
+permitiu `sentToManager` entrar sem migration de tipo — e o app já tolerava um
+status desconhecido, então as versões instaladas continuaram carregando a lista
+(mostrando a permuta nova como "Aguardando Revisão", impreciso mas visível). Vieram
 assim do SQLite, que não tem enum, e ficaram: a validação mora nos DTOs
 (`@IsIn`), e um valor novo não pede migration nem deploy coordenado entre banco
 e aplicação.
@@ -486,7 +557,11 @@ corrigir um custo hoje reescreveria a margem apurada ontem.
 ```
 User ─┬─< AccessToken        (sessões revogáveis)
       ├─< Producer           (carteira; SetNull se o consultor sai)
-      └─< Barter             (SetNull)
+      ├─< User               (time: o gerente e os consultores dele)
+      ├─< Barter             (registrou; SetNull)
+      └─< Barter             (recebeu para parecer; SetNull)
+Unit ─┬─< User               (lotação)
+      └─< Barter             (local de retirada; SetNull, unitName fica)
 Producer ─< Barter
 Season ─< BarterVersion ─┬─< VersionPrice >─ Product   (a tabela de valores)
                          └─< Barter                     (SetNull; versionCode fica)
@@ -519,7 +594,14 @@ mínimos por hectare.
 O dataset em si está em [seed-data.ts](../api/prisma/seed-data.ts); `npm run
 db:seed` ([seed.ts](../api/prisma/seed.ts)) apaga e recria tudo.
 
-O dataset conta a história do modelo novo: duas safras **encerradas** (`T2025`
+O dataset também conta a história do fluxo: **dois gerentes** com times
+distintos (Beatriz responde por João e Ana; Gustavo, por Roberto, Maria e
+Lucas) e duas permutas paradas em `sentToManager` — uma na fila de cada um.
+Com um gerente só, "cada um vê a sua fila" e "todo mundo vê tudo" produziriam
+exatamente a mesma tela. E a `PRM-2026-008` é retirada na Matriz, embora seja do
+Roberto: é o dataset mostrando que a retirada não tem relação com quem analisa.
+
+E conta a história do modelo de valores: duas safras **encerradas** (`T2025`
 de trigo e `M2026` de milho — é delas que vêm as permutas antigas pagas nesses
 grãos) e a safra de soja `S2026` **aberta**, com `S2026.01` encerrada logo após
 a publicação (o caso de quem republica antes de alguém usar) e `S2026.02`
@@ -567,18 +649,21 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST | `/seasons/:code/close` | admin | encerra safra + versão vigente |
 | POST | `/seasons/:code/versions` | admin | publica versão com a tabela no corpo (seed/testes) |
 | POST | `/seasons/:code/versions/import` | admin | publica versão pela planilha .xlsx (multipart, 5 MB) |
-| GET | `/barters` `?status=` | escopado | |
+| GET | `/barters` `?status=` `?unitId=` `?managerId=` | escopado | consultor: as dele; gerente: as do time; retaguarda: todas |
 | GET | `/barters/:code` | escopado | `code` = PRM-2026-001 |
-| POST | `/barters` | consultor | sem `grainId`; 422 se não há Barter aberto |
-| POST | `/barters/:code/review` | admin | só permuta pendente |
+| GET | `/units` | autenticado | os locais de retirada (o consultor escolhe um por permuta) |
+| POST/PUT/DELETE | `/units`, `/units/:id` | admin | cadastro dos locais |
+| POST | `/barters` | consultor | com `unitId`; sem `grainId`; 422 se não há Barter aberto |
+| POST | `/barters/:code/opinion` | gerente | parecer técnico; só na permuta endereçada a ele |
+| POST | `/barters/:code/review` | admin | só permuta em análise (o parecer já veio) |
 
 As quatro rotas de usuário seguem o mesmo desenho e **só alcançam o próprio
 papel**: papel diferente responde 404, e o admin não é gerenciado por nenhuma
 delas (ver `ManagedRole` em [roles.ts](../api/src/common/roles.ts)) — ele nasce
 do `bootstrap-admin` e se recupera por script.
 
-"Escopado" = consultor vê a própria carteira, retaguarda (admin, gerente,
-comitê, faturista) vê tudo. "admin" nas linhas de escrita é o estado de hoje:
+"Escopado" = consultor vê a própria carteira; gerente vê o time dele (as
+permutas endereçadas a ele); admin, comitê e faturista veem tudo. "admin" nas linhas de escrita é o estado de hoje:
 é onde os papéis novos vão ganhar as próprias ações.
 
 \* também liberadas com senha provisória.
@@ -799,17 +884,17 @@ safra ser aberta.
 |---|---|
 | [admin_main_screen.dart](../app/lib/screens/admin_main_screen.dart) | casca do admin + dashboard (herói de sacas a receber, mix por grão, rankings, fila de pendentes) |
 | [consultant_main_screen.dart](../app/lib/screens/consultant_main_screen.dart) | casca do consultor + dashboard + aba de perfil |
-| [back_office_main_screen.dart](../app/lib/screens/back_office_main_screen.dart) | casca de **gerente, comitê e faturista** — uma tela parametrizada pelo papel, em modo leitura, até cada um ganhar as próprias ações |
+| [back_office_main_screen.dart](../app/lib/screens/back_office_main_screen.dart) | casca de **gerente, comitê e faturista**, parametrizada pelo papel. O gerente abre na **fila de parecer** dele, com selo de pendências na navegação; comitê e faturista seguem em leitura |
 | [barter_screen.dart](../app/lib/screens/barter_screen.dart) | **o construtor de permuta** (a tela mais complexa) |
 | [barters_screen.dart](../app/lib/screens/barters_screen.dart) | listagem com abas por status + busca |
 | [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe (com a versão do Barter), revisão do admin, PDF |
 | [prices_screen.dart](../app/lib/screens/prices_screen.dart) | ⚠️ é a aba **Barter** inteira (lançamento, valores, histórico, pastas) |
 | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) | o lançamento: versão vigente, metas, publicação por planilha, encerramento |
 | [product_report_screen.dart](../app/lib/screens/product_report_screen.dart) | relatório de um produto + diálogos de preço/categoria/exigência |
-| [consultants_screen.dart](../app/lib/screens/consultants_screen.dart) | ⚠️ é a aba **Cadastros** (alterna Produtores ↔ Consultores) |
+| [consultants_screen.dart](../app/lib/screens/consultants_screen.dart) | ⚠️ é a aba **Cadastros** (Produtores · Consultores · Gerentes · Unidades) |
 | [producer_profile_screen.dart](../app/lib/screens/producer_profile_screen.dart) | perfil do **produtor** visto pelo admin |
 | [consultant_profile_screen.dart](../app/lib/screens/consultant_profile_screen.dart) | perfil do **consultor** visto pelo admin |
-| [edit_forms.dart](../app/lib/screens/edit_forms.dart) | três formulários: produtor, consultor, categoria |
+| [edit_forms.dart](../app/lib/screens/edit_forms.dart) | os formulários: produtor, **pessoal** (`EditStaffScreen`, consultor ou gerente), unidade, produto |
 | [change_password_screen.dart](../app/lib/screens/change_password_screen.dart) | troca obrigatória (`forced: true`) ou voluntária |
 
 O ⚠️ é nome herdado do protótipo: `consultants_screen.dart` não lista só
@@ -827,16 +912,33 @@ regra do domínio:
 - **Etapa 1 — produtor**. Vem primeiro porque a **área da propriedade** define
   quais insumos são obrigatórios e em que quantidade. A lista é
   `AppData.producersForConsultant(consultantId)` — a carteira.
-- **Etapa 2 — insumos**. A lista é `AppData.barterInputs`: só o que a versão
+- **Etapa 2 — unidade de retirada**. Onde o produtor vai buscar os insumos.
+  Qualquer uma serve, inclusive de outra praça: é um combinado com o produtor, e
+  não muda quem analisa a permuta. É etapa própria, e não um campo no rodapé da
+  lista de insumos, justamente para não virar algo que se preenche no fim sem
+  pensar.
+- **Etapa 3 — insumos**. A lista é `AppData.barterInputs`: só o que a versão
   vigente precificou. Insumos com exigência já vêm pré-preenchidos no mínimo e
-  não descem abaixo dele (`_setInput` trava). Barras de progresso das categorias
-  mostram o quanto falta **em proporção**.
+  não descem abaixo dele (`_setInput` trava). Barras de progresso das classes
+  mostram o quanto falta **em proporção** — e ficam em zero enquanto a permuta
+  está vazia: exigência percentual sobre custo zero é cumprida na matemática,
+  mas "atingida" antes do primeiro insumo é a tela dizendo que ele terminou sem
+  ter começado.
+- **Achar o insumo entre centenas** é o problema real da lista do fornecedor.
+  Além da busca por nome **ou código**, a mesma barra de filtros do admin
+  ([filter_bar.dart](../app/lib/widgets/filter_bar.dart)): chips por CLASSE — que
+  é como quem monta a permuta pensa — e um chip **"Escolhidos (N)"**, que é a
+  revisão do que já entrou sem caçar item por item. A ordenação alterna entre
+  nome e "escolhidos primeiro"; não há ordenar por preço, porque o consultor não
+  vê R$. Lista vazia diz QUAL recorte a esvaziou e oferece limpar.
 - **Não há etapa de grão.** Ele é o da safra; as sacas saem de
   `version.grainPrice`.
-- **Envio**: `AppData.createBarter` manda só `producerId` e
+- **Envio**: `AppData.createBarter` manda `producerId`, `unitId` e
   `[{productId, quantity}]`. O diálogo de sucesso mostra **a permuta devolvida
   pelo servidor**, não a prévia local. Se o Barter tiver fechado no meio do
-  caminho, o erro do servidor aparece e a tela recarrega a vigência.
+  caminho, o erro do servidor aparece e a tela recarrega a vigência. O diálogo
+  de sucesso diz **a quem** a permuta foi enviada — dizer "enviada para análise
+  do administrador" passou a ser falso.
 
 ### Por que a matemática está duplicada
 
@@ -928,6 +1030,8 @@ Estes pares andam juntos. Mudou de um lado, procure o outro:
 | [barter-math.ts](../api/src/barters/barter-math.ts) | [barter_math.dart](../app/lib/services/barter_math.dart) — espelho, com testes espelhados |
 | `toBarterVersionJson` / `toSeasonJson` ([serializers.ts](../api/src/common/serializers.ts)) | `BarterVersionModel` / `SeasonModel` em [models.dart](../app/lib/models/models.dart) |
 | `GET /barter-versions/current` devolvendo `null` | estado "Barter fechado" em [barter_screen.dart](../app/lib/screens/barter_screen.dart) |
+| `BARTER_STATUSES` em [barter.dto.ts](../api/src/barters/dto/barter.dto.ts) | `enum BarterStatus` em [models.dart](../app/lib/models/models.dart) — os nomes precisam bater, é `status.name` que compara |
+| `POST /barters/:code/opinion` | `giveBarterOpinion` em [common_widgets.dart](../app/lib/widgets/common_widgets.dart) |
 | upload multipart de `/versions/import` | `ApiClient.upload` + `file_picker` em [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) |
 
 **As mensagens de erro do backend estão em pt-BR de propósito** — elas vão
@@ -965,12 +1069,15 @@ Se for ler tudo em ordem, sugiro:
 |---|---|---|
 | um campo novo em produtor | `schema.prisma` + migration, `producer.dto.ts`, `toProducerJson` | `ProducerModel` + `_payload`, `edit_forms.dart` |
 | uma regra nova de classe | `barter-math.ts` (`classRequired`), `class.dto.ts` | `ClassRuleType`, `_classRequired` em `barter_screen.dart`, `edit_forms.dart` |
-| uma CLASSE nova na lista | migration nova (a lista é fixa; decida o que fazer com os produtos já classificados) | nada |
+| a figura de uma classe nova | nada | `iconForClass` em `class_avatar.dart` |
 | aceitar outra coluna na planilha | `COLUMNS` em `version-import.ts` (+ spec) | nada |
 | uma meta nova (ex.: hectares) | `schema.prisma`, `Targets`/`goalsOf` em `version-progress.ts`, `VersionLimitsDto` | `GoalKind`, campo no `_PublishSheet` |
 | fazer a meta ENCERRAR sozinha | `isOpenAt` em `version-progress.ts` | nada (o app lê `isOpen`) |
 | mudar validade da sessão | `TOKEN_TTL_DAYS` no `.env` | nada |
 | um endpoint novo | módulo (controller+service+dto) + serializer | repositório novo + campo no `AppData` |
+| uma etapa nova no fluxo da permuta | valor em `BARTER_STATUSES`, transição no `barters.service.ts`, capacidade em `policy.ts` | `BarterStatus`, `statusLabel`, `StatusBadge`, `statusColor`, cor na paleta da marca, aba em `barters_screen.dart` |
+| trocar quem dá o parecer | `managerId` em `CreateConsultantDto` + `resolveManager` | dropdown de gerente em `EditStaffScreen` |
+| mudar o que um papel enxerga | `scopeFor` em `barters.service.ts` + a capacidade em `policy.ts` | nada (o servidor já filtra) |
 | deixar o consultor ver R$ | nada (já vem no JSON) | trocar as flags `showValue` |
 | ler outra coluna da planilha | `COLUMNS` em `version-import.ts` (+ spec) | nada |
 | outro padrão de embalagem no nome | `UNITS`/`PACKAGES` em `unit-from-name.ts` (+ spec) | nada |
@@ -1025,6 +1132,22 @@ Coisas verdadeiras sobre o código hoje, para você não interpretar como bug:
   ainda deixaria o insumo cadastrado sem preço — visível, não permutável e
   removível pela aba Produtos. Coberto em `seasons.e2e-spec.ts`, "publicação
   recusada não deixa rastro no catálogo".
+- **`User.branch` é derivado.** Ele guarda o NOME da unidade da pessoa, escrito
+  a partir de `unitId` num lugar só
+  ([user-provisioning.service.ts](../api/src/users/user-provisioning.service.ts)).
+  Existe porque é o que as telas mostram, o que os rankings agrupam e o que a
+  permuta congela — ler pela relação obrigaria todo `findUnique` de usuário,
+  inclusive o do AuthGuard em cada requisição, a carregar um join. O preço é o
+  de sempre: renomear uma unidade não reescreve o que já foi congelado (que é o
+  comportamento certo, como `Barter.producerName`, mas continua sendo duas
+  cópias do mesmo dado).
+- **O destinatário do parecer é snapshot.** `Barter.managerId` é gravado no
+  envio, não lido do vínculo atual do consultor. Trocar o gerente de alguém
+  vale para as próximas permutas — decisão consciente, e a saída de um gerente
+  é barrada enquanto ele tiver time ou fila
+  ([`ensureManagerIsFree`](../api/src/users/user-provisioning.service.ts)).
+  O custo é que reatribuir em massa (férias, desligamento) exige esvaziar a fila
+  antes.
 - **`Product.currentPrice` é derivado.** Ele guarda o último valor publicado
   para o relatório e o gráfico; quem precifica é a versão. A rota que o editava
   direto foi removida justamente para os dois não divergirem, mas o campo

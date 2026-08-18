@@ -52,9 +52,15 @@ const Brand agroBarterBrand = Brand(
     onPrimaryOverlay: Color(0x1FFFFFFF),
 
     // --- Estados da permuta ----------------------------------------------
+    // Índigo para "na mesa do gerente": ele precisa se distinguir do âmbar de
+    // "aguardando revisão" à primeira vista, porque as duas etapas são de pessoas
+    // diferentes — e é justamente na lista misturada que a diferença importa.
+    // Um segundo tom de âmbar teria mantido as duas indistinguíveis.
+    atManager: Color(0xFF4338CA),
+    atManagerBg: Color(0xFFEEF0FF),
     approved: Color(0xFF15803D),
     // Âmbar mais claro que `grain` de propósito: os dois aparecem lado a lado
-    // no painel, e com o mesmo tom um selo "em análise" se confundia com um
+    // no painel, e com o mesmo tom um selo de revisão se confundia com um
     // marcador de grão.
     pending: Color(0xFFD97706),
     denied: Color(0xFFB91C1C),

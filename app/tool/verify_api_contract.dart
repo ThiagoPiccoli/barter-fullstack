@@ -22,7 +22,9 @@ import 'package:agrobarter_app/repositories/barter_program_repository.dart';
 import 'package:agrobarter_app/repositories/barter_repository.dart';
 import 'package:agrobarter_app/repositories/catalog_repository.dart';
 import 'package:agrobarter_app/repositories/consultant_repository.dart';
+import 'package:agrobarter_app/repositories/manager_repository.dart';
 import 'package:agrobarter_app/repositories/producer_repository.dart';
+import 'package:agrobarter_app/repositories/unit_repository.dart';
 import 'package:agrobarter_app/services/api/api_client.dart';
 
 int _failures = 0;
@@ -76,6 +78,21 @@ Future<void> _run() async {
   final tiny = await api.getAll('/barters', pageSize: 2);
   check('mesmo com página de 2, o total bate', tiny.length == barters.length,
       '${tiny.length} vs ${barters.length}');
+
+  /* ── A etapa do gerente ───────────────────────────────────────────── */
+  // Duas leituras diferentes do mesmo par de campos, e é a diferença entre
+  // elas que a tela usa: `managerName` diz A QUEM a permuta foi enviada e vem
+  // desde a criação; `managerNote` só existe depois que ele responde.
+  final atManager = barters.where((b) => b.awaitsManager).toList();
+  check('há permuta esperando parecer no dataset', atManager.isNotEmpty,
+      '${atManager.length} de ${barters.length}');
+  check('toda permuta enviada tem destinatário e nenhum parecer ainda',
+      atManager.every((b) => b.managerId.isNotEmpty && !b.hasManagerOpinion),
+      atManager.map((b) => '${b.id}→${b.managerLabel}').join(' · '));
+  check('a permuta que passou pelo gerente carrega o parecer assinado',
+      barters.where((b) => b.hasManagerOpinion).every((b) =>
+          b.managerName != null && b.managerReviewedAt != null && !b.awaitsManager));
+  check('a permuta diz onde será retirada', barters.any((b) => b.unitName.isNotEmpty));
 
   /* ── Catálogo ─────────────────────────────────────────────────────── */
   final catalog = CatalogRepository();
@@ -150,6 +167,19 @@ Future<void> _run() async {
       '${seasons.length} safra(s)');
 
   /* ── Provisionamento de consultor ─────────────────────────────────── */
+  // O cadastro do consultor depende de duas listas que o app carrega: as
+  // UNIDADES (onde ele trabalha) e os GERENTES (a quem as permutas dele vão).
+  // São os dois campos que substituíram a filial em texto livre.
+  final units = await UnitRepository().list();
+  check('as unidades chegam com nome e cidade',
+      units.isNotEmpty && units.every((u) => u.name.isNotEmpty && u.city.isNotEmpty),
+      units.map((u) => u.name).join(' · '));
+
+  final managers = await ManagerRepository().list();
+  check('os gerentes chegam para o cadastro do consultor',
+      managers.isNotEmpty && managers.every((m) => m.role == UserRole.manager),
+      '${managers.length} gerente(s)');
+
   final consultants = ConsultantRepository();
   final email = 'verificacao.${DateTime.now().millisecondsSinceEpoch}@agrobarter.com.br';
   final provisioned = await consultants.create(UserModel(
@@ -157,11 +187,23 @@ Future<void> _run() async {
     name: 'Consultor de Verificação',
     email: email,
     phone: '',
-    branch: 'Filial de Teste',
+    unitId: units.first.id,
+    branch: units.first.name,
+    managerId: managers.first.id,
     role: UserRole.consultant,
     avatarInitials: 'CV',
     createdAt: DateTime.now(),
   ));
+
+  // O `branch` é ESCRITO PELO SERVIDOR a partir da unidade escolhida — o que o
+  // app manda é o id. Se um dia voltar a ser texto livre, cai aqui.
+  check('a unidade escolhida vira o rótulo do consultor',
+      provisioned.consultant.unitId == units.first.id &&
+          provisioned.consultant.branch == units.first.name,
+      provisioned.consultant.branch);
+  check('o consultor nasce com o gerente que dará o parecer',
+      provisioned.consultant.managerId == managers.first.id,
+      provisioned.consultant.managerName);
 
   check('criação devolve a senha provisória',
       provisioned.provisionalPassword.length >= 8, provisioned.provisionalPassword);
@@ -174,7 +216,9 @@ Future<void> _run() async {
     name: 'Outro Consultor',
     email: 'outro.$email',
     phone: '',
-    branch: 'Filial de Teste',
+    unitId: units.first.id,
+    branch: units.first.name,
+    managerId: managers.first.id,
     role: UserRole.consultant,
     avatarInitials: 'OC',
     createdAt: DateTime.now(),

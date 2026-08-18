@@ -17,9 +17,10 @@ describe('Tabela de capacidades', () => {
     expect(orfas).toEqual([]);
   });
 
-  it('o admin é o único que gerencia usuários, catálogo, produtores e auditoria', () => {
+  it('o admin é o único que gerencia usuários, unidades, catálogo, produtores e auditoria', () => {
     for (const capability of [
       CAPABILITY.usersManage,
+      CAPABILITY.unitsManage,
       CAPABILITY.catalogManage,
       CAPABILITY.producersManage,
       CAPABILITY.auditRead,
@@ -34,17 +35,51 @@ describe('Tabela de capacidades', () => {
   });
 
   /**
-   * O estado combinado: gerente, comitê e faturista ENXERGAM a operação e não
-   * escrevem nada. Quando o contrato entre eles for definido, este teste é o
-   * que vai obrigar a decisão a ser explícita — ele quebra no momento em que
-   * alguém der escrita a um deles.
+   * A ETAPA DO GERENTE é dele e de mais ninguém.
+   *
+   * O parecer técnico não é uma segunda aprovação: é o responsável pela unidade
+   * dizendo o que pensa da negociação que vai ser retirada lá. Dar isso ao
+   * admin "porque ele pode tudo" esvaziaria a etapa — ele passaria a opinar
+   * sobre praças que não conhece, e a permuta seguiria sem nunca ter passado
+   * pela unidade.
    */
-  it('a retaguarda nova está em leitura, sem nenhuma escrita', () => {
-    for (const role of [ROLE.manager, ROLE.committee, ROLE.biller]) {
+  it('o parecer técnico é só do gerente — nem o admin dá parecer', () => {
+    expect(rolesWith(CAPABILITY.bartersOpinion)).toEqual([ROLE.manager]);
+  });
+
+  /**
+   * Comitê e faturista ENXERGAM a operação e não escrevem nada. Quando a etapa
+   * de cada um for definida, este teste é o que vai obrigar a decisão a ser
+   * explícita — ele quebra no momento em que alguém der escrita a um deles. Foi
+   * exatamente o que aconteceu com o gerente, que saiu daqui ao ganhar o
+   * parecer e passou a ter o próprio caso, acima.
+   */
+  it('comitê e faturista seguem em leitura, sem nenhuma escrita', () => {
+    for (const role of [ROLE.committee, ROLE.biller]) {
       expect([...ROLE_CAPABILITIES[role]].sort()).toEqual(
         [CAPABILITY.bartersReadAll, CAPABILITY.producersReadAll].sort(),
       );
     }
+  });
+
+  it('o gerente enxerga o TIME dele e escreve UMA coisa: o parecer', () => {
+    expect([...ROLE_CAPABILITIES[ROLE.manager]].sort()).toEqual(
+      [CAPABILITY.bartersReadTeam, CAPABILITY.producersReadAll, CAPABILITY.bartersOpinion].sort(),
+    );
+  });
+
+  /**
+   * O escopo de time é do gerente e de mais ninguém — e, principalmente, ele
+   * NÃO acumula com o de tudo. Um papel com as duas capacidades enxergaria a
+   * operação inteira, que é o oposto do que este escopo existe para dar.
+   */
+  it('só o gerente tem escopo de time, e ele não enxerga tudo', () => {
+    expect(rolesWith(CAPABILITY.bartersReadTeam)).toEqual([ROLE.manager]);
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersReadAll)).toBe(false);
+  });
+
+  it('quem acompanha a operação inteira são admin, comitê e faturista', () => {
+    expect(rolesWith(CAPABILITY.bartersReadAll)).toEqual([ROLE.admin, ROLE.committee, ROLE.biller]);
   });
 
   it('o consultor não enxerga além da própria carteira', () => {

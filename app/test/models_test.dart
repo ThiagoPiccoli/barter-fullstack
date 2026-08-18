@@ -14,7 +14,11 @@ void main() {
         'consultantBranch': 'Filial 02',
         'producerId': 1,
         'producerName': 'Antônio Carvalho',
+        'unitId': 2,
+        'unitName': 'Filial 02 – Gran. Santa T.',
         'status': status,
+        'managerId': 7,
+        'managerName': 'Beatriz Nogueira',
         'createdAt': '2026-01-10T00:00:00.000Z',
         'items': [
           {
@@ -100,6 +104,56 @@ void main() {
       final barter = BarterModel.fromJson(barterJson(status: 'cancelled'));
       expect(barter.status, BarterStatus.pending);
       expect(barter.id, 'PRM-2026-001');
+    });
+
+    /// A ETAPA DO GERENTE tem duas leituras diferentes no mesmo par de campos:
+    /// `managerName` diz A QUEM a permuta foi enviada (vem preenchido desde a
+    /// criação), e `managerNote` diz se ele já respondeu. Ler as duas como uma
+    /// só faria toda permuta enviada parecer já pareceada.
+    test('enviada ao gerente: destinatário preenchido, parecer ainda não', () {
+      final barter = BarterModel.fromJson(barterJson(status: 'sentToManager'));
+
+      expect(barter.status, BarterStatus.sentToManager);
+      expect(barter.awaitsManager, isTrue);
+      expect(barter.managerLabel, 'Beatriz Nogueira');
+      // O destinatário existe; o parecer, não.
+      expect(barter.hasManagerOpinion, isFalse);
+      expect(barter.statusLabel, 'Enviada ao Gerente');
+    });
+
+    /// A tela só oferece o botão de parecer a quem o servidor deixaria dar —
+    /// oferecer um botão que a API recusa é pior do que não mostrá-lo.
+    test('a permuta só espera o parecer de quem ela foi endereçada', () {
+      final barter = BarterModel.fromJson(barterJson(status: 'sentToManager'));
+
+      expect(barter.awaitsOpinionFrom('7'), isTrue);
+      expect(barter.awaitsOpinionFrom('10'), isFalse); // outro gerente
+      expect(barter.awaitsOpinionFrom(null), isFalse); // não é gerente
+      expect(barter.awaitsOpinionFrom(''), isFalse);
+    });
+
+    test('com o parecer escrito, a permuta já não espera o gerente', () {
+      final json = barterJson(status: 'pending')
+        ..['managerNote'] = 'Estoque conferido, volume compatível com a área.'
+        ..['managerReviewedAt'] = '2026-01-11T10:00:00.000Z';
+      final barter = BarterModel.fromJson(json);
+
+      expect(barter.hasManagerOpinion, isTrue);
+      expect(barter.awaitsManager, isFalse);
+      expect(barter.awaitsOpinionFrom('7'), isFalse);
+      expect(barter.managerReviewedAt, isNotNull);
+    });
+
+    /// A unidade é LOGÍSTICA. Permutas anteriores ao cadastro de unidades não
+    /// têm local de retirada, e a tela precisa mostrar isso sem quebrar.
+    test('permuta sem unidade (dado antigo) mostra travessão', () {
+      final json = barterJson()
+        ..remove('unitId')
+        ..remove('unitName');
+      final barter = BarterModel.fromJson(json);
+
+      expect(barter.unitId, isEmpty);
+      expect(barter.unitLabel, '—');
     });
   });
 
@@ -225,6 +279,64 @@ void main() {
       expect(product.firstPrice, isNull);
       expect(product.deltaPct, 0);
       expect(product.hasFullHistory, isTrue);
+    });
+  });
+
+  /// A UNIDADE é um local, e o modelo dela é curto por isso. Se um dia este
+  /// grupo ganhar um teste de "responsável pela unidade", é sinal de que o
+  /// modelo mudou — quem analisa a permuta é o gerente do CONSULTOR.
+  group('UnitModel', () {
+    test('lê o local de retirada', () {
+      final unit = UnitModel.fromJson({
+        'id': 2,
+        'name': 'Filial 02 – Gran. Santa T.',
+        'city': 'Sarandi/PR',
+        'createdAt': '2026-08-16T10:00:00.000Z',
+        'initials': 'FG',
+      });
+
+      expect(unit.id, '2');
+      expect(unit.label, 'Filial 02 – Gran. Santa T. • Sarandi/PR');
+    });
+  });
+
+  group('UserModel', () {
+    /// O gerente do consultor é o que decide para quem as permutas dele vão —
+    /// e é a única forma de o app saber isso sem a lista de gerentes, que é
+    /// rota de admin.
+    test('o consultor traz o gerente dele; os outros papéis, não', () {
+      final base = {
+        'email': 'joao.silva@agrobarter.com.br',
+        'createdAt': '2026-01-10T00:00:00.000Z',
+        'initials': 'JS',
+      };
+
+      final consultor = UserModel.fromJson({
+        ...base,
+        'id': 2,
+        'fullName': 'João Silva',
+        'role': 'consultant',
+        'unitId': 2,
+        'branch': 'Filial 02 – Gran. Santa T.',
+        'managerId': 7,
+        'managerName': 'Beatriz Nogueira',
+      });
+      expect(consultor.managerId, '7');
+      expect(consultor.managerName, 'Beatriz Nogueira');
+      expect(consultor.unitId, '2');
+
+      final gerente = UserModel.fromJson({
+        ...base,
+        'id': 7,
+        'fullName': 'Beatriz Nogueira',
+        'role': 'manager',
+        'unitId': 1,
+        'branch': 'Matriz',
+        'managerId': null,
+        'managerName': null,
+      });
+      expect(gerente.managerId, isEmpty);
+      expect(gerente.managerName, isEmpty);
     });
   });
 

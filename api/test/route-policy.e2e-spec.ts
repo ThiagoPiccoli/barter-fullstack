@@ -122,6 +122,10 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /barters', policy: 'any-authenticated' },
         { route: 'GET /barters/:code', policy: 'any-authenticated' },
         { route: 'POST /barters', policy: 'capability:barters.register' },
+        // A etapa do gerente. A capacidade abre a porta ao PAPEL; que a permuta
+        // seja de uma unidade dele é conferido no service, e por isso não
+        // aparece aqui.
+        { route: 'POST /barters/:code/opinion', policy: 'capability:barters.opinion' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
 
         // Lançamento do Barter — safra e versões são do admin. A exceção é a
@@ -159,6 +163,16 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /producers/:id', policy: 'any-authenticated' },
         { route: 'POST /producers', policy: 'capability:producers.manage' },
         { route: 'PUT /producers/:id', policy: 'capability:producers.manage' },
+
+        // Unidades — a LEITURA é de qualquer autenticado (o consultor precisa
+        // dela para escolher onde o produtor retira, o gerente para reconhecer
+        // as dele); o cadastro exige `units.manage`, separada de `users.manage`
+        // porque designar o responsável por uma unidade redireciona a fila de
+        // parecer.
+        { route: 'DELETE /units/:id', policy: 'capability:units.manage' },
+        { route: 'GET /units', policy: 'any-authenticated' },
+        { route: 'POST /units', policy: 'capability:units.manage' },
+        { route: 'PUT /units/:id', policy: 'capability:units.manage' },
 
         // Usuários — uma rota por papel, todas sob a mesma capacidade.
         { route: 'DELETE /billers/:id', policy: 'capability:users.manage' },

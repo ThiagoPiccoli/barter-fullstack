@@ -92,13 +92,16 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     final approved = approvedList.length;
     final pending = pendingList.length;
     final denied = AppData.barters.where((b) => b.status == BarterStatus.denied).length;
+    // Ainda na mesa do gerente: não é "em revisão" nem "aprovada", e somá-la a
+    // qualquer uma das duas contaria como decidido o que ninguém decidiu.
+    final atManager = AppData.barters.where((b) => b.awaitsManager).length;
 
     // Sacas a receber: o grão que os produtores entregarão pelas permutas
     // aprovadas — o "a receber" da empresa, em saca, na colheita.
     final sacksReceivable = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     final grainValue = approvedList.fold<double>(0, (s, b) => s + b.grainCredit);
     final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
-    // Sacas ainda em análise (potencial a entrar se aprovadas).
+    // Sacas ainda em revisão (potencial a entrar se aprovadas).
     final pendingSacks = pendingList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     // Produtores distintos com permuta aprovada.
     final activeProducers = approvedList.map((b) => b.producerId).toSet().length;
@@ -200,7 +203,12 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             Text('${brand.copy.barterPluralTitle} por Status',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),
-            _StatusBreakdownCard(approved: approved, pending: pending, denied: denied),
+            _StatusBreakdownCard(
+              atManager: atManager,
+              approved: approved,
+              pending: pending,
+              denied: denied,
+            ),
             const SizedBox(height: 20),
 
             Row(
@@ -259,7 +267,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 Color _grainColor(int i) => AppColors.series(i);
 
 /// Cartão-herói: as sacas a receber (compromisso de entrega das permutas
-/// aprovadas) como número-estrela, com o valor em R$ e o potencial em análise.
+/// aprovadas) como número-estrela, com o valor em R$ e o potencial em revisão.
 class _ReceivableHero extends StatelessWidget {
   final double sacks;
   final double value;
@@ -331,7 +339,7 @@ class _ReceivableHero extends StatelessWidget {
                   Expanded(
                     child: Text(
                       pendingCount > 0
-                          ? '$pendingCount em análise • +${formatSacks(pendingSacks)} se aprovadas'
+                          ? '$pendingCount em revisão • +${formatSacks(pendingSacks)} se aprovadas'
                           : 'Nenhuma permuta aguardando revisão',
                       style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
@@ -670,8 +678,13 @@ class _EmptyHint extends StatelessWidget {
 }
 
 class _StatusBreakdownCard extends StatelessWidget {
-  final int approved, pending, denied;
-  const _StatusBreakdownCard({required this.approved, required this.pending, required this.denied});
+  final int atManager, approved, pending, denied;
+  const _StatusBreakdownCard({
+    required this.atManager,
+    required this.approved,
+    required this.pending,
+    required this.denied,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -686,19 +699,26 @@ class _StatusBreakdownCard extends StatelessWidget {
                 height: 12,
                 child: Row(
                   children: [
-                    if (approved > 0) Expanded(flex: approved, child: Container(color: AppColors.approved)),
+                    // Na ordem do fluxo, e não na do tamanho: a barra lida da
+                    // esquerda para a direita conta o caminho da permuta.
+                    if (atManager > 0)
+                      Expanded(flex: atManager, child: Container(color: AppColors.atManager)),
                     if (pending > 0) Expanded(flex: pending, child: Container(color: AppColors.pending)),
+                    if (approved > 0) Expanded(flex: approved, child: Container(color: AppColors.approved)),
                     if (denied > 0) Expanded(flex: denied, child: Container(color: AppColors.denied)),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+            Wrap(
+              alignment: WrapAlignment.spaceAround,
+              spacing: 12,
+              runSpacing: 8,
               children: [
+                _LegendItem(color: AppColors.atManager, label: 'No Gerente', count: atManager),
+                _LegendItem(color: AppColors.pending, label: 'Em Revisão', count: pending),
                 _LegendItem(color: AppColors.approved, label: 'Aprovadas', count: approved),
-                _LegendItem(color: AppColors.pending, label: 'Em Análise', count: pending),
                 _LegendItem(color: AppColors.denied, label: 'Negadas', count: denied),
               ],
             ),

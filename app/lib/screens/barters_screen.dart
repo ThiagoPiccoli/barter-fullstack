@@ -15,11 +15,25 @@ class BartersScreen extends StatefulWidget {
   /// faturista enxergam tudo, mas quem revisa hoje é só o admin.
   final bool canReview;
 
+  /// Quem pode dar PARECER — o gerente logado. Quando preenchido, as permutas
+  /// endereçadas a ele ganham o botão de parecer, e a aba "No gerente" abre
+  /// primeiro: para ele, essa é a lista que pede ação.
+  final String? opinionManagerId;
+
+  /// Avisa a tela de cima que uma permuta mudou de estado.
+  ///
+  /// Existe por causa do selo de pendências na navegação: sem isto, dar um
+  /// parecer por AQUI atualizava a lista e deixava o selo com o número velho —
+  /// e um contador que mente é pior do que não ter contador.
+  final VoidCallback? onChanged;
+
   const BartersScreen({
     super.key,
     required this.isAdmin,
     required this.consultantId,
     this.canReview = true,
+    this.opinionManagerId,
+    this.onChanged,
   });
   @override
   State<BartersScreen> createState() => _BartersScreenState();
@@ -32,13 +46,25 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(
+      length: 5,
+      vsync: this,
+      // O gerente entra na fila dele; todo mundo entra em "Todas".
+      initialIndex: widget.opinionManagerId != null ? 1 : 0,
+    );
   }
 
   @override
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  /// Uma permuta mudou de estado: refaz a lista E avisa a tela de cima, que é
+  /// quem desenha o selo de pendências da navegação.
+  void _onChanged() {
+    setState(() {});
+    widget.onChanged?.call();
   }
 
   List<BarterModel> _filtered(BarterStatus? status) {
@@ -73,7 +99,11 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
           tabs: [
             Tab(text: 'Todas (${_filtered(null).length})'),
-            Tab(text: 'Análise (${_filtered(BarterStatus.pending).length})'),
+            // Na ordem do fluxo: a permuta passa pelo gerente ANTES da
+            // revisão, e a lista lida da esquerda para a direita conta o
+            // caminho dela.
+            Tab(text: 'No gerente (${_filtered(BarterStatus.sentToManager).length})'),
+            Tab(text: 'Revisão (${_filtered(BarterStatus.pending).length})'),
             Tab(text: 'Aprovadas (${_filtered(BarterStatus.approved).length})'),
             Tab(text: 'Negadas (${_filtered(BarterStatus.denied).length})'),
           ],
@@ -97,10 +127,20 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             child: TabBarView(
               controller: _tabController,
               children: [
-                _BarterList(barters: _filtered(null), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
-                _BarterList(barters: _filtered(BarterStatus.pending), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
-                _BarterList(barters: _filtered(BarterStatus.approved), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
-                _BarterList(barters: _filtered(BarterStatus.denied), isAdmin: widget.isAdmin, canReview: widget.canReview, onChanged: () => setState(() {})),
+                for (final status in <BarterStatus?>[
+                  null,
+                  BarterStatus.sentToManager,
+                  BarterStatus.pending,
+                  BarterStatus.approved,
+                  BarterStatus.denied,
+                ])
+                  _BarterList(
+                    barters: _filtered(status),
+                    isAdmin: widget.isAdmin,
+                    canReview: widget.canReview,
+                    opinionManagerId: widget.opinionManagerId,
+                    onChanged: _onChanged,
+                  ),
               ],
             ),
           ),
@@ -114,12 +154,14 @@ class _BarterList extends StatelessWidget {
   final List<BarterModel> barters;
   final bool isAdmin;
   final bool canReview;
+  final String? opinionManagerId;
   final VoidCallback onChanged;
   const _BarterList({
     required this.barters,
     required this.isAdmin,
     required this.canReview,
     required this.onChanged,
+    this.opinionManagerId,
   });
 
   @override
@@ -139,8 +181,13 @@ class _BarterList extends StatelessWidget {
     return ListView.builder(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       itemCount: barters.length,
-      itemBuilder: (context, index) =>
-          _BarterCard(barter: barters[index], isAdmin: isAdmin, canReview: canReview, onChanged: onChanged),
+      itemBuilder: (context, index) => _BarterCard(
+        barter: barters[index],
+        isAdmin: isAdmin,
+        canReview: canReview,
+        opinionManagerId: opinionManagerId,
+        onChanged: onChanged,
+      ),
     );
   }
 }
@@ -149,12 +196,14 @@ class _BarterCard extends StatelessWidget {
   final BarterModel barter;
   final bool isAdmin;
   final bool canReview;
+  final String? opinionManagerId;
   final VoidCallback onChanged;
   const _BarterCard({
     required this.barter,
     required this.isAdmin,
     required this.canReview,
     required this.onChanged,
+    this.opinionManagerId,
   });
 
   @override
@@ -167,8 +216,12 @@ class _BarterCard extends StatelessWidget {
           await Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) =>
-                  BarterDetailScreen(barter: barter, isAdmin: isAdmin, canReview: canReview),
+              builder: (_) => BarterDetailScreen(
+                barter: barter,
+                isAdmin: isAdmin,
+                canReview: canReview,
+                opinionManagerId: opinionManagerId,
+              ),
             ),
           );
           onChanged();
@@ -236,10 +289,38 @@ class _BarterCard extends StatelessWidget {
                 children: [
                   Icon(Icons.calendar_today_outlined, size: 13, color: AppColors.textLight),
                   const SizedBox(width: 4),
-                  Text(_formatDate(barter.createdAt),
+                  Text(formatDate(barter.createdAt),
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  const SizedBox(width: 10),
+                  Icon(Icons.store_outlined, size: 13, color: AppColors.textLight),
+                  const SizedBox(width: 4),
+                  // O local de retirada fica na linha da data porque é dele que
+                  // vem a pergunta mais repetida do dia a dia — "onde esse
+                  // produtor vai buscar?" — e ela não deveria custar abrir o
+                  // detalhe de cada permuta da lista.
+                  Expanded(
+                    child: Text(barter.unitLabel,
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        overflow: TextOverflow.ellipsis),
+                  ),
                 ],
               ),
+              if (barter.awaitsOpinionFrom(opinionManagerId)) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => giveBarterOpinion(context, barter,
+                        onGiven: (_) => onChanged()),
+                    icon: const Icon(Icons.rate_review_outlined, size: 16),
+                    label: const Text('Dar parecer', style: TextStyle(fontSize: 13)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.atManager,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+              ],
               if (isAdmin && canReview && barter.status == BarterStatus.pending) ...[
                 const SizedBox(height: 10),
                 Row(
@@ -279,9 +360,6 @@ class _BarterCard extends StatelessWidget {
       ),
     );
   }
-
-  String _formatDate(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 }
 
 class _SidePill extends StatelessWidget {

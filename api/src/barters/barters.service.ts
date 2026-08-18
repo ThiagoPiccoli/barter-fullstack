@@ -21,9 +21,20 @@ import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
 import { ROLE } from '../common/roles';
 import { SeasonsService } from '../seasons/seasons.service';
-import { CreateBarterDto, ListBartersQuery, ReviewBarterDto } from './dto/barter.dto';
+import {
+  BarterOpinionDto,
+  CreateBarterDto,
+  ListBartersQuery,
+  ReviewBarterDto,
+} from './dto/barter.dto';
 
 type BarterWithItems = Barter & { items: BarterItem[] };
+
+/** Quanto de um texto longo cabe numa linha da trilha sem afogá-la. */
+const AUDIT_DETAIL_LIMIT = 180;
+
+const summarize = (text: string): string =>
+  text.length <= AUDIT_DETAIL_LIMIT ? text : `${text.slice(0, AUDIT_DETAIL_LIMIT)}…`;
 
 /**
  * Regras de negócio da permuta. O servidor é a autoridade: preços saem do
@@ -39,9 +50,26 @@ export class BartersService {
   ) {}
 
   /**
-   * Permutas visíveis para o usuário: consultor enxerga apenas as próprias; os
-   * papéis de retaguarda (admin, gerente, comitê, faturista) enxergam todas.
-   * Regra de acesso central do domínio.
+   * O RECORTE de quem enxerga o quê — a regra de acesso central do domínio, em
+   * um lugar só. Três escopos, e cada um responde a uma pergunta diferente:
+   *
+   * - **tudo** (admin, comitê, faturista): acompanham a operação inteira;
+   * - **o time** (gerente): as permutas endereçadas a ele. Ele não é auditor —
+   *   responde por um time, e a permuta de outro time não é assunto dele;
+   * - **as próprias** (consultor): as que ele registrou.
+   *
+   * A ordem das perguntas importa: `readAll` vence `readTeam`, de modo que um
+   * papel que ganhe as duas continue enxergando tudo em vez de ficar preso ao
+   * recorte mais estreito.
+   */
+  private scopeFor(user: User): Prisma.BarterWhereInput {
+    if (can(user, CAPABILITY.bartersReadAll)) return {};
+    if (can(user, CAPABILITY.bartersReadTeam)) return { managerId: user.id };
+    return { consultantId: user.id };
+  }
+
+  /**
+   * Permutas visíveis para o usuário, dentro do escopo dele (ver `scopeFor`).
    *
    * O `id` desempata a ordenação por data. Sem ele, permutas criadas no mesmo
    * instante sairiam em ordem arbitrária a cada consulta e a paginação
@@ -50,8 +78,10 @@ export class BartersService {
   async listFor(user: User, query: ListBartersQuery): Promise<Paginated<BarterWithItems>> {
     const { take, skip } = windowOf(query);
     const where = {
-      ...(can(user, CAPABILITY.bartersReadAll) ? {} : { consultantId: user.id }),
+      ...this.scopeFor(user),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.unitId ? { unitId: query.unitId } : {}),
+      ...(query.managerId ? { managerId: query.managerId } : {}),
     };
 
     const [items, total] = await this.prisma.$transaction([
@@ -68,17 +98,26 @@ export class BartersService {
     return new Paginated(items, total, take, skip);
   }
 
-  /** Uma permuta pelo código público, respeitando o escopo do usuário. */
+  /**
+   * Uma permuta pelo código público, respeitando o escopo do usuário.
+   *
+   * O escopo é o MESMO da listagem, e por isso vem do mesmo lugar: uma permuta
+   * que não aparece na lista de alguém também não pode abrir pelo código. Foi
+   * exatamente essa a fresta que o `scopeFor` fecha — a listagem filtrava, o
+   * detalhe conferia por conta própria, e as duas regras podiam divergir.
+   */
   async findFor(user: User, code: string): Promise<BarterWithItems> {
-    const barter = await this.prisma.barter.findUnique({
-      where: { code },
+    const barter = await this.prisma.barter.findFirst({
+      where: { code, ...this.scopeFor(user) },
       include: { items: true },
     });
-    if (!barter) throw new NotFoundException('Registro não encontrado.');
-    if (!can(user, CAPABILITY.bartersReadAll) && barter.consultantId !== user.id) {
-      throw new ForbiddenException('Você não tem acesso a esta permuta');
-    }
-    return barter;
+    if (barter) return barter;
+
+    // Distingue "não existe" de "não é sua": a segunda é informação útil para
+    // quem digitou um código legítimo, e a permuta em si continua invisível.
+    const exists = await this.prisma.barter.count({ where: { code } });
+    if (exists === 0) throw new NotFoundException('Registro não encontrado.');
+    throw new ForbiddenException('Você não tem acesso a esta permuta');
   }
 
   /**
@@ -86,15 +125,21 @@ export class BartersService {
    * 1. precisa haver um Barter (versão) aberto — é ele quem diz por quanto se
    *    permuta hoje, e qual é o grão de pagamento;
    * 2. produtor precisa pertencer à carteira de quem registra;
-   * 3. todo insumo com exigência por hectare é obrigatório, no mínimo
+   * 3. a UNIDADE de retirada precisa existir — mas é só logística: ela não
+   *    escolhe quem analisa a permuta, e pode ser qualquer uma da lista;
+   * 4. todo insumo com exigência por hectare é obrigatório, no mínimo
    *    `taxa × área` (o app pré-preenche, o servidor confere);
-   * 4. as regras de mínimo das classes precisam estar satisfeitas;
-   * 5. o custo é precificado com a TABELA DA VERSÃO e convertido em sacas do
+   * 5. as regras de mínimo das classes precisam estar satisfeitas;
+   * 6. o custo é precificado com a TABELA DA VERSÃO e convertido em sacas do
    *    grão da safra — o item de grão é criado pelo servidor.
    *
    * O consultor não escolhe mais o grão: ele é da safra. E os preços não vêm
    * mais do catálogo — vêm da versão, que é o acordo publicado. Um insumo fora
    * da tabela da versão simplesmente não é permutável naquela gestão.
+   *
+   * A permuta nasce em `sentToManager`, e não em `pending`: ela é ENDEREÇADA ao
+   * gerente do consultor, que precisa dar o parecer técnico antes de a
+   * negociação seguir para a revisão.
    */
   async create(consultant: User, dto: CreateBarterDto): Promise<BarterWithItems> {
     // A rota já exige a capacidade `barters.register`; aqui a regra é repetida
@@ -103,6 +148,22 @@ export class BartersService {
     // comitê e faturista registrariam permuta sem ninguém ter decidido isso.
     if (consultant.role !== ROLE.consultant) {
       throw new ForbiddenException('Permutas são registradas pelo consultor da carteira');
+    }
+
+    // O DESTINATÁRIO. O cadastro do consultor exige um gerente, então isto só
+    // acontece quando o gerente dele foi excluído depois — e nesse caso a
+    // permuta nasceria endereçada a ninguém: ficaria em `sentToManager` para
+    // sempre, sem erro e sem a quem cobrar. Melhor recusar aqui.
+    if (consultant.managerId === null) {
+      throw new UnprocessableEntityException(
+        'Você está sem gerente designado — fale com o administrador antes de registrar permutas',
+      );
+    }
+    const manager = await this.prisma.user.findUnique({ where: { id: consultant.managerId } });
+    if (!manager) {
+      throw new UnprocessableEntityException(
+        'Você está sem gerente designado — fale com o administrador antes de registrar permutas',
+      );
     }
 
     // 1. O Barter vigente é o primeiro portão: sem lançamento aberto não existe
@@ -120,6 +181,14 @@ export class BartersService {
     }
     if (producer.consultantId !== consultant.id) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
+    }
+
+    // 3. A unidade de retirada é LOGÍSTICA: onde o produtor vai buscar. Ela não
+    //    escolhe quem analisa a permuta nem participa de regra nenhuma, então a
+    //    única conferência é que ela exista — qualquer praça serve.
+    const unit = await this.prisma.unit.findUnique({ where: { id: dto.unitId } });
+    if (!unit) {
+      throw new UnprocessableEntityException('Escolha uma unidade de retirada válida');
     }
 
     // Consolida quantidades por produto (payload pode repetir ids) e as leva à
@@ -164,7 +233,7 @@ export class BartersService {
       throw new UnprocessableEntityException('Quantidades de insumo devem ser maiores que zero');
     }
 
-    // 3. Insumos com exigência por hectare são obrigatórios para a área do
+    // 4. Insumos com exigência por hectare são obrigatórios para a área do
     //    produtor — mas só os que ESTÃO na versão: exigir o que o Barter não
     //    lançou travaria toda permuta da gestão.
     const requiredProducts = (
@@ -182,7 +251,7 @@ export class BartersService {
       }
     }
 
-    // 4. Regras de mínimo por CLASSE travam o envio.
+    // 5. Regras de mínimo por CLASSE travam o envio.
     const totalCost = inputCost(pricedInputs);
     if (totalCost <= 0) {
       throw new UnprocessableEntityException('Escolha ao menos um insumo para retirar');
@@ -201,7 +270,7 @@ export class BartersService {
       );
     }
 
-    // 5. Converte o custo em sacas do grão da safra — o coração do escambo.
+    // 6. Converte o custo em sacas do grão da safra — o coração do escambo.
     const sacks = sacksToCover(totalCost, version.grainPrice);
 
     const items = [
@@ -231,9 +300,69 @@ export class BartersService {
       consultantBranch: consultant.branch ?? '',
       producerId: producer.id,
       producerName: producer.name,
-      status: 'pending',
+      unitId: unit.id,
+      unitName: unit.name,
+      // O destinatário é gravado no ENVIO. Trocar o gerente do consultor depois
+      // vale para as próximas permutas; esta continua na mesa de quem a
+      // recebeu. Ver o comentário de `managerId` no schema.
+      managerId: manager.id,
+      managerName: manager.fullName,
+      status: 'sentToManager',
       items: { create: items },
     });
+  }
+
+  /**
+   * O PARECER TÉCNICO do gerente — a etapa que faz a permuta seguir.
+   *
+   * Três coisas são conferidas, e a ordem importa: a permuta existe, ela está
+   * ESPERANDO parecer, e ela foi endereçada a quem está pedindo. A terceira é a
+   * que a tabela de capacidades não alcança: `barters.opinion` diz que gerente
+   * dá parecer, não que ESTE gerente dá parecer nesta permuta. Sem ela, qualquer
+   * gerente opinaria sobre o time de qualquer outro.
+   *
+   * O parecer não decide nada: ele é gravado e a permuta passa a `pending`, que
+   * é a fila de REVISÃO. Quem aprova ou nega continua sendo quem tem
+   * `barters.review`, e lê este texto antes.
+   */
+  async giveOpinion(manager: User, code: string, dto: BarterOpinionDto): Promise<BarterWithItems> {
+    const barter = await this.prisma.barter.findUnique({ where: { code } });
+    if (!barter) throw new NotFoundException('Registro não encontrado.');
+
+    if (barter.status !== 'sentToManager') {
+      throw new UnprocessableEntityException('Esta permuta já recebeu o parecer do gerente');
+    }
+    if (barter.managerId !== manager.id) {
+      throw new ForbiddenException('Esta permuta foi enviada a outro gerente');
+    }
+
+    const note = dto.note.trim();
+    const reviewed = await this.prisma.barter.update({
+      where: { code },
+      data: {
+        status: 'pending',
+        // O nome é regravado porque ele é a ASSINATURA do parecer, e não só o
+        // rótulo do destinatário: entre o envio e o parecer, a pessoa pode ter
+        // corrigido o próprio nome no cadastro.
+        managerName: manager.fullName,
+        managerNote: note,
+        managerReviewedAt: new Date(),
+      },
+      include: { items: true },
+    });
+
+    await this.audit.record({
+      actor: manager,
+      action: AUDIT_ACTION.barterOpinion,
+      targetType: 'barter',
+      targetId: reviewed.id,
+      targetLabel: reviewed.code,
+      // O parecer inteiro vive na permuta; aqui vai o começo dele, porque a
+      // trilha se lê em lista e um texto de duas mil letras por linha a
+      // esconderia de quem está procurando outra coisa.
+      detail: `parecer sobre a permuta de ${reviewed.consultantName}: ${summarize(note)}`,
+    });
+    return reviewed;
   }
 
   /**
@@ -285,10 +414,21 @@ export class BartersService {
   /**
    * Revisão do admin: aprova ou nega uma permuta pendente, com observação
    * opcional. Grava o snapshot do revisor e o momento da revisão.
+   *
+   * Só alcança quem está em `pending` — e as duas maneiras de não estar têm
+   * mensagens diferentes de propósito. "Já foi revisada" respondido a uma
+   * permuta que ainda espera o gerente mandaria o revisor procurar uma decisão
+   * que ninguém tomou; o que ele precisa saber é que a etapa anterior não
+   * terminou, e com quem ela está parada.
    */
   async review(admin: User, code: string, dto: ReviewBarterDto): Promise<BarterWithItems> {
     const barter = await this.prisma.barter.findUnique({ where: { code } });
     if (!barter) throw new NotFoundException('Registro não encontrado.');
+    if (barter.status === 'sentToManager') {
+      throw new UnprocessableEntityException(
+        `Esta permuta aguarda o parecer do gerente ${barter.managerName ?? 'responsável'}`,
+      );
+    }
     if (barter.status !== 'pending') {
       throw new UnprocessableEntityException('Esta permuta já foi revisada');
     }

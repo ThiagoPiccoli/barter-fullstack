@@ -17,6 +17,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { ProducersModule } from './producers/producers.module';
 import { ProductsModule } from './products/products.module';
 import { SeasonsModule } from './seasons/seasons.module';
+import { UnitsModule } from './units/units.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -27,6 +28,7 @@ import { UsersModule } from './users/users.module';
     AuditModule,
     AuthModule,
     ProducersModule,
+    UnitsModule,
     UsersModule,
     ClassesModule,
     ProductsModule,

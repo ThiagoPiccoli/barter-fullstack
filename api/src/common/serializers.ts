@@ -10,6 +10,7 @@ import type {
   Producer,
   Product,
   Season,
+  Unit,
   User,
   VersionPrice,
 } from '@prisma/client';
@@ -28,14 +29,28 @@ export function initialsOf(name: string): string {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
-export function toUserJson(user: User) {
+/**
+ * O usuário. `manager` chega preenchido nas rotas que o incluem (a listagem e o
+ * provisionamento de consultores) — é o que dá `managerName` sem obrigar o app
+ * a ter a lista de gerentes, que é rota de admin.
+ */
+export function toUserJson(user: User & { manager?: { id: number; fullName: string } | null }) {
   return {
     id: user.id,
     fullName: user.fullName,
     email: user.email,
     role: user.role,
     phone: user.phone,
+    // A UNIDADE da pessoa, e o nome dela congelado no cadastro. `branch`
+    // continua no contrato porque é o que as telas mostram e o que os rankings
+    // agrupam; `unitId` é o que o formulário usa para escolher. Ver o campo
+    // `branch` no schema — quem escreve os dois é o provisionamento.
+    unitId: user.unitId,
     branch: user.branch,
+    // O GERENTE desta pessoa. Só o consultor tem, e para ele é obrigatório: é a
+    // ele que as permutas do consultor são enviadas. Null nos outros papéis.
+    managerId: user.managerId,
+    managerName: user.manager?.fullName ?? null,
     createdAt: user.createdAt,
     initials: initialsOf(user.fullName),
     // O app usa isto para exigir a troca da senha provisória antes de deixar
@@ -59,10 +74,30 @@ export function toUserJson(user: User) {
  * A FORMA é a mesma para os quatro papéis, de propósito: o app tem um só
  * diálogo de "anote esta senha", e ele não precisa saber quem foi cadastrado.
  */
-export function toProvisionedUserJson(provisioned: { user: User; provisionalPassword: string }) {
+export function toProvisionedUserJson(provisioned: {
+  user: User & { manager?: { id: number; fullName: string } | null };
+  provisionalPassword: string;
+}) {
   return {
     ...toUserJson(provisioned.user),
     provisionalPassword: provisioned.provisionalPassword,
+  };
+}
+
+/**
+ * A UNIDADE de retirada — o lugar onde o produtor busca os insumos.
+ *
+ * Curta porque a unidade é curta: ela não tem responsável e não participa do
+ * fluxo de análise. Quem dá o parecer é o gerente do consultor (ver
+ * `toBarterJson`), e a retirada pode ser em qualquer praça.
+ */
+export function toUnitJson(unit: Unit) {
+  return {
+    id: unit.id,
+    name: unit.name,
+    city: unit.city,
+    createdAt: unit.createdAt,
+    initials: initialsOf(unit.name),
   };
 }
 
@@ -249,7 +284,20 @@ export function toBarterJson(barter: Barter & { items?: BarterItem[] }) {
     consultantBranch: barter.consultantBranch,
     producerId: barter.producerId,
     producerName: barter.producerName,
+    // Onde o produtor retira. É logística: não decide quem analisa a permuta.
+    // Vazio nas permutas anteriores ao cadastro de unidades.
+    unitId: barter.unitId,
+    unitName: barter.unitName,
     status: barter.status,
+    // A QUEM esta permuta foi enviada — o gerente do consultor no momento do
+    // registro — e o parecer dele. `managerId`/`managerName` vêm preenchidos
+    // desde a criação (é o destinatário); `managerNote` e `managerReviewedAt`
+    // só quando o parecer é escrito, e é o app que lê essa diferença para saber
+    // se a etapa terminou.
+    managerId: barter.managerId,
+    managerName: barter.managerName,
+    managerNote: barter.managerNote,
+    managerReviewedAt: barter.managerReviewedAt,
     adminNote: barter.adminNote,
     reviewedBy: barter.reviewedBy,
     reviewedAt: barter.reviewedAt,

@@ -80,9 +80,19 @@ class BarterPdf {
           _grainsTable(barter, showValues),
           pw.SizedBox(height: 18),
           _totalBox(barter, showValues),
+          // O parecer vem ANTES da observação do administrador porque é essa a
+          // ordem em que os dois foram escritos — o comprovante conta a
+          // história da permuta na sequência em que ela aconteceu.
+          if (barter.hasManagerOpinion) ...[
+            pw.SizedBox(height: 14),
+            _noteBox(
+              'PARECER TÉCNICO • ${barter.managerName ?? 'GERENTE'}',
+              barter.managerNote!,
+            ),
+          ],
           if (barter.adminNote != null && barter.adminNote!.isNotEmpty) ...[
             pw.SizedBox(height: 14),
-            _adminNote(barter),
+            _noteBox('OBSERVAÇÃO DO ADMINISTRADOR', barter.adminNote!),
           ],
           pw.SizedBox(height: 44),
           _signatures(barter, producer),
@@ -183,6 +193,9 @@ class BarterPdf {
       case BarterStatus.pending:
         color = _c(AppColors.pendingBg);
         break;
+      case BarterStatus.sentToManager:
+        color = _c(AppColors.atManagerBg);
+        break;
     }
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -212,7 +225,12 @@ class BarterPdf {
                   children: [
                     _partyLabel('CONSULTOR'),
                     _kv('Nome', barter.consultantName),
-                    _kv('Filial', barter.consultantBranch),
+                    _kv('Unidade', barter.consultantBranch),
+                    // A RETIRADA no comprovante é o que o produtor leva: é o
+                    // endereço onde ele vai buscar os insumos. Sem isso, o
+                    // documento descreve a troca inteira e omite o único dado
+                    // de que ele precisa para executá-la.
+                    _kv('Retirada em', barter.unitLabel),
                   ],
                 ),
               ),
@@ -398,7 +416,10 @@ class BarterPdf {
     );
   }
 
-  static pw.Widget _adminNote(BarterModel barter) {
+  /// Um bloco de texto assinado — o parecer do gerente e a observação do
+  /// administrador têm a mesma forma porque são a mesma coisa no documento:
+  /// alguém do fluxo escreveu algo sobre esta permuta.
+  static pw.Widget _noteBox(String title, String body) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(10),
       decoration: pw.BoxDecoration(
@@ -408,10 +429,10 @@ class BarterPdf {
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Text('OBSERVAÇÃO DO ADMINISTRADOR',
+          pw.Text(_s(title),
               style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _textMedium)),
           pw.SizedBox(height: 4),
-          pw.Text(_s(barter.adminNote!), style: const pw.TextStyle(fontSize: 9)),
+          pw.Text(_s(body), style: const pw.TextStyle(fontSize: 9)),
         ],
       ),
     );

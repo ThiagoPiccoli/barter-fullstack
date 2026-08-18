@@ -19,11 +19,16 @@ class BarterDetailScreen extends StatefulWidget {
   /// oferecer um botão que a API recusa é pior do que não mostrá-lo.
   final bool canReview;
 
+  /// Quem pode dar PARECER — o gerente logado. A ação só aparece se a permuta
+  /// tiver sido endereçada a ele, que é a mesma regra que o servidor aplica.
+  final String? opinionManagerId;
+
   const BarterDetailScreen({
     super.key,
     required this.barter,
     required this.isAdmin,
     this.canReview = true,
+    this.opinionManagerId,
   });
   @override
   State<BarterDetailScreen> createState() => _BarterDetailScreenState();
@@ -91,6 +96,10 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                   _InfoRow(label: 'Produtor', value: _barter.producerName),
                   if (producer != null)
                     _InfoRow(label: 'Propriedade', value: producer.location),
+                  // A RETIRADA vale para todo mundo, inclusive o consultor: é
+                  // onde o produtor dele vai buscar os insumos, e a primeira
+                  // pergunta que ele recebe de volta.
+                  _InfoRow(label: 'Retirada em', value: _barter.unitLabel),
                   if (widget.isAdmin) ...[
                     _InfoRow(label: 'Consultor', value: _barter.consultantName),
                     _InfoRow(label: 'Filial', value: _barter.consultantBranch),
@@ -133,6 +142,17 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             ),
           ),
           const SizedBox(height: 16),
+
+          // O PARECER vem antes dos itens de propósito: quem abre uma permuta
+          // que já passou pelo gerente quer saber o que ele disse antes de
+          // conferir linha a linha o que ela tem dentro.
+          if (_barter.hasManagerOpinion) ...[
+            ManagerOpinionCard(barter: _barter),
+            const SizedBox(height: 16),
+          ] else if (_barter.awaitsManager) ...[
+            _AwaitingOpinionCard(managerLabel: _barter.managerLabel),
+            const SizedBox(height: 16),
+          ],
 
           _ItemsSection(
             title: 'Insumos Retirados',
@@ -194,6 +214,31 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           ),
           const SizedBox(height: 20),
 
+          if (_awaitsMyOpinion) ...[
+            Text('Ação do Gerente',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            const SizedBox(height: 4),
+            Text(
+              '${_barter.consultantName} enviou esta permuta a você. Ela espera o seu '
+              'parecer técnico para seguir para a revisão.',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => giveBarterOpinion(context, _barter,
+                    onGiven: (updated) => setState(() => _barter = updated)),
+                icon: const Icon(Icons.rate_review_outlined),
+                label: const Text('Dar Parecer Técnico'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.atManager,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+          ],
+
           if (widget.isAdmin && widget.canReview && _barter.status == BarterStatus.pending) ...[
             Text('Ação do Administrador',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
@@ -235,8 +280,56 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
     );
   }
 
+  bool get _awaitsMyOpinion => _barter.awaitsOpinionFrom(widget.opinionManagerId);
+
   String _formatDate(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+}
+
+/// A permuta está na mesa do gerente e o parecer ainda não veio.
+///
+/// Dizer isso por extenso — e com o NOME de quem está com ela — importa para o
+/// consultor: sem este bloco, uma permuta registrada há três dias parecia
+/// parada sem motivo, e a pergunta ("cadê a minha permuta?") ia para o admin,
+/// que também não tinha o que responder.
+class _AwaitingOpinionCard extends StatelessWidget {
+  final String managerLabel;
+  const _AwaitingOpinionCard({required this.managerLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.atManagerBg,
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.atManager.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.assignment_ind_outlined, size: 18, color: AppColors.atManager),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Com o gerente',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.atManager)),
+                const SizedBox(height: 2),
+                Text(
+                  'Aguardando o parecer técnico de $managerLabel para seguir para a revisão.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textDark),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _ItemsSection extends StatelessWidget {

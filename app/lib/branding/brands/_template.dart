@@ -59,6 +59,11 @@ const Brand templateBrand = Brand(
 
     // --- Estados da permuta ----------------------------------------------
     // Verde/âmbar/vermelho são convenção; mude só se a marca exigir.
+    // `atManager` = esperando o parecer do gerente da unidade. Mantenha-o
+    // distinguível de `pending`: as duas etapas são "ainda não decidido", mas
+    // com pessoas diferentes, e é na lista misturada que isso importa.
+    atManager: Color(0xFF4338CA),
+    atManagerBg: Color(0xFFEEF0FF),
     approved: Color(0xFF15803D),
     pending: Color(0xFFB45309),
     denied: Color(0xFFB91C1C),

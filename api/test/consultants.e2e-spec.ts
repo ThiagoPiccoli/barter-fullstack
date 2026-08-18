@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { ADMIN, ANA, JOAO, createTestApp, loginAs, resetDb } from './utils';
+import { ADMIN, ANA, JOAO, MANAGER, UNIT, createTestApp, loginAs, resetDb } from './utils';
 
 describe('Consultants — gestão pelo admin (e2e)', () => {
   let app: INestApplication;
@@ -34,7 +34,8 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
       .send({
         fullName: 'Novo Consultor',
         email: 'novo.consultor@agrobarter.com.br',
-        branch: 'Filial 99',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
       });
     expect(created.status).toBe(201);
     expect(created.body.data.role).toBe('consultant');
@@ -56,7 +57,12 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
     await request(app.getHttpServer())
       .post('/api/v1/consultants')
       .set('Authorization', admin)
-      .send({ fullName: 'Efêmero', email: 'efemero@agrobarter.com.br', branch: 'F1' })
+      .send({
+        fullName: 'Efêmero',
+        email: 'efemero@agrobarter.com.br',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
+      })
       .expect(201);
 
     const list = await request(app.getHttpServer())
@@ -71,7 +77,12 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
     const updated = await request(app.getHttpServer())
       .put('/api/v1/consultants/2')
       .set('Authorization', admin)
-      .send({ fullName: 'João Silva', email: 'joao.silva@agrobarter.com.br', branch: 'Filial 02' })
+      .send({
+        fullName: 'João Silva',
+        email: 'joao.silva@agrobarter.com.br',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
+      })
       .expect(200);
     expect(updated.body.data.provisionalPassword).toBeUndefined();
   });
@@ -82,14 +93,19 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
     const duplicateCreate = await request(app.getHttpServer())
       .post('/api/v1/consultants')
       .set('Authorization', admin)
-      .send({ fullName: 'Clone', email: JOAO, branch: 'Filial X' });
+      .send({ fullName: 'Clone', email: JOAO, unitId: UNIT.filial04, managerId: MANAGER.beatriz });
     expect(duplicateCreate.status).toBe(422);
 
     // João é o usuário id 2 no seed; tenta assumir o e-mail da Ana.
     const duplicateUpdate = await request(app.getHttpServer())
       .put('/api/v1/consultants/2')
       .set('Authorization', admin)
-      .send({ fullName: 'João Silva', email: ANA, branch: 'Filial 02' });
+      .send({
+        fullName: 'João Silva',
+        email: ANA,
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
+      });
     expect(duplicateUpdate.status).toBe(422);
   });
 

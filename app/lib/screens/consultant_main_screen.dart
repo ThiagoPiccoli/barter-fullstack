@@ -156,7 +156,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
                 color: AppColors.approved,
               ),
               SummaryCard(
-                title: 'Em Análise',
+                title: 'Em Revisão',
                 value: pending.toString(),
                 icon: Icons.hourglass_top,
                 color: AppColors.pending,
@@ -257,7 +257,16 @@ class _ConsultantProfileTab extends StatelessWidget {
                 const Divider(height: 1),
                 InfoTile(icon: Icons.phone_outlined, label: 'Telefone', value: consultant.phone),
                 const Divider(height: 1),
-                InfoTile(icon: Icons.store_outlined, label: 'Filial', value: consultant.branch),
+                InfoTile(icon: Icons.store_outlined, label: 'Unidade', value: consultant.branch),
+                const Divider(height: 1),
+                // Saber A QUEM as próprias permutas vão é o que permite ao
+                // consultor cobrar o parecer da pessoa certa em vez de
+                // perguntar ao admin onde a permuta dele parou.
+                InfoTile(
+                  icon: Icons.assignment_ind_outlined,
+                  label: 'Meu gerente',
+                  value: consultant.managerName.isEmpty ? '—' : consultant.managerName,
+                ),
                 const Divider(height: 1),
                 InfoTile(
                   icon: Icons.calendar_today_outlined,

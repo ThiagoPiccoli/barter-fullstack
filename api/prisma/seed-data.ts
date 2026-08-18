@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/auth/password.util';
 import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
+import { normalizeName } from '../src/seasons/product-name';
 
 /**
  * A senha de todas as contas de demonstração.
@@ -39,7 +40,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.producer.deleteMany();
   await prisma.accessToken.deleteMany();
   await prisma.auditLog.deleteMany();
+  // Usuário antes de unidade: o usuário aponta a lotação dele, e o FK é
+  // SetNull. A ordem segue a mesma regra da lista acima — filhos primeiro.
   await prisma.user.deleteMany();
+  await prisma.unit.deleteMany();
 
   const at = (year: number, month: number, day: number, hour = 0, minute = 0) =>
     new Date(Date.UTC(year, month - 1, day, hour, minute));
@@ -108,7 +112,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   /* Retaguarda: um usuário de cada papel novo, para entrar e ver o sistema
      pelos olhos dele. Vêm DEPOIS dos consultores de propósito — os ids 1..6
      (admin e consultores) são fixados por testes e pelas carteiras acima. */
-  await mkUser({
+  const beatriz = await mkUser({
     fullName: 'Beatriz Nogueira',
     email: 'gerente@agrobarter.com.br',
     role: ROLE.manager,
@@ -132,6 +136,77 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     branch: 'Matriz',
     createdAt: at(2020, 2, 3),
   });
+
+  /**
+   * O SEGUNDO gerente existe para o dataset mostrar a regra, não só o caminho
+   * feliz: cada gerente recebe as permutas do PRÓPRIO time, e a permuta de um
+   * consultor não aparece para o gerente do outro. Com um gerente só, "cada um
+   * vê a sua fila" e "todo mundo vê tudo" produzem exatamente a mesma tela.
+   *
+   * Vem por último pelo mesmo motivo dos três acima: não deslocar os ids 7, 8 e
+   * 9, que os testes de provisionamento fixam.
+   */
+  const gustavo = await mkUser({
+    fullName: 'Gustavo Ramires',
+    email: 'gerente.sul@agrobarter.com.br',
+    role: ROLE.manager,
+    phone: '(44) 99999-0013',
+    branch: 'Filial 34 – Gran. Jari',
+    createdAt: at(2021, 8, 16),
+  });
+
+  /* ── Unidades de retirada ─────────────────────────────────────────── */
+  //
+  // Elas nascem dos textos que estavam em `branch`: o cadastro de unidade é a
+  // formalização daquele campo livre. São LOCAIS — não têm dono e não decidem
+  // nada do fluxo; quem analisa a permuta é o gerente de quem a registrou.
+  const mkUnit = (name: string, city: string) =>
+    prisma.unit.create({ data: { name, nameKey: normalizeName(name), city } });
+
+  const matriz = await mkUnit('Matriz', 'Maringá/PR');
+  const filial02 = await mkUnit('Filial 02 – Gran. Santa T.', 'Sarandi/PR');
+  const filial04 = await mkUnit('Filial 04 – Gran. Inharap.', 'Maringá/PR');
+  const filial18 = await mkUnit('Filial 18 – Gran. São Joa.', 'Paiçandu/PR');
+  const filial24 = await mkUnit('Filial 24 – Gran. Oliveira', 'Marialva/PR');
+  const filial34 = await mkUnit('Filial 34 – Gran. Jari', 'Mandaguari/PR');
+
+  // A lotação e o gerente de cada um, num segundo passo porque as unidades só
+  // existem agora. `branch` continua sendo o NOME da unidade — quem o escreve
+  // na aplicação é o user-provisioning.service.ts, pelo mesmo caminho.
+  //
+  // Os dois times: Beatriz responde por João e Ana; Gustavo, por Roberto, Maria
+  // e Lucas. Repare que a lotação NÃO acompanha o time — Roberto é da Filial 34
+  // e Ana da Filial 04, e isso não tem relação com quem os gerencia.
+  const lotar = (
+    user: { id: number },
+    unit: { id: number; name: string },
+    manager?: { id: number },
+  ) =>
+    prisma.user.update({
+      where: { id: user.id },
+      data: { unitId: unit.id, branch: unit.name, managerId: manager?.id ?? null },
+    });
+
+  const managerOfConsultant = new Map<number, typeof beatriz>([
+    [joao.id, beatriz],
+    [ana.id, beatriz],
+    [roberto.id, gustavo],
+    [maria.id, gustavo],
+    [lucas.id, gustavo],
+  ]);
+
+  await lotar(admin, matriz);
+  await lotar(joao, filial02, beatriz);
+  await lotar(ana, filial04, beatriz);
+  await lotar(roberto, filial34, gustavo);
+  await lotar(maria, filial24, gustavo);
+  await lotar(lucas, filial18, gustavo);
+  await lotar(beatriz, matriz);
+  await lotar(gustavo, filial34);
+  for (const email of ['comite@agrobarter.com.br', 'faturista@agrobarter.com.br']) {
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (user) await lotar(user, matriz);
+  }
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
@@ -523,6 +598,13 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     unitValue,
   });
 
+  /* ── Permutas históricas (mesmos números do mock) ─────────────────── */
+  //
+  // Toda permuta tem uma UNIDADE de retirada e foi endereçada ao gerente do
+  // consultor que a registrou. Todas já passaram pelo parecer dele — menos
+  // duas, deixadas em `sentToManager` de propósito: são as filas de Beatriz
+  // (PRM-2026-005, do João) e de Gustavo (PRM-2026-007, do Lucas), e sem elas a
+  // tela do gerente abriria vazia no dataset de demonstração.
   const barters = [
     {
       code: 'PRM-2026-001',
@@ -531,6 +613,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       producer: antonio,
       status: 'approved',
       createdAt: at(2026, 1, 10, 9, 30),
+      managerNote:
+        'Volume compatível com a área declarada e com o histórico do produtor. ' +
+        'Estoque de NPK e glifosato disponível na unidade para o período.',
+      managerReviewedAt: at(2026, 1, 10, 16, 45),
       reviewedAt: at(2026, 1, 11, 14, 0),
       adminNote: 'Permuta aprovada. Entrega dos grãos confirmada no armazém.',
       items: [
@@ -546,6 +632,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       producer: helena,
       status: 'pending',
       createdAt: at(2026, 4, 22, 11, 15),
+      managerNote:
+        'Produtora com bom histórico de entrega. Semente e fungicida em estoque; ' +
+        'a retirada da semente precisa ser agendada com uma semana de antecedência.',
+      managerReviewedAt: at(2026, 4, 23, 9, 10),
       items: [
         grainItem(soja, 154.8822, 148.5),
         inputItem(semente, 50, 320.0),
@@ -559,6 +649,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       producer: joaquim,
       status: 'denied',
       createdAt: at(2026, 2, 5, 8, 0),
+      managerNote:
+        'Não temos fertilizante para esse volume no período pedido — a próxima carga ' +
+        'chega depois da janela de plantio dele. Sugiro reprogramar ou dividir a retirada.',
+      managerReviewedAt: at(2026, 2, 5, 17, 20),
       reviewedAt: at(2026, 2, 6, 10, 30),
       adminNote: 'Estoque de fertilizante indisponível nesta filial para o período solicitado.',
       items: [grainItem(milho, 276.8861, 62.3), inputItem(npk, 150, 115.0)],
@@ -570,6 +664,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       producer: claudia,
       status: 'approved',
       createdAt: at(2026, 3, 1, 10, 0),
+      managerNote:
+        'Mix bem distribuído e coerente com os 80 ha da propriedade. Sem restrição ' +
+        'de estoque na unidade.',
+      managerReviewedAt: at(2026, 3, 1, 15, 30),
       reviewedAt: at(2026, 3, 2, 9, 0),
       adminNote: 'Aprovada.',
       items: [
@@ -584,7 +682,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       version: sojaV2,
       consultant: joao,
       producer: sebastiao,
-      status: 'pending',
+      // Na mesa da Beatriz, esperando o parecer da Filial 02.
+      status: 'sentToManager',
       createdAt: at(2026, 5, 8, 14, 20),
       items: [
         grainItem(soja, 166.6667, 148.5),
@@ -599,6 +698,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       producer: osmar,
       status: 'approved',
       createdAt: at(2026, 4, 10, 9, 0),
+      managerNote:
+        'Retirada do inseticida já separada. Produtor é cliente antigo da unidade e ' +
+        'costuma retirar tudo de uma vez — reservei doca para o dia 15.',
+      managerReviewedAt: at(2026, 4, 10, 14, 5),
       reviewedAt: at(2026, 4, 11, 11, 0),
       adminNote: 'Aprovada com prioridade.',
       items: [
@@ -612,7 +715,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       version: milhoVersion,
       consultant: lucas,
       producer: vanessa,
-      status: 'pending',
+      // Na mesa do Gustavo, esperando o parecer da Filial 18.
+      status: 'sentToManager',
       createdAt: at(2026, 5, 11, 16, 0),
       items: [
         grainItem(milho, 245.2649, 62.3),
@@ -627,6 +731,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       producer: joaquim,
       status: 'approved',
       createdAt: at(2026, 3, 20, 10, 45),
+      managerNote:
+        'Volume de glifosato alto para a área, mas o produtor já explicou: dois talhões ' +
+        'em pousio entram agora. Estoque comporta.',
+      managerReviewedAt: at(2026, 3, 20, 17, 0),
       reviewedAt: at(2026, 3, 21, 8, 30),
       adminNote: 'Aprovada.',
       items: [
@@ -637,7 +745,26 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
   ];
 
+  // Onde cada permuta é retirada. O padrão é a unidade do próprio consultor,
+  // que é o caso comum — menos a do Roberto para o Joaquim, retirada na Matriz
+  // de propósito: é o dataset mostrando que a retirada é combinada com o
+  // produtor e não tem relação nenhuma com quem analisa a permuta.
+  const unitOfConsultant = new Map([
+    [joao.id, filial02],
+    [ana.id, filial04],
+    [roberto.id, filial34],
+    [maria.id, filial24],
+    [lucas.id, filial18],
+  ]);
+  const pickupOverride = new Map([['PRM-2026-008', matriz]]);
+
   for (const entry of barters) {
+    const homeUnit = unitOfConsultant.get(entry.consultant.id)!;
+    const unit = pickupOverride.get(entry.code) ?? homeUnit;
+    // O destinatário é o gerente do CONSULTOR — a mesma regra que o
+    // BartersService impõe, aqui só reproduzida para o dataset.
+    const manager = managerOfConsultant.get(entry.consultant.id)!;
+
     await prisma.barter.create({
       data: {
         code: entry.code,
@@ -645,10 +772,18 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         versionCode: entry.version.code,
         consultantId: entry.consultant.id,
         consultantName: entry.consultant.fullName,
-        consultantBranch: entry.consultant.branch ?? '',
+        consultantBranch: homeUnit.name,
         producerId: entry.producer.id,
         producerName: entry.producer.name,
+        unitId: unit.id,
+        unitName: unit.name,
         status: entry.status,
+        // O destinatário existe desde o envio; o parecer só nas que já passaram
+        // pela etapa. As duas em `sentToManager` estão endereçadas e sem nota.
+        managerId: manager.id,
+        managerName: manager.fullName,
+        managerNote: entry.managerNote ?? null,
+        managerReviewedAt: entry.managerReviewedAt ?? null,
         adminNote: entry.adminNote ?? null,
         reviewedBy: entry.reviewedAt ? admin.fullName : null,
         reviewedById: entry.reviewedAt ? admin.id : null,

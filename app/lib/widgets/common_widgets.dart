@@ -47,6 +47,10 @@ String formatSacks(double v) {
   return '${formatQty(clean)} sc';
 }
 
+/// Data no padrão brasileiro: 16/08/2026.
+String formatDate(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+
 class StatusBadge extends StatelessWidget {
   final BarterStatus status;
   const StatusBadge({super.key, required this.status});
@@ -73,7 +77,13 @@ class StatusBadge extends StatelessWidget {
         bg = AppColors.pendingBg;
         fg = AppColors.pending;
         icon = Icons.hourglass_empty_rounded;
-        label = 'Em Análise';
+        label = 'Aguardando Revisão';
+        break;
+      case BarterStatus.sentToManager:
+        bg = AppColors.atManagerBg;
+        fg = AppColors.atManager;
+        icon = Icons.assignment_ind_outlined;
+        label = 'Enviada ao Gerente';
         break;
     }
     return Container(
@@ -415,6 +425,8 @@ Color statusColor(BarterStatus s) {
       return AppColors.denied;
     case BarterStatus.pending:
       return AppColors.pending;
+    case BarterStatus.sentToManager:
+      return AppColors.atManager;
   }
 }
 
@@ -493,11 +505,25 @@ class MiniBarterCard extends StatelessWidget {
   /// botões de aprovar/negar.
   final bool canReview;
 
+  /// O gerente logado, repassado ao detalhe.
+  ///
+  /// Sem isto, a MESMA permuta abria com a ação de parecer pela aba de permutas
+  /// e sem ela por este cartão — e a lista do painel é justamente por onde o
+  /// gerente entra primeiro. Uma tela que oferece a ação e outra que a esconde,
+  /// para o mesmo registro e a mesma pessoa, é o app se contradizendo.
+  final String? opinionManagerId;
+
+  /// Avisa a tela de cima quando a permuta volta alterada (parecer dado,
+  /// revisão feita) — é o que mantém contadores e selos honestos.
+  final VoidCallback? onChanged;
+
   const MiniBarterCard({
     super.key,
     required this.barter,
     required this.isAdmin,
     this.canReview = true,
+    this.opinionManagerId,
+    this.onChanged,
   });
 
   @override
@@ -505,13 +531,20 @@ class MiniBarterCard extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        onTap: () => Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                BarterDetailScreen(barter: barter, isAdmin: isAdmin, canReview: canReview),
-          ),
-        ),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BarterDetailScreen(
+                barter: barter,
+                isAdmin: isAdmin,
+                canReview: canReview,
+                opinionManagerId: opinionManagerId,
+              ),
+            ),
+          );
+          onChanged?.call();
+        },
         leading: CircleAvatar(
           backgroundColor: AppColors.primarySurface,
           child: isAdmin
@@ -695,6 +728,162 @@ void reviewBarter(
       );
     },
   );
+}
+
+/// Quantas letras o servidor exige num parecer (ver BarterOpinionDto).
+///
+/// A conferência é repetida aqui porque a tela precisa saber ANTES de enviar
+/// se o botão liga — quem valida de verdade continua sendo o servidor, e a
+/// mensagem dele é a que apareceria se este número divergisse.
+const int _minOpinionLength = 10;
+
+/// Diálogo do PARECER TÉCNICO do gerente.
+///
+/// Ele é irmão de [reviewBarter] e deliberadamente diferente num ponto: não há
+/// "aprovar" nem "negar". O gerente diz o que pensa da negociação que um
+/// consultor do time dele registrou, e quem decide é quem revisa, lendo isto
+/// antes. Por isso há um botão só, e o texto é obrigatório — um parecer em
+/// branco seria um botão de "seguir" disfarçado.
+void giveBarterOpinion(
+  BuildContext context,
+  BarterModel barter, {
+  required ValueChanged<BarterModel> onGiven,
+}) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final enough = noteCtrl.text.trim().length >= _minOpinionLength;
+          return AlertDialog(
+            title: const Text('Parecer Técnico'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Permuta: ${barter.id}',
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  Text('${barter.consultantName} • retirada em ${barter.unitLabel}',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Escreva a sua avaliação da negociação. Ela segue com a permuta '
+                    'para a revisão — o parecer não aprova nem nega.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    autofocus: true,
+                    minLines: 4,
+                    maxLines: 8,
+                    maxLength: 2000,
+                    textCapitalization: TextCapitalization.sentences,
+                    onChanged: (_) => setLocal(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'Parecer',
+                      hintText: 'Estoque, prazo de retirada, histórico do produtor…',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: submitting || !enough
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated =
+                              await AppData.giveOpinion(barter.id, noteCtrl.text);
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onGiven(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: const Text('Parecer registrado. A permuta seguiu para revisão.'),
+                            backgroundColor: AppColors.atManager,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.atManager),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                    : const Text('Registrar Parecer'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+/// O parecer do gerente, como bloco de leitura. Aparece no detalhe da permuta e
+/// no cartão da fila — nos dois lugares com o mesmo desenho, porque é o mesmo
+/// texto e quem lê quer reconhecê-lo à primeira vista.
+class ManagerOpinionCard extends StatelessWidget {
+  final BarterModel barter;
+  const ManagerOpinionCard({super.key, required this.barter});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.atManagerBg,
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.atManager.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.assignment_ind_outlined, size: 16, color: AppColors.atManager),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Parecer técnico • ${barter.managerName ?? 'Gerente'}',
+                  style: TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.atManager),
+                ),
+              ),
+              if (barter.managerReviewedAt != null)
+                Text(
+                  formatDate(barter.managerReviewedAt!),
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            barter.managerNote ?? '',
+            style: TextStyle(fontSize: 13, color: AppColors.textDark, height: 1.35),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class SummaryCard extends StatelessWidget {

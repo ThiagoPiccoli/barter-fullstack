@@ -6,6 +6,8 @@ import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../services/barter_math.dart';
 import '../services/barter_pdf.dart';
+import '../widgets/class_avatar.dart';
+import '../widgets/filter_bar.dart';
 import '../widgets/common_widgets.dart';
 
 /// Construtor de permuta.
@@ -25,10 +27,31 @@ class NewBarterScreen extends StatefulWidget {
   State<NewBarterScreen> createState() => _NewBarterScreenState();
 }
 
+/// Como ordenar a lista de insumos. Sem preço: o consultor não vê R$, então
+/// "mais caro primeiro" não existe do lado dele.
+enum _InputSort { name, chosenFirst }
+
 class _NewBarterScreenState extends State<NewBarterScreen> {
   final Map<String, double> _inputQty = {};
   String? _producerId;
+
+  /// A UNIDADE onde o produtor vai retirar os insumos (etapa 2).
+  ///
+  /// É logística e nada mais: qualquer unidade serve, e ela não muda quem
+  /// analisa a permuta — isso é sempre o gerente do consultor. A etapa existe
+  /// aqui, e não no cadastro do produtor, porque a retirada é combinada caso a
+  /// caso: o mesmo produtor pode buscar em praças diferentes ao longo da safra.
+  String? _unitId;
+
   String _searchQuery = '';
+
+  /// Recortes da lista de insumos. Com o catálogo real (centenas de itens), a
+  /// busca por texto sozinha obriga a saber o nome antes de procurar — e quem
+  /// monta a permuta pensa por classe ("agora os herbicidas") e pelo que já
+  /// escolheu, não por nome exato.
+  String? _classId;
+  bool _onlyChosen = false;
+  _InputSort _sort = _InputSort.name;
 
   /// O Barter vigente. Null (ou fechado) trava a tela inteira.
   BarterVersionModel? get _version => AppData.currentVersion;
@@ -62,6 +85,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// Produtor (cliente) designado para esta permuta (ou null).
   ProducerModel? get _producer =>
       _producerId == null ? null : AppData.producerById(_producerId!);
+
+  /// A unidade de retirada escolhida (ou null).
+  UnitModel? get _unit => AppData.unitById(_unitId);
 
   /// Sacas do grão da safra necessárias para cobrir o custo dos insumos.
   /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
@@ -114,11 +140,22 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
   /// Progresso (0–1) rumo ao mínimo da classe. Usado na barra do consultor —
   /// é proporção, nunca expõe R\$.
+  ///
+  /// Com a permuta VAZIA a barra fica em zero, e não em 100%. A regra
+  /// percentual sobre um custo zero dá exigência zero — matematicamente
+  /// cumprida —, mas "Exigência atingida" antes de o consultor escolher o
+  /// primeiro insumo é a tela dizendo que ele terminou sem ter começado.
   double _classProgress(ProductClassModel c) {
+    if (_inputCost <= 0) return 0;
     final req = _classRequired(c);
     if (req <= 0) return 1;
     return (_classSpend(c.id) / req).clamp(0.0, 1.0);
   }
+
+  /// A classe aparece como cumprida na tela? Só depois de haver permuta: é o
+  /// mesmo motivo de [_classProgress]. Quem decide o ENVIO é [_classMet], que
+  /// não muda — a permuta vazia já é barrada por não ter insumo nenhum.
+  bool _classMetOnScreen(ProductClassModel c) => _inputCost > 0 && _classMet(c);
 
   /// Todas as exigências de classe foram cumpridas?
   bool get _classesOk => _ruledClasses.every(_classMet);
@@ -157,13 +194,33 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   }
 
   /// Troca o produtor: limpa a permuta em construção e volta à escolha.
+  ///
+  /// A unidade cai junto porque a etapa dela vem DEPOIS: voltar para a primeira
+  /// etapa com a segunda ainda respondida deixaria a tela mostrando uma
+  /// retirada escolhida para um produtor que ainda não existe.
   void _changeProducer() {
     setState(() {
       _producerId = null;
+      _unitId = null;
       _searchQuery = '';
       _inputQty.clear();
     });
   }
+
+  /// Escolhe a unidade de retirada (segunda etapa).
+  void _selectUnit(String id) {
+    if (AppData.unitById(id) == null) return;
+    setState(() {
+      _unitId = id;
+      _searchQuery = '';
+    });
+  }
+
+  /// Volta para a escolha da unidade, preservando os insumos já montados.
+  void _changeUnit() => setState(() {
+        _unitId = null;
+        _searchQuery = '';
+      });
 
   bool _submitting = false;
 
@@ -171,12 +228,13 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       !_submitting &&
       (_version?.isOpen ?? false) &&
       _producerId != null &&
+      _unitId != null &&
       _inputCost > 0 &&
       _classesOk;
 
-  /// O produtor já foi escolhido na primeira etapa; aqui só revisamos e enviamos.
+  /// Produtor e unidade já foram escolhidos; aqui só revisamos e enviamos.
   Future<void> _onSubmitPressed() async {
-    if (_producerId == null) return;
+    if (_producerId == null || _unitId == null) return;
     final confirmed = await _showSummaryDialog();
     if (confirmed == true) await _submit();
   }
@@ -186,6 +244,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   Future<bool?> _showSummaryDialog() {
     final version = _version;
     final producer = _producer;
+    final unit = _unit;
     final sacks = _sacksNeeded;
     final inputs = _inputQty.entries.where((e) => e.value > 0).map((e) {
       final p = _productById(e.key)!;
@@ -198,7 +257,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       );
     }).toList();
 
-    if (version == null || producer == null || inputs.isEmpty) return Future.value(false);
+    if (version == null || producer == null || unit == null || inputs.isEmpty) {
+      return Future.value(false);
+    }
 
     return showDialog<bool>(
       context: context,
@@ -213,6 +274,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _DialogLine('Produtor', producer.name),
+                _DialogLine('Retirada em', unit.name),
                 _DialogLine('Barter', version.code),
                 const SizedBox(height: 8),
                 Text('Insumos retirados',
@@ -283,11 +345,16 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// — a permuta exibida no diálogo de sucesso é a versão oficial devolvida.
   Future<void> _submit() async {
     final producer = _producer;
+    final unit = _unit;
     final chosen = Map<String, double>.from(_inputQty)
       ..removeWhere((_, qty) => qty <= 0);
 
     if (producer == null) {
       _toast('Selecione o produtor desta permuta.');
+      return;
+    }
+    if (unit == null) {
+      _toast('Selecione a unidade de retirada desta permuta.');
       return;
     }
     if (chosen.isEmpty) {
@@ -305,6 +372,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     try {
       barter = await AppData.createBarter(
         producerId: producer.id,
+        unitId: unit.id,
         inputQuantities: chosen,
       );
     } on ApiException catch (e) {
@@ -325,6 +393,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       _submitting = false;
       _inputQty.clear();
       _producerId = null;
+      _unitId = null;
     });
 
     showDialog(
@@ -339,8 +408,12 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             Text('Permuta ${barter.id} registrada com sucesso.',
                 textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
             const SizedBox(height: 8),
+            // O próximo passo agora tem NOME. Dizer "enviada para revisão do
+            // administrador" seria falso: ela está na mesa do gerente do
+            // consultor, e é dele que ele espera a resposta.
             Text(
-              'Sua proposta de troca foi enviada para análise do administrador.',
+              'Ela foi enviada a ${barter.managerLabel}, que dará o parecer técnico '
+              'antes de a permuta seguir para revisão.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
@@ -354,6 +427,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               child: Column(
                 children: [
                   _DialogLine('Produtor', producer.name),
+                  _DialogLine('Retirada em', barter.unitLabel),
                   if (barter.versionCode.isNotEmpty) _DialogLine('Barter', barter.versionCode),
                   _DialogLine('Insumos retirados', '${barter.inputs.length} item(ns)'),
                   const Divider(height: 14),
@@ -418,17 +492,23 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   Widget build(BuildContext context) {
     final version = _version;
     final producer = _producer;
+    final unit = _unit;
 
     return Scaffold(
       appBar: AppBar(
         title: Text('Nova ${brand.copy.barterTitle}'),
         actions: const [LogoutButton()],
       ),
+      // As três etapas, na ordem em que uma habilita a seguinte: o produtor
+      // define a área (e com ela os mínimos por hectare); a unidade define
+      // onde se retira e de quem é o parecer; só então os insumos.
       body: version == null || !version.isOpen
           ? _buildClosedBarter()
           : producer == null
               ? _buildProducerStep(version)
-              : _buildInputStep(version, producer),
+              : unit == null
+                  ? _buildUnitStep(version, producer)
+                  : _buildInputStep(version, producer, unit),
     );
   }
 
@@ -521,14 +601,100 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     );
   }
 
-  /// Etapa 2: montar os insumos (já com os mínimos pré-preenchidos), com o
-  /// produtor e o Barter vigente fixados no topo.
-  Widget _buildInputStep(BarterVersionModel version, ProducerModel producer) {
+  /// Etapa 2: escolher a UNIDADE de retirada.
+  ///
+  /// É uma etapa própria, e não um campo no rodapé da lista de insumos, porque
+  /// é um combinado com o produtor ("onde você quer buscar?") e não um detalhe
+  /// de preenchimento. Qualquer unidade serve — inclusive de outra praça —, e
+  /// ela não muda quem analisa a permuta: isso é sempre o gerente do consultor.
+  Widget _buildUnitStep(BarterVersionModel version, ProducerModel producer) {
+    final all = AppData.units;
+    final query = _searchQuery.trim().toLowerCase();
+    final units = query.isEmpty
+        ? all
+        : all
+            .where((u) =>
+                u.name.toLowerCase().contains(query) || u.city.toLowerCase().contains(query))
+            .toList();
+
+    return Column(
+      children: [
+        _BarterBanner(version: version),
+        _buildProducerHeader(producer),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+          child: _hint(
+            icon: Icons.store_outlined,
+            color: AppColors.primary,
+            text: 'Etapa 2: onde ${producer.name.split(' ').first} vai retirar os insumos. '
+                'Pode ser qualquer unidade — combine com ele.',
+          ),
+        ),
+        if (all.isEmpty)
+          Expanded(child: _emptyUnitsHint())
+        else ...[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+            child: _searchBox('Buscar unidade ou cidade...'),
+          ),
+          Expanded(
+            child: units.isEmpty
+                ? _emptySearchHint()
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                    itemCount: units.length,
+                    itemBuilder: (_, i) => _UnitChoiceTile(
+                      unit: units[i],
+                      onSelect: () => _selectUnit(units[i].id),
+                    ),
+                  ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Não há nenhuma unidade cadastrada — e sem local não há retirada.
+  Widget _emptyUnitsHint() {
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        const SizedBox(height: 40),
+        Icon(Icons.store_mall_directory_outlined, size: 56, color: AppColors.textLight),
+        const SizedBox(height: 14),
+        Text(
+          'Nenhuma unidade cadastrada',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'A permuta é retirada em uma unidade, e ainda não há nenhuma no cadastro. '
+          'Fale com o administrador.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+        ),
+        const SizedBox(height: 18),
+        Center(
+          child: TextButton.icon(
+            onPressed: _refreshVersion,
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Verificar novamente'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Etapa 3: montar os insumos (já com os mínimos pré-preenchidos), com o
+  /// produtor, a unidade e o Barter vigente fixados no topo.
+  Widget _buildInputStep(BarterVersionModel version, ProducerModel producer, UnitModel unit) {
     final inputCount = _inputQty.values.where((q) => q > 0).length;
     return Column(
       children: [
         _BarterBanner(version: version),
         _buildProducerHeader(producer),
+        _buildUnitHeader(unit),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
           child: BarterBalanceBar(
@@ -541,11 +707,56 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-          child: _searchBox('Buscar insumo...'),
+          child: _searchBox('Buscar insumo ou código...'),
         ),
+        _buildInputFilters(),
         Expanded(child: _buildInputList()),
         _buildFooter(version),
       ],
+    );
+  }
+
+  /// A barra de filtros da lista de insumos.
+  ///
+  /// Os chips recortam por CLASSE — que é como quem monta a permuta pensa
+  /// ("agora os herbicidas") — e por "escolhidos", que é a revisão do que já
+  /// está na permuta sem precisar caçar item por item numa lista de centenas.
+  Widget _buildInputFilters() {
+    final chosen = _inputQty.values.where((qty) => qty > 0).length;
+    return FilterBar<_InputSort>(
+      chips: [
+        FilterChipData(
+          label: 'Todos',
+          selected: _classId == null && !_onlyChosen,
+          onTap: () => setState(() {
+            _classId = null;
+            _onlyChosen = false;
+          }),
+        ),
+        // Só aparece quando há o que revisar: chip que devolveria lista vazia
+        // é ruído na barra.
+        if (chosen > 0)
+          FilterChipData(
+            label: 'Escolhidos ($chosen)',
+            selected: _onlyChosen,
+            onTap: () => setState(() => _onlyChosen = !_onlyChosen),
+          ),
+        for (final productClass in _classesInVersion)
+          FilterChipData(
+            label: productClass.name,
+            selected: _classId == productClass.id,
+            onTap: () => setState(() {
+              _classId = _classId == productClass.id ? null : productClass.id;
+            }),
+          ),
+      ],
+      sortLabel: _sort == _InputSort.name ? 'Nome' : 'Escolhidos',
+      sortOptions: const {
+        _InputSort.name: 'Nome (A–Z)',
+        _InputSort.chosenFirst: 'Escolhidos primeiro',
+      },
+      current: _sort,
+      onSort: (value) => setState(() => _sort = value),
     );
   }
 
@@ -621,53 +832,179 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     );
   }
 
-  Widget _buildInputList() {
-    final query = _searchQuery.trim().toLowerCase();
-    final inputs = query.isEmpty
-        ? _catalog
-        : _catalog.where((i) => i.matches(query)).toList();
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-      children: [
-        if (query.isEmpty)
-          _hint(
-            icon: _hasRequiredInputs ? Icons.rule : Icons.info_outline,
-            color: AppColors.input,
-            text: _hasRequiredInputs
-                ? 'Os insumos obrigatórios para a área deste produtor já vêm com a '
-                    'quantidade mínima preenchida. Você pode aumentar, não reduzir.'
-                : 'Escolha os insumos que o produtor precisa. Eles serão '
-                    'convertidos em sacas do grão desta safra.',
+  /// Faixa fina com a unidade de retirada escolhida.
+  ///
+  /// Ela fica visível durante a montagem inteira porque é um combinado com o
+  /// produtor, e é o tipo de coisa que se lembra tarde ("ele disse que buscaria
+  /// na Matriz") — com a faixa à vista, trocar custa um toque.
+  Widget _buildUnitHeader(UnitModel unit) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.primarySurface,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.store_outlined, size: 16, color: AppColors.primary),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Retirada em ${unit.label}',
+              style:
+                  TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
-        if (query.isEmpty) const SizedBox(height: 8),
-        if (query.isEmpty && _ruledClasses.isNotEmpty) ...[
-          ..._ruledClasses.map((c) => _ClassRuleTile(
-                name: c.name,
-                detail: c.ruleType == ClassRuleType.percentOfTotal
-                    ? 'mín. ${_fmtPct(c.ruleValue)} do total da permuta'
-                    : 'mínimo por área da propriedade',
-                progress: _classProgress(c),
-                met: _classMet(c),
-              )),
-          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: _changeUnit,
+            icon: const Icon(Icons.swap_horiz, size: 16),
+            label: const Text('Trocar', style: TextStyle(fontSize: 12)),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: const Size(0, 0),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
         ],
-        if (inputs.isEmpty) _emptySearchHint() else ...inputs.map((i) => _InputTile(
-              product: i,
-              qty: _inputQty[i.id] ?? 0,
-              minQty: _minFor(i.id),
-              onChanged: (q) => _setInput(i.id, q),
-            )),
-      ],
+      ),
     );
   }
 
-  Widget _emptySearchHint() => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: Text('Nenhum item encontrado para "$_searchQuery"',
-              style: TextStyle(fontSize: 13, color: AppColors.textLight)),
+  /// A lista de insumos do Barter vigente.
+  ///
+  /// `ListView.builder` não é otimização prematura aqui: cada `_InputTile` é um
+  /// widget COM ESTADO, que cria o próprio `TextEditingController`. Com a lista
+  /// real (656 insumos), a forma `children:` montava 656 tiles e 656
+  /// controllers na abertura da tela — para o consultor ver oito.
+  /// Os insumos que a lista mostra: busca + classe + "só os escolhidos", na
+  /// ordem pedida.
+  List<ProductModel> get _visibleInputs {
+    final query = _searchQuery.trim().toLowerCase();
+    final filtered = _catalog.where((input) {
+      if (!input.matches(query)) return false;
+      if (_classId != null && input.classId != _classId) return false;
+      if (_onlyChosen && (_inputQty[input.id] ?? 0) <= 0) return false;
+      return true;
+    }).toList();
+
+    filtered.sort((a, b) {
+      if (_sort == _InputSort.chosenFirst) {
+        final chosenA = (_inputQty[a.id] ?? 0) > 0;
+        final chosenB = (_inputQty[b.id] ?? 0) > 0;
+        if (chosenA != chosenB) return chosenA ? -1 : 1;
+      }
+      return a.name.compareTo(b.name);
+    });
+    return filtered;
+  }
+
+  /// Só as classes que TÊM insumo no Barter vigente viram chip — oferecer um
+  /// recorte que devolveria lista vazia é um filtro que mente.
+  List<ProductClassModel> get _classesInVersion {
+    final ids = _catalog.map((input) => input.classId).whereType<String>().toSet();
+    return AppData.classes.where((c) => ids.contains(c.id)).toList();
+  }
+
+  Widget _buildInputList() {
+    final query = _searchQuery.trim().toLowerCase();
+    final inputs = _visibleInputs;
+
+    // O cabeçalho (dica + barras de mínimo por classe) só aparece sem busca:
+    // quem está procurando um item quer a lista, não a explicação.
+    final filtrando = query.isNotEmpty || _classId != null || _onlyChosen;
+    final header = <Widget>[
+      // Com filtro ativo, quantos itens sobraram de quantos — é o que diz se
+      // vale continuar rolando ou refinar a busca.
+      if (filtrando && inputs.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8, left: 2),
+          child: Text('${inputs.length} de ${_catalog.length} insumo(s)',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight)),
         ),
-      );
+      if (query.isEmpty) ...[
+        _hint(
+          icon: _hasRequiredInputs ? Icons.rule : Icons.info_outline,
+          color: AppColors.input,
+          text: _hasRequiredInputs
+              ? 'Os insumos obrigatórios para a área deste produtor já vêm com a '
+                  'quantidade mínima preenchida. Você pode aumentar, não reduzir.'
+              : 'Escolha os insumos que o produtor precisa. Eles serão '
+                  'convertidos em sacas do grão desta safra.',
+        ),
+        const SizedBox(height: 8),
+        ..._ruledClasses.map((c) => _ClassRuleTile(
+              name: c.name,
+              detail: c.ruleType == ClassRuleType.percentOfTotal
+                  ? 'mín. ${_fmtPct(c.ruleValue)} do total da permuta'
+                  : 'mínimo por área da propriedade',
+              progress: _classProgress(c),
+              met: _classMetOnScreen(c),
+            )),
+        if (_ruledClasses.isNotEmpty) const SizedBox(height: 8),
+      ],
+    ];
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+      itemCount: header.length + (inputs.isEmpty ? 1 : inputs.length),
+      itemBuilder: (context, index) {
+        if (index < header.length) return header[index];
+        if (inputs.isEmpty) return _emptySearchHint();
+        final input = inputs[index - header.length];
+        return _InputTile(
+          // A chave amarra o estado do tile ao PRODUTO, não à posição: sem
+          // ela, filtrar a lista faria o campo de quantidade de um insumo
+          // aparecer noutro.
+          key: ValueKey(input.id),
+          product: input,
+          qty: _inputQty[input.id] ?? 0,
+          minQty: _minFor(input.id),
+          onChanged: (q) => _setInput(input.id, q),
+        );
+      },
+    );
+  }
+
+  /// Nada encontrado — dizendo POR QUE, que é o que permite desfazer. Com três
+  /// recortes possíveis (busca, classe, escolhidos), "nenhum item encontrado"
+  /// sozinho deixa o consultor procurando o que ele mesmo ligou.
+  Widget _emptySearchHint() {
+    final motivos = [
+      if (_searchQuery.trim().isNotEmpty) '"${_searchQuery.trim()}"',
+      if (_classId != null) AppData.classById(_classId)?.name ?? 'classe',
+      if (_onlyChosen) 'só os escolhidos',
+    ];
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: [
+          Icon(Icons.search_off, size: 40, color: AppColors.textLight),
+          const SizedBox(height: 8),
+          Text(
+            motivos.isEmpty
+                ? 'Nenhum insumo neste Barter'
+                : 'Nenhum insumo em ${motivos.join(' + ')}',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: AppColors.textLight),
+          ),
+          if (motivos.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed: () => setState(() {
+                _searchQuery = '';
+                _classId = null;
+                _onlyChosen = false;
+              }),
+              child: const Text('Limpar filtros', style: TextStyle(fontSize: 12)),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 
   /// Aviso para o consultor sem produtores na carteira: sem carteira não há
   /// permuta, e quem cadastra/atribui produtores é o administrador.
@@ -730,12 +1067,19 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               children: [
                 Icon(Icons.local_shipping_outlined, size: 14, color: AppColors.textMedium),
                 const SizedBox(width: 6),
-                Text(
-                  inputCount > 0
-                      ? 'Entregar: ${formatSacks(sacks)} ${version.grainName.toLowerCase()} • $inputCount insumo(s)'
-                      : 'Escolha os insumos para ver quantas sacas serão necessárias',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
-                  overflow: TextOverflow.ellipsis,
+                // Expanded, e não Text solto: `overflow: ellipsis` só corta o
+                // texto DEPOIS que ele recebe uma largura máxima. Numa Row sem
+                // Expanded ele recebe largura infinita, não corta nada e
+                // estoura a linha — eram os 33 pixels vermelhos no rodapé.
+                Expanded(
+                  child: Text(
+                    inputCount > 0
+                        ? 'Entregar: ${formatSacks(sacks)} ${version.grainName.toLowerCase()} • $inputCount insumo(s)'
+                        : 'Escolha os insumos para ver quantas sacas serão necessárias',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),
@@ -923,6 +1267,7 @@ class _InputTile extends StatefulWidget {
   final ValueChanged<double> onChanged;
 
   const _InputTile({
+    super.key,
     required this.product,
     required this.qty,
     required this.minQty,
@@ -976,12 +1321,10 @@ class _InputTileState extends State<_InputTile> {
           children: [
             Row(
               children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
-                  child: Icon(Icons.science_outlined, color: AppColors.input, size: 20),
-                ),
+                // A figura é da CLASSE: com centenas de insumos na lista, é ela
+                // que deixa o consultor varrer por bloco (herbicida, adubo) em
+                // vez de ler item por item.
+                ClassAvatar(productClass: AppData.classById(product.classId)),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -1116,6 +1459,56 @@ class _ProducerChoiceTile extends StatelessWidget {
                         ],
                       ),
                     ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: AppColors.textLight),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Card de escolha da unidade de retirada (etapa 2). Nome e cidade, porque é
+/// só isso que a unidade é: um local. Qualquer uma da lista serve.
+class _UnitChoiceTile extends StatelessWidget {
+  final UnitModel unit;
+  final VoidCallback onSelect;
+
+  const _UnitChoiceTile({required this.unit, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        onTap: onSelect,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: AppColors.primarySurface,
+                child: Icon(Icons.store_outlined, size: 20, color: AppColors.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(unit.name,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textDark)),
+                    const SizedBox(height: 2),
+                    Text(unit.city,
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        overflow: TextOverflow.ellipsis),
                   ],
                 ),
               ),

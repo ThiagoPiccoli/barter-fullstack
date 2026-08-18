@@ -17,16 +17,30 @@ class BarterRepository {
 
   Future<BarterModel> create({
     required String producerId,
+    required String unitId,
     required Map<String, double> inputQuantities,
   }) async {
     final data = await api.post('/barters', body: {
       'producerId': int.parse(producerId),
+      // A unidade de retirada. Ela decide de qual gerente é o parecer, e a
+      // permuta nasce esperando por ele.
+      'unitId': int.parse(unitId),
       'inputs': [
         for (final entry in inputQuantities.entries)
           if (entry.value > 0)
             {'productId': int.parse(entry.key), 'quantity': entry.value},
       ],
     });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// PARECER TÉCNICO do gerente da unidade — a etapa que move a permuta de
+  /// "enviada ao gerente" para "aguardando revisão".
+  ///
+  /// Repare que não há status no corpo: o parecer não aprova nem nega. O
+  /// servidor recusa (403) se a permuta for de uma unidade de outro gerente.
+  Future<BarterModel> giveOpinion(String code, String note) async {
+    final data = await api.post('/barters/$code/opinion', body: {'note': note.trim()});
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 

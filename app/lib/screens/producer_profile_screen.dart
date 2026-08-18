@@ -45,6 +45,7 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
     final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;
     final denied = barters.where((b) => b.status == BarterStatus.denied).length;
+    final atManager = barters.where((b) => b.awaitsManager).length;
     final sacks = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
 
@@ -138,10 +139,19 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
                 color: AppColors.input,
               ),
               SummaryCard(
-                title: 'Em Análise',
+                title: 'Em Revisão',
                 value: pending.toString(),
                 icon: Icons.hourglass_top,
                 color: AppColors.pending,
+              ),
+              // Contagem própria: uma permuta que ainda não saiu da mesa do
+              // gerente não é "em revisão", e juntar as duas esconderia
+              // exatamente a etapa que acabou de ser criada.
+              SummaryCard(
+                title: 'No Gerente',
+                value: atManager.toString(),
+                icon: Icons.assignment_ind_outlined,
+                color: AppColors.atManager,
               ),
             ],
           ),

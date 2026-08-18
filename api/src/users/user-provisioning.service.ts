@@ -3,7 +3,7 @@ import type { User } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { CLEARED_LOCKOUT } from '../auth/lockout';
 import { generateProvisionalPassword, hashPassword } from '../auth/password.util';
-import { ROLE_LABELS, type ManagedRole } from '../common/roles';
+import { ROLE, ROLE_LABELS, type ManagedRole } from '../common/roles';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 
@@ -13,9 +13,15 @@ import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
  * ditar ao titular, e ele nunca mais pode ser lido de volta.
  */
 export interface ProvisionedUser {
-  user: User;
+  user: UserWithManager;
   provisionalPassword: string;
 }
+
+/** O usuário com o gerente resolvido — é a forma que o serializer espera. */
+export type UserWithManager = User & { manager: Pick<User, 'id' | 'fullName'> | null };
+
+/** Só o que o serializer precisa do gerente. Evita levar o hash de senha junto. */
+const MANAGER_FIELDS = { select: { id: true, fullName: true } } as const;
 
 /**
  * O motor de provisionamento, compartilhado pelas quatro rotas de usuário
@@ -39,8 +45,12 @@ export class UserProvisioningService {
     private readonly audit: AuditService,
   ) {}
 
-  async list(role: ManagedRole): Promise<User[]> {
-    return this.prisma.user.findMany({ where: { role }, orderBy: { id: 'asc' } });
+  async list(role: ManagedRole): Promise<UserWithManager[]> {
+    return this.prisma.user.findMany({
+      where: { role },
+      include: { manager: MANAGER_FIELDS },
+      orderBy: { id: 'asc' },
+    });
   }
 
   /**
@@ -61,15 +71,20 @@ export class UserProvisioningService {
   async create(actor: User, role: ManagedRole, dto: CreateUserDto): Promise<ProvisionedUser> {
     await this.ensureEmailIsFree(dto.email);
 
-    const { password, ...data } = dto;
+    const { password, unitId, managerId, ...data } = dto as CreateUserDto & {
+      managerId?: number;
+    };
     const provisionalPassword = password ?? generateProvisionalPassword();
     const user = await this.prisma.user.create({
       data: {
         ...data,
+        ...(await this.unitFields(unitId)),
+        managerId: await this.resolveManager(role, managerId),
         password: await hashPassword(provisionalPassword),
         role,
         mustChangePassword: true,
       },
+      include: { manager: MANAGER_FIELDS },
     });
 
     await this.audit.record({
@@ -83,10 +98,24 @@ export class UserProvisioningService {
     return { user, provisionalPassword };
   }
 
-  async update(actor: User, role: ManagedRole, id: number, dto: UpdateUserDto): Promise<User> {
+  async update(
+    actor: User,
+    role: ManagedRole,
+    id: number,
+    dto: UpdateUserDto,
+  ): Promise<UserWithManager> {
     const user = await this.findWithRole(role, id);
     await this.ensureEmailIsFree(dto.email, user.id);
-    const updated = await this.prisma.user.update({ where: { id: user.id }, data: dto });
+    const { unitId, managerId, ...data } = dto as UpdateUserDto & { managerId?: number };
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        ...data,
+        ...(await this.unitFields(unitId)),
+        managerId: await this.resolveManager(role, managerId),
+      },
+      include: { manager: MANAGER_FIELDS },
+    });
 
     await this.audit.record({
       actor,
@@ -128,6 +157,7 @@ export class UserProvisioningService {
           mustChangePassword: true,
           ...CLEARED_LOCKOUT,
         },
+        include: { manager: MANAGER_FIELDS },
       }),
       this.prisma.accessToken.deleteMany({ where: { userId: target.id } }),
     ]);
@@ -150,9 +180,17 @@ export class UserProvisioningService {
    * No caso do CONSULTOR há um efeito a mais, que é do domínio e não desta
    * rota: os produtores da carteira dele ficam "sem consultor" até o admin
    * realocá-los (`onDelete: SetNull` no schema).
+   *
+   * O GERENTE, ao contrário, é BARRADO enquanto tiver trabalho na mesa. As
+   * duas travas abaixo existem porque a saída dele criaria estados sem saída:
+   * um consultor sem gerente não registra permuta (o cadastro exige um), e uma
+   * permuta endereçada a alguém que não existe mais fica esperando para sempre
+   * um parecer que ninguém pode dar — sem erro e sem alarme. Reatribuir o time
+   * e esvaziar a fila são decisões de gente, e a mensagem diz qual falta.
    */
   async delete(actor: User, role: ManagedRole, id: number): Promise<void> {
     const user = await this.findWithRole(role, id);
+    if (role === ROLE.manager) await this.ensureManagerIsFree(user.id);
     await this.prisma.user.delete({ where: { id: user.id } });
 
     await this.audit.record({
@@ -163,6 +201,73 @@ export class UserProvisioningService {
       targetLabel: user.email,
       detail: `papel: ${ROLE_LABELS[role]}`,
     });
+  }
+
+  /**
+   * O vínculo com a unidade E o rótulo dela, escritos JUNTOS — este é o único
+   * lugar do sistema que os produz.
+   *
+   * `branch` é o nome da unidade congelado no usuário. Ele existe porque é o
+   * que as telas mostram, o que os rankings do painel agrupam e o que a permuta
+   * copia para dentro de si (`consultantBranch`); ler o nome pela relação a
+   * cada uso obrigaria todo `findUnique` de usuário — inclusive o do AuthGuard,
+   * em toda requisição — a carregar um join que ninguém pediu.
+   *
+   * O preço de um campo derivado é ele divergir da fonte. Aqui isso é contido
+   * por dois fatos: quem escreve é só este método, e renomear uma unidade não
+   * reescreve o que já foi congelado — que é o comportamento certo, do mesmo
+   * jeito que `Barter.producerName` não muda quando o produtor troca de nome.
+   */
+  private async unitFields(unitId: number): Promise<{ unitId: number; branch: string }> {
+    const unit = await this.prisma.unit.findUnique({ where: { id: unitId } });
+    if (!unit) {
+      throw new UnprocessableEntityException('Escolha uma unidade válida');
+    }
+    return { unitId: unit.id, branch: unit.name };
+  }
+
+  /**
+   * O gerente do consultor, conferido.
+   *
+   * Só o CONSULTOR tem gerente. Nos outros papéis o campo nem existe no DTO, e
+   * o `whitelist` do ValidationPipe descartaria um `managerId` enviado à mão —
+   * a garantia final é este `null`, que impede um faturista de nascer
+   * pendurado num gerente e aparecer no time dele.
+   *
+   * A conferência é uma lista de permitidos com um papel só: apontar um
+   * faturista como gerente de alguém criaria um consultor cujas permutas nunca
+   * sairiam de `sentToManager`, porque quem dá parecer é quem tem
+   * `barters.opinion` — e ele não tem.
+   */
+  private async resolveManager(role: ManagedRole, managerId?: number): Promise<number | null> {
+    if (role !== ROLE.consultant || managerId === undefined) return null;
+
+    const manager = await this.prisma.user.findUnique({ where: { id: managerId } });
+    if (!manager || manager.role !== ROLE.manager) {
+      throw new UnprocessableEntityException(
+        `Escolha um ${ROLE_LABELS[ROLE.manager]} para responder pelo consultor`,
+      );
+    }
+    return manager.id;
+  }
+
+  /** As duas coisas que impedem um gerente de sair — ver `delete`. */
+  private async ensureManagerIsFree(managerId: number): Promise<void> {
+    const team = await this.prisma.user.count({ where: { managerId } });
+    if (team > 0) {
+      throw new UnprocessableEntityException(
+        `Este gerente ainda responde por ${team} ${team === 1 ? 'consultor' : 'consultores'} — designe outro gerente para ${team === 1 ? 'ele' : 'eles'} antes de excluir`,
+      );
+    }
+
+    const waiting = await this.prisma.barter.count({
+      where: { managerId, status: 'sentToManager' },
+    });
+    if (waiting > 0) {
+      throw new UnprocessableEntityException(
+        `Este gerente tem ${waiting} ${waiting === 1 ? 'permuta esperando' : 'permutas esperando'} o parecer dele`,
+      );
+    }
   }
 
   /**

@@ -14,6 +14,21 @@ export const AUDIT_ACTION = {
   userUpdated: 'user.updated',
   userPasswordReset: 'user.password-reset',
   userDeleted: 'user.deleted',
+  /**
+   * As UNIDADES, porque designar o gerente de uma é decidir para quem vão as
+   * permutas que serão retiradas nela.
+   *
+   * Sem isto, trocar o responsável por uma unidade tiraria permutas da fila de
+   * alguém e as colocaria na de outro sem deixar rastro — e a pergunta que
+   * aparece depois ("por que esta permuta parou de aparecer para mim?") não
+   * teria como ser respondida. É a mesma natureza do reset de senha: o ato é
+   * pequeno, o efeito é sobre quem alcança o quê.
+   */
+  unitCreated: 'unit.created',
+  unitUpdated: 'unit.updated',
+  unitDeleted: 'unit.deleted',
+  /** O parecer técnico do gerente da unidade — a etapa que antecede a análise. */
+  barterOpinion: 'barter.opinion',
   barterReviewed: 'barter.reviewed',
   /**
    * ENTRADA no sistema — e as tentativas que não entraram.
@@ -58,7 +73,7 @@ export interface AuditActor {
 export interface AuditEntry {
   actor: User | AuditActor;
   action: AuditAction;
-  targetType: 'user' | 'barter' | 'season' | 'version' | 'session';
+  targetType: 'user' | 'unit' | 'barter' | 'season' | 'version' | 'session';
   targetId?: number | null;
   targetLabel: string;
   detail?: string;

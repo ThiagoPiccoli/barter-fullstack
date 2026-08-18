@@ -3,6 +3,8 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../widgets/class_avatar.dart';
+import '../widgets/filter_bar.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_program_screen.dart';
 import 'product_report_screen.dart';
@@ -18,7 +20,8 @@ import 'edit_forms.dart';
 /// 3. **Histórico** — como o valor de cada item andou ao longo das versões.
 ///    Leitura: o cadastro do produto (pasta, exigência, exclusão) mora na tela
 ///    do próprio item, e o valor de hoje se corrige na aba Valores.
-/// 4. **Classes** — a taxonomia fixa do negócio e a regra de mínimo de cada uma.
+/// 4. **Classes** — a taxonomia que vem da lista de preços, e a regra de
+///    mínimo de cada uma.
 ///
 /// Busca e filtros ficam no topo: a busca é do texto, os chips recortam o
 /// conjunto e o menu de ordenação responde "em que ordem". Os três se somam.
@@ -159,6 +162,9 @@ class _VersionPriceTable extends StatefulWidget {
 enum _ValueSort { name, priceDesc, priceAsc }
 
 class _VersionPriceTableState extends State<_VersionPriceTable> {
+  /// Quantos itens da lista são cabeçalho (cotação da saca e título).
+  static const int _headerCount = 2;
+
   /// Classe escolhida (null = todas). A tabela da versão não carrega a classe:
   /// ela é atributo do CADASTRO, então vem do catálogo pelo productId.
   String? _classId;
@@ -231,13 +237,13 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
 
     return Column(
       children: [
-        _FilterBar(
+        FilterBar(
           chips: [
-            _FilterChipData(label: 'Todas', selected: _classId == null, onTap: () {
+            FilterChipData(label: 'Todas', selected: _classId == null, onTap: () {
               setState(() => _classId = null);
             }),
             for (final productClass in classes)
-              _FilterChipData(
+              FilterChipData(
                 label: productClass.name,
                 selected: _classId == productClass.id,
                 onTap: () => setState(() => _classId = productClass.id),
@@ -252,43 +258,65 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
           },
           current: _sort,
         ),
+        // `ListView.builder`, e não `ListView(children:)`: a tabela real tem 656
+        // linhas, e a forma com `children` constrói TODAS de uma vez, na
+        // primeira montagem — inclusive as que ninguém vai rolar até ver. Com o
+        // catálogo de demonstração (cinco itens) dava no mesmo; com a lista do
+        // fornecedor, é o custo de abrir a aba.
         Expanded(
-          child: ListView(
+          child: ListView.builder(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            children: [
-              _GrainPriceCard(version: version, onUpdate: widget.onUpdate),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Text('Insumos da versão ${version.code}',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                  const Spacer(),
-                  Text(
-                    rows.length == version.prices.length
-                        ? '${version.prices.length} item(ns)'
-                        : '${rows.length} de ${version.prices.length}',
-                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            // Cabeçalho (cotação da saca + título) + as linhas, ou a mensagem
+            // de lista vazia no lugar delas.
+            itemCount: _headerCount + (rows.isEmpty ? 1 : rows.length),
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Column(
+                  children: [
+                    _GrainPriceCard(version: version, onUpdate: widget.onUpdate),
+                    const SizedBox(height: 12),
+                  ],
+                );
+              }
+              if (index == 1) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    children: [
+                      Text('Insumos da versão ${version.code}',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textDark)),
+                      const Spacer(),
+                      Text(
+                        rows.length == version.prices.length
+                            ? '${version.prices.length} item(ns)'
+                            : '${rows.length} de ${version.prices.length}',
+                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (rows.isEmpty)
-                Padding(
+                );
+              }
+              if (rows.isEmpty) {
+                return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 24),
                   child: Center(
                     child: Text('Nenhum item com esse filtro',
                         style: TextStyle(fontSize: 13, color: AppColors.textLight)),
                   ),
-                )
-              else
-                ...rows.map((row) => _VersionPriceCard(
-                      row: row,
-                      code: _productOf(row.productId)?.sku,
-                      editable: version.isOpen,
-                      onUpdate: widget.onUpdate,
-                    )),
-            ],
+                );
+              }
+              final row = rows[index - _headerCount];
+              return _VersionPriceCard(
+                row: row,
+                code: _productOf(row.productId)?.sku,
+                productClass: AppData.classById(_classOf(row.productId)),
+                editable: version.isOpen,
+                onUpdate: widget.onUpdate,
+              );
+            },
           ),
         ),
       ],
@@ -370,11 +398,15 @@ class _VersionPriceCard extends StatelessWidget {
 
   /// Código do item no cadastro — a linha da versão não o guarda.
   final String? code;
+
+  /// A classe do item, para a figura. Também vem do cadastro.
+  final ProductClassModel? productClass;
   final bool editable;
   final VoidCallback onUpdate;
   const _VersionPriceCard({
     required this.row,
     required this.code,
+    required this.productClass,
     required this.editable,
     required this.onUpdate,
   });
@@ -387,12 +419,7 @@ class _VersionPriceCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         child: Row(
           children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
-              child: Icon(Icons.science_outlined, color: AppColors.input, size: 18),
-            ),
+            ClassAvatar(productClass: productClass, size: 36),
             const SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -518,19 +545,19 @@ class _HistoryListState extends State<_HistoryList> {
 
     return Column(
       children: [
-        _FilterBar(
+        FilterBar(
           chips: [
-            _FilterChipData(
+            FilterChipData(
               label: 'Todos',
               selected: _type == null,
               onTap: () => setState(() => _type = null),
             ),
-            _FilterChipData(
+            FilterChipData(
               label: brand.copy.grainPluralTitle,
               selected: _type == ProductType.grain,
               onTap: () => setState(() => _type = ProductType.grain),
             ),
-            _FilterChipData(
+            FilterChipData(
               label: brand.copy.inputPluralTitle,
               selected: _type == ProductType.input,
               onTap: () => setState(() => _type = ProductType.input),
@@ -538,7 +565,7 @@ class _HistoryListState extends State<_HistoryList> {
             // Só aparece quando há o que revisar: filtro que devolveria lista
             // vazia é ruído na barra.
             if (pendentes > 0)
-              _FilterChipData(
+              FilterChipData(
                 label: 'Sem unidade ($pendentes)',
                 selected: _onlyPending,
                 onTap: () => setState(() => _onlyPending = !_onlyPending),
@@ -561,30 +588,41 @@ class _HistoryListState extends State<_HistoryList> {
                   title: 'Nenhum item encontrado',
                   text: 'Ajuste a busca ou o filtro para ver o histórico de outros itens.',
                 )
-              : ListView(
+              // Builder pelo mesmo motivo da tabela de valores: com o catálogo
+              // real são 661 cartões, e `children:` os construiria todos na
+              // abertura da aba.
+              : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  children: [
-                    Row(
-                      children: [
-                        Text('Linha do tempo de valores',
-                            style: TextStyle(
-                                fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        const Spacer(),
-                        Text(
-                          products.length == total
-                              ? '$total item(ns)'
-                              : '${products.length} de $total',
-                          style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                  itemCount: products.length + 1,
+                  itemBuilder: (context, index) {
+                    if (index == 0) {
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Text('Linha do tempo de valores',
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textDark)),
+                            const Spacer(),
+                            Text(
+                              products.length == total
+                                  ? '$total item(ns)'
+                                  : '${products.length} de $total',
+                              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    ...products.map((product) => _HistoryCard(
-                          product: product,
-                          deltaPct: deltaPctOf(product),
-                          onUpdate: widget.onUpdate,
-                        )),
-                  ],
+                      );
+                    }
+                    final product = products[index - 1];
+                    return _HistoryCard(
+                      product: product,
+                      deltaPct: deltaPctOf(product),
+                      onUpdate: widget.onUpdate,
+                    );
+                  },
                 ),
         ),
       ],
@@ -768,87 +806,6 @@ class _CodeChip extends StatelessWidget {
   }
 }
 
-class _FilterChipData {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  const _FilterChipData({required this.label, required this.selected, required this.onTap});
-}
-
-/// Barra de filtros: os recortes como chips que rolam na horizontal e a
-/// ordenação num menu à direita.
-///
-/// Chip e menu respondem a perguntas diferentes — "o que eu quero ver" e "em
-/// que ordem" —, e é por isso que não são a mesma lista: misturar os dois num
-/// seletor só obrigaria a escolher entre filtrar e ordenar.
-class _FilterBar<T> extends StatelessWidget {
-  final List<_FilterChipData> chips;
-  final String sortLabel;
-  final Map<T, String> sortOptions;
-  final T current;
-  final ValueChanged<T> onSort;
-
-  const _FilterBar({
-    required this.chips,
-    required this.sortLabel,
-    required this.sortOptions,
-    required this.current,
-    required this.onSort,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 6, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final chip in chips) ...[
-                    ChoiceChip(
-                      label: Text(chip.label, style: const TextStyle(fontSize: 12)),
-                      selected: chip.selected,
-                      onSelected: (_) => chip.onTap(),
-                      visualDensity: VisualDensity.compact,
-                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    ),
-                    const SizedBox(width: 6),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          PopupMenuButton<T>(
-            tooltip: 'Ordenar',
-            initialValue: current,
-            onSelected: onSort,
-            itemBuilder: (_) => [
-              for (final entry in sortOptions.entries)
-                PopupMenuItem(value: entry.key, child: Text(entry.value)),
-            ],
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.swap_vert, size: 16, color: AppColors.primary),
-                  const SizedBox(width: 2),
-                  Text(sortLabel,
-                      style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _EmptyState extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -923,8 +880,8 @@ class _ClassList extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'A lista de classes é fixa. Toque em uma para definir o mínimo '
-                  'que ela precisa representar em cada permuta.',
+                  'As classes vêm da lista de preços do fornecedor. Toque em uma '
+                  'para definir o mínimo que ela precisa representar na permuta.',
                   style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                 ),
               ),
@@ -974,12 +931,7 @@ class _ClassCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(color: AppColors.inputBg, borderRadius: BorderRadius.circular(10)),
-                    child: Icon(Icons.category_outlined, color: AppColors.input, size: 20),
-                  ),
+                  ClassAvatar(productClass: productClass),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Column(

@@ -2,7 +2,7 @@
 //
 // Observações de domínio:
 // - Os "enums" são String: role admin|consultant|manager|committee|biller,
-//   type grain|input, kind grain|input, status pending|approved|denied,
+//   type grain|input, kind grain|input, status sentToManager|pending|approved|denied,
 //   ruleType none|percentOfTotal|valuePerHa. Vieram assim do SQLite, que não
 //   tem enum, e continuam assim de propósito — a validação mora nos DTOs
 //   (`@IsIn`) e um valor novo não pede migration nem deploy coordenado.
@@ -26,9 +26,43 @@ model User {
   password  String
   role      String   @default("consultant")
   phone     String?
-  branch    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// UNIDADE a que esta pessoa pertence (a lotação dela).
+  ///
+  /// Era `branch`, texto livre digitado no cadastro. Enquanto foi texto, "Filial
+  /// 02", "filial 02" e "F02" eram três filiais para qualquer agrupamento, e não
+  /// havia como perguntar "quem responde por esta unidade?" — que é justamente a
+  /// pergunta do fluxo do gerente.
+  unitId Int?
+  unit   Unit? @relation("UserUnit", fields: [unitId], references: [id], onDelete: SetNull)
+
+  /// O NOME da unidade no momento em que ele foi gravado.
+  ///
+  /// Continua existindo — e continua se chamando `branch` — porque é o rótulo
+  /// que a permuta congela (`Barter.consultantBranch`), o que os rankings do
+  /// painel agrupam e o que as permutas anteriores ao cadastro de unidades
+  /// guardam. É snapshot pelo mesmo motivo de `Season.grainName`: excluir a
+  /// unidade não pode apagar a memória de onde a pessoa estava. Quem escreve é
+  /// um lugar só (user-provisioning.service.ts), a partir de `unit`.
+  branch String?
+
+  /// O GERENTE desta pessoa. Só o consultor tem, e para ele é obrigatório no
+  /// cadastro (ver ConsultantDto): é a ele que as permutas do consultor são
+  /// enviadas, e é ele quem escreve o parecer técnico delas.
+  ///
+  /// O vínculo é com a PESSOA, não com o lugar. A unidade de retirada é
+  /// logística e não tem relação nenhuma com isto: uma permuta retirada na
+  /// Filial 34 continua sendo analisada pelo gerente do consultor que a
+  /// registrou.
+  ///
+  /// Nulável no banco porque os outros papéis não têm gerente — e porque a
+  /// exclusão de um gerente precisa deixar os consultores dele órfãos em vez de
+  /// apagá-los. Um consultor sem gerente não registra permuta até o admin
+  /// designar outro.
+  managerId Int?
+  manager   User? @relation("ConsultantManager", fields: [managerId], references: [id], onDelete: SetNull)
 
   /// Senha provisória: o consultor recém-provisionado pelo admin precisa
   /// trocá-la antes de usar o app. O seed de demonstração nasce com false
@@ -50,6 +84,16 @@ model User {
   tokens  AccessToken[]
   wallet  Producer[]
   barters Barter[]      @relation("ConsultantBarters")
+
+  /// Os consultores sob a gerência desta pessoa (só gerente tem). É por aqui
+  /// que a permuta chega até ele: ela é endereçada ao gerente de quem a
+  /// registrou.
+  team User[] @relation("ConsultantManager")
+
+  /// As permutas endereçadas a este gerente, esperando ou já com parecer.
+  opinions Barter[] @relation("ManagerOpinions")
+
+  @@index([managerId])
 }
 
 /// Token de acesso opaco (guardamos só o SHA-256; o valor cru vai ao cliente).
@@ -79,6 +123,39 @@ model AccessToken {
 
   @@index([expiresAt])
   @@index([lastUsedAt])
+}
+
+/// UNIDADE: o lugar físico onde o produtor RETIRA os insumos da permuta.
+///
+/// É um LOCAL, e só. Ela não tem dono, não decide fluxo e não escolhe quem
+/// analisa a permuta — quem dá o parecer é o gerente do CONSULTOR (ver
+/// `User.managerId`), independentemente de onde a retirada acontece. O
+/// consultor escolhe qualquer unidade da lista, inclusive uma de outra praça,
+/// porque a retirada é decisão de logística combinada com o produtor.
+///
+/// Vale registrar por que ela existe como cadastro e não como texto: a filial
+/// era digitada à mão, e "Filial 02", "filial 02" e "F02" eram três lugares
+/// para qualquer agrupamento ou relatório.
+model Unit {
+  id   Int    @id @default(autoincrement())
+  name String
+
+  /// O mesmo nome reduzido à forma canônica (sem acento, sem caixa, sem espaço
+  /// repetido). É ELE que carrega a unicidade, pelo mesmo motivo de
+  /// `Producer.documentDigits`: sobre o texto cru, "Filial 02" e "FILIAL 02"
+  /// passariam como duas unidades, e a mesma praça apareceria duas vezes na
+  /// lista de retirada.
+  nameKey String @unique
+
+  /// Município/UF, como no produtor — é o que distingue duas unidades de nome
+  /// parecido na hora de escolher onde retirar.
+  city String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  staff   User[]   @relation("UserUnit")
+  barters Barter[]
 }
 
 /// Produtor (cliente) designado nas permutas; pertence à CARTEIRA de um
@@ -294,6 +371,21 @@ model PriceHistoryEntry {
 /// valores esta permuta foi fechada. `versionCode` fica desnormalizado porque é
 /// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
 /// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
+///
+/// O CAMINHO dela é o `status`, e ele tem quatro paradas:
+///
+///     sentToManager → pending → approved
+///                             ↘ denied
+///
+/// `sentToManager` é onde ela nasce: o consultor a registrou e ela está na mesa
+/// do GERENTE DELE, esperando o parecer técnico. Escrito o parecer, ela vira
+/// `pending` — a fila de REVISÃO, onde alguém aprova ou nega (hoje o admin;
+/// comitê e faturista entram nas próximas etapas do fluxo).
+///
+/// "Revisão" e não "análise" é a palavra do sistema para esta etapa: a rota é
+/// `POST /barters/:code/review` e os campos são `reviewedBy`/`reviewedAt`. O
+/// gerente também analisa — chamar as duas coisas de análise deixava as etapas
+/// indistinguíveis no vocabulário.
 model Barter {
   id               Int            @id @default(autoincrement())
   code             String         @unique
@@ -307,16 +399,53 @@ model Barter {
   consultantName   String
   consultantBranch String         @default("")
   producerName     String
-  status           String         @default("pending")
-  adminNote        String?
-  reviewedBy       String?
-  reviewedById     Int?
-  reviewedAt       DateTime?
-  createdAt        DateTime       @default(now())
+
+  /// UNIDADE DE RETIRADA — onde o produtor busca os insumos desta permuta.
+  ///
+  /// É LOGÍSTICA, e nada além disso: ela não escolhe quem analisa a permuta nem
+  /// participa de nenhuma regra. O consultor pode mandar a retirada para
+  /// qualquer unidade, inclusive uma de outra praça, e o parecer continua sendo
+  /// do gerente dele. `unitName` é o snapshot para o detalhe e o comprovante,
+  /// pelo mesmo motivo de `producerName`.
+  unitId   Int?
+  unit     Unit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
+  unitName String @default("")
+
+  status String @default("sentToManager")
+
+  /// O GERENTE A QUEM ESTA PERMUTA FOI ENVIADA — o gerente do consultor no
+  /// momento do registro — e o parecer técnico dele sobre a negociação.
+  ///
+  /// O destinatário é gravado no ENVIO, não lido do vínculo atual. É a leitura
+  /// literal de "o consultor envia para o gerente": trocar o gerente de um
+  /// consultor vale para as próximas permutas, e as que já estão na mesa de
+  /// alguém continuam lá. O contrário faria uma permuta mudar de mãos sem
+  /// ninguém ter agido sobre ela.
+  ///
+  /// O parecer é texto, e só texto: ele não aprova nem nega — quem decide é a
+  /// instância seguinte, que o lê antes. Escrevê-lo é o que move a permuta de
+  /// `sentToManager` para `pending`.
+  ///
+  /// `managerName` é snapshot (o parecer precisa continuar assinado depois que
+  /// a conta for excluída); `managerId` fica como pista, com SetNull.
+  managerId         Int?
+  manager           User?     @relation("ManagerOpinions", fields: [managerId], references: [id], onDelete: SetNull)
+  managerName       String?
+  managerNote       String?
+  managerReviewedAt DateTime?
+
+  adminNote    String?
+  reviewedBy   String?
+  reviewedById Int?
+  reviewedAt   DateTime?
+  createdAt    DateTime  @default(now())
 
   items BarterItem[]
 
   @@index([versionId])
+  @@index([unitId])
+  // A fila do gerente: as permutas endereçadas a ele que ainda esperam parecer.
+  @@index([managerId, status])
 }
 
 /// Item da permuta com snapshots imutáveis de nome/unidade/preço. O preço é
@@ -358,7 +487,7 @@ model AuditLog {
   /// O que foi feito — ver AUDIT_ACTION em src/audit/audit.service.ts.
   action String
 
-  /// Sobre quem/o quê, também congelado ("user" | "barter").
+  /// Sobre quem/o quê, também congelado ("user" | "barter" | "unit" | …).
   targetType  String
   targetId    Int?
   targetLabel String

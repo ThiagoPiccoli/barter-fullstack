@@ -3,7 +3,7 @@ import ExcelJS from 'exceljs';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { MAX_VERSION_PRICES } from '../src/seasons/version-import';
-import { ADMIN, BACK_OFFICE, JOAO, createTestApp, loginAs, resetDb } from './utils';
+import { ADMIN, BACK_OFFICE, JOAO, UNIT, createTestApp, loginAs, resetDb } from './utils';
 
 /**
  * O LANÇAMENTO do Barter, ponta a ponta.
@@ -25,9 +25,13 @@ describe('Barter — safra e versões (e2e)', () => {
   const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
   const http = () => request(app.getHttpServer());
 
-  /** Permuta válida do Antônio (120 ha, carteira do João) — sem grão: é da safra. */
+  /**
+   * Permuta válida do Antônio (120 ha, carteira do João) — sem grão: é da
+   * safra. A retirada é na Filial 02, a unidade do próprio João.
+   */
   const permuta = {
     producerId: 1,
+    unitId: UNIT.filial02,
     inputs: [
       { productId: 5, quantity: 48 },
       { productId: 6, quantity: 300 },

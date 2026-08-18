@@ -76,5 +76,35 @@ export const GERENTE = 'gerente@agrobarter.com.br';
 export const COMITE = 'comite@agrobarter.com.br';
 export const FATURISTA = 'faturista@agrobarter.com.br';
 
+/**
+ * O SEGUNDO gerente do dataset — Gustavo, das filiais do sul.
+ *
+ * Ele existe para os testes poderem perguntar a coisa que um gerente só não
+ * responde: "o gerente da outra praça consegue opinar sobre esta permuta?".
+ */
+export const GERENTE_SUL = 'gerente.sul@agrobarter.com.br';
+
 /** Os três papéis de retaguarda criados junto com o RBAC, para varrer todos. */
 export const BACK_OFFICE = [GERENTE, COMITE, FATURISTA];
+
+/**
+ * Os ids dos dois gerentes do dataset.
+ *
+ * Beatriz gerencia João e Ana; Gustavo, Roberto, Maria e Lucas. É o TIME que
+ * decide para quem a permuta vai — a unidade de retirada não tem relação com
+ * isso.
+ */
+export const MANAGER = { beatriz: 7, gustavo: 10 } as const;
+
+/**
+ * As unidades do dataset, na ordem em que o seed as cria. São LOCAIS de
+ * retirada: não têm responsável e não roteiam nada.
+ */
+export const UNIT = {
+  matriz: 1,
+  filial02: 2,
+  filial04: 3,
+  filial18: 4,
+  filial24: 5,
+  filial34: 6,
+} as const;

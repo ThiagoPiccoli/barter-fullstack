@@ -25,7 +25,9 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
   Future<void> _edit() async {
     final updated = await Navigator.push<UserModel>(
       context,
-      MaterialPageRoute(builder: (_) => EditConsultantScreen(consultant: consultant)),
+      MaterialPageRoute(
+        builder: (_) => EditStaffScreen(user: consultant, role: UserRole.consultant),
+      ),
     );
     if (updated != null) setState(() => consultant = updated);
   }
@@ -94,6 +96,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
     final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;
     final denied = barters.where((b) => b.status == BarterStatus.denied).length;
+    final atManager = barters.where((b) => b.awaitsManager).length;
     final sacks = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
 
@@ -146,7 +149,16 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                 const Divider(height: 1),
                 InfoTile(icon: Icons.phone_outlined, label: 'Telefone', value: consultant.phone),
                 const Divider(height: 1),
-                InfoTile(icon: Icons.store_outlined, label: 'Filial', value: consultant.branch),
+                InfoTile(icon: Icons.store_outlined, label: 'Unidade', value: consultant.branch),
+                const Divider(height: 1),
+                // A quem as permutas dele são enviadas. Fica junto do cadastro,
+                // e não escondido na edição, porque é a resposta da pergunta
+                // que traz o admin a esta tela.
+                InfoTile(
+                  icon: Icons.assignment_ind_outlined,
+                  label: 'Gerente responsável',
+                  value: consultant.managerName.isEmpty ? '—' : consultant.managerName,
+                ),
                 const Divider(height: 1),
                 InfoTile(
                   icon: Icons.calendar_today_outlined,
@@ -189,10 +201,19 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                 color: AppColors.input,
               ),
               SummaryCard(
-                title: 'Em Análise',
+                title: 'Em Revisão',
                 value: pending.toString(),
                 icon: Icons.hourglass_top,
                 color: AppColors.pending,
+              ),
+              // Contagem própria: uma permuta que ainda não saiu da mesa do
+              // gerente não é "em revisão", e juntar as duas esconderia
+              // exatamente a etapa que acabou de ser criada.
+              SummaryCard(
+                title: 'No Gerente',
+                value: atManager.toString(),
+                icon: Icons.assignment_ind_outlined,
+                color: AppColors.atManager,
               ),
             ],
           ),

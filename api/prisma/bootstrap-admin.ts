@@ -2,6 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../src/auth/password.util';
 import { passwordProblem } from '../src/auth/password-policy';
 import { ROLE } from '../src/common/roles';
+import { normalizeName } from '../src/seasons/product-name';
 
 /**
  * Primeiro acesso em PRODUÇÃO. O dataset de demonstração não roda fora de
@@ -34,13 +35,23 @@ export async function bootstrapAdmin(
   const problem = passwordProblem(password, { email, fullName });
   if (problem) return { status: 'weak-password', reason: problem };
 
+  // A PRIMEIRA UNIDADE nasce junto com o primeiro admin, e não por acaso: o
+  // cadastro de qualquer usuário exige uma unidade, então um banco com admin e
+  // sem unidade nenhuma seria um sistema que não consegue cadastrar a segunda
+  // pessoa. Ela vem sem gerente — designar o responsável é o passo seguinte,
+  // depois de o admin provisionar um.
+  const matriz = await prisma.unit.create({
+    data: { name: 'Matriz', nameKey: normalizeName('Matriz'), city: 'Sede' },
+  });
+
   await prisma.user.create({
     data: {
       fullName,
       email,
       password: await hashPassword(password),
       role: ROLE.admin,
-      branch: 'Matriz',
+      unitId: matriz.id,
+      branch: matriz.name,
       mustChangePassword: true,
     },
   });

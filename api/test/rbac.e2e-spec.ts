@@ -6,8 +6,10 @@ import {
   COMITE,
   FATURISTA,
   GERENTE,
+  GERENTE_SUL,
   JOAO,
   SEED_PASSWORD,
+  UNIT,
   createTestApp,
   loginAs,
   resetDb,
@@ -50,8 +52,8 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     }
   });
 
-  it('retaguarda enxerga a operação inteira, não uma carteira', async () => {
-    for (const email of BACK_OFFICE) {
+  it('comitê e faturista acompanham a operação inteira, não uma carteira', async () => {
+    for (const email of [COMITE, FATURISTA]) {
       const auth = await asUser(email);
 
       const barters = await request(app.getHttpServer())
@@ -75,7 +77,54 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     }
   });
 
-  it('retaguarda ainda não escreve nada: cadastros, catálogo e revisão são do admin', async () => {
+  /**
+   * O GERENTE tem um escopo próprio, mais estreito que o da retaguarda: ele
+   * enxerga o TIME dele.
+   *
+   * Ele não é auditor — responde por um time, e a permuta de outro time não é
+   * assunto dele. Enquanto teve `barters.readAll`, a fila que pedia ação dele
+   * ficava misturada com a operação inteira, e a tela não tinha como dar ênfase
+   * ao que era dele.
+   */
+  it('o gerente enxerga o time dele, e só ele', async () => {
+    const beatriz = await asUser(GERENTE);
+
+    // Beatriz responde por João e Ana: 001, 002, 004 e 005.
+    const lista = await request(app.getHttpServer())
+      .get('/api/v1/barters')
+      .set('Authorization', beatriz);
+    expect(lista.status).toBe(200);
+    expect(lista.body.data.map((b: { code: string }) => b.code).sort()).toEqual([
+      'PRM-2026-001',
+      'PRM-2026-002',
+      'PRM-2026-004',
+      'PRM-2026-005',
+    ]);
+
+    // E o detalhe segue o MESMO recorte: o que não aparece na lista também não
+    // abre pelo código.
+    await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-002')
+      .set('Authorization', beatriz)
+      .expect(200);
+    const alheia = await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-007') // do Lucas, time do Gustavo
+      .set('Authorization', beatriz);
+    expect(alheia.status).toBe(403);
+
+    // O outro gerente enxerga exatamente o complemento.
+    const gustavo = await request(app.getHttpServer())
+      .get('/api/v1/barters')
+      .set('Authorization', await asUser(GERENTE_SUL));
+    expect(gustavo.body.data.map((b: { code: string }) => b.code).sort()).toEqual([
+      'PRM-2026-003',
+      'PRM-2026-006',
+      'PRM-2026-007',
+      'PRM-2026-008',
+    ]);
+  });
+
+  it('retaguarda não escreve cadastro nem revisão: isso é do admin', async () => {
     for (const email of BACK_OFFICE) {
       const auth = await asUser(email);
       const post = (url: string, body: object) =>
@@ -98,7 +147,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
         post('/api/v1/consultants', {
           fullName: 'Consultor Novo',
           email: 'consultor.novo@agrobarter.com.br',
-          branch: 'Filial 99',
+          unitId: UNIT.filial02,
         }).then((r) => r.status),
       ).resolves.toBe(403);
 
@@ -118,16 +167,48 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
         ),
       ).resolves.toBe(403);
 
-      // PRM-2026-003 está pendente no dataset.
+      // PRM-2026-002 está em análise no dataset.
       await expect(
-        post('/api/v1/barters/PRM-2026-003/review', { status: 'approved' }).then((r) => r.status),
+        post('/api/v1/barters/PRM-2026-002/review', { status: 'approved' }).then((r) => r.status),
+      ).resolves.toBe(403);
+
+      // Abrir e fechar praça é operação do admin. A retaguarda LÊ a lista (ela
+      // aparece nas permutas), mas não mexe nela.
+      await expect(
+        post('/api/v1/units', { name: 'Filial Nova', city: 'Maringá/PR' }).then((r) => r.status),
+      ).resolves.toBe(403);
+      await expect(
+        put('/api/v1/units/1', { name: 'Matriz', city: 'Maringá/PR' }).then((r) => r.status),
       ).resolves.toBe(403);
     }
+  });
+
+  /**
+   * O gerente é o único da retaguarda que escreve — e escreve UMA coisa. Este
+   * caso é o par do de cima: ele fixa o que o gerente ganhou sem deixar a lista
+   * de "não escreve nada" perder o sentido para comitê e faturista.
+   */
+  it('o parecer é do gerente; comitê e faturista não alcançam a etapa', async () => {
+    for (const email of [COMITE, FATURISTA]) {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-005/opinion')
+        .set('Authorization', await asUser(email))
+        .send({ note: 'Parecer que este papel não deveria conseguir dar.' });
+      expect(response.status).toBe(403);
+    }
+
+    const gerente = await request(app.getHttpServer())
+      .post('/api/v1/barters/PRM-2026-005/opinion')
+      .set('Authorization', await asUser(GERENTE))
+      .send({ note: 'Estoque conferido na unidade, volume compatível com a área.' });
+    expect(gerente.status).toBe(200);
+    expect(gerente.body.data.status).toBe('pending');
   });
 
   it('permuta é ato do consultor da carteira — nem retaguarda nem admin registram', async () => {
     const payload = {
       producerId: 1,
+      unitId: UNIT.filial02,
       grainId: 1,
       inputs: [
         { productId: 5, quantity: 48 },

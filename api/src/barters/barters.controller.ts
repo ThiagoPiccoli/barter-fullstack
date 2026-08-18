@@ -4,7 +4,12 @@ import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterJson } from '../common/serializers';
 import { BartersService } from './barters.service';
-import { CreateBarterDto, ListBartersQuery, ReviewBarterDto } from './dto/barter.dto';
+import {
+  BarterOpinionDto,
+  CreateBarterDto,
+  ListBartersQuery,
+  ReviewBarterDto,
+} from './dto/barter.dto';
 
 @Controller('barters')
 export class BartersController {
@@ -37,6 +42,24 @@ export class BartersController {
   @RequireCapability(CAPABILITY.bartersRegister)
   async store(@CurrentUser() user: User, @Body() dto: CreateBarterDto) {
     return toBarterJson(await this.bartersService.create(user, dto));
+  }
+
+  /**
+   * PARECER TÉCNICO do gerente sobre uma permuta que chegou à unidade dele.
+   *
+   * A capacidade abre a porta para o papel; quem confere que a permuta é de uma
+   * unidade DESTE gerente é o service — a política sobre o recurso não cabe no
+   * decorator.
+   */
+  @Post(':code/opinion')
+  @RequireCapability(CAPABILITY.bartersOpinion)
+  @HttpCode(200)
+  async opinion(
+    @CurrentUser() manager: User,
+    @Param('code') code: string,
+    @Body() dto: BarterOpinionDto,
+  ) {
+    return toBarterJson(await this.bartersService.giveOpinion(manager, code, dto));
   }
 
   /** Revisão do admin: aprova/nega uma pendente, com observação opcional. */

@@ -33,10 +33,17 @@ class ConsultantRepository {
 
   Future<void> delete(String id) => api.delete('/consultants/$id');
 
+  /// A unidade vai como id — o `branch` que sai na resposta é o NOME dela,
+  /// escrito pelo servidor. Enquanto isto era texto livre, "Filial 02" e
+  /// "FILIAL 02" eram duas filiais para qualquer agrupamento.
+  ///
+  /// O GERENTE é obrigatório e vai junto: é a ele que as permutas deste
+  /// consultor serão enviadas, e é ele quem dará o parecer técnico delas.
   Map<String, dynamic> _payload(UserModel s) => {
         'fullName': s.name,
         'email': s.email,
         if (s.phone.isNotEmpty) 'phone': s.phone,
-        'branch': s.branch,
+        'unitId': int.parse(s.unitId),
+        'managerId': int.parse(s.managerId),
       };
 }

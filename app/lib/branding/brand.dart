@@ -67,6 +67,14 @@ class BrandPalette {
   final Color onPrimaryOverlay;
 
   /// Estados de uma permuta, e seus fundos correspondentes.
+  ///
+  /// [atManager] é a permuta esperando o parecer do gerente da unidade — a
+  /// primeira parada do caminho. Ela precisa de cor PRÓPRIA, e não da de
+  /// [pending]: as duas são "ainda não decidido", mas a ação está com pessoas
+  /// diferentes, e pintá-las igual esconderia a única informação que a lista
+  /// do gerente existe para dar.
+  final Color atManager;
+  final Color atManagerBg;
   final Color approved;
   final Color pending;
   final Color denied;
@@ -122,6 +130,8 @@ class BrandPalette {
     required this.onPrimarySubtle,
     required this.onPrimaryFaint,
     required this.onPrimaryOverlay,
+    required this.atManager,
+    required this.atManagerBg,
     required this.approved,
     required this.pending,
     required this.denied,

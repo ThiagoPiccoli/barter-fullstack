@@ -4,7 +4,8 @@ import '../services/api/api_client.dart';
 /// Catálogo: produtos (grãos e insumos, com histórico de valores) e as CLASSES
 /// de produto com sua regra de mínimo.
 ///
-/// A lista de classes é fixa no servidor — aqui só se lê e se ajusta a regra.
+/// As classes vêm da lista de preços do fornecedor (a carga em massa cria a
+/// que não existe) — aqui só se lê e se ajusta a regra de mínimo.
 class CatalogRepository {
   /// O catálogo inteiro, **sem** a linha do tempo de cada produto: dela vêm só
   /// o primeiro valor e a contagem (ver [ProductModel.priceHistory]). É a

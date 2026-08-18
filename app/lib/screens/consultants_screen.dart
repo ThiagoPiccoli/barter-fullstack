@@ -7,8 +7,13 @@ import 'producer_profile_screen.dart';
 import 'consultant_profile_screen.dart';
 import 'edit_forms.dart';
 
-/// Aba de cadastros do admin: alterna entre PRODUTORES (clientes designados) e
-/// CONSULTORES (usuários que registram permutas), com busca em cada lista.
+/// O que a aba de cadastros administra. A ordem é a da dependência: o produtor
+/// precisa de um consultor, o consultor precisa de uma unidade e de um gerente.
+enum _Registry { producers, consultants, managers, units }
+
+/// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
+/// (quem registra permuta), GERENTES (quem dá o parecer) e UNIDADES (os locais
+/// de retirada), com busca em cada lista.
 class ConsultantsScreen extends StatefulWidget {
   const ConsultantsScreen({super.key});
   @override
@@ -16,7 +21,7 @@ class ConsultantsScreen extends StatefulWidget {
 }
 
 class _ConsultantsScreenState extends State<ConsultantsScreen> {
-  int _tab = 0; // 0 = produtores, 1 = consultores
+  _Registry _tab = _Registry.producers;
   String _search = '';
   final _searchCtrl = TextEditingController();
 
@@ -26,22 +31,26 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     super.dispose();
   }
 
-  void _setTab(int i) {
-    if (i == _tab) return;
+  void _setTab(_Registry tab) {
+    if (tab == _tab) return;
     setState(() {
-      _tab = i;
+      _tab = tab;
       _search = '';
       _searchCtrl.clear();
     });
   }
 
-  /// Abre o cadastro de um novo produtor ou consultor, conforme a aba ativa.
+  /// Abre o cadastro novo do que a aba ativa administra.
   Future<void> _createNew() async {
-    final isProducers = _tab == 0;
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => isProducers ? const EditProducerScreen() : const EditConsultantScreen(),
+        builder: (_) => switch (_tab) {
+          _Registry.producers => const EditProducerScreen(),
+          _Registry.consultants => const EditStaffScreen(role: UserRole.consultant),
+          _Registry.managers => const EditStaffScreen(role: UserRole.manager),
+          _Registry.units => const EditUnitScreen(),
+        },
       ),
     );
     if (mounted) setState(() {});
@@ -50,7 +59,6 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
   @override
   Widget build(BuildContext context) {
     final q = _search.trim().toLowerCase();
-    final isProducers = _tab == 0;
 
     final producers = AppData.producers
         .where((p) =>
@@ -64,8 +72,45 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             q.isEmpty ||
             v.name.toLowerCase().contains(q) ||
             v.branch.toLowerCase().contains(q) ||
+            v.managerName.toLowerCase().contains(q) ||
             v.email.toLowerCase().contains(q))
         .toList();
+    final managers = AppData.managers
+        .where((m) =>
+            q.isEmpty ||
+            m.name.toLowerCase().contains(q) ||
+            m.branch.toLowerCase().contains(q) ||
+            m.email.toLowerCase().contains(q))
+        .toList();
+    final units = AppData.units
+        .where((u) =>
+            q.isEmpty ||
+            u.name.toLowerCase().contains(q) ||
+            u.city.toLowerCase().contains(q))
+        .toList();
+
+    final (hint, count, fab) = switch (_tab) {
+      _Registry.producers => (
+          'Buscar produtor, fazenda ou cidade...',
+          '${producers.length} produtor(es)',
+          'Novo produtor',
+        ),
+      _Registry.consultants => (
+          'Buscar consultor, unidade, gerente ou e-mail...',
+          '${consultants.length} consultor(es)',
+          'Novo consultor',
+        ),
+      _Registry.managers => (
+          'Buscar gerente, unidade ou e-mail...',
+          '${managers.length} gerente(s)',
+          'Novo gerente',
+        ),
+      _Registry.units => (
+          'Buscar unidade ou cidade...',
+          '${units.length} unidade(s)',
+          'Nova unidade',
+        ),
+    };
 
     return Scaffold(
       appBar: AppBar(
@@ -75,7 +120,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createNew,
         icon: const Icon(Icons.add),
-        label: Text(isProducers ? 'Novo produtor' : 'Novo consultor'),
+        label: Text(fab),
       ),
       body: Column(
         children: [
@@ -83,8 +128,12 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
             child: _SegmentedToggle(
               tab: _tab,
-              producerCount: AppData.producers.length,
-              consultantCount: AppData.consultants.length,
+              counts: {
+                _Registry.producers: AppData.producers.length,
+                _Registry.consultants: AppData.consultants.length,
+                _Registry.managers: AppData.managers.length,
+                _Registry.units: AppData.units.length,
+              },
               onChanged: _setTab,
             ),
           ),
@@ -92,9 +141,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: SearchField(
               controller: _searchCtrl,
-              hint: isProducers
-                  ? 'Buscar produtor, fazenda ou cidade...'
-                  : 'Buscar consultor, filial ou e-mail...',
+              hint: hint,
               onChanged: (v) => setState(() => _search = v),
               onClear: () => setState(() {
                 _search = '';
@@ -107,16 +154,19 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                isProducers
-                    ? '${producers.length} produtor(es)'
-                    : '${consultants.length} consultor(es)',
+                count,
                 style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
               ),
             ),
           ),
           const SizedBox(height: 8),
           Expanded(
-            child: isProducers ? _buildProducerList(producers) : _buildConsultantList(consultants),
+            child: switch (_tab) {
+              _Registry.producers => _buildProducerList(producers),
+              _Registry.consultants => _buildConsultantList(consultants),
+              _Registry.managers => _buildManagerList(managers),
+              _Registry.units => _buildUnitList(units),
+            },
           ),
         ],
       ),
@@ -177,11 +227,93 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           subtitle: v.branch,
           accent: AppColors.input,
           badgeIcon: Icons.badge,
-          chips: _statChips(bs),
+          chips: [
+            // A quem as permutas dele vão. É a informação que o admin procura
+            // ao abrir esta lista depois de alguém perguntar "quem dá o parecer
+            // das permutas do Roberto?".
+            _StatChip(
+              label: 'Gerente: ${v.managerName.isEmpty ? 'sem gerente' : v.managerName.split(' ').first}',
+              color: AppColors.atManager,
+            ),
+            ..._statChips(bs),
+          ],
           onTap: () async {
             await Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => ConsultantProfileScreen(consultant: v)),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// Os GERENTES. O cartão mostra as duas coisas que o admin precisa saber
+  /// antes de mexer neles: o TAMANHO do time e o que está esperando parecer —
+  /// que são exatamente as duas travas que o servidor aplica na exclusão.
+  Widget _buildManagerList(List<UserModel> list) {
+    if (list.isEmpty) return const _EmptyState(label: 'Nenhum gerente encontrado');
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_gerentes'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final m = list[i];
+        final team = AppData.consultants.where((c) => c.managerId == m.id).length;
+        final waiting = AppData.opinionQueueFor(m.id).length;
+        return _PersonCard(
+          initials: m.avatarInitials,
+          name: m.name,
+          subtitle: m.branch,
+          accent: AppColors.atManager,
+          badgeIcon: Icons.assignment_ind,
+          chips: [
+            _StatChip(label: '$team consultor(es)', color: AppColors.input),
+            if (waiting > 0)
+              _StatChip(label: '$waiting esperando parecer', color: AppColors.atManager),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditStaffScreen(user: m, role: UserRole.manager),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// As UNIDADES de retirada. O cartão mostra quantas permutas são retiradas em
+  /// cada uma — que é a leitura de logística da lista, e a única pergunta que
+  /// ela responde: a unidade não tem dono nem participa da revisão.
+  Widget _buildUnitList(List<UnitModel> list) {
+    if (list.isEmpty) return const _EmptyState(label: 'Nenhuma unidade encontrada');
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_unidades'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final u = list[i];
+        final pickups = AppData.barters.where((b) => b.unitId == u.id).length;
+        final staff = AppData.consultants.where((c) => c.unitId == u.id).length;
+        return _PersonCard(
+          initials: u.avatarInitials,
+          name: u.name,
+          subtitle: u.city,
+          accent: AppColors.primaryMedium,
+          badgeIcon: Icons.store,
+          chips: [
+            _StatChip(label: '$pickups retirada(s)', color: AppColors.primary),
+            if (staff > 0) _StatChip(label: '$staff consultor(es)', color: AppColors.input),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => EditUnitScreen(unit: u)),
             );
             if (mounted) setState(() {});
           },
@@ -194,23 +326,43 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
 List<Widget> _statChips(List<BarterModel> bs) {
   final approved = bs.where((b) => b.status == BarterStatus.approved).length;
   final pending = bs.where((b) => b.status == BarterStatus.pending).length;
+  final atManager = bs.where((b) => b.awaitsManager).length;
   return [
     _StatChip(label: '${bs.length} permutas', color: AppColors.primary),
     if (approved > 0) _StatChip(label: '$approved aprov.', color: AppColors.approved),
-    if (pending > 0) _StatChip(label: '$pending análise', color: AppColors.pending),
+    if (pending > 0) _StatChip(label: '$pending revisão', color: AppColors.pending),
+    // A etapa nova precisa de contagem própria: somada a "revisão", ela
+    // esconderia justamente o que ainda não saiu da mesa do gerente.
+    if (atManager > 0) _StatChip(label: '$atManager no gerente', color: AppColors.atManager),
   ];
 }
 
 class _SegmentedToggle extends StatelessWidget {
-  final int tab;
-  final int producerCount, consultantCount;
-  final ValueChanged<int> onChanged;
+  final _Registry tab;
+  final Map<_Registry, int> counts;
+  final ValueChanged<_Registry> onChanged;
   const _SegmentedToggle({
     required this.tab,
-    required this.producerCount,
-    required this.consultantCount,
+    required this.counts,
     required this.onChanged,
   });
+
+  /// Rótulo, ícone e cor de cada segmento, em um lugar só. Com três abas, a
+  /// forma anterior (um bloco por segmento, copiado) já era o começo de uma
+  /// lista escrita à mão.
+  static const _segments = {
+    _Registry.producers: ('Produtores', Icons.agriculture),
+    _Registry.consultants: ('Consultores', Icons.badge),
+    _Registry.managers: ('Gerentes', Icons.assignment_ind),
+    _Registry.units: ('Unidades', Icons.store),
+  };
+
+  Color _accentOf(_Registry registry) => switch (registry) {
+        _Registry.producers => AppColors.primary,
+        _Registry.consultants => AppColors.input,
+        _Registry.managers => AppColors.atManager,
+        _Registry.units => AppColors.primaryMedium,
+      };
 
   @override
   Widget build(BuildContext context) {
@@ -222,26 +374,17 @@ class _SegmentedToggle extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Expanded(
-            child: _seg(
-              label: 'Produtores',
-              icon: Icons.agriculture,
-              count: producerCount,
-              selected: tab == 0,
-              accent: AppColors.primary,
-              onTap: () => onChanged(0),
+          for (final entry in _segments.entries)
+            Expanded(
+              child: _seg(
+                label: entry.value.$1,
+                icon: entry.value.$2,
+                count: counts[entry.key] ?? 0,
+                selected: tab == entry.key,
+                accent: _accentOf(entry.key),
+                onTap: () => onChanged(entry.key),
+              ),
             ),
-          ),
-          Expanded(
-            child: _seg(
-              label: 'Consultores',
-              icon: Icons.badge,
-              count: consultantCount,
-              selected: tab == 1,
-              accent: AppColors.input,
-              onTap: () => onChanged(1),
-            ),
-          ),
         ],
       ),
     );
@@ -261,7 +404,7 @@ class _SegmentedToggle extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
         decoration: BoxDecoration(
           color: selected ? accent : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
@@ -269,33 +412,46 @@ class _SegmentedToggle extends StatelessWidget {
               ? [BoxShadow(color: accent.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 2))]
               : null,
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        // Com QUATRO segmentos, ícone + rótulo + contagem lado a lado não cabe
+        // num celular estreito, e o `ellipsis` comia o rótulo até sobrar uma
+        // letra. Empilhar (ícone em cima, rótulo e contagem embaixo) devolve a
+        // largura ao texto, e o FittedBox garante que nada estoure quando o
+        // nome for longo ou a fonte do sistema for maior.
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 16, color: selected ? AppColors.onPrimary : AppColors.textMedium),
-            const SizedBox(width: 6),
-            Flexible(
-              child: Text(label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: selected ? AppColors.onPrimary : AppColors.textMedium,
-                  )),
-            ),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-              decoration: BoxDecoration(
-                color: selected ? AppColors.onPrimary.withValues(alpha: 0.25) : AppColors.textLight.withValues(alpha: 0.20),
-                borderRadius: BorderRadius.circular(10),
+            Icon(icon, size: 17, color: selected ? AppColors.onPrimary : AppColors.textMedium),
+            const SizedBox(height: 3),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label,
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: selected ? AppColors.onPrimary : AppColors.textMedium,
+                      )),
+                  const SizedBox(width: 5),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? AppColors.onPrimary.withValues(alpha: 0.25)
+                          : AppColors.textLight.withValues(alpha: 0.20),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text('$count',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: selected ? AppColors.onPrimary : AppColors.textMedium,
+                        )),
+                  ),
+                ],
               ),
-              child: Text('$count',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: selected ? AppColors.onPrimary : AppColors.textMedium,
-                  )),
             ),
           ],
         ),

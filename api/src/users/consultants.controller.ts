@@ -14,15 +14,19 @@ import { CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { ROLE } from '../common/roles';
 import { toProvisionedUserJson, toUserJson } from '../common/serializers';
-import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
+import { CreateConsultantDto, UpdateConsultantDto } from './dto/user.dto';
 import { UserProvisioningService } from './user-provisioning.service';
 
 /**
  * CONSULTOR — quem registra permuta para a própria carteira de produtores.
  *
- * É o único dos quatro cujo cadastro tem consequência no domínio: produtor
- * pertence à carteira de um consultor, então excluir um deixa esses produtores
- * sem dono até o admin realocá-los.
+ * É o único dos quatro cujo cadastro tem consequência no domínio, por duas
+ * pontas: produtor pertence à carteira de um consultor (excluir um deixa esses
+ * produtores sem dono até o admin realocá-los), e toda permuta dele é enviada
+ * ao GERENTE apontado aqui, que é quem dará o parecer técnico.
+ *
+ * É também o único com DTO próprio — `CreateConsultantDto` estende o comum com
+ * o gerente. As outras três rotas continuam sem saber que gerente existe.
  */
 @Controller('consultants')
 @RequireCapability(CAPABILITY.usersManage)
@@ -40,7 +44,7 @@ export class ConsultantsController {
    * valor depois; o caminho para isso é o reset abaixo.
    */
   @Post()
-  async store(@CurrentUser() actor: User, @Body() dto: CreateUserDto) {
+  async store(@CurrentUser() actor: User, @Body() dto: CreateConsultantDto) {
     return toProvisionedUserJson(await this.users.create(actor, ROLE.consultant, dto));
   }
 
@@ -48,7 +52,7 @@ export class ConsultantsController {
   async update(
     @CurrentUser() actor: User,
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateUserDto,
+    @Body() dto: UpdateConsultantDto,
   ) {
     return toUserJson(await this.users.update(actor, ROLE.consultant, id, dto));
   }

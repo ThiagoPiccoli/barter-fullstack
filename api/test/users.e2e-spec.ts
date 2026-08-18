@@ -1,6 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { ADMIN, BACK_OFFICE, JOAO, createTestApp, loginAs, resetDb } from './utils';
+import { ADMIN, BACK_OFFICE, JOAO, MANAGER, UNIT, createTestApp, loginAs, resetDb } from './utils';
 
 /**
  * As quatro rotas de provisionamento — uma por papel.
@@ -33,7 +33,10 @@ describe('Usuários — uma rota por papel (e2e)', () => {
   const novoUsuario = (email: string) => ({
     fullName: 'Pessoa Nova',
     email,
-    branch: 'Matriz',
+    unitId: UNIT.matriz,
+    // Só a rota de consultor declara `managerId`; nas outras três o whitelist
+    // do ValidationPipe o descarta, que é justamente o que se quer provar.
+    managerId: MANAGER.beatriz,
   });
 
   it('cada rota lista apenas o próprio papel', async () => {

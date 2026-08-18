@@ -3,7 +3,16 @@ import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { passwordProblem } from '../src/auth/password-policy';
 import { hashToken } from '../src/auth/token.util';
-import { ADMIN, JOAO, SEED_PASSWORD, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  JOAO,
+  MANAGER,
+  SEED_PASSWORD,
+  UNIT,
+  createTestApp,
+  loginAs,
+  resetDb,
+} from './utils';
 
 describe('Auth (e2e)', () => {
   let app: INestApplication;
@@ -162,7 +171,12 @@ describe('Auth (e2e)', () => {
     const created = await request(app.getHttpServer())
       .post('/api/v1/consultants')
       .set({ Authorization: `Bearer ${adminToken}` })
-      .send({ fullName: 'Novo Consultor', email: 'novo@agrobarter.com.br', branch: 'Filial 99' })
+      .send({
+        fullName: 'Novo Consultor',
+        email: 'novo@agrobarter.com.br',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
+      })
       .expect(201);
     expect(created.body.data.mustChangePassword).toBe(true);
 
@@ -212,7 +226,8 @@ describe('Auth (e2e)', () => {
         .send({
           fullName: 'Recém Provisionado',
           email: 'recem@agrobarter.com.br',
-          branch: 'Filial 7',
+          unitId: UNIT.matriz,
+          managerId: MANAGER.beatriz,
         })
         .expect(201);
       const password = created.body.data.provisionalPassword as string;
@@ -286,7 +301,12 @@ describe('Auth (e2e)', () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/consultants')
         .set({ Authorization: `Bearer ${adminToken}` })
-        .send({ fullName: 'Consultor Provisionado', email, branch: 'Filial 9' })
+        .send({
+          fullName: 'Consultor Provisionado',
+          email,
+          unitId: UNIT.matriz,
+          managerId: MANAGER.beatriz,
+        })
         .expect(201);
       return created.body.data.provisionalPassword as string;
     }

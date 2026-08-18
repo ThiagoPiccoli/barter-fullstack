@@ -5,6 +5,8 @@ import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
 import '../repositories/consultant_repository.dart';
+import '../repositories/manager_repository.dart';
+import '../repositories/unit_repository.dart';
 
 /// Estado de dados do app: um cache em memória hidratado da API no login.
 ///
@@ -22,6 +24,8 @@ class AppData {
   static final CatalogRepository _catalog = CatalogRepository();
   static final BarterRepository _barters = BarterRepository();
   static final BarterProgramRepository _program = BarterProgramRepository();
+  static final UnitRepository _units = UnitRepository();
+  static final ManagerRepository _managers = ManagerRepository();
 
   /// Usuário logado (admin ou consultor).
   static UserModel? currentUser;
@@ -29,13 +33,22 @@ class AppData {
   /// Consultores (visível só para admin — a API restringe a rota).
   static List<UserModel> consultants = [];
 
+  /// Gerentes (idem). O app os carrega por um motivo só: o cadastro do
+  /// consultor precisa escolher a quem as permutas dele serão enviadas.
+  static List<UserModel> managers = [];
+
   /// Produtores visíveis: a API devolve a carteira do consultor logado, ou
   /// todas as carteiras para o admin.
   static List<ProducerModel> producers = [];
 
+  /// As UNIDADES de retirada, em ordem alfabética. Todo papel carrega: o
+  /// consultor escolhe entre elas ao registrar, o gerente descobre quais são as
+  /// dele e o admin as cadastra.
+  static List<UnitModel> units = [];
+
   static List<ProductModel> grains = [];
   static List<ProductModel> inputs = [];
-  /// As CLASSES de produto — lista fixa vinda do servidor.
+  /// As CLASSES de produto, na ordem de exibição do servidor.
   static List<ProductClassModel> classes = [];
   static List<BarterModel> barters = [];
 
@@ -116,7 +129,9 @@ class AppData {
   static void _clearCache() {
     currentUser = null;
     consultants = [];
+    managers = [];
     producers = [];
+    units = [];
     grains = [];
     inputs = [];
     classes = [];
@@ -132,11 +147,19 @@ class AppData {
     await Future.wait([
       refreshCatalog(),
       refreshProducers(),
+      refreshUnits(),
       refreshBarters(),
       refreshBarterVersion(),
       if (isAdmin) refreshConsultants(),
+      if (isAdmin) refreshManagers(),
       if (isAdmin) refreshSeasons(),
     ]);
+  }
+
+  /// As unidades de retirada. Todo papel carrega — sem elas o consultor não
+  /// consegue registrar permuta e o gerente não sabe quais filas são dele.
+  static Future<void> refreshUnits() async {
+    units = await _units.list();
   }
 
   /// A versão vigente do Barter. Todo papel carrega — o consultor precisa dela
@@ -174,6 +197,10 @@ class AppData {
     consultants = await _consultants.list();
   }
 
+  static Future<void> refreshManagers() async {
+    managers = await _managers.list();
+  }
+
   static Future<void> refreshBarters() async {
     barters = await _barters.list();
   }
@@ -205,6 +232,24 @@ class AppData {
     return null;
   }
 
+  /// Busca uma unidade pelo id (null se não encontrada ou id vazio).
+  static UnitModel? unitById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final u in units) {
+      if (u.id == id) return u;
+    }
+    return null;
+  }
+
+  /// As permutas que esperam o parecer DESTE gerente — a fila dele.
+  ///
+  /// A permuta já chega com o destinatário dentro (`managerId`), então o recorte
+  /// é sobre o próprio cache: o gerente não precisa da lista de consultores,
+  /// que é rota de admin. O servidor aplica a mesma regra ao recusar o parecer
+  /// de outro gerente.
+  static List<BarterModel> opinionQueueFor(String managerId) =>
+      barters.where((b) => b.awaitsOpinionFrom(managerId)).toList();
+
   /// Busca uma classe pelo id (null se não encontrada ou id null).
   static ProductClassModel? classById(String? id) {
     if (id == null) return null;
@@ -218,14 +263,49 @@ class AppData {
 
   static Future<BarterModel> createBarter({
     required String producerId,
+    required String unitId,
     required Map<String, double> inputQuantities,
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
+      unitId: unitId,
       inputQuantities: inputQuantities,
     );
     barters.insert(0, barter);
     return barter;
+  }
+
+  /* ── Unidades (admin cadastra; gerente responde por elas) ───────────── */
+
+  static Future<UnitModel> saveUnit(UnitModel unit, {required bool isNew}) async {
+    final saved = isNew ? await _units.create(unit) : await _units.update(unit);
+    final index = units.indexWhere((u) => u.id == saved.id);
+    if (index == -1) {
+      units.add(saved);
+    } else {
+      units[index] = saved;
+    }
+    units.sort((a, b) => a.name.compareTo(b.name));
+    return saved;
+  }
+
+  /// Excluir a unidade desfaz o vínculo das permutas dela no servidor (o nome
+  /// congelado fica, e a etapa do gerente não é afetada — a unidade é só o
+  /// local). As permutas em cache são recarregadas em vez de remendadas, pelo
+  /// mesmo motivo da exclusão de consultor.
+  static Future<void> deleteUnit(String id) async {
+    await _units.delete(id);
+    units.removeWhere((u) => u.id == id);
+    await refreshBarters();
+  }
+
+  /// PARECER TÉCNICO do gerente. A permuta volta do servidor já em revisão —
+  /// o cache guarda a resposta dele, nunca uma versão montada aqui.
+  static Future<BarterModel> giveOpinion(String code, String note) async {
+    final updated = await _barters.giveOpinion(code, note);
+    final index = barters.indexWhere((b) => b.id == updated.id);
+    if (index != -1) barters[index] = updated;
+    return updated;
   }
 
   /* ── Lançamento do Barter (admin) ───────────────────────────────────── */
@@ -350,6 +430,46 @@ class AppData {
     return provisioned;
   }
 
+  /* ── Gerentes (quem recebe as permutas para dar parecer) ────────────── */
+
+  static Future<ProvisionedConsultant> createManager(UserModel manager) async {
+    final provisioned = await _managers.create(manager);
+    _cacheManager(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateManager(UserModel manager) async {
+    final saved = await _managers.update(manager);
+    _cacheManager(saved);
+    // O nome dele aparece dentro de cada consultor do time (`managerName`), e
+    // o cache guarda essa cópia — recarrega em vez de remendar linha a linha.
+    await refreshConsultants();
+    return saved;
+  }
+
+  static Future<ProvisionedConsultant> resetManagerPassword(String id) async {
+    final provisioned = await _managers.resetPassword(id);
+    _cacheManager(provisioned.consultant);
+    return provisioned;
+  }
+
+  /// O servidor recusa enquanto ele tiver time ou fila; quando aceita, os
+  /// consultores dele já não existiam para apontar, então não há o que
+  /// recarregar além da própria lista.
+  static Future<void> deleteManager(String id) async {
+    await _managers.delete(id);
+    managers.removeWhere((m) => m.id == id);
+  }
+
+  static void _cacheManager(UserModel saved) {
+    final index = managers.indexWhere((m) => m.id == saved.id);
+    if (index == -1) {
+      managers.add(saved);
+    } else {
+      managers[index] = saved;
+    }
+  }
+
   static void _cacheConsultant(UserModel saved) {
     final index = consultants.indexWhere((s) => s.id == saved.id);
     if (index == -1) {
@@ -406,8 +526,8 @@ class AppData {
   }
 
   /// Ajusta a regra de mínimo de uma classe. Não há criar nem excluir: a lista
-  /// é fixa no servidor, e é isso que mantém o vocabulário estável entre uma
-  /// carga de planilha e outra.
+  /// vem da lista de preços do fornecedor, e o casamento por nome normalizado
+  /// é o que mantém o vocabulário estável entre uma carga e outra.
   static Future<ProductClassModel> updateClassRule(ProductClassModel productClass) async {
     final saved = await _catalog.updateClassRule(productClass);
     final index = classes.indexWhere((c) => c.id == saved.id);

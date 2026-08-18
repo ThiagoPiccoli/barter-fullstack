@@ -1,6 +1,16 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { ADMIN, BACK_OFFICE, JOAO, SEED_PASSWORD, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  BACK_OFFICE,
+  JOAO,
+  SEED_PASSWORD,
+  MANAGER,
+  UNIT,
+  createTestApp,
+  loginAs,
+  resetDb,
+} from './utils';
 
 interface AuditRow {
   action: string;
@@ -67,7 +77,7 @@ describe('Auditoria (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/managers')
         .set('Authorization', auth)
-        .send({ fullName: 'Pessoa Nova', email, branch: 'Matriz' });
+        .send({ fullName: 'Pessoa Nova', email, unitId: UNIT.matriz });
     }
 
     const rows = await trail();
@@ -85,7 +95,7 @@ describe('Auditoria (e2e)', () => {
       .send({
         fullName: 'Faturista Novo',
         email: 'faturista.novo@agrobarter.com.br',
-        branch: 'Matriz',
+        unitId: UNIT.matriz,
       });
     const id = created.body.data.id as number;
 
@@ -95,7 +105,7 @@ describe('Auditoria (e2e)', () => {
       .send({
         fullName: 'Faturista Novo',
         email: 'outro.email@agrobarter.com.br',
-        branch: 'Matriz',
+        unitId: UNIT.matriz,
       })
       .expect(200);
 
@@ -164,7 +174,8 @@ describe('Auditoria (e2e)', () => {
       .send({
         fullName: 'Some Depois',
         email: 'some.depois@agrobarter.com.br',
-        branch: 'Filial 99',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
       });
 
     await request(app.getHttpServer())

@@ -41,7 +41,25 @@ class UserModel {
   final String name;
   final String email;
   final String phone;
+
+  /// UNIDADE em que a pessoa trabalha. Vazio nos cadastros anteriores ao
+  /// cadastro de unidades.
+  final String unitId;
+
+  /// Nome da unidade, congelado no cadastro. É o que as telas mostram e o que
+  /// o painel agrupa nos rankings — o servidor o escreve a partir de [unitId].
   final String branch;
+
+  /// O GERENTE desta pessoa. Só o consultor tem, e para ele é obrigatório no
+  /// cadastro: é a ele que as permutas do consultor são enviadas, e é ele quem
+  /// escreve o parecer técnico delas.
+  ///
+  /// O vínculo é com a PESSOA. A unidade de retirada é logística e não tem
+  /// relação nenhuma com isto — uma permuta retirada na Filial 34 continua
+  /// sendo analisada pelo gerente do consultor que a registrou.
+  final String managerId;
+  final String managerName;
+
   final UserRole role;
   final String avatarInitials;
   final DateTime createdAt;
@@ -57,7 +75,10 @@ class UserModel {
     required this.name,
     required this.email,
     required this.phone,
+    this.unitId = '',
     required this.branch,
+    this.managerId = '',
+    this.managerName = '',
     required this.role,
     required this.avatarInitials,
     required this.createdAt,
@@ -71,7 +92,10 @@ class UserModel {
         name: (json['fullName'] ?? json['email']) as String,
         email: json['email'] as String,
         phone: (json['phone'] ?? '') as String,
+        unitId: _asId(json['unitId']),
         branch: (json['branch'] ?? '') as String,
+        managerId: _asId(json['managerId']),
+        managerName: (json['managerName'] ?? '') as String,
         role: UserRole.fromWire(json['role']),
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
@@ -97,6 +121,47 @@ class ProvisionedConsultant {
         consultant: UserModel.fromJson(json),
         provisionalPassword: (json['provisionalPassword'] ?? '') as String,
       );
+}
+
+/// UNIDADE de retirada: o lugar onde o produtor busca os insumos da permuta.
+///
+/// É um LOCAL, e só. Ela não tem responsável, não decide quem analisa a permuta
+/// e não participa de regra nenhuma — quem dá o parecer técnico é o gerente do
+/// CONSULTOR (ver [UserModel.managerName]), esteja a retirada onde estiver. O
+/// consultor escolhe qualquer unidade da lista, porque a retirada é combinada
+/// com o produtor.
+///
+/// Ela existe como cadastro, e não como texto, porque a filial era digitada à
+/// mão: "Filial 02", "filial 02" e "F02" eram três lugares em qualquer lista.
+class UnitModel {
+  final String id;
+  final String name;
+
+  /// Município/UF — é o que distingue duas unidades de nome parecido na hora de
+  /// escolher onde retirar.
+  final String city;
+
+  final String avatarInitials;
+  final DateTime createdAt;
+
+  const UnitModel({
+    required this.id,
+    required this.name,
+    required this.city,
+    this.avatarInitials = '?',
+    required this.createdAt,
+  });
+
+  factory UnitModel.fromJson(Map<String, dynamic> json) => UnitModel(
+        id: _asId(json['id']),
+        name: json['name'] as String,
+        city: (json['city'] ?? '') as String,
+        avatarInitials: (json['initials'] ?? '?') as String,
+        createdAt: _asDate(json['createdAt']),
+      );
+
+  /// A unidade como se lê numa linha só: "Filial 02 – Gran. Santa T. • Sarandi/PR".
+  String get label => city.isEmpty ? name : '$name • $city';
 }
 
 /// Produtor (cliente) designado a uma permuta. NÃO loga no app — é cadastrado
@@ -173,7 +238,24 @@ class ProducerModel {
 /// grão é o pagamento — e a quantidade de sacas é consequência do custo dos insumos.
 enum ProductType { grain, input }
 
-enum BarterStatus { pending, approved, denied }
+/// O caminho de uma permuta, na ordem em que ela o percorre:
+///
+///     sentToManager → pending → approved
+///                             ↘ denied
+///
+/// [sentToManager] é onde ela nasce: ela está na mesa do gerente do consultor,
+/// esperando o parecer técnico. Escrito o parecer, ela vira [pending] — a fila
+/// de REVISÃO, que é onde alguém aprova ou nega.
+///
+/// "Revisão" e não "análise" porque é a palavra que o resto do sistema já usa
+/// para esta etapa: a rota é `POST /barters/:code/review` e os campos são
+/// `reviewedBy` e `reviewedAt`. Enquanto a tela dizia "em análise", ela dava um
+/// segundo nome à mesma coisa — e "análise" descrevia igualmente bem o que o
+/// gerente faz, deixando as duas etapas indistinguíveis no vocabulário.
+///
+/// Os nomes são os MESMOS que a API grava (ver BARTER_STATUSES em
+/// api/src/barters/dto/barter.dto.ts) — é o que [_asStatus] compara.
+enum BarterStatus { sentToManager, pending, approved, denied }
 
 /// Status vindo do servidor, tolerante ao desconhecido.
 ///
@@ -182,9 +264,12 @@ enum BarterStatus { pending, approved, denied }
 /// lista inteira parar de carregar nas versões do app já instaladas — uma tela
 /// vazia no lugar de todas as permutas.
 ///
-/// Um status que o app não conhece cai em "em análise": o registro continua
+/// Um status que o app não conhece cai em "aguardando revisão": o registro continua
 /// visível, e quem decide se ele aceita ação continua sendo o servidor, que
-/// recusa revisar o que não está pendente.
+/// recusa revisar o que não está pendente. Foi o que aconteceu quando
+/// `sentToManager` nasceu: as versões instaladas do app passaram a mostrar as
+/// permutas novas como "Aguardando Revisão" — impreciso, mas visível e sem ação
+/// indevida, que é exatamente o que este padrão existe para dar.
 BarterStatus _asStatus(dynamic v) {
   for (final status in BarterStatus.values) {
     if (status.name == v) return status;
@@ -238,11 +323,33 @@ class BarterModel {
   // Produtor: cliente designado pelo consultor, dono dos grãos que pagam.
   final String producerId;
   final String producerName;
+
+  /// UNIDADE em que o produtor retira os insumos. É logística: não decide quem
+  /// analisa a permuta. Vazio nas permutas anteriores ao cadastro de unidades.
+  final String unitId;
+  final String unitName;
+
   final BarterStatus status;
   final List<BarterItem> grains;
   final List<BarterItem> inputs;
   final DateTime createdAt;
   final DateTime? updatedAt;
+
+  /// A QUEM esta permuta foi enviada — o gerente do consultor no momento do
+  /// registro — e o PARECER TÉCNICO dele sobre a negociação.
+  ///
+  /// [managerId] e [managerName] vêm preenchidos desde a criação: são o
+  /// destinatário. [managerNote] é null enquanto a permuta está em
+  /// [BarterStatus.sentToManager] — é justamente o que a etapa dele preenche, e
+  /// é essa diferença que [hasManagerOpinion] lê.
+  ///
+  /// O parecer é texto, e só texto: ele não aprova nem nega — quem decide é
+  /// quem revisa, e ele lê isto antes.
+  final String managerId;
+  final String? managerName;
+  final String? managerNote;
+  final DateTime? managerReviewedAt;
+
   final String? adminNote;
   final String? reviewedBy;
 
@@ -254,11 +361,17 @@ class BarterModel {
     required this.consultantBranch,
     required this.producerId,
     required this.producerName,
+    this.unitId = '',
+    this.unitName = '',
     required this.status,
     required this.grains,
     required this.inputs,
     required this.createdAt,
     this.updatedAt,
+    this.managerId = '',
+    this.managerName,
+    this.managerNote,
+    this.managerReviewedAt,
     this.adminNote,
     this.reviewedBy,
   });
@@ -276,6 +389,8 @@ class BarterModel {
       consultantBranch: (json['consultantBranch'] ?? '') as String,
       producerId: _asId(json['producerId']),
       producerName: json['producerName'] as String,
+      unitId: _asId(json['unitId']),
+      unitName: (json['unitName'] ?? '') as String,
       status: _asStatus(json['status']),
       grains: items
           .where((i) => i['kind'] == 'grain')
@@ -287,6 +402,10 @@ class BarterModel {
           .toList(),
       createdAt: _asDate(json['createdAt']),
       updatedAt: _asDateOrNull(json['reviewedAt']),
+      managerId: _asId(json['managerId']),
+      managerName: json['managerName'] as String?,
+      managerNote: json['managerNote'] as String?,
+      managerReviewedAt: _asDateOrNull(json['managerReviewedAt']),
       adminNote: json['adminNote'] as String?,
       reviewedBy: json['reviewedBy'] as String?,
     );
@@ -342,10 +461,31 @@ class BarterModel {
   /// Folga do pagamento expressa em sacas do grão de pagamento (~0).
   double get balanceInSacks => referenceValue > 0 ? balance / referenceValue : 0;
 
+  /// O parecer técnico já foi escrito? É o que separa a etapa do gerente da
+  /// revisão — e o que decide se o detalhe mostra o bloco do parecer.
+  bool get hasManagerOpinion => (managerNote ?? '').trim().isNotEmpty;
+
+  /// Está esperando o parecer do gerente a quem foi enviada.
+  bool get awaitsManager => status == BarterStatus.sentToManager;
+
+  /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
+  /// — repetida aqui só para a tela não oferecer um botão que levaria 403.
+  bool awaitsOpinionFrom(String? managerId) =>
+      managerId != null && managerId.isNotEmpty && awaitsManager && this.managerId == managerId;
+
+  /// O gerente a quem ela foi enviada, como se lê na tela.
+  String get managerLabel => managerName ?? '—';
+
+  /// A unidade de retirada como se lê na tela (travessão nas permutas antigas,
+  /// anteriores ao cadastro de unidades).
+  String get unitLabel => unitName.isEmpty ? '—' : unitName;
+
   String get statusLabel {
     switch (status) {
+      case BarterStatus.sentToManager:
+        return 'Enviada ao Gerente';
       case BarterStatus.pending:
-        return 'Em Análise';
+        return 'Aguardando Revisão';
       case BarterStatus.approved:
         return 'Aprovada';
       case BarterStatus.denied:
@@ -501,6 +641,11 @@ class ProductClassModel {
   /// pessoa lê; o slug é o que o código e a planilha reconhecem.
   final String slug;
   final String name;
+
+  /// Ordem de exibição definida pelo servidor. Também é o índice da cor da
+  /// classe na paleta da marca — ver `ClassAvatar`.
+  final int position;
+
   final ClassRuleType ruleType;
 
   /// Percentual (0–100) quando [ruleType] é [ClassRuleType.percentOfTotal];
@@ -512,6 +657,7 @@ class ProductClassModel {
     required this.id,
     required this.slug,
     required this.name,
+    this.position = 0,
     this.ruleType = ClassRuleType.none,
     this.ruleValue = 0,
   });
@@ -520,6 +666,7 @@ class ProductClassModel {
         id: _asId(json['id']),
         slug: (json['slug'] ?? '') as String,
         name: json['name'] as String,
+        position: (json['position'] as num?)?.toInt() ?? 0,
         // Mesmo cuidado do status da permuta: uma regra que o app não conhece
         // não pode derrubar a lista inteira. Sem exigência é o padrão seguro —
         // o servidor valida os mínimos de novo no envio.
