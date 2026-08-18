@@ -842,9 +842,18 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                   children: [
                     Icon(Icons.straighten, size: 12, color: AppColors.primary),
                     const SizedBox(width: 3),
-                    Text(
-                      '${p.areaLabel} • ${p.city}',
-                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    // Expanded, e não Text solto — o mesmo motivo dos 33 pixels
+                    // do rodapé: numa Row sem Expanded o texto recebe largura
+                    // infinita, e `ellipsis` só corta DEPOIS que existe uma
+                    // largura máxima. Aqui vinha "1.200 ha • Nome da Cidade/PR"
+                    // estourando 127 pixels num telefone de 360 — a linha
+                    // vermelha por cima do cabeçalho do produtor.
+                    Expanded(
+                      child: Text(
+                        '${p.areaLabel} • ${p.city}',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
@@ -1237,6 +1246,23 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 /// diferença aparecer no momento da escolha, e não na nota fiscal.
 ///
 /// PF ou PJ não é perguntado: sai do documento do produtor desta permuta.
+///
+/// ## Por que cada segmento diz a alíquota E o nome
+///
+/// Os dois juntos, e não um ou outro. A alíquota sozinha era o desenho
+/// anterior, pela razão certa — é o percentual que muda a conta, e é ele que a
+/// pessoa do outro lado do balcão pergunta. Mas com só o número o nome da opção
+/// NÃO SELECIONADA ficava invisível, e descobri-lo custava tocar nela — o que
+/// não é espiar, é declarar: esta escolha é gravada na permuta e vira o
+/// `taxRate` congelado do comprovante.
+///
+/// E "1,63% ou 0,20%, escolha" descreve errado o que está sendo perguntado. O
+/// regime não é preferência de quem fecha a permuta: é a opção FORMAL que o
+/// produtor fez (ou não fez) perante o fisco, e quem não fez cai na
+/// comercialização. Dois números anônimos lado a lado, um deles oito vezes
+/// menor, convidam a marcar o barato — que só é legítimo para quem de fato
+/// optou. Por isso o nome voltou ao segmento e a linha de baixo diz o que a
+/// forma selecionada significa, em vez de só repetir o rótulo dela.
 class _TaxRegimeChooser extends StatelessWidget {
   final TaxRegime selected;
 
@@ -1271,9 +1297,14 @@ class _TaxRegimeChooser extends StatelessWidget {
           children: [
             Icon(Icons.receipt_long_outlined, size: 14, color: AppColors.textMedium),
             const SizedBox(width: 6),
-            Text(
-              'Recolhimento do Funrural',
-              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+            // Expanded aqui pela mesma razão do cabeçalho do produtor: `Text`
+            // solto numa `Row` não tem largura máxima e não corta.
+            Expanded(
+              child: Text(
+                'Recolhimento do Funrural',
+                style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -1281,31 +1312,55 @@ class _TaxRegimeChooser extends StatelessWidget {
         SizedBox(
           width: double.infinity,
           child: SegmentedButton<TaxRegime>(
-            // O botão mostra a ALÍQUOTA, não o nome da opção: é o percentual que
-            // muda a conta, e é ele que a pessoa do outro lado do balcão
-            // pergunta. Quem é qual está dito por extenso logo abaixo, junto do
-            // valor — assim o nome aparece uma vez, no lugar em que ele explica
-            // o número, em vez de duas vezes competindo com ele.
             segments: [
               for (final regime in TaxRegime.values)
-                ButtonSegment(value: regime, label: Text(_rateLabel(regime))),
+                ButtonSegment(
+                  value: regime,
+                  label: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Nenhum dos dois fixa `color`: quem pinta o texto do
+                      // segmento é o próprio botão, conforme selecionado ou
+                      // não, e uma cor nossa aqui apagaria essa diferença — que
+                      // é o que diz qual das formas está valendo.
+                      Text(
+                        _rateLabel(regime),
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        regime.shortLabel,
+                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
             ],
             selected: {selected},
             showSelectedIcon: false,
-            style: const ButtonStyle(
-              textStyle: WidgetStatePropertyAll(
-                TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-              visualDensity: VisualDensity.compact,
-            ),
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
             onSelectionChanged: (escolha) => onChanged(escolha.first),
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 3),
+        // O QUANTO e o PORQUÊ, em um parágrafo só.
+        //
+        // O quanto vem primeiro porque é a resposta à pergunta que o produtor
+        // faz na fazenda ("quanto eu entrego?"), e sai em sacas porque é a
+        // unidade em que o consultor enxerga a permuta. O porquê é
+        // `description`, que existia no modelo desde o começo e não aparecia em
+        // lugar nenhum — era a única frase do app que dizia a diferença entre as
+        // duas formas, e estava sobrando enquanto a tela pedia a escolha sem
+        // explicá-la.
+        //
+        // Um Text só, e não dois: em tela estreita ambos quebram de qualquer
+        // jeito, e separá-los custava uma linha inteira de altura num rodapé que
+        // já disputa espaço com a lista de insumos.
         Text(
-          '${selected.label}: + ${formatSacks(taxAmountOf(sacks, taxRateOf(selected, document)))} '
-          '${grainName.toLowerCase()} de Funrural/Senar sobre a entrega — estimativa',
-          style: TextStyle(fontSize: 11, color: AppColors.textLight),
+          '+ ${formatSacks(taxAmountOf(sacks, taxRateOf(selected, document)))} '
+          '${grainName.toLowerCase()} de Funrural/Senar sobre a entrega — estimativa. '
+          '${selected.description}',
+          style: TextStyle(fontSize: 11, color: AppColors.textLight, height: 1.25),
         ),
       ],
     );

@@ -39,18 +39,24 @@ extension TaxRegimeApi on TaxRegime {
 
   /// Rótulo curto, para o fechamento da permuta e o detalhe dela.
   String get label => switch (this) {
-        TaxRegime.comercializacao => 'Sobre a comercialização',
-        TaxRegime.folha => 'Sobre a folha de pagamento',
-      };
+    TaxRegime.comercializacao => 'Sobre a comercialização',
+    TaxRegime.folha => 'Sobre a folha de pagamento',
+  };
+
+  /// Nome curto, para onde não cabe o [label] inteiro — os segmentos do
+  /// seletor, que dividem a largura da tela em duas.
+  String get shortLabel => switch (this) {
+    TaxRegime.comercializacao => 'Comercialização',
+    TaxRegime.folha => 'Folha',
+  };
 
   /// O que a escolha significa, em uma linha — o consultor está fechando uma
   /// permuta, não estudando legislação.
   String get description => switch (this) {
-        TaxRegime.comercializacao =>
-          'O Funrural sai da receita de cada venda, incluindo o grão desta permuta.',
-        TaxRegime.folha =>
-          'O Funrural sai da folha de pagamento; sobre o grão fica só o Senar.',
-      };
+    TaxRegime.comercializacao =>
+      'O Funrural sai da receita de cada venda, incluindo o grão desta permuta.',
+    TaxRegime.folha => 'O Funrural sai da folha de pagamento; sobre o grão fica só o Senar.',
+  };
 }
 
 /// Forma vinda do servidor (ou de uma simulação guardada por uma versão
@@ -97,9 +103,7 @@ bool isCompanyDocument(String document) => _digitsOf(document).length == 14;
 /// vezes do mesmo produtor no papel.
 double taxRateOf(TaxRegime regime, String document) {
   final rate = isCompanyDocument(document) ? _pj : _pf;
-  final total = regime == TaxRegime.folha
-      ? rate.senar
-      : rate.previdencia + rate.rat + rate.senar;
+  final total = regime == TaxRegime.folha ? rate.senar : rate.previdencia + rate.rat + rate.senar;
   // Duas casas: as alíquotas são publicadas assim, e somar 1.32 + 0.11 + 0.2 em
   // ponto flutuante devolve 1.6300000000000001 — que viraria um comprovante com
   // dezesseis casas de imposto.
