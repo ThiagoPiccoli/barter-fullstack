@@ -131,16 +131,8 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersOpinion,
     CAPABILITY.pricesRead,
   ],
-  [ROLE.committee]: [
-    CAPABILITY.producersReadAll,
-    CAPABILITY.bartersReadAll,
-    CAPABILITY.pricesRead,
-  ],
-  [ROLE.biller]: [
-    CAPABILITY.producersReadAll,
-    CAPABILITY.bartersReadAll,
-    CAPABILITY.pricesRead,
-  ],
+  [ROLE.committee]: [CAPABILITY.producersReadAll, CAPABILITY.bartersReadAll, CAPABILITY.pricesRead],
+  [ROLE.biller]: [CAPABILITY.producersReadAll, CAPABILITY.bartersReadAll, CAPABILITY.pricesRead],
   [ROLE.consultant]: [CAPABILITY.bartersRegister],
 };
 

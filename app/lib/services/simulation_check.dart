@@ -22,20 +22,14 @@ class SendResult {
   /// conferir a lista antes de reenviar.
   final String? uncertainReason;
 
-  const SendResult._({
-    this.barter,
-    this.reconciled = false,
-    this.refusal,
-    this.uncertainReason,
-  });
+  const SendResult._({this.barter, this.reconciled = false, this.refusal, this.uncertainReason});
 
   factory SendResult.sent(BarterModel barter, {bool reconciled = false}) =>
       SendResult._(barter: barter, reconciled: reconciled);
 
   factory SendResult.refused(String message) => SendResult._(refusal: message);
 
-  factory SendResult.uncertain(String message) =>
-      SendResult._(uncertainReason: message);
+  factory SendResult.uncertain(String message) => SendResult._(uncertainReason: message);
 
   bool get isSent => barter != null;
   bool get isUncertain => uncertainReason != null;
@@ -96,7 +90,40 @@ class SimulationCheck {
   /// As sacas recalculadas com a tabela vigente — o que será registrado.
   double get currentSacks => rebuilt.simulatedSacks;
 
-  bool get canSend => blocker == null && dropped.isEmpty;
+  /// Por que esta simulação não pode ir agora POR CAUSA DOS INSUMOS, ou null
+  /// quando todos continuam na tabela.
+  ///
+  /// Mora separado de [blocker] porque a conferência ainda serviu: a simulação
+  /// foi refeita na tabela de hoje e é essa versão que fica guardada. O que não
+  /// dá é ENVIAR — sem valor acordado nesta gestão o servidor recusa a permuta
+  /// inteira por causa do item, e quem escolhe o substituto é o consultor.
+  String? get _droppedReason {
+    if (dropped.isEmpty) return null;
+    final names = [
+      for (final item in dropped) item.productName.isEmpty ? item.productId : item.productName,
+    ];
+    final lista = names.length == 1
+        ? names.first
+        : '${names.sublist(0, names.length - 1).join(', ')} e ${names.last}';
+    final um = names.length == 1;
+    return '$lista ${um ? 'não está' : 'não estão'} na tabela do '
+        '${rebuilt.versionCode} e ${um ? 'não pode ser permutado' : 'não podem ser permutados'} '
+        'nesta gestão. Abra a simulação e ${um ? 'troque o insumo' : 'troque os insumos'} '
+        'antes de enviar.';
+  }
+
+  /// O motivo de esta simulação não poder ser enviada agora, pronto para
+  /// exibir — ou null quando ela pode ir.
+  ///
+  /// É a ÚNICA porta do envio, e por isso soma as duas famílias de recusa: as
+  /// que impedem qualquer permuta hoje ([blocker]) e as que impedem ESTA por
+  /// causa de um insumo ([_droppedReason]). Enquanto [canSend] era a única a
+  /// somá-las e o envio olhava só [blocker], a permuta com insumo derrubado
+  /// passava daqui para tomar um 422 do servidor — depois de mostrar ao
+  /// consultor um total de sacas que já não cobria aquele item.
+  String? get stopReason => blocker ?? _droppedReason;
+
+  bool get canSend => stopReason == null;
 
   /// O Barter virou desde que a simulação foi montada.
   bool get versionChanged => previousVersionCode != null;
@@ -161,11 +188,9 @@ SimulationCheck checkSimulation(
       dropped.add(item);
       continue;
     }
-    priced.add(PricedInput(
-      productId: item.productId,
-      quantity: item.quantity,
-      unitPrice: price.price,
-    ));
+    priced.add(
+      PricedInput(productId: item.productId, quantity: item.quantity, unitPrice: price.price),
+    );
   }
 
   final sacks = sacksToCover(inputCost(priced), version.grainPrice);
@@ -179,17 +204,15 @@ SimulationCheck checkSimulation(
   return SimulationCheck._(
     rebuilt: rebuilt,
     dropped: dropped,
-    previousVersionCode:
-        simulation.versionCode.isNotEmpty && simulation.versionCode != version.code
-            ? simulation.versionCode
-            : null,
+    previousVersionCode: simulation.versionCode.isNotEmpty && simulation.versionCode != version.code
+        ? simulation.versionCode
+        : null,
     simulatedSacks: simulation.simulatedSacks,
   );
 }
 
-SimulationCheck _blocked(BarterSimulation simulation, String reason) =>
-    SimulationCheck._(
-      blocker: reason,
-      rebuilt: simulation,
-      simulatedSacks: simulation.simulatedSacks,
-    );
+SimulationCheck _blocked(BarterSimulation simulation, String reason) => SimulationCheck._(
+  blocker: reason,
+  rebuilt: simulation,
+  simulatedSacks: simulation.simulatedSacks,
+);

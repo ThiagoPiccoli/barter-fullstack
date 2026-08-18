@@ -49,7 +49,7 @@ describe('Barter — safra e versões (e2e)', () => {
     ],
   });
 
-  it('a versão vigente é a que o consultor enxerga, com a tabela de valores', async () => {
+  it('a versão vigente é a que o consultor enxerga, com a tabela em sacas', async () => {
     const response = await http()
       .get('/api/v1/barter-versions/current')
       .set('Authorization', await asUser(JOAO));
@@ -59,11 +59,60 @@ describe('Barter — safra e versões (e2e)', () => {
       code: 'S2026.02',
       seasonCode: 'S2026',
       grainName: 'Soja',
-      grainPrice: 148.5,
       status: 'active',
       isOpen: true,
     });
     expect(response.body.data.prices).toHaveLength(5);
+
+    // A LENTE DE VALOR: o consultor recebe a mesma tabela medida em SACAS, que é
+    // a unidade em que ele sempre montou a permuta. O numerador não vai — nem a
+    // cotação da saca, que devolveria os R$ por multiplicação.
+    const npk = response.body.data.prices.find((p: { productId: number }) => p.productId === 5);
+    expect(npk.price).toBeUndefined();
+    // 115 ÷ 148,50 = 0,7744 sacas por saco de NPK.
+    expect(npk.sacksPerUnit).toBeCloseTo(115 / 148.5, 6);
+    expect(response.body.data.grainPrice).toBeUndefined();
+    expect(response.body.data.targetSales).toBeUndefined();
+  });
+
+  /**
+   * A LENTE atravessa o ANINHAMENTO. A safra carrega as versões dentro dela, e
+   * quem serializa a versão é a mesma função da rota de versão — que, sem
+   * viewer, cai no padrão fechado e devolve a tabela em sacas.
+   *
+   * Foi exatamente o que aconteceu: `GET /seasons` era a única rota de
+   * `barterManage` que não repassava quem estava perguntando, e o admin recebia
+   * a própria safra sem `grainPrice` e sem as metas — os campos de que a tela de
+   * lançamento vive. O padrão fechado é o certo (papel novo não herda R$ por
+   * omissão); o que faltava era a rota dizer por quais olhos ela monta o JSON.
+   */
+  it('a safra traz as versões aninhadas com os valores em R$ para a retaguarda', async () => {
+    const response = await http()
+      .get('/api/v1/seasons')
+      .set('Authorization', await asUser(ADMIN));
+
+    expect(response.status).toBe(200);
+    const safra = response.body.data.find((s: { code: string }) => s.code === 'S2026');
+    const vigente = safra.versions.find((v: { code: string }) => v.code === 'S2026.02');
+    // A cotação da saca e as metas — os campos que a lente fechada suprime, e
+    // sem os quais a tela de lançamento não tem o que desenhar. A listagem não
+    // carrega a tabela `prices` (é a rota da versão que a traz), então quem
+    // responde por ela aqui é a versão em si.
+    expect(vigente.grainPrice).toBe(148.5);
+    expect(vigente.targetSales).not.toBeUndefined();
+    expect(vigente.targetBarters).not.toBeUndefined();
+  });
+
+  it('a retaguarda enxerga a mesma versão com os valores em R$', async () => {
+    const response = await http()
+      .get('/api/v1/barter-versions/current')
+      .set('Authorization', await asUser(ADMIN));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.grainPrice).toBe(148.5);
+    const npk = response.body.data.prices.find((p: { productId: number }) => p.productId === 5);
+    expect(npk).toMatchObject({ price: 115 });
+    expect(npk.sacksPerUnit).toBeUndefined();
   });
 
   it('a permuta nasce amarrada à versão vigente e congela o preço', async () => {
@@ -74,10 +123,21 @@ describe('Barter — safra e versões (e2e)', () => {
 
     expect(response.status).toBe(201);
     expect(response.body.data.versionCode).toBe('S2026.02');
-    const npk = response.body.data.items.find((i: { productId: number }) => i.productId === 5);
+    // O grão vem da safra: o consultor não escolheu nada. Para ele a permuta é
+    // "tantos insumos -> tantas sacas", e é isso que a resposta traz.
+    const grainDoConsultor = response.body.data.items.find(
+      (i: { kind: string }) => i.kind === 'grain',
+    );
+    expect(grainDoConsultor).toMatchObject({ productName: 'Soja' });
+    expect(grainDoConsultor.unitValue).toBeUndefined();
+
+    // O valor CONGELADO é o que a retaguarda lê de volta — é ela que vê R$.
+    const daRetaguarda = await http()
+      .get(`/api/v1/barters/${response.body.data.code}`)
+      .set('Authorization', await asUser(ADMIN));
+    const npk = daRetaguarda.body.data.items.find((i: { productId: number }) => i.productId === 5);
     expect(npk).toMatchObject({ unitValue: 115 });
-    // O grão vem da safra: o consultor não escolheu nada.
-    const grain = response.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
+    const grain = daRetaguarda.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
     expect(grain).toMatchObject({ productName: 'Soja', unitValue: 148.5 });
   });
 
@@ -104,9 +164,17 @@ describe('Barter — safra e versões (e2e)', () => {
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
       expect(permutaNova.body.data.versionCode).toBe('S2026.03');
+      // A QUANTIDADE é a resposta que o consultor recebe — ela não é moeda.
       const grain = permutaNova.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
-      expect(grain.unitValue).toBe(150);
       expect(grain.quantity).toBe(106.84);
+      // O valor da saca aplicado sai na leitura da retaguarda.
+      const daRetaguarda = await http()
+        .get(`/api/v1/barters/${permutaNova.body.data.code}`)
+        .set('Authorization', admin);
+      const grainEmReais = daRetaguarda.body.data.items.find(
+        (i: { kind: string }) => i.kind === 'grain',
+      );
+      expect(grainEmReais.unitValue).toBe(150);
     });
 
     /**
@@ -268,7 +336,10 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
-      const item = nova.body.data.items.find((i: { productId: number }) => i.productId === 5);
+      const registrada = await http()
+        .get(`/api/v1/barters/${nova.body.data.code}`)
+        .set('Authorization', admin);
+      const item = registrada.body.data.items.find((i: { productId: number }) => i.productId === 5);
       expect(item).toMatchObject({ unitValue: 120 });
     });
 

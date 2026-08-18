@@ -26,7 +26,7 @@ describe('Products & Classes (e2e)', () => {
   it('catálogo traz o RESUMO do histórico, não a série inteira', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/products?type=grain')
-      .set('Authorization', await asUser(JOAO));
+      .set('Authorization', await asUser(ADMIN));
 
     expect(response.status).toBe(200);
     const soja = response.body.data.find((p: { name: string }) => p.name === 'Soja');
@@ -40,13 +40,49 @@ describe('Products & Classes (e2e)', () => {
   it('o detalhe do produto traz a linha do tempo completa, em ordem cronológica', async () => {
     const response = await request(app.getHttpServer())
       .get('/api/v1/products/1')
-      .set('Authorization', await asUser(JOAO));
+      .set('Authorization', await asUser(ADMIN));
 
     expect(response.status).toBe(200);
     expect(response.body.data.name).toBe('Soja');
     expect(response.body.data.priceHistory).toHaveLength(7);
     expect(response.body.data.priceHistory[0].price).toBe(142.0); // mais antigo primeiro
     expect(response.body.data.priceHistory[6].price).toBe(148.5);
+  });
+
+  /**
+   * A LENTE DE VALOR sobre o catálogo: o consultor não vê R$, e isso deixou de
+   * ser regra de tela para ser regra da API. Enquanto era só da tela, bastava um
+   * `curl` com o token dele para ler a tabela inteira do fornecedor — e, depois
+   * do cache offline, ela ainda ia parar gravada no aparelho.
+   *
+   * O que ele recebe é o CADASTRO do produto, sem numerador nenhum: quem
+   * precifica a permuta dele é a tabela da versão vigente, em sacas.
+   */
+  it('o consultor recebe o catálogo sem nenhum valor em R$', async () => {
+    const lista = await request(app.getHttpServer())
+      .get('/api/v1/products?type=grain')
+      .set('Authorization', await asUser(JOAO));
+
+    expect(lista.status).toBe(200);
+    const soja = lista.body.data.find((p: { name: string }) => p.name === 'Soja');
+    // O cadastro continua inteiro — é a lista que ele usa para montar a permuta.
+    expect(soja.name).toBe('Soja');
+    expect(soja.unit).toBe('saca 60kg');
+    // E nenhum dos três campos de moeda atravessa.
+    expect(soja.currentPrice).toBeUndefined();
+    expect(soja.firstPrice).toBeUndefined();
+    expect(soja.priceHistoryCount).toBeUndefined();
+
+    const detalhe = await request(app.getHttpServer())
+      .get('/api/v1/products/1')
+      .set('Authorization', await asUser(JOAO));
+
+    expect(detalhe.status).toBe(200);
+    expect(detalhe.body.data.name).toBe('Soja');
+    // A linha do tempo é uma série de R$: não há versão dela em sacas, então ela
+    // simplesmente não vai.
+    expect(detalhe.body.data.priceHistory).toBeUndefined();
+    expect(detalhe.body.data.currentPrice).toBeUndefined();
   });
 
   /**

@@ -52,20 +52,41 @@ describe('Tabela de capacidades', () => {
    * de cada um for definida, este teste é o que vai obrigar a decisão a ser
    * explícita — ele quebra no momento em que alguém der escrita a um deles. Foi
    * exatamente o que aconteceu com o gerente, que saiu daqui ao ganhar o
-   * parecer e passou a ter o próprio caso, acima.
+   * parecer e passou a ter o próprio caso, abaixo.
+   *
+   * `pricesRead` entrou na lista e continua sendo leitura: a retaguarda avalia
+   * negociação, e negociação sem R$ não se avalia. Quem fica de fora dela é só o
+   * consultor — ver o comentário de `pricesRead` em policy.ts.
    */
   it('comitê e faturista seguem em leitura, sem nenhuma escrita', () => {
     for (const role of [ROLE.committee, ROLE.biller]) {
       expect([...ROLE_CAPABILITIES[role]].sort()).toEqual(
-        [CAPABILITY.bartersReadAll, CAPABILITY.producersReadAll].sort(),
+        [CAPABILITY.bartersReadAll, CAPABILITY.producersReadAll, CAPABILITY.pricesRead].sort(),
       );
     }
   });
 
   it('o gerente enxerga o TIME dele e escreve UMA coisa: o parecer', () => {
     expect([...ROLE_CAPABILITIES[ROLE.manager]].sort()).toEqual(
-      [CAPABILITY.bartersReadTeam, CAPABILITY.producersReadAll, CAPABILITY.bartersOpinion].sort(),
+      [
+        CAPABILITY.bartersReadTeam,
+        CAPABILITY.producersReadAll,
+        CAPABILITY.bartersOpinion,
+        CAPABILITY.pricesRead,
+      ].sort(),
     );
+  });
+
+  /**
+   * A LENTE DE VALOR, na tabela: quem vê R$ é a retaguarda inteira, e o
+   * consultor não. Não é preferência de tela — é o que decide se a tabela do
+   * fornecedor sai pela API e vai parar gravada no aparelho dele.
+   */
+  it('o consultor é o único papel sem acesso a valores', () => {
+    expect(rolesWith(CAPABILITY.pricesRead).sort()).toEqual(
+      [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.biller].sort(),
+    );
+    expect(can({ role: ROLE.consultant }, CAPABILITY.pricesRead)).toBe(false);
   });
 
   /**

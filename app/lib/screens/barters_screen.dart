@@ -4,12 +4,10 @@ import '../theme/app_theme.dart';
 import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
-import '../services/api/api_client.dart';
-import '../services/barter_pdf.dart';
-import '../services/simulation_check.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 import 'barter_screen.dart';
+import 'send_simulation.dart';
 
 class BartersScreen extends StatefulWidget {
   /// Visão de RETAGUARDA: todas as permutas, com os valores em R$.
@@ -79,8 +77,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
       initialIndex: widget.opinionManagerId != null
           ? 1
           : pending > 0
-              ? 0
-              : (_hasSimulations ? 1 : 0),
+          ? 0
+          : (_hasSimulations ? 1 : 0),
     );
   }
 
@@ -90,9 +88,11 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     if (_search.isEmpty) return all;
     final query = _search.toLowerCase();
     return all
-        .where((item) =>
-            item.producerName.toLowerCase().contains(query) ||
-            item.unitName.toLowerCase().contains(query))
+        .where(
+          (item) =>
+              item.producerName.toLowerCase().contains(query) ||
+              item.unitName.toLowerCase().contains(query),
+        )
         .toList();
   }
 
@@ -117,10 +117,12 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
       list = list
-          .where((b) =>
-              b.id.toLowerCase().contains(q) ||
-              b.producerName.toLowerCase().contains(q) ||
-              b.consultantName.toLowerCase().contains(q))
+          .where(
+            (b) =>
+                b.id.toLowerCase().contains(q) ||
+                b.producerName.toLowerCase().contains(q) ||
+                b.consultantName.toLowerCase().contains(q),
+          )
           .toList();
     }
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
@@ -131,9 +133,9 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.isAdmin
-            ? brand.copy.barterPluralTitle
-            : 'Minhas ${brand.copy.barterPluralTitle}'),
+        title: Text(
+          widget.isAdmin ? brand.copy.barterPluralTitle : 'Minhas ${brand.copy.barterPluralTitle}',
+        ),
         actions: const [LogoutButton()],
         bottom: TabBar(
           controller: _tabController,
@@ -226,7 +228,10 @@ class _BarterList extends StatelessWidget {
           children: [
             Icon(Icons.swap_horiz, size: 64, color: AppColors.divider),
             const SizedBox(height: 12),
-            Text('Nenhuma ${brand.copy.barter} encontrada', style: TextStyle(color: AppColors.textLight)),
+            Text(
+              'Nenhuma ${brand.copy.barter} encontrada',
+              style: TextStyle(color: AppColors.textLight),
+            ),
           ],
         ),
       );
@@ -286,8 +291,14 @@ class _BarterCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(barter.id,
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  Text(
+                    barter.id,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
+                    ),
+                  ),
                   const Spacer(),
                   StatusBadge(status: barter.status),
                 ],
@@ -298,13 +309,21 @@ class _BarterCard extends StatelessWidget {
                   children: [
                     Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
                     const SizedBox(width: 4),
-                    Text(barter.producerName,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600)),
+                    Text(
+                      barter.producerName,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textMedium,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text('Vend.: ${barter.consultantName}',
-                          style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                          overflow: TextOverflow.ellipsis),
+                      child: Text(
+                        'Vend.: ${barter.consultantName}',
+                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),
@@ -342,8 +361,10 @@ class _BarterCard extends StatelessWidget {
                 children: [
                   Icon(Icons.calendar_today_outlined, size: 13, color: AppColors.textLight),
                   const SizedBox(width: 4),
-                  Text(formatDate(barter.createdAt),
-                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  Text(
+                    formatDate(barter.createdAt),
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
                   const SizedBox(width: 10),
                   Icon(Icons.store_outlined, size: 13, color: AppColors.textLight),
                   const SizedBox(width: 4),
@@ -352,9 +373,11 @@ class _BarterCard extends StatelessWidget {
                   // produtor vai buscar?" — e ela não deveria custar abrir o
                   // detalhe de cada permuta da lista.
                   Expanded(
-                    child: Text(barter.unitLabel,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                        overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      barter.unitLabel,
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
               ),
@@ -363,8 +386,8 @@ class _BarterCard extends StatelessWidget {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: () => giveBarterOpinion(context, barter,
-                        onGiven: (_) => onChanged()),
+                    onPressed: () =>
+                        giveBarterOpinion(context, barter, onGiven: (_) => onChanged()),
                     icon: const Icon(Icons.rate_review_outlined, size: 16),
                     label: const Text('Dar parecer', style: TextStyle(fontSize: 13)),
                     style: ElevatedButton.styleFrom(
@@ -380,8 +403,12 @@ class _BarterCard extends StatelessWidget {
                   children: [
                     Expanded(
                       child: OutlinedButton.icon(
-                        onPressed: () => reviewBarter(context, barter, BarterStatus.denied,
-                            onReviewed: (_) => onChanged()),
+                        onPressed: () => reviewBarter(
+                          context,
+                          barter,
+                          BarterStatus.denied,
+                          onReviewed: (_) => onChanged(),
+                        ),
                         icon: const Icon(Icons.close, size: 16),
                         label: const Text('Negar', style: TextStyle(fontSize: 13)),
                         style: OutlinedButton.styleFrom(
@@ -394,8 +421,12 @@ class _BarterCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: ElevatedButton.icon(
-                        onPressed: () => reviewBarter(context, barter, BarterStatus.approved,
-                            onReviewed: (_) => onChanged()),
+                        onPressed: () => reviewBarter(
+                          context,
+                          barter,
+                          BarterStatus.approved,
+                          onReviewed: (_) => onChanged(),
+                        ),
                         icon: const Icon(Icons.check, size: 16),
                         label: const Text('Aprovar', style: TextStyle(fontSize: 13)),
                         style: ElevatedButton.styleFrom(
@@ -420,7 +451,12 @@ class _SidePill extends StatelessWidget {
   final Color accent;
   final String title;
   final String value;
-  const _SidePill({required this.icon, required this.accent, required this.title, required this.value});
+  const _SidePill({
+    required this.icon,
+    required this.accent,
+    required this.title,
+    required this.value,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -438,11 +474,15 @@ class _SidePill extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title,
-                    style: TextStyle(fontSize: 11, color: AppColors.textMedium),
-                    overflow: TextOverflow.ellipsis),
-                Text(value,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: accent)),
+                Text(
+                  title,
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  value,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: accent),
+                ),
               ],
             ),
           ),
@@ -480,14 +520,19 @@ class _SimulationList extends StatelessWidget {
             children: [
               Icon(Icons.bookmark_border, size: 64, color: AppColors.divider),
               const SizedBox(height: 12),
-              Text('Nenhuma simulação guardada',
-                  style: TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+              Text(
+                'Nenhuma simulação guardada',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+              ),
               const SizedBox(height: 6),
               Text(
                 'Monte a permuta em "Nova ${brand.copy.barterTitle}" e guarde. A '
                 'simulação fica neste aparelho e funciona sem internet — o envio '
-                'ao gerente é feito aqui, quando você tiver sinal.',
+                'ao gerente pode ser feito na hora ou aqui, quando você tiver sinal.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: AppColors.textMedium),
               ),
@@ -538,315 +583,18 @@ class _SimulationCardState extends State<_SimulationCard> {
     if (changed == true) widget.onChanged();
   }
 
-  /// FECHAR A SIMULAÇÃO E ENCAMINHAR. É o único ponto do fluxo que fala com o
-  /// servidor, e ele acontece em três tempos, nesta ordem:
-  ///
-  /// 1. **Serviço responde?** — `reviewSimulation` busca versão, carteira,
-  ///    unidades e catálogo. Se não responder, nada foi enviado e a simulação
-  ///    fica: o consultor tenta de novo de onde houver sinal.
-  /// 2. **O que mudou?** — Barter fechado, produtor fora da carteira, insumo que
-  ///    saiu da tabela, sacas diferentes das simuladas. O que impede o envio é
-  ///    dito e para por aqui; o que só mudou o número é MOSTRADO, e o consultor
-  ///    decide.
-  /// 3. **Envia** — e só depois do sucesso a simulação some.
+  /// Encaminha esta simulação ao gerente. O caminho inteiro — conferir o que
+  /// mudou, confirmar, registrar — mora em `send_simulation.dart`, porque o
+  /// construtor de permuta oferece o mesmo envio logo depois de guardar.
   Future<void> _send() async {
     setState(() => _busy = true);
-    final messenger = ScaffoldMessenger.of(context);
-
-    final SimulationCheck check;
-    try {
-      check = await AppData.reviewSimulation(simulation);
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      // Nada saiu daqui: a simulação continua inteira, e é isso que a mensagem
-      // precisa dizer — senão o consultor acha que perdeu o trabalho.
-      showErrorOn(messenger,
-          '${e.message} Sua simulação continua guardada — tente de novo quando tiver sinal.');
-      return;
-    }
-    if (!mounted) return;
-
-    // O Barter virou enquanto a simulação esperava: ela é refeita com os mesmos
-    // insumos na tabela vigente. Guardar a versão refeita ANTES de perguntar é o
-    // que faz o trabalho não se perder se o consultor recuar agora.
-    if (check.rebuilt.simulatedSacks != simulation.simulatedSacks ||
-        check.rebuilt.versionCode != simulation.versionCode) {
-      await AppData.saveSimulation(check.rebuilt);
-      if (!mounted) return;
-      widget.onChanged();
-    }
-
-    if (check.blocker != null) {
-      setState(() => _busy = false);
-      showErrorOn(messenger, check.blocker!);
-      return;
-    }
-
-    final confirmed = await _confirmSend(check);
-    if (!mounted) return;
-    if (confirmed != true) {
-      setState(() => _busy = false);
-      return;
-    }
-
-    final result = await AppData.sendSimulation(check.rebuilt);
-    if (!mounted) return;
-    setState(() => _busy = false);
-
-    if (result.isSent) {
-      widget.onChanged();
-      await _showSent(result);
-      return;
-    }
-    if (result.isUncertain) {
-      await _showUncertain(result.uncertainReason!);
-      return;
-    }
-    showErrorOn(messenger, '${result.refusal!} A simulação continua guardada.');
-  }
-
-  /// O RESUMO antes de encaminhar — o momento em que a permuta deixa de ser
-  /// simulação. Mostra o que vai ser registrado, e o que mudou desde que foi
-  /// montada.
-  Future<bool?> _confirmSend(SimulationCheck check) {
-    final sim = check.rebuilt;
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.send_outlined, color: AppColors.primary, size: 40),
-        title: const Text('Encaminhar ao gerente?'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (check.needsReview) ...[
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.pendingBg,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.info_outline, size: 15, color: AppColors.pending),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                check.versionChanged
-                                    ? 'O Barter mudou desde a simulação'
-                                    : 'Os valores mudaram desde a simulação',
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.pending),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          check.versionChanged
-                              ? 'Ela foi montada no ${check.previousVersionCode} e foi refeita '
-                                  'com os mesmos insumos no ${sim.versionCode}.'
-                              : 'Os insumos são os mesmos; a conta é a do Barter de agora.',
-                          style: TextStyle(fontSize: 11, color: AppColors.pending),
-                        ),
-                        if (check.sacksChanged) ...[
-                          const SizedBox(height: 6),
-                          // O número lado a lado, e não só o novo: é este valor
-                          // que o consultor falou para o produtor, e é ele que
-                          // vai precisar refazer a conversa se mudou.
-                          Text(
-                            'Simulado: ${formatSacks(check.simulatedSacks)}   →   '
-                            'Agora: ${formatSacks(check.currentSacks)}',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.pending),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
-                DialogLine('Produtor', sim.producerName),
-                DialogLine('Retirada em', sim.unitName),
-                DialogLine('Barter', sim.versionCode),
-                DialogLine('Vai para', widget.consultant.managerName.isEmpty
-                    ? 'seu gerente'
-                    : widget.consultant.managerName),
-                const SizedBox(height: 8),
-                Text('Insumos retirados',
-                    style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppColors.inputBg,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Column(
-                    children: [
-                      for (final item in sim.items)
-                        DialogLine(
-                          item.productName.isEmpty ? item.productId : item.productName,
-                          '${formatQty(item.quantity)} ${item.unit}',
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppColors.primarySurface,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: DialogLine(
-                    'Vai entregar',
-                    '${formatSacks(sim.simulatedSacks)} '
-                        '${sim.grainName.toLowerCase()}',
-                    bold: true,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'O servidor recalcula tudo ao registrar — mínimos por classe e '
-                  'por hectare inclusive. Se algo não fechar, a simulação volta '
-                  'para você corrigir.',
-                  style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Encaminhar'),
-          ),
-        ],
-      ),
+    await sendSimulationToManager(
+      context,
+      simulation: simulation,
+      consultant: widget.consultant,
+      onChanged: widget.onChanged,
     );
-  }
-
-  Future<void> _showSent(SendResult result) {
-    final barter = result.barter!;
-    final producer = AppData.producerById(barter.producerId);
-    return showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.swap_horiz, color: AppColors.approved, size: 48),
-        title: Text('${brand.copy.barterTitle} Enviada!'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (result.reconciled)
-              // O envio anterior TINHA dado certo — o que se perdeu foi a
-              // resposta. Dizer isso evita a pergunta seguinte, que seria por
-              // que ele viu um erro e a permuta existe assim mesmo.
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'Esta permuta já havia sido registrada no envio anterior — a '
-                  'resposta é que não chegou até você.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                ),
-              ),
-            Text('Permuta ${barter.id} registrada com sucesso.',
-                textAlign: TextAlign.center, style: const TextStyle(fontSize: 14)),
-            const SizedBox(height: 8),
-            Text(
-              'Ela foi enviada a ${barter.managerLabel}, que dará o parecer técnico '
-              'antes de a permuta seguir para revisão.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: AppColors.primarySurface,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Column(
-                children: [
-                  DialogLine('Produtor', barter.producerName),
-                  DialogLine('Retirada em', barter.unitLabel),
-                  if (barter.versionCode.isNotEmpty) DialogLine('Barter', barter.versionCode),
-                  const Divider(height: 14),
-                  DialogLine(
-                    'Vai entregar',
-                    '${formatSacks(barter.totalGrainQty)} '
-                        '${barter.referenceGrainName.toLowerCase()}',
-                    bold: true,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
-        actions: [
-          // Comprovante para controle: PDF do consultor, sem valores em R$. Só
-          // aparece com o produtor em cache — sem ele o PDF sairia sem os dados
-          // da propriedade, que é metade do documento.
-          if (producer != null)
-            OutlinedButton.icon(
-              onPressed: () => _sharePdf(barter, producer),
-              icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
-              label: const Text('Gerar PDF'),
-            ),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-        ],
-      ),
-    );
-  }
-
-  /// O DESFECHO INCERTO: o envio saiu, a resposta não voltou, e a conferência
-  /// no servidor também não respondeu.
-  ///
-  /// A simulação FICA — apagá-la poderia jogar fora uma permuta que nunca foi
-  /// registrada. E o texto manda conferir antes de reenviar, porque a outra
-  /// metade do risco é o consultor mandar de novo e o gerente receber duas.
-  Future<void> _showUncertain(String reason) {
-    return showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.help_outline, color: AppColors.pending, size: 44),
-        title: const Text('Não deu para confirmar'),
-        content: Text(
-          '$reason\n\nA permuta PODE ter sido registrada — a conexão caiu antes de '
-          'o servidor responder. Sua simulação continua guardada.\n\n'
-          'Antes de enviar de novo, confira a aba "No gerente": se a permuta já '
-          'estiver lá, descarte esta simulação em vez de reenviá-la.',
-          style: const TextStyle(fontSize: 13),
-        ),
-        actions: [
-          ElevatedButton(onPressed: () => Navigator.pop(ctx), child: const Text('Entendi')),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _sharePdf(BarterModel barter, ProducerModel producer) async {
-    try {
-      await BarterPdf.share(barter, producer: producer, showValues: false);
-    } catch (e) {
-      if (mounted) showErrorOn(ScaffoldMessenger.of(context), 'Não foi possível gerar o PDF: $e');
-    }
+    if (mounted) setState(() => _busy = false);
   }
 
   Future<void> _delete() async {
@@ -896,10 +644,15 @@ class _SimulationCardState extends State<_SimulationCard> {
               Row(
                 children: [
                   Expanded(
-                    child: Text(simulation.producerName,
-                        style: TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark),
-                        overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      simulation.producerName,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Container(
@@ -908,9 +661,14 @@ class _SimulationCardState extends State<_SimulationCard> {
                       color: AppColors.pendingBg,
                       borderRadius: BorderRadius.circular(20),
                     ),
-                    child: Text('Não enviada',
-                        style: TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.pending)),
+                    child: Text(
+                      'Não enviada',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.pending,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -933,8 +691,10 @@ class _SimulationCardState extends State<_SimulationCard> {
                         alignment: Alignment.centerLeft,
                         child: Padding(
                           padding: const EdgeInsets.only(top: 4),
-                          child: Text('+ $rest insumo(s)',
-                              style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                          child: Text(
+                            '+ $rest insumo(s)',
+                            style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                          ),
                         ),
                       ),
                   ],
@@ -953,7 +713,10 @@ class _SimulationCardState extends State<_SimulationCard> {
                       'Simulado: ${formatSacks(simulation.simulatedSacks)}'
                       '${simulation.grainName.isEmpty ? '' : ' ${simulation.grainName.toLowerCase()}'}',
                       style: TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -965,14 +728,18 @@ class _SimulationCardState extends State<_SimulationCard> {
                   Icon(Icons.store_outlined, size: 13, color: AppColors.textLight),
                   const SizedBox(width: 4),
                   Expanded(
-                    child: Text(simulation.unitName.isEmpty ? '—' : simulation.unitName,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                        overflow: TextOverflow.ellipsis),
+                    child: Text(
+                      simulation.unitName.isEmpty ? '—' : simulation.unitName,
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                   Icon(Icons.schedule, size: 13, color: AppColors.textLight),
                   const SizedBox(width: 4),
-                  Text(formatDate(simulation.updatedAt),
-                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  Text(
+                    formatDate(simulation.updatedAt),
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
                 ],
               ),
               const SizedBox(height: 10),
@@ -1008,8 +775,10 @@ class _SimulationCardState extends State<_SimulationCard> {
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
                           : const Icon(Icons.send_outlined, size: 16),
-                      label: Text(_busy ? 'Conferindo...' : 'Encaminhar',
-                          style: const TextStyle(fontSize: 13)),
+                      label: Text(
+                        _busy ? 'Conferindo...' : 'Encaminhar',
+                        style: const TextStyle(fontSize: 13),
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.atManager,
                         padding: const EdgeInsets.symmetric(vertical: 10),

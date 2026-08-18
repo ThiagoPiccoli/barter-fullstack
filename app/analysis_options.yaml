@@ -9,6 +9,16 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+# A LARGURA da linha, declarada — 100 colunas, a mesma do `printWidth` do
+# prettier da API. Sem esta chave o `dart format` assume 80 e devolve os
+# arquivos já formatados a 100 para a largura antiga: quem rodasse o formatador
+# reescreveria arquivo que ninguém tocou, e o diff da revisão seguinte viria
+# afogado. O CI ainda não roda `dart format` (ver ci.yml), justamente porque a
+# migração é gradual — declarar a largura é o que permite terminá-la sem que
+# cada arquivo migrado dependa da configuração do editor de quem o migrou.
+formatter:
+  page_width: 100
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

@@ -91,7 +91,18 @@ describe('Barters (e2e)', () => {
     expect(grains).toHaveLength(1);
     // 11946 / 148.5 = 80.4444 sacas de soja
     expect(grains[0].quantity).toBe(80.4444);
-    expect(grains[0].unitValue).toBe(148.5);
+    // A conta em SACAS é toda a resposta que o consultor recebe: o valor da saca
+    // é R$, e R$ não atravessa a lente dele (ver `ValueLens`). Quem confere o
+    // valor congelado é a retaguarda, abaixo.
+    expect(grains[0].unitValue).toBeUndefined();
+
+    const daRetaguarda = await request(app.getHttpServer())
+      .get(`/api/v1/barters/${barter.code}`)
+      .set('Authorization', await asUser(ADMIN));
+    const grainEmReais = daRetaguarda.body.data.items.find(
+      (i: { kind: string }) => i.kind === 'grain',
+    );
+    expect(grainEmReais.unitValue).toBe(148.5);
   });
 
   /**
@@ -219,7 +230,12 @@ describe('Barters (e2e)', () => {
       .send(adulterado);
 
     expect(response.status).toBe(201);
-    const npk = response.body.data.items.find((i: { productId: number }) => i.productId === 5);
+    // O preço GRAVADO é o do banco, e é a retaguarda que o lê de volta — para o
+    // consultor a permuta continua sem R$ nenhum.
+    const registrada = await request(app.getHttpServer())
+      .get(`/api/v1/barters/${response.body.data.code}`)
+      .set('Authorization', await asUser(ADMIN));
+    const npk = registrada.body.data.items.find((i: { productId: number }) => i.productId === 5);
     expect(npk.unitValue).toBe(115.0);
   });
 

@@ -35,9 +35,9 @@ export class BarterVersionsController {
   /** Detalhe de uma versão, com o realizado contra as metas. */
   @Get(':code')
   @RequireCapability(CAPABILITY.barterManage)
-  async show(@Param('code') code: string) {
+  async show(@CurrentUser() user: User, @Param('code') code: string) {
     const version = await this.seasons.findVersion(code);
-    return toBarterVersionJson(version, await this.seasons.progressOf(version));
+    return toBarterVersionJson(version, await this.seasons.progressOf(version), user);
   }
 
   /** Correção pontual de um valor da versão vigente (o grão inclusive). */
@@ -49,7 +49,11 @@ export class BarterVersionsController {
     @Param('productId', ParseIntPipe) productId: number,
     @Body() dto: UpdateVersionPriceDto,
   ) {
-    return toBarterVersionJson(await this.seasons.updatePrice(admin, code, productId, dto));
+    return toBarterVersionJson(
+      await this.seasons.updatePrice(admin, code, productId, dto),
+      undefined,
+      admin,
+    );
   }
 
   /** Encerra a versão: o Barter para de aceitar permuta, a safra continua. */
@@ -57,6 +61,6 @@ export class BarterVersionsController {
   @RequireCapability(CAPABILITY.barterManage)
   @HttpCode(200)
   async close(@CurrentUser() admin: User, @Param('code') code: string) {
-    return toBarterVersionJson(await this.seasons.closeVersion(admin, code));
+    return toBarterVersionJson(await this.seasons.closeVersion(admin, code), undefined, admin);
   }
 }

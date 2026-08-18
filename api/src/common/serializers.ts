@@ -289,7 +289,10 @@ export function toProductListJson(
 
 /* ── Barter: safra e versões ──────────────────────────────────────────── */
 
-export function toSeasonJson(season: Season & { versions?: BarterVersion[] }) {
+export function toSeasonJson(
+  season: Season & { versions?: BarterVersion[] },
+  viewer?: Pick<User, 'role'>,
+) {
   return {
     id: season.id,
     code: season.code,
@@ -301,7 +304,10 @@ export function toSeasonJson(season: Season & { versions?: BarterVersion[] }) {
     status: season.status,
     openedAt: season.openedAt,
     closedAt: season.closedAt,
-    versions: season.versions?.map((version) => toBarterVersionJson(version)),
+    // O viewer atravessa: sem ele a lente cai no padrão fechado e a safra sairia
+    // sem valor nenhum — inclusive para quem tem barterManage, que é o único
+    // papel que chega a estas rotas.
+    versions: season.versions?.map((version) => toBarterVersionJson(version, undefined, viewer)),
   };
 }
 

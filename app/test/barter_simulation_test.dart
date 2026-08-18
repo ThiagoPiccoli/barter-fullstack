@@ -341,6 +341,41 @@ void main() {
       expect(result.dropped.map((i) => i.productName), ['Glifosato']);
       expect(result.canSend, isFalse);
       expect(result.needsReview, isTrue);
+      // O insumo derrubado CONTINUA na simulação refeita — `copyWith` não mexe
+      // nos itens —, e é por isso que a trava tem de existir: as sacas foram
+      // recalculadas sem ele, então enviar registraria um total que não o cobre.
+      expect(result.rebuilt.items.map((i) => i.productName), contains('Glifosato'));
+    });
+
+    test('a trava do insumo derrubado sai por nome e diz o que fazer', () {
+      // `stopReason` é a porta que o envio consulta. Enquanto ela não existia, o
+      // envio olhava só `blocker` e a permuta passava daqui para tomar um 422.
+      final result = check(
+        simulation(versionCode: 'S2026.02'),
+        v: version(code: 'S2026.03', prices: const {'5': 100.0}),
+      );
+
+      expect(result.blocker, isNull);
+      expect(result.stopReason, contains('Glifosato'));
+      expect(result.stopReason, contains('S2026.03'));
+      expect(result.stopReason, contains('Abra a simulação'));
+    });
+
+    test('sem insumo derrubado a porta do envio fica aberta', () {
+      final result = check(simulation(versionCode: 'S2026.02'), v: version(code: 'S2026.03'));
+
+      expect(result.dropped, isEmpty);
+      expect(result.stopReason, isNull);
+      expect(result.canSend, isTrue);
+    });
+
+    test('o Barter fechado continua respondendo pela mesma porta', () {
+      // `stopReason` soma as duas famílias de recusa: quem já parava por
+      // `blocker` não pode ter passado a escapar.
+      final result = check(simulation(), v: version(isOpen: false));
+
+      expect(result.stopReason, equals(result.blocker));
+      expect(result.stopReason, isNotNull);
     });
 
     test('a simulação refeita preserva id, dono e produtor', () {

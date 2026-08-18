@@ -36,14 +36,14 @@ export class SeasonsController {
 
   @Get()
   @RequireCapability(CAPABILITY.barterManage)
-  async index() {
-    return (await this.seasons.listSeasons()).map(toSeasonJson);
+  async index(@CurrentUser() user: User) {
+    return (await this.seasons.listSeasons()).map((season) => toSeasonJson(season, user));
   }
 
   @Post()
   @RequireCapability(CAPABILITY.barterManage)
   async store(@CurrentUser() admin: User, @Body() dto: OpenSeasonDto) {
-    return toSeasonJson(await this.seasons.open(admin, dto));
+    return toSeasonJson(await this.seasons.open(admin, dto), admin);
   }
 
   /** Encerra a safra e a versão vigente dela. */
@@ -51,7 +51,7 @@ export class SeasonsController {
   @RequireCapability(CAPABILITY.barterManage)
   @HttpCode(200)
   async close(@CurrentUser() admin: User, @Param('code') code: string) {
-    return toSeasonJson(await this.seasons.close(admin, code));
+    return toSeasonJson(await this.seasons.close(admin, code), admin);
   }
 
   /**
@@ -66,7 +66,7 @@ export class SeasonsController {
     @Param('code') code: string,
     @Body() dto: PublishVersionDto,
   ) {
-    return toBarterVersionJson(await this.seasons.publish(admin, code, dto));
+    return toBarterVersionJson(await this.seasons.publish(admin, code, dto), undefined, admin);
   }
 
   /**
@@ -89,6 +89,6 @@ export class SeasonsController {
     if (!/\.xlsx$/i.test(file.originalname)) {
       throw new UnprocessableEntityException('O arquivo precisa ser uma planilha .xlsx');
     }
-    return toBarterVersionJson(await this.seasons.import(admin, code, file, dto));
+    return toBarterVersionJson(await this.seasons.import(admin, code, file, dto), undefined, admin);
   }
 }

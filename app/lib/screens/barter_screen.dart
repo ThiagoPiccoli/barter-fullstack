@@ -10,6 +10,7 @@ import '../services/tax_regime.dart';
 import '../widgets/class_avatar.dart';
 import '../widgets/filter_bar.dart';
 import '../widgets/common_widgets.dart';
+import 'send_simulation.dart';
 
 /// Construtor de permuta.
 ///
@@ -96,7 +97,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (_producer == null) {
-        _toast('${simulation.producerName} não está mais na sua carteira — escolha outro produtor.');
+        _toast(
+          '${simulation.producerName} não está mais na sua carteira — escolha outro produtor.',
+        );
       } else if (_unit == null) {
         _toast('A unidade ${simulation.unitName} não está mais disponível — escolha outra.');
       }
@@ -112,15 +115,15 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// Os insumos escolhidos, precificados PELA VERSÃO — a entrada da matemática
   /// da permuta (services/barter_math.dart, espelho do cálculo do servidor).
   List<PricedInput> get _pricedInputs => [
-        for (final e in _inputQty.entries)
-          if (e.value > 0)
-            PricedInput(
-              productId: e.key,
-              quantity: e.value,
-              unitPrice: AppData.priceOf(e.key),
-              classId: _productById(e.key)?.classId,
-            ),
-      ];
+    for (final e in _inputQty.entries)
+      if (e.value > 0)
+        PricedInput(
+          productId: e.key,
+          quantity: e.value,
+          unitPrice: AppData.priceOf(e.key),
+          classId: _productById(e.key)?.classId,
+        ),
+  ];
 
   ProductModel? _productById(String id) {
     for (final input in _catalog) {
@@ -133,8 +136,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   double get _inputCost => inputCost(_pricedInputs);
 
   /// Produtor (cliente) designado para esta permuta (ou null).
-  ProducerModel? get _producer =>
-      _producerId == null ? null : AppData.producerById(_producerId!);
+  ProducerModel? get _producer => _producerId == null ? null : AppData.producerById(_producerId!);
 
   /// A unidade de retirada escolhida (ou null).
   UnitModel? get _unit => AppData.unitById(_unitId);
@@ -145,21 +147,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final version = _version;
     return version == null ? 0 : sacksToCover(_inputCost, version.grainPrice);
   }
-
-  /// A alíquota (%) que a forma escolhida produz para ESTE produtor — CPF e
-  /// CNPJ recolhem percentuais diferentes, e o documento está no cadastro dele.
-  ///
-  /// É PREVISÃO: quem grava a alíquota é o servidor, no envio, com a tabela
-  /// daquele instante. Calculá-la aqui é o mesmo contrato do resto desta tela
-  /// (ver `barter_math.dart`) — o consultor precisa do número na fazenda, sem
-  /// sinal.
-  double get _taxRate {
-    final producer = _producer;
-    return producer == null ? 0 : taxRateOf(_taxRegime, producer.document);
-  }
-
-  String get _taxRateLabel =>
-      '${_taxRate.toStringAsFixed(2).replaceAll('.', ',')}%';
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
   /// taxa por hectare × área da propriedade. 0 se não há produtor ou exigência.
@@ -175,8 +162,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
   /// Classes que carregam uma regra de mínimo capaz de travar o envio da
   /// permuta.
-  List<ProductClassModel> get _ruledClasses =>
-      AppData.classes.where((c) => c.hasRule).toList();
+  List<ProductClassModel> get _ruledClasses => AppData.classes.where((c) => c.hasRule).toList();
 
   /// Custo (R$) dos insumos escolhidos que pertencem à classe [classId].
   double _classSpend(String classId) => classSpend(_pricedInputs, classId);
@@ -223,8 +209,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   bool _classMetOnScreen(ProductClassModel c) => _inputCost > 0 && _classMet(c);
 
   /// Classes ainda abaixo do mínimo (para avisar o consultor).
-  List<ProductClassModel> get _unmetClasses =>
-      _ruledClasses.where((c) => !_classMet(c)).toList();
+  List<ProductClassModel> get _unmetClasses => _ruledClasses.where((c) => !_classMet(c)).toList();
 
   void _setInput(String id, double qty) {
     final min = _minFor(id);
@@ -281,9 +266,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
   /// Volta para a escolha da unidade, preservando os insumos já montados.
   void _changeUnit() => setState(() {
-        _unitId = null;
-        _searchQuery = '';
-      });
+    _unitId = null;
+    _searchQuery = '';
+  });
 
   bool _saving = false;
 
@@ -296,19 +281,18 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// exatamente nas horas em que ele serve. Quem cobra o mínimo das classes é o
   /// ENVIO, lá na aba de simulações, e antes dele o próprio servidor.
   bool get _canSave =>
-      !_saving &&
-      _producerId != null &&
-      _unitId != null &&
-      _inputQty.values.any((qty) => qty > 0);
+      !_saving && _producerId != null && _unitId != null && _inputQty.values.any((qty) => qty > 0);
 
-  /// Guarda a simulação NO APARELHO. Não fala com o servidor — nem aqui, nem em
-  /// lugar nenhum desta tela.
+  /// Guarda a simulação NO APARELHO. Montar e guardar não falam com o servidor
+  /// em momento algum — a permuta é montada na fazenda, onde pode não haver
+  /// sinal, e enviar dependia de rede no exato momento em que o consultor estava
+  /// mais longe dela.
   ///
-  /// É o único desfecho do construtor, e é de propósito: a permuta é montada na
-  /// fazenda, onde pode não haver sinal, e enviar dependia de rede no exato
-  /// momento em que o consultor estava mais longe dela. Toda permuta passa a
-  /// nascer como simulação; o envio ao gerente é um ato próprio, na aba de
-  /// simulações, onde a checagem de serviço e de valores cabe.
+  /// GUARDAR é o desfecho; ENVIAR é oferecido logo depois, em `_offerToSend`, e
+  /// a ordem é o ponto. O trabalho já está no aparelho quando a pergunta chega,
+  /// então dizer "agora não" — ou ficar sem sinal no meio do envio — não custa
+  /// nada. Era um botão de enviar NO RODAPÉ, concorrendo com o de guardar, que
+  /// fazia a permuta depender de rede para não se perder.
   Future<void> _save() async {
     final producer = _producer;
     final unit = _unit;
@@ -351,8 +335,15 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final persisted = await AppData.saveSimulation(simulation);
     if (!mounted) return;
 
-    // Retomada a partir da lista: volta para ela, que é de onde o consultor veio
-    // e onde ele vai enviar.
+    // GUARDADA. Só a partir daqui o envio é oferecido — nesta ordem, e não como
+    // um segundo botão no rodapé: o trabalho já está no aparelho, então o
+    // consultor pode dizer "não" (ou ficar sem sinal no meio do envio) sem
+    // perder nada. Era esse o motivo de o envio não morar nesta tela.
+    final enviada = await _offerToSend(simulation);
+    if (!mounted) return;
+
+    // Retomada a partir da lista: volta para ela, que é de onde o consultor
+    // veio. Se a permuta foi encaminhada agora, a simulação já não está lá.
     if (widget.simulation != null) {
       Navigator.pop(context, true);
       return;
@@ -369,11 +360,58 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       _unitId = null;
       _searchQuery = '';
     });
-    _toast(persisted
-        ? 'Simulação de ${producer.name} guardada. Envie ao gerente em Minhas '
-            '${brand.copy.barterPluralTitle} › Simulações.'
-        : 'Simulação guardada só nesta sessão: o aparelho não permitiu gravá-la. '
-            'Envie-a antes de fechar o app.');
+    // Quem acabou de encaminhar já viu o diálogo do registro: repetir "envie em
+    // Simulações" mandaria procurar uma simulação que não existe mais.
+    if (enviada) return;
+    _toast(
+      persisted
+          ? 'Simulação de ${producer.name} guardada. Envie ao gerente em Minhas '
+                '${brand.copy.barterPluralTitle} › Simulações.'
+          : 'Simulação guardada só nesta sessão: o aparelho não permitiu gravá-la. '
+                'Envie-a antes de fechar o app.',
+    );
+  }
+
+  /// "Encaminhar agora?" — a pergunta que vem logo depois de guardar.
+  ///
+  /// Ela é BARATA de propósito: não fala com o servidor. Só quem responde que
+  /// sim é que entra no fluxo de envio (que aí sim busca a tabela vigente e
+  /// confere o que mudou). Perguntar depois de já ter tentado a rede faria a
+  /// tela pedir sinal para quem só queria guardar e ir embora.
+  ///
+  /// Devolve `true` quando a permuta foi mesmo registrada.
+  Future<bool> _offerToSend(BarterSimulation simulation) async {
+    final agora = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: Icon(Icons.bookmark_added_outlined, color: AppColors.primary, size: 40),
+        title: const Text('Simulação guardada'),
+        content: Text(
+          'A permuta de ${simulation.producerName} está guardada neste aparelho. '
+          'Quer encaminhá-la ao gerente agora? Se preferir, ela espera em Minhas '
+          '${brand.copy.barterPluralTitle} › Simulações.',
+          style: const TextStyle(fontSize: 14),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Agora não')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Encaminhar'),
+          ),
+        ],
+      ),
+    );
+    if (agora != true || !mounted) return false;
+
+    // O resumo do envio não é perguntado de novo — ele acabou de dizer que quer
+    // mandar, e a tela que ele está vendo É a permuta. O diálogo volta sozinho
+    // se houver o que dizer (o Barter virou, as sacas mudaram).
+    return sendSimulationToManager(
+      context,
+      simulation: simulation,
+      consultant: widget.consultant,
+      alreadyConfirmed: true,
+    );
   }
 
   /// Rebaixa o PACOTE do Barter — tabela, catálogo, classes, carteira e
@@ -414,9 +452,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.simulation == null
-            ? 'Nova ${brand.copy.barterTitle}'
-            : 'Simulação • ${widget.simulation!.producerName}'),
+        title: Text(
+          widget.simulation == null
+              ? 'Nova ${brand.copy.barterTitle}'
+              : 'Simulação • ${widget.simulation!.producerName}',
+        ),
         actions: const [LogoutButton()],
       ),
       // As três etapas, na ordem em que uma habilita a seguinte: o produtor
@@ -425,10 +465,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       body: version == null || !version.isOpen
           ? _buildClosedBarter()
           : producer == null
-              ? _buildProducerStep(version)
-              : unit == null
-                  ? _buildUnitStep(version, producer)
-                  : _buildInputStep(version, producer, unit),
+          ? _buildProducerStep(version)
+          : unit == null
+          ? _buildUnitStep(version, producer)
+          : _buildInputStep(version, producer, unit),
     );
   }
 
@@ -450,16 +490,19 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final String body;
     if (neverSynced) {
       title = 'Baixe o ${brand.copy.programTitle} uma vez';
-      body = 'Este aparelho ainda não tem a tabela de valores. Conecte-se à '
+      body =
+          'Este aparelho ainda não tem a tabela de valores. Conecte-se à '
           'internet e atualize: depois disso você monta simulações offline, '
           'inclusive abrindo o app sem sinal.';
     } else if (closed) {
       title = '${brand.copy.programTitle} encerrado';
-      body = 'A versão ${version.code} foi encerrada. Assim que o administrador '
+      body =
+          'A versão ${version.code} foi encerrada. Assim que o administrador '
           'publicar a próxima, ela aparece aqui.';
     } else {
       title = '${brand.copy.programTitle} fechado no momento';
-      body = 'Não há lançamento aberto para registrar permutas. Assim que o '
+      body =
+          'Não há lançamento aberto para registrar permutas. Assim que o '
           'administrador publicar a próxima versão, ela aparece aqui.';
     }
 
@@ -470,8 +513,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         padding: const EdgeInsets.all(32),
         children: [
           const SizedBox(height: 40),
-          Icon(neverSynced ? Icons.cloud_download_outlined : Icons.event_busy_outlined,
-              size: 64, color: AppColors.textLight),
+          Icon(
+            neverSynced ? Icons.cloud_download_outlined : Icons.event_busy_outlined,
+            size: 64,
+            color: AppColors.textLight,
+          ),
           const SizedBox(height: 16),
           Text(
             title,
@@ -528,11 +574,13 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final producers = query.isEmpty
         ? wallet
         : wallet
-            .where((p) =>
-                p.name.toLowerCase().contains(query) ||
-                p.city.toLowerCase().contains(query) ||
-                p.farmName.toLowerCase().contains(query))
-            .toList();
+              .where(
+                (p) =>
+                    p.name.toLowerCase().contains(query) ||
+                    p.city.toLowerCase().contains(query) ||
+                    p.farmName.toLowerCase().contains(query),
+              )
+              .toList();
 
     return Column(
       children: [
@@ -546,7 +594,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             child: _hint(
               icon: Icons.person_pin_circle_outlined,
               color: AppColors.primary,
-              text: 'Etapa 1: escolha um produtor da sua carteira. A área da propriedade '
+              text:
+                  'Etapa 1: escolha um produtor da sua carteira. A área da propriedade '
                   'define os insumos obrigatórios e a quantidade mínima de cada um.',
             ),
           ),
@@ -583,9 +632,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final units = query.isEmpty
         ? all
         : all
-            .where((u) =>
-                u.name.toLowerCase().contains(query) || u.city.toLowerCase().contains(query))
-            .toList();
+              .where(
+                (u) => u.name.toLowerCase().contains(query) || u.city.toLowerCase().contains(query),
+              )
+              .toList();
 
     return Column(
       children: [
@@ -597,7 +647,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           child: _hint(
             icon: Icons.store_outlined,
             color: AppColors.primary,
-            text: 'Etapa 2: onde ${producer.name.split(' ').first} vai retirar os insumos. '
+            text:
+                'Etapa 2: onde ${producer.name.split(' ').first} vai retirar os insumos. '
                 'Pode ser qualquer unidade — combine com ele.',
           ),
         ),
@@ -614,10 +665,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
                     itemCount: units.length,
-                    itemBuilder: (_, i) => _UnitChoiceTile(
-                      unit: units[i],
-                      onSelect: () => _selectUnit(units[i].id),
-                    ),
+                    itemBuilder: (_, i) =>
+                        _UnitChoiceTile(unit: units[i], onSelect: () => _selectUnit(units[i].id)),
                   ),
           ),
         ],
@@ -683,7 +732,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         ),
         _buildInputFilters(),
         Expanded(child: _buildInputList()),
-        _buildFooter(version),
+        _buildFooter(version, producer),
       ],
     );
   }
@@ -733,24 +782,24 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   }
 
   Widget _searchBox(String hint) => SizedBox(
-        height: 40,
-        child: TextField(
-          onChanged: (v) => setState(() => _searchQuery = v),
-          style: const TextStyle(fontSize: 13),
-          decoration: InputDecoration(
-            isDense: true,
-            hintText: hint,
-            prefixIcon: const Icon(Icons.search, size: 18),
-            suffixIcon: _searchQuery.isEmpty
-                ? null
-                : IconButton(
-                    icon: const Icon(Icons.close, size: 16),
-                    onPressed: () => setState(() => _searchQuery = ''),
-                  ),
-            contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-          ),
-        ),
-      );
+    height: 40,
+    child: TextField(
+      onChanged: (v) => setState(() => _searchQuery = v),
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: hint,
+        prefixIcon: const Icon(Icons.search, size: 18),
+        suffixIcon: _searchQuery.isEmpty
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.close, size: 16),
+                onPressed: () => setState(() => _searchQuery = ''),
+              ),
+        contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      ),
+    ),
+  );
 
   /// Cabeçalho fixo com o produtor escolhido e sua área, com opção de trocar.
   Widget _buildProducerHeader(ProducerModel p) {
@@ -766,23 +815,37 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           CircleAvatar(
             radius: 18,
             backgroundColor: AppColors.primary,
-            child: Text(p.avatarInitials,
-                style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.bold)),
+            child: Text(
+              p.avatarInitials,
+              style: TextStyle(
+                color: AppColors.onPrimary,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(p.name,
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark),
-                    overflow: TextOverflow.ellipsis),
+                Text(
+                  p.name,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
                 Row(
                   children: [
                     Icon(Icons.straighten, size: 12, color: AppColors.primary),
                     const SizedBox(width: 3),
-                    Text('${p.areaLabel} • ${p.city}',
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                    Text(
+                      '${p.areaLabel} • ${p.city}',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
                   ],
                 ),
               ],
@@ -824,8 +887,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           Expanded(
             child: Text(
               'Retirada em ${unit.label}',
-              style:
-                  TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textDark,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -893,8 +959,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       if (filtrando && inputs.isNotEmpty)
         Padding(
           padding: const EdgeInsets.only(bottom: 8, left: 2),
-          child: Text('${inputs.length} de ${_catalog.length} insumo(s)',
-              style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+          child: Text(
+            '${inputs.length} de ${_catalog.length} insumo(s)',
+            style: TextStyle(fontSize: 11, color: AppColors.textLight),
+          ),
         ),
       if (query.isEmpty) ...[
         _hint(
@@ -902,19 +970,21 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           color: AppColors.input,
           text: _hasRequiredInputs
               ? 'Os insumos obrigatórios para a área deste produtor já vêm com a '
-                  'quantidade mínima preenchida. Você pode aumentar, não reduzir.'
+                    'quantidade mínima preenchida. Você pode aumentar, não reduzir.'
               : 'Escolha os insumos que o produtor precisa. Eles serão '
-                  'convertidos em sacas do grão desta safra.',
+                    'convertidos em sacas do grão desta safra.',
         ),
         const SizedBox(height: 8),
-        ..._ruledClasses.map((c) => _ClassRuleTile(
-              name: c.name,
-              detail: c.ruleType == ClassRuleType.percentOfTotal
-                  ? 'mín. ${_fmtPct(c.ruleValue)} do total da permuta'
-                  : 'mínimo por área da propriedade',
-              progress: _classProgress(c),
-              met: _classMetOnScreen(c),
-            )),
+        ..._ruledClasses.map(
+          (c) => _ClassRuleTile(
+            name: c.name,
+            detail: c.ruleType == ClassRuleType.percentOfTotal
+                ? 'mín. ${_fmtPct(c.ruleValue)} do total da permuta'
+                : 'mínimo por área da propriedade',
+            progress: _classProgress(c),
+            met: _classMetOnScreen(c),
+          ),
+        ),
         if (_ruledClasses.isNotEmpty) const SizedBox(height: 8),
       ],
     ];
@@ -981,29 +1051,38 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// Aviso para o consultor sem produtores na carteira: sem carteira não há
   /// permuta, e quem cadastra/atribui produtores é o administrador.
   Widget _emptyWalletHint() => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.group_off_outlined, size: 56, color: AppColors.textLight),
-              const SizedBox(height: 12),
-              Text('Sua carteira de produtores está vazia',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-              const SizedBox(height: 6),
-              Text(
-                'Peça ao administrador para cadastrar produtores na sua carteira '
-                'antes de registrar uma permuta.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: AppColors.textMedium),
-              ),
-            ],
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.group_off_outlined, size: 56, color: AppColors.textLight),
+          const SizedBox(height: 12),
+          Text(
+            'Sua carteira de produtores está vazia',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
           ),
-        ),
-      );
+          const SizedBox(height: 6),
+          Text(
+            'Peça ao administrador para cadastrar produtores na sua carteira '
+            'antes de registrar uma permuta.',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+          ),
+        ],
+      ),
+    ),
+  );
 
-  Widget _buildFooter(BarterVersionModel version) {
+  /// O rodapé da etapa 3: o total em sacas, o Funrural e o botão de guardar.
+  ///
+  /// Recebe o [producer] em vez de reler `_producerId`: o documento dele é o que
+  /// escolhe entre as alíquotas de CPF e as de CNPJ, e o rodapé só existe dentro
+  /// da etapa que já o tem resolvido. Buscá-lo de novo abriria um caminho em que
+  /// a busca falha e a conta cai calada nas alíquotas de CPF — imposto errado,
+  /// sem aviso nenhum. Pela assinatura isso não é representável.
+  Widget _buildFooter(BarterVersionModel version, ProducerModel producer) {
     final sacks = _sacksNeeded;
     final inputCount = _inputQty.values.where((q) => q > 0).length;
     return Container(
@@ -1027,7 +1106,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                   Expanded(
                     child: Text(
                       'Mínimo não atingido: ${_unmetClasses.map((c) => c.name).join(', ')}',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.pending,
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -1049,7 +1132,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                         ? 'Entregar: ${formatSacks(sacks)} ${version.grainName.toLowerCase()} • $inputCount insumo(s)'
                         : 'Escolha os insumos para ver quantas sacas serão necessárias',
                     style: TextStyle(
-                        fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -1067,18 +1153,18 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               const SizedBox(height: 8),
               _TaxRegimeChooser(
                 selected: _taxRegime,
-                rateLabel: _taxRateLabel,
-                taxInSacks: taxAmountOf(sacks, _taxRate),
+                document: producer.document,
+                sacks: sacks,
                 grainName: version.grainName,
                 onChanged: (regime) => setState(() => _taxRegime = regime),
               ),
             ],
             const SizedBox(height: 8),
-            // UM botão, e não dois. Enviar ao gerente não mora mais aqui: a
-            // permuta é sempre guardada primeiro, e o envio é um ato próprio na
-            // aba de simulações, onde a checagem de serviço e de valores cabe.
-            // Duas saídas nesta tela reabririam o caminho que dependia de rede
-            // no pior lugar para depender dela.
+            // UM botão, e não dois. Enviar ao gerente existe nesta tela, mas
+            // DEPOIS de guardar (ver `_offerToSend`), nunca como uma segunda
+            // saída aqui: duas saídas deixariam o consultor escolher a que
+            // depende de rede no pior lugar para depender dela, e perder o
+            // trabalho junto com o envio que não completou.
             SizedBox(
               width: double.infinity,
               height: 44,
@@ -1091,11 +1177,13 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
                     : const Icon(Icons.bookmark_added_outlined, size: 18),
-                label: Text(_saving
-                    ? 'Guardando...'
-                    : widget.simulation == null
-                        ? 'Guardar simulação'
-                        : 'Salvar alterações'),
+                label: Text(
+                  _saving
+                      ? 'Guardando...'
+                      : widget.simulation == null
+                      ? 'Guardar simulação'
+                      : 'Salvar alterações',
+                ),
               ),
             ),
             const SizedBox(height: 6),
@@ -1126,7 +1214,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(text, style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500)),
+            child: Text(
+              text,
+              style: TextStyle(fontSize: 12, color: color, fontWeight: FontWeight.w500),
+            ),
           ),
         ],
       ),
@@ -1149,21 +1240,27 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 class _TaxRegimeChooser extends StatelessWidget {
   final TaxRegime selected;
 
-  /// A alíquota resultante (ex.: "1,63%") e o quanto ela dá EM SACAS do grão —
-  /// o consultor não vê R$ em lugar nenhum do app.
-  final String rateLabel;
-  final double taxInSacks;
+  /// O documento do produtor desta permuta — é a contagem de dígitos dele que
+  /// decide se as alíquotas mostradas são as de CPF ou as de CNPJ.
+  final String document;
+
+  /// As sacas a entregar, para a linha de baixo dizer quanto o percentual dá em
+  /// grão — o consultor não vê R$ em lugar nenhum do app.
+  final double sacks;
   final String grainName;
 
   final ValueChanged<TaxRegime> onChanged;
 
   const _TaxRegimeChooser({
     required this.selected,
-    required this.rateLabel,
-    required this.taxInSacks,
+    required this.document,
+    required this.sacks,
     required this.grainName,
     required this.onChanged,
   });
+
+  String _rateLabel(TaxRegime regime) =>
+      '${taxRateOf(regime, document).toStringAsFixed(2).replaceAll('.', ',')}%';
 
   @override
   Widget build(BuildContext context) {
@@ -1174,28 +1271,31 @@ class _TaxRegimeChooser extends StatelessWidget {
           children: [
             Icon(Icons.receipt_long_outlined, size: 14, color: AppColors.textMedium),
             const SizedBox(width: 6),
-            Text('Recolhimento do Funrural',
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+            Text(
+              'Recolhimento do Funrural',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+            ),
           ],
         ),
         const SizedBox(height: 6),
         SizedBox(
           width: double.infinity,
           child: SegmentedButton<TaxRegime>(
-            segments: const [
-              ButtonSegment(
-                value: TaxRegime.comercializacao,
-                label: Text('Comercialização', overflow: TextOverflow.ellipsis),
-              ),
-              ButtonSegment(
-                value: TaxRegime.folha,
-                label: Text('Folha de pagamento', overflow: TextOverflow.ellipsis),
-              ),
+            // O botão mostra a ALÍQUOTA, não o nome da opção: é o percentual que
+            // muda a conta, e é ele que a pessoa do outro lado do balcão
+            // pergunta. Quem é qual está dito por extenso logo abaixo, junto do
+            // valor — assim o nome aparece uma vez, no lugar em que ele explica
+            // o número, em vez de duas vezes competindo com ele.
+            segments: [
+              for (final regime in TaxRegime.values)
+                ButtonSegment(value: regime, label: Text(_rateLabel(regime))),
             ],
             selected: {selected},
             showSelectedIcon: false,
             style: const ButtonStyle(
-              textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12)),
+              textStyle: WidgetStatePropertyAll(
+                TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
               visualDensity: VisualDensity.compact,
             ),
             onSelectionChanged: (escolha) => onChanged(escolha.first),
@@ -1203,8 +1303,8 @@ class _TaxRegimeChooser extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          '+ ${formatSacks(taxInSacks)} ${grainName.toLowerCase()} de Funrural/Senar '
-          '($rateLabel) sobre a entrega — estimativa',
+          '${selected.label}: + ${formatSacks(taxAmountOf(sacks, taxRateOf(selected, document)))} '
+          '${grainName.toLowerCase()} de Funrural/Senar sobre a entrega — estimativa',
           style: TextStyle(fontSize: 11, color: AppColors.textLight),
         ),
       ],
@@ -1237,9 +1337,14 @@ class _BarterBanner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${brand.copy.programTitle} ${version.code}',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                Text(
+                  '${brand.copy.programTitle} ${version.code}',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textDark,
+                  ),
+                ),
                 Text(
                   'Pagamento em ${version.grainName.toLowerCase()}'
                   '${version.endsAt != null ? ' • até ${_shortDate(version.endsAt!)}' : ''}',
@@ -1289,11 +1394,19 @@ class _ClassRuleTile extends StatelessWidget {
               Icon(met ? Icons.check_circle : Icons.rule, size: 16, color: color),
               const SizedBox(width: 6),
               Expanded(
-                child: Text(name,
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                child: Text(
+                  name,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
               ),
-              Text('${(progress * 100).round()}%',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: color)),
+              Text(
+                '${(progress * 100).round()}%',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: color),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -1307,8 +1420,10 @@ class _ClassRuleTile extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          Text(met ? 'Exigência atingida • $detail' : 'Exigência: $detail',
-              style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+          Text(
+            met ? 'Exigência atingida • $detail' : 'Exigência: $detail',
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+          ),
         ],
       ),
     );
@@ -1391,9 +1506,14 @@ class _InputTileState extends State<_InputTile> {
                       Row(
                         children: [
                           Flexible(
-                            child: Text(product.name,
-                                style: TextStyle(
-                                    fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            child: Text(
+                              product.name,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textDark,
+                              ),
+                            ),
                           ),
                           if (_required) ...[
                             const SizedBox(width: 6),
@@ -1403,15 +1523,24 @@ class _InputTileState extends State<_InputTile> {
                                 color: AppColors.input.withValues(alpha: 0.12),
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              child: Text('mín. ${formatQty(minQty)} ${product.unit}',
-                                  style: TextStyle(
-                                      fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.input)),
+                              child: Text(
+                                'mín. ${formatQty(minQty)} ${product.unit}',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.input,
+                                ),
+                              ),
                             ),
                           ],
                         ],
                       ),
-                      Text(_required ? 'Obrigatório • medido em ${product.unit}' : 'Medido em ${product.unit}',
-                          style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+                      Text(
+                        _required
+                            ? 'Obrigatório • medido em ${product.unit}'
+                            : 'Medido em ${product.unit}',
+                        style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                      ),
                     ],
                   ),
                 ),
@@ -1423,7 +1552,9 @@ class _InputTileState extends State<_InputTile> {
                 _StepBtn(
                   icon: Icons.remove,
                   color: AppColors.input,
-                  onTap: qty > minQty ? () => onChanged((qty - 1).clamp(minQty, double.infinity)) : null,
+                  onTap: qty > minQty
+                      ? () => onChanged((qty - 1).clamp(minQty, double.infinity))
+                      : null,
                 ),
                 const SizedBox(width: 8),
                 SizedBox(
@@ -1443,16 +1574,16 @@ class _InputTileState extends State<_InputTile> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                _StepBtn(
-                  icon: Icons.add,
-                  color: AppColors.input,
-                  onTap: () => onChanged(qty + 1),
-                ),
+                _StepBtn(icon: Icons.add, color: AppColors.input, onTap: () => onChanged(qty + 1)),
                 const Spacer(),
                 if (qty > 0)
                   Text(
                     '${formatQty(qty)} ${product.unit}',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.input),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.input,
+                    ),
                   ),
               ],
             ),
@@ -1485,20 +1616,34 @@ class _ProducerChoiceTile extends StatelessWidget {
               CircleAvatar(
                 radius: 22,
                 backgroundColor: AppColors.primarySurface,
-                child: Text(producer.avatarInitials,
-                    style: TextStyle(color: AppColors.primary, fontSize: 14, fontWeight: FontWeight.bold)),
+                child: Text(
+                  producer.avatarInitials,
+                  style: TextStyle(
+                    color: AppColors.primary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(producer.name,
-                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    Text(
+                      producer.name,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text(producer.location,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      producer.location,
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     const SizedBox(height: 6),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -1511,9 +1656,14 @@ class _ProducerChoiceTile extends StatelessWidget {
                         children: [
                           Icon(Icons.straighten, size: 12, color: AppColors.primary),
                           const SizedBox(width: 4),
-                          Text('Área: ${producer.areaLabel}',
-                              style: TextStyle(
-                                  fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.primary)),
+                          Text(
+                            'Área: ${producer.areaLabel}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.primary,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1558,15 +1708,20 @@ class _UnitChoiceTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(unit.name,
-                        style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textDark)),
+                    Text(
+                      unit.name,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text(unit.city,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                        overflow: TextOverflow.ellipsis),
+                    Text(
+                      unit.city,
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                 ),
               ),
