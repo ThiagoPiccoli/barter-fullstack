@@ -21,8 +21,8 @@ import 'package:agrobarter_app/models/models.dart';
 import 'package:agrobarter_app/repositories/barter_program_repository.dart';
 import 'package:agrobarter_app/repositories/barter_repository.dart';
 import 'package:agrobarter_app/repositories/catalog_repository.dart';
-import 'package:agrobarter_app/repositories/consultant_repository.dart';
-import 'package:agrobarter_app/repositories/manager_repository.dart';
+import 'package:agrobarter_app/repositories/committee_repository.dart';
+import 'package:agrobarter_app/repositories/staff_repository.dart';
 import 'package:agrobarter_app/repositories/producer_repository.dart';
 import 'package:agrobarter_app/repositories/unit_repository.dart';
 import 'package:agrobarter_app/services/api/api_client.dart';
@@ -225,12 +225,12 @@ Future<void> _run() async {
       units.isNotEmpty && units.every((u) => u.name.isNotEmpty && u.city.isNotEmpty),
       units.map((u) => u.name).join(' · '));
 
-  final managers = await ManagerRepository().list();
+  final managers = await const StaffRepository('/managers').list();
   check('os gerentes chegam para o cadastro do consultor',
       managers.isNotEmpty && managers.every((m) => m.role == UserRole.manager),
       '${managers.length} gerente(s)');
 
-  final consultants = ConsultantRepository();
+  const consultants = StaffRepository('/consultants');
   final email = 'verificacao.${DateTime.now().millisecondsSinceEpoch}@agrobarter.com.br';
   final provisioned = await consultants.create(UserModel(
     id: '',
@@ -290,4 +290,54 @@ Future<void> _run() async {
   await consultants.delete(provisioned.consultant.id);
   await consultants.delete(second.consultant.id);
   check('consultores de verificação removidos', true);
+
+  /* ── Faturista (pessoa) e comitê (órgão) ──────────────────────────── */
+  // Os dois últimos postos da linha, e as DUAS FORMAS de cadastro que o app
+  // precisa saber distinguir: o faturista é uma pessoa entre várias, e o comitê
+  // é um cadastro só — sem lista, sem id e sem exclusão.
+  const billers = StaffRepository('/billers');
+  final biller = await billers.create(UserModel(
+    id: '',
+    name: 'Faturista de Verificação',
+    email: 'faturista.$email',
+    phone: '',
+    unitId: units.first.id,
+    branch: units.first.name,
+    role: UserRole.biller,
+    avatarInitials: 'FV',
+    createdAt: DateTime.now(),
+  ));
+  check('faturista nasce faturista, com senha de primeira entrada',
+      biller.consultant.role == UserRole.biller &&
+          biller.provisionalPassword.isNotEmpty &&
+          biller.consultant.mustChangePassword,
+      biller.consultant.branch);
+  await billers.delete(biller.consultant.id);
+  check('faturista de verificação removido', true);
+
+  final committee = CommitteeRepository();
+  final existing = await committee.find();
+  check('o comitê é UM cadastro, e ele vem sem id na rota',
+      existing != null && existing.role == UserRole.committee,
+      existing?.name ?? 'sem cadastro');
+
+  // A segunda tentativa precisa ser RECUSADA — é a regra que faz do comitê um
+  // órgão em vez de uma lista de gente.
+  var refused = false;
+  try {
+    await committee.create(UserModel(
+      id: '',
+      name: 'Segundo Comitê',
+      email: 'segundo.$email',
+      phone: '',
+      unitId: units.first.id,
+      branch: units.first.name,
+      role: UserRole.committee,
+      avatarInitials: 'SC',
+      createdAt: DateTime.now(),
+    ));
+  } on ApiException catch (e) {
+    refused = e.statusCode == 422;
+  }
+  check('um segundo comitê é recusado — o cadastro é único', refused);
 }

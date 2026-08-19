@@ -110,6 +110,10 @@ class StatusBadge extends StatelessWidget {
         bg = AppColors.approvedBg;
         fg = AppColors.approved;
         icon = Icons.check_circle_outline;
+        // "Aprovada" e não "Aprovada — a faturar": o selo é curto por
+        // desenho, e a lista já separa as duas em abas. Quem precisa do
+        // detalhe da etapa lê o [BarterModel.statusLabel], que vem do
+        // servidor.
         label = 'Aprovada';
         break;
       case BarterStatus.denied:
@@ -122,13 +126,19 @@ class StatusBadge extends StatelessWidget {
         bg = AppColors.pendingBg;
         fg = AppColors.pending;
         icon = Icons.hourglass_empty_rounded;
-        label = 'Aguardando Revisão';
+        label = 'No comitê';
         break;
       case BarterStatus.sentToManager:
         bg = AppColors.atManagerBg;
         fg = AppColors.atManager;
         icon = Icons.assignment_ind_outlined;
-        label = 'Enviada ao Gerente';
+        label = 'No gerente';
+        break;
+      case BarterStatus.invoiced:
+        bg = AppColors.invoicedBg;
+        fg = AppColors.invoiced;
+        icon = Icons.receipt_long_outlined;
+        label = 'Faturada';
         break;
     }
     return Container(
@@ -525,6 +535,8 @@ Color statusColor(BarterStatus s) {
       return AppColors.pending;
     case BarterStatus.sentToManager:
       return AppColors.atManager;
+    case BarterStatus.invoiced:
+      return AppColors.invoiced;
   }
 }
 
@@ -599,10 +611,6 @@ class MiniBarterCard extends StatelessWidget {
   final BarterModel barter;
   final bool isAdmin;
 
-  /// Ver [BarterDetailScreen.canReview] — a retaguarda abre o detalhe sem os
-  /// botões de aprovar/negar.
-  final bool canReview;
-
   /// O gerente logado, repassado ao detalhe.
   ///
   /// Sem isto, a MESMA permuta abria com a ação de parecer pela aba de permutas
@@ -619,7 +627,6 @@ class MiniBarterCard extends StatelessWidget {
     super.key,
     required this.barter,
     required this.isAdmin,
-    this.canReview = true,
     this.opinionManagerId,
     this.onChanged,
   });
@@ -636,7 +643,6 @@ class MiniBarterCard extends StatelessWidget {
               builder: (_) => BarterDetailScreen(
                 barter: barter,
                 isAdmin: isAdmin,
-                canReview: canReview,
                 opinionManagerId: opinionManagerId,
               ),
             ),
@@ -771,13 +777,20 @@ void reviewBarter(
               Text('Permuta: ${barter.id}',
                   style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
               const SizedBox(height: 12),
+              // A ATA vai aqui, e o rótulo diz isso. Quem chega a este diálogo é
+              // o comitê — a rota só aceita quem tem `barters.review` —, e o
+              // acesso dele é compartilhado por quem participa da reunião: a
+              // trilha registra "Comitê", não quem estava na sala. Este campo é
+              // o lugar de guardar isso, e chamá-lo de "observação" escondia a
+              // única oportunidade de fazê-lo.
               TextField(
                 controller: noteCtrl,
                 decoration: const InputDecoration(
-                  labelText: 'Observação (opcional)',
-                  hintText: 'Adicione uma nota...',
+                  labelText: 'Ata da reunião (opcional)',
+                  hintText: 'Quem participou, o que foi acordado...',
                 ),
-                maxLines: 2,
+                maxLines: 3,
+                textCapitalization: TextCapitalization.sentences,
               ),
             ],
           ),
@@ -870,7 +883,7 @@ void giveBarterOpinion(
                   const SizedBox(height: 12),
                   Text(
                     'Escreva a sua avaliação da negociação. Ela segue com a permuta '
-                    'para a revisão — o parecer não aprova nem nega.',
+                    'para o comitê — o parecer não aprova nem nega.',
                     style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                   ),
                   const SizedBox(height: 12),
@@ -909,7 +922,7 @@ void giveBarterOpinion(
                           onGiven(updated);
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                            content: const Text('Parecer registrado. A permuta seguiu para revisão.'),
+                            content: const Text('Parecer registrado. A permuta seguiu para o comitê.'),
                             backgroundColor: AppColors.atManager,
                           ));
                         } on ApiException catch (e) {
@@ -930,6 +943,102 @@ void giveBarterOpinion(
             ],
           );
         },
+      );
+    },
+  );
+}
+
+/// Diálogo do FATURAMENTO — o último posto da linha.
+///
+/// É o mais simples dos três de propósito, e a simplicidade é a etapa: o
+/// faturista não aprova nem nega, ele fatura o que o comitê aprovou. Por isso
+/// não há escolha nenhuma aqui, e a observação é opcional — exigir texto de quem
+/// só carimba produziria quinhentos "ok" no histórico.
+///
+/// O que ele PRECISA ver antes de confirmar é o que veio das etapas anteriores,
+/// e por isso o diálogo mostra o parecer do gerente e a decisão do comitê.
+void invoiceBarter(
+  BuildContext context,
+  BarterModel barter, {
+  required ValueChanged<BarterModel> onInvoiced,
+}) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+      return StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Faturar Permuta'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Permuta: ${barter.id}',
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 2),
+                Text('${barter.producerName} • retirada em ${barter.unitLabel}',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                const SizedBox(height: 12),
+                if (barter.hasDecision)
+                  Text(
+                    'Aprovada por ${barter.reviewedBy}'
+                    '${barter.reviewNote?.isNotEmpty == true ? ' — ${barter.reviewNote}' : ''}',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: noteCtrl,
+                  maxLength: 500,
+                  maxLines: 2,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Observação (opcional)',
+                    hintText: 'Número da nota, entrega parcial…',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      setLocal(() => submitting = true);
+                      try {
+                        final updated =
+                            await AppData.invoiceBarter(barter.id, noteCtrl.text);
+                        if (!ctx.mounted) return;
+                        Navigator.pop(ctx);
+                        onInvoiced(updated);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: const Text('Permuta faturada.'),
+                          backgroundColor: AppColors.invoiced,
+                        ));
+                      } on ApiException catch (e) {
+                        if (!ctx.mounted) return;
+                        setLocal(() => submitting = false);
+                        showErrorSnack(ctx, e);
+                      }
+                    },
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.invoiced),
+              child: submitting
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child:
+                          CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                  : const Text('Confirmar Faturamento'),
+            ),
+          ],
+        ),
       );
     },
   );

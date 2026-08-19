@@ -107,10 +107,10 @@ curl -X POST http://localhost:3333/api/v1/barters \
 
 | Papel | E-mail | Carteira de produtores |
 |---|---|---|
-| **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo) |
-| Gerente | `gerente@agrobarter.com.br` | — (enxerga tudo, em modo leitura) |
-| Comitê | `comite@agrobarter.com.br` | — (enxerga tudo, em modo leitura) |
-| Faturista | `faturista@agrobarter.com.br` | — (enxerga tudo, em modo leitura) |
+| **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo; administra, não decide) |
+| Gerente | `gerente@agrobarter.com.br` | — (o time dele; dá o parecer técnico) |
+| Comitê | `comite@agrobarter.com.br` | — (o ÓRGÃO, um acesso só; **decide** as permutas) |
+| Faturista | `faturista@agrobarter.com.br` | — (enxerga tudo; **fatura** as aprovadas) |
 | Consultor | `joao.silva@agrobarter.com.br` | Antônio Carvalho, Sebastião Ramos |
 | Consultor | `ana.ferreira@agrobarter.com.br` | Helena Prado, Cláudia Nunes |
 | Consultor | `roberto.souza@agrobarter.com.br` | Joaquim Tavares |
@@ -119,8 +119,9 @@ curl -X POST http://localhost:3333/api/v1/barters \
 
 Além disso, o dataset traz **9 produtos** (4 grãos + 5 insumos, cada um com 7
 meses de histórico de preço), **3 categorias** de insumo com regras de mínimo, e
-**8 permutas** em estados variados (aprovadas, pendentes e uma negada) para
-testar o fluxo de revisão do admin.
+**8 permutas** espalhadas pela linha inteira — duas na mesa do gerente, uma no
+comitê, três aprovadas esperando faturamento, uma negada e uma já faturada.
+Nenhuma tela do fluxo abre vazia, e cada permuta vem com a linha do tempo dela.
 
 ---
 
@@ -158,12 +159,18 @@ npm run password:reset # redefine a senha de qualquer conta (saída de emergênc
 São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts)):
 
 - **admin** — gerencia cadastros (consultores, produtores), valores de
-  referência e pastas de insumos; revisa (aprova/nega) permutas. Enxerga tudo.
-- **manager (gerente)**, **committee (comitê)** e **biller (faturista)** — a
-  RETAGUARDA. Enxergam a operação inteira, como o admin, e **ainda não escrevem
-  nada**: o fluxo de cada um entra junto com o contrato entre eles. Toda
-  tentativa de escrita hoje devolve 403, e isso é testado
-  ([`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts)).
+  referência e pastas de insumos. Enxerga tudo e **não decide permuta**: quem
+  administra o acesso não pode ser também quem decide o negócio, porque aí é a
+  mesma pessoa concedendo o poder e usando-o.
+- **manager (gerente)** — dá o **parecer técnico** das permutas do time dele
+  (só as endereçadas a ele, ver [a linha de produção](#a-linha-de-produção-da-permuta)).
+- **committee (comitê)** — **decide**: aprova ou nega, lendo o pedido do
+  consultor e o parecer do gerente. É a única instância que decide, e é um
+  ÓRGÃO: uma reunião, com um cadastro só (ver "O comitê é um cadastro só").
+- **biller (faturista)** — **fatura** o que foi aprovado. É o último posto da
+  linha, e o mais simples: ele não avalia e não devolve.
+- Cada um dos três escreve UMA coisa, e nenhum escreve a do outro — a matriz
+  inteira é varrida em [`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts).
 - **consultant (consultor)** — loga no app e registra permutas **apenas para os
   produtores que atende**. A carteira é compartilhável: consultores dividem
   região, e o mesmo produtor pode ser atendido por vários — mas nenhum deles vê
@@ -177,12 +184,40 @@ sem política é recusada. Quem tem cada capacidade está numa tabela só,
 tabela para decidir o escopo por linha (carteira própria × operação inteira).
 
 Atos sensíveis deixam rastro em `GET /audit-logs`: provisionar, editar, resetar
-senha, excluir usuário e revisar permuta.
+senha, excluir usuário, decidir e faturar permuta. Cada permuta ainda tem a
+PRÓPRIA linha do tempo (ver abaixo) — são trilhas diferentes de propósito.
 
 Não há signup público: **usuário é provisionado pelo admin**, cada papel pela
-sua rota — `POST /consultants`, `/managers`, `/committee-members`, `/billers`.
-O papel vem da ROTA, nunca do corpo, e cada rota só enxerga e altera o próprio
-papel (papel alheio responde 404).
+sua rota — `POST /consultants`, `/managers`, `/billers` e `/committee`. O papel
+vem da ROTA, nunca do corpo, e cada rota só enxerga e altera o próprio papel
+(papel alheio responde 404).
+
+### O comitê é um cadastro só
+
+As três primeiras rotas cadastram PESSOAS e são plurais. A do comitê é
+**singular**, e a diferença é de domínio: o comitê é uma **reunião**. Quem decide
+a permuta não é o fulano do comitê — é o comitê reunido.
+
+```bash
+GET  /committee                  # o cadastro, ou null enquanto não existe
+POST /committee                  # cria; 422 no segundo ("é único e já existe")
+PUT  /committee                  # corrige nome, e-mail de acesso, unidade
+POST /committee/reset-password   # nova senha; derruba as sessões abertas
+```
+
+Não há `:id` em lugar nenhum (não há qual comitê escolher) e **não há DELETE**: a
+conta é a ETAPA, e sem ela nenhuma permuta é decidida. Para tirar o acesso de
+quem está com ela, redefine-se a senha — é o mesmo ato que se usa quando a
+composição da reunião muda.
+
+A unicidade é do PAPEL, não do e-mail (`isSingleAccount` em
+[`src/common/roles.ts`](src/common/roles.ts)): um segundo comitê com outro
+endereço passaria pela conferência de e-mail sem esbarrar em nada, e a operação
+passaria a ter dois órgãos decidindo a mesma fila sem saber um do outro.
+
+O que se perde com o login compartilhado, e vale dizer: a trilha registra
+"Comitê", não quem estava na sala. É por isso que a observação da decisão é o
+lugar da **ata** — e a tela do comitê pede o texto com esse nome.
 
 `admin` não tem rota: o primeiro vem do `bootstrap-admin` (banco vazio +
 variáveis de ambiente) e a senha se recupera por `npm run password:reset`. Não
@@ -300,14 +335,17 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | POST/PUT/DELETE | `/categories[/:id]` | admin | CRUD de pastas |
 | GET/POST/PUT/DELETE | `/consultants[/:id]` | admin | Consultores |
 | GET/POST/PUT/DELETE | `/managers[/:id]` | admin | Gerentes |
-| GET/POST/PUT/DELETE | `/committee-members[/:id]` | admin | Integrantes do comitê |
+| GET/POST/PUT | `/committee` | admin | O comitê — **um cadastro só** (ver abaixo) |
+| POST | `/committee/reset-password` | admin | Nova senha da conta do comitê |
 | GET/POST/PUT/DELETE | `/billers[/:id]` | admin | Faturistas |
 | POST | `/<papel>/:id/reset-password` | admin | Nova senha provisória; encerra as sessões dele |
 | GET | `/audit-logs` | admin | Trilha de auditoria (`?action=`, `?targetType=`); só leitura |
 | GET | `/barters` | autenticado | Escopado por papel (`?status=`) |
 | GET | `/barters/:code` | autenticado | Detalhe pelo código público (PRM-AAAA-NNN) |
 | POST | `/barters` | consultor | Registra permuta (ver regras abaixo) |
-| POST | `/barters/:code/review` | admin | Aprova/nega pendente com observação |
+| POST | `/barters/:code/opinion` | gerente | Parecer técnico (move para o comitê) |
+| POST | `/barters/:code/review` | comitê | Aprova/nega, com observação |
+| POST | `/barters/:code/invoice` | faturista | Fatura a aprovada — fim da linha |
 
 Documentação navegável em **`/api/v1/docs`** (Swagger). Fica aberta fora de
 produção; em produção, só com `SWAGGER=on`.
@@ -338,6 +376,81 @@ servidor junto com a pilha.
 **Filtro que a API não entende é RECUSADO com 422**, nunca ignorado
 (`?status=lixo`, `?consultantId=abc`). Ignorar devolvia a base inteira com
 aparência de lista filtrada.
+
+## A linha de produção da permuta
+
+Uma permuta atravessa **três postos** antes de virar nota, e cada posto tem um
+dono e uma pergunta:
+
+```
+                    ┌──────────┐
+(registro)          │ invoiced │  fim da linha
+    │               └──────────┘
+    ▼                     ▲
+sentToManager ──▶ pending ──▶ approved ──▶ (fatura)
+ (gerente)       (comitê)    (faturista)
+                    │
+                    └──▶ denied   (fim da linha)
+```
+
+| Posto | Quem | O que faz | Rota |
+|---|---|---|---|
+| 1 | **gerente** do consultor | Escreve o **parecer técnico**. Não decide. | `POST /barters/:code/opinion` |
+| 2 | **comitê** | **Decide**: lê o pedido e o parecer, aprova ou nega. | `POST /barters/:code/review` |
+| 3 | **faturista** | **Fatura** o que foi aprovado. Não avalia, não devolve. | `POST /barters/:code/invoice` |
+
+O caminho inteiro mora em um arquivo só,
+[`src/barters/barter-workflow.ts`](src/barters/barter-workflow.ts): os estados,
+quem move o quê, e **o que responder a quem chega fora de hora**. Essa última
+parte é metade do valor — as três recusas dizem coisas diferentes de propósito:
+
+```bash
+# faturista tentando faturar o que ainda está no comitê
+422 "Esta permuta aguarda a decisão do comitê"
+# comitê tentando decidir o que já decidiu
+422 "Esta permuta já foi decidida pelo comitê"
+# qualquer um tentando faturar uma negada
+422 "Esta permuta foi negada pelo comitê"
+```
+
+Dizer "já foi decidida" a quem espera o gerente mandaria a pessoa procurar uma
+decisão que ninguém tomou; o que ela precisa saber é **com quem a permuta está
+parada**. O JSON da permuta carrega isso pronto (`waitingFor`, `nextAction`,
+`statusLabel`), para o app não manter uma segunda cópia do fluxo em Dart.
+
+**O admin não decide.** Ele administra o sistema — contas, catálogo, valores,
+unidades — e enxerga tudo; a capacidade `barters.review` saiu dele e foi para o
+comitê. Quem administra o acesso não pode ser também quem decide o negócio: é a
+mesma pessoa concedendo o poder e usando-o. Um teste segura isso
+([`src/common/policy.spec.ts`](src/common/policy.spec.ts)).
+
+### O histórico de cada permuta
+
+Toda passagem de um estado para o outro vira uma linha em `BarterEvent`, gravada
+**na mesma transação** da mudança: sem o evento não há mudança de estado. O
+detalhe (`GET /barters/:code`) devolve a linha do tempo pronta:
+
+```json
+"events": [
+  { "action": "register", "fromStatus": null,            "toStatus": "sentToManager", "actorName": "João Silva",       "actorRoleLabel": "Consultor" },
+  { "action": "opinion",  "fromStatus": "sentToManager", "toStatus": "pending",       "actorName": "Beatriz Nogueira", "actorRoleLabel": "Gerente", "note": "Estoque conferido…" },
+  { "action": "review",   "fromStatus": "pending",       "toStatus": "approved",      "actorName": "Comitê de Permutas", "actorRoleLabel": "Comitê" },
+  { "action": "invoice",  "fromStatus": "approved",      "toStatus": "invoiced",      "actorName": "Patrícia Lemos",   "actorRoleLabel": "Faturista" }
+]
+```
+
+São **duas trilhas**, e a diferença é deliberada:
+
+- `AuditLog` (`GET /audit-logs`) responde *"quem mexeu no sistema"*: é global,
+  só o admin lê, e a gravação é best-effort — perder uma linha não pode derrubar
+  o ato;
+- `BarterEvent` responde *"por onde esta permuta passou"*: é parte do documento,
+  quem enxerga a permuta enxerga a história dela, e ele é transacional.
+
+É essa segunda que o faturista recebe pronta das etapas anteriores — e é ela que
+mantém o parecer do gerente visível depois que a decisão o sucede, porque os
+campos da permuta são sobrescritos e os eventos não. A listagem **não** carrega
+histórico: lista mostra estado, não trajetória.
 
 ## O coração do escambo (`src/barters/barters.service.ts`)
 
@@ -377,9 +490,13 @@ desnormalizados no schema). A matemática pura fica em
 src/
 ├── auth/          # login/logout por token opaco (hash SHA-256 no banco),
 │                  # hash de senha (scrypt), guard global + @Public()
-├── common/        # AdminGuard, @CurrentUser(), EnvelopeInterceptor, ValidationPipe
+├── common/        # AccessGuard + a tabela de capacidades (policy.ts),
+│                  # @CurrentUser(), EnvelopeInterceptor, ValidationPipe
 ├── prisma/        # PrismaService (driver adapter pg) como provider global
-├── producers/      services/products/categories/barters/  # um módulo por recurso:
+├── barters/       # a permuta: barter-math.ts (a conta), tax-regime.ts (o
+│                  # imposto) e barter-workflow.ts (a LINHA DE PRODUÇÃO —
+│                  # estados, transições e as recusas de cada etapa)
+├── producers/      services/products/categories/  # um módulo por recurso:
 │                  # controller fino → service com a regra → PrismaService
 prisma/
 ├── schema.prisma  # fonte da verdade do schema (gera o client tipado)

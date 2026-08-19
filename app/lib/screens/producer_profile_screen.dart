@@ -42,7 +42,8 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
   Widget build(BuildContext context) {
     final barters = AppData.barters.where((b) => b.producerId == producer.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
+    // Aprovadas E faturadas: faturar não desfaz o negócio (ver wasApproved).
+    final approvedList = barters.where((b) => b.wasApproved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;
     final denied = barters.where((b) => b.status == BarterStatus.denied).length;
     final atManager = barters.where((b) => b.awaitsManager).length;
@@ -152,14 +153,14 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
                 color: AppColors.input,
               ),
               SummaryCard(
-                title: 'Em Revisão',
+                title: 'No Comitê',
                 value: pending.toString(),
                 icon: Icons.hourglass_top,
                 color: AppColors.pending,
               ),
               // Contagem própria: uma permuta que ainda não saiu da mesa do
-              // gerente não é "em revisão", e juntar as duas esconderia
-              // exatamente a etapa que acabou de ser criada.
+              // gerente não está no comitê, e juntar as duas esconderia
+              // exatamente onde ela parou.
               SummaryCard(
                 title: 'No Gerente',
                 value: atManager.toString(),

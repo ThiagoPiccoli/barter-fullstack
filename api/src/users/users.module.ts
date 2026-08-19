@@ -13,6 +13,10 @@ import { UserProvisioningService } from './user-provisioning.service';
  * = um controller de ~50 linhas aqui dentro; regra nova de provisionamento =
  * um lugar só para mudar.
  *
+ * Três delas são plurais (`/consultants`, `/managers`, `/billers`) porque
+ * cadastram PESSOAS. A do comitê é singular (`/committee`) porque cadastra um
+ * ÓRGÃO: ele é uma reunião, e a conta é uma só — ver o controller.
+ *
  * `admin` não tem controller de propósito — ver `ManagedRole` em
  * common/roles.ts.
  */

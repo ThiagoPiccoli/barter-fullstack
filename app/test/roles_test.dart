@@ -45,6 +45,54 @@ void main() {
     });
   });
 
+  /// AS CAPACIDADES são o que o app pergunta antes de mostrar uma ação. Elas
+  /// vêm do servidor, e é isso que permitiu a decisão da permuta sair do admin e
+  /// ir para o comitê sem uma linha de tela mudar de dono.
+  group('capacidades', () {
+    UserModel withCapabilities(String role, List<String> capabilities) =>
+        UserModel.fromJson({
+          'id': 1,
+          'fullName': 'Fulano de Tal',
+          'email': 'fulano@agrobarter.com.br',
+          'role': role,
+          'createdAt': '2026-01-10T00:00:00.000Z',
+          'capabilities': capabilities,
+        });
+
+    test('o app lê o que o servidor concedeu, e não deduz do papel', () {
+      final comite = withCapabilities('committee', [
+        Capability.bartersReview,
+        Capability.pricesRead,
+      ]);
+      expect(comite.can(Capability.bartersReview), isTrue);
+      expect(comite.can(Capability.bartersInvoice), isFalse);
+
+      final faturista = withCapabilities('biller', [Capability.bartersInvoice]);
+      expect(faturista.can(Capability.bartersInvoice), isTrue);
+      expect(faturista.can(Capability.bartersReview), isFalse);
+    });
+
+    /// Falha FECHANDO: resposta sem o campo (servidor antigo, cache velho) não
+    /// pode virar "pode tudo" — mostraria botões que a API recusaria.
+    test('sem capacidades na resposta, não pode nada', () {
+      expect(user('admin').capabilities, isEmpty);
+      expect(user('admin').can(Capability.bartersReview), isFalse);
+    });
+
+    /// O ADMIN NÃO DECIDE PERMUTA. Ele administra o sistema; quem decide é o
+    /// comitê. Este teste existe do lado do app porque foi aqui que o botão de
+    /// aprovar morava.
+    test('o admin não recebe a capacidade de decidir', () {
+      final admin = withCapabilities('admin', [
+        'users.manage',
+        'barters.readAll',
+        Capability.pricesRead,
+      ]);
+      expect(admin.can(Capability.bartersReview), isFalse);
+      expect(admin.can(Capability.bartersInvoice), isFalse);
+    });
+  });
+
   group('destinationFor', () {
     test('cada papel abre a própria tela', () {
       expect(destinationFor(user('admin')), isA<AdminMainScreen>());

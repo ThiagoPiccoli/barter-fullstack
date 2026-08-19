@@ -127,6 +127,7 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // aparece aqui.
         { route: 'POST /barters/:code/opinion', policy: 'capability:barters.opinion' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
+        { route: 'POST /barters/:code/invoice', policy: 'capability:barters.invoice' },
 
         // Lançamento do Barter — safra e versões são do admin. A exceção é a
         // versão VIGENTE: o consultor precisa dela para saber se há Barter
@@ -180,11 +181,11 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /billers', policy: 'capability:users.manage' },
         { route: 'POST /billers/:id/reset-password', policy: 'capability:users.manage' },
         { route: 'PUT /billers/:id', policy: 'capability:users.manage' },
-        { route: 'DELETE /committee-members/:id', policy: 'capability:users.manage' },
-        { route: 'GET /committee-members', policy: 'capability:users.manage' },
-        { route: 'POST /committee-members', policy: 'capability:users.manage' },
-        { route: 'POST /committee-members/:id/reset-password', policy: 'capability:users.manage' },
-        { route: 'PUT /committee-members/:id', policy: 'capability:users.manage' },
+        // O comitê é um cadastro SÓ: rota no singular, sem `:id` e sem DELETE.
+        { route: 'GET /committee', policy: 'capability:users.manage' },
+        { route: 'POST /committee', policy: 'capability:users.manage' },
+        { route: 'POST /committee/reset-password', policy: 'capability:users.manage' },
+        { route: 'PUT /committee', policy: 'capability:users.manage' },
         { route: 'DELETE /consultants/:id', policy: 'capability:users.manage' },
         { route: 'GET /consultants', policy: 'capability:users.manage' },
         { route: 'POST /consultants', policy: 'capability:users.manage' },

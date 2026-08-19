@@ -27,9 +27,20 @@ export const AUDIT_ACTION = {
   unitCreated: 'unit.created',
   unitUpdated: 'unit.updated',
   unitDeleted: 'unit.deleted',
-  /** O parecer técnico do gerente da unidade — a etapa que antecede a análise. */
+  /**
+   * A LINHA DE PRODUÇÃO da permuta: o parecer do gerente, a decisão do comitê e
+   * o faturamento.
+   *
+   * Os três estão aqui porque decidem dinheiro — e continuam aqui mesmo agora
+   * que cada permuta tem a PRÓPRIA linha do tempo (`BarterEvent`). São trilhas
+   * de naturezas diferentes: a da permuta conta a história DAQUELE registro, e é
+   * lida por quem está trabalhando nele; esta é global, cruza contas, unidades e
+   * permutas, e é onde uma investigação começa — "o que o fulano fez na terça?"
+   * não se responde abrindo permuta por permuta.
+   */
   barterOpinion: 'barter.opinion',
   barterReviewed: 'barter.reviewed',
+  barterInvoiced: 'barter.invoiced',
   /**
    * ENTRADA no sistema — e as tentativas que não entraram.
    *

@@ -162,7 +162,107 @@ void main() {
       expect(barter.managerLabel, 'Beatriz Nogueira');
       // O destinatário existe; o parecer, não.
       expect(barter.hasManagerOpinion, isFalse);
-      expect(barter.statusLabel, 'Enviada ao Gerente');
+      expect(barter.statusLabel, 'No gerente');
+      // COM QUEM ela está parada. Sem `waitingFor` no JSON (resposta antiga),
+      // fica null e a tela simplesmente não diz — em vez de dizer errado.
+      expect(barter.waitingFor, isNull);
+    });
+
+    /// A LINHA DE PRODUÇÃO inteira, lida do servidor.
+    ///
+    /// O que este teste prende é que o app não deduz o fluxo: o estado, o rótulo
+    /// e COM QUEM a permuta está vêm da resposta. Foi assim que a decisão pôde
+    /// sair do admin e ir para o comitê sem o app aprender nada novo.
+    test('lê os postos da linha: comitê, faturamento e o rótulo do servidor', () {
+      final noComite = BarterModel.fromJson(barterJson()
+        ..['waitingFor'] = 'committee'
+        ..['statusLabel'] = 'No comitê');
+      expect(noComite.awaitsCommittee, isTrue);
+      expect(noComite.waitingFor, UserRole.committee);
+      expect(noComite.statusLabel, 'No comitê');
+      expect(noComite.wasApproved, isFalse);
+
+      final aFaturar = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['waitingFor'] = 'biller'
+        ..['reviewedBy'] = 'Ricardo Alencar'
+        ..['reviewNote'] = 'Aprovada pelo comitê.');
+      expect(aFaturar.awaitsInvoice, isTrue);
+      expect(aFaturar.waitingFor, UserRole.biller);
+      expect(aFaturar.hasDecision, isTrue);
+      expect(aFaturar.reviewNote, 'Aprovada pelo comitê.');
+      expect(aFaturar.wasApproved, isTrue);
+
+      final faturada = BarterModel.fromJson(barterJson(status: 'invoiced')
+        ..['invoicedBy'] = 'Patrícia Lemos'
+        ..['invoicedAt'] = '2026-01-12T10:15:00.000Z'
+        ..['invoiceNote'] = 'NF 4471');
+      expect(faturada.isInvoiced, isTrue);
+      expect(faturada.awaitsInvoice, isFalse);
+      // Fim de linha: ninguém está com ela.
+      expect(faturada.waitingFor, isNull);
+      expect(faturada.invoicedBy, 'Patrícia Lemos');
+      expect(faturada.invoicedAt, isNotNull);
+      // Faturar não desfaz a aprovação — ela continua contando nos painéis.
+      expect(faturada.wasApproved, isTrue);
+    });
+
+    /// A LINHA DO TEMPO só vem no detalhe. Na listagem ela não vem, e a tela
+    /// precisa distinguir "não veio nesta resposta" de "não tem passos".
+    test('a linha do tempo vem do detalhe, com o autor de cada passo', () {
+      expect(BarterModel.fromJson(barterJson()).hasHistory, isFalse);
+
+      final barter = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['events'] = [
+          {
+            'action': 'register',
+            'fromStatus': null,
+            'toStatus': 'sentToManager',
+            'actorName': 'João Silva',
+            'actorRole': 'consultant',
+            'actorRoleLabel': 'Consultor',
+            'note': null,
+            'at': '2026-01-10T09:30:00.000Z',
+          },
+          {
+            'action': 'review',
+            'fromStatus': 'pending',
+            'toStatus': 'approved',
+            'actorName': 'Ricardo Alencar',
+            'actorRole': 'committee',
+            'actorRoleLabel': 'Comitê',
+            'note': 'Aprovada.',
+            'at': '2026-01-11T14:00:00.000Z',
+          },
+        ]);
+
+      expect(barter.hasHistory, isTrue);
+      expect(barter.events.first.title, 'Registrada pelo consultor');
+      expect(barter.events.first.fromStatus, isNull);
+      expect(barter.events.first.actorRole, UserRole.consultant);
+      expect(barter.events.last.title, 'Aprovada pelo comitê');
+      expect(barter.events.last.note, 'Aprovada.');
+    });
+
+    /// Um ato de um servidor mais novo não pode sumir da história nem derrubar
+    /// a tela: ele aparece como "Andamento", com quem fez e quando.
+    test('passo desconhecido continua visível na linha do tempo', () {
+      final barter = BarterModel.fromJson(barterJson()
+        ..['events'] = [
+          {
+            'action': 'cancel',
+            'fromStatus': 'approved',
+            'toStatus': 'cancelada',
+            'actorName': 'Alguém',
+            'actorRole': 'diretor',
+            'actorRoleLabel': 'Diretor',
+            'at': '2026-02-01T10:00:00.000Z',
+          },
+        ]);
+
+      expect(barter.events.single.title, 'Andamento');
+      expect(barter.events.single.actorRoleLabel, 'Diretor');
+      // Papel que este app não conhece não vira consultor por descuido.
+      expect(barter.events.single.actorRole, isNull);
     });
 
     /// A tela só oferece o botão de parecer a quem o servidor deixaria dar —

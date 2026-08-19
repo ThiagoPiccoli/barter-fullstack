@@ -95,7 +95,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
     final wallet = AppData.producersForConsultant(consultant.id);
     final barters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final approvedList = barters.where((b) => b.status == BarterStatus.approved).toList();
+    final approvedList = barters.where((b) => b.wasApproved).toList();
     final pending = barters.where((b) => b.status == BarterStatus.pending).length;
     final denied = barters.where((b) => b.status == BarterStatus.denied).length;
     final atManager = barters.where((b) => b.awaitsManager).length;
@@ -203,13 +203,13 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                 color: AppColors.input,
               ),
               SummaryCard(
-                title: 'Em Revisão',
+                title: 'No Comitê',
                 value: pending.toString(),
                 icon: Icons.hourglass_top,
                 color: AppColors.pending,
               ),
               // Contagem própria: uma permuta que ainda não saiu da mesa do
-              // gerente não é "em revisão", e juntar as duas esconderia
+              // gerente não está no comitê, e juntar as duas esconderia
               // exatamente a etapa que acabou de ser criada.
               SummaryCard(
                 title: 'No Gerente',

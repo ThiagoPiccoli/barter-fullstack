@@ -24,10 +24,28 @@ describe('Tabela de capacidades', () => {
       CAPABILITY.catalogManage,
       CAPABILITY.producersManage,
       CAPABILITY.auditRead,
-      CAPABILITY.bartersReview,
     ]) {
       expect(rolesWith(capability)).toEqual([ROLE.admin]);
     }
+  });
+
+  /**
+   * O ADMIN NÃO DECIDE PERMUTA — e este é o teste que segura isso.
+   *
+   * `bartersReview` era dele, e a lista acima é justamente onde ela estava. Sair
+   * dali não é detalhe de arrumação: quem administra o acesso não pode ser
+   * também quem decide o negócio, porque aí é a mesma pessoa concedendo o poder
+   * e usando-o. Devolvê-la ao admin um dia — de propósito ou por engano ao mexer
+   * na tabela — quebra aqui.
+   */
+  it('decidir permuta é só do comitê; o admin administra e não decide', () => {
+    expect(rolesWith(CAPABILITY.bartersReview)).toEqual([ROLE.committee]);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersReview)).toBe(false);
+  });
+
+  /** Faturar é do faturista, e é a única coisa que ele escreve. */
+  it('faturar é só do faturista', () => {
+    expect(rolesWith(CAPABILITY.bartersInvoice)).toEqual([ROLE.biller]);
   });
 
   it('registrar permuta é só do consultor', () => {
@@ -48,22 +66,39 @@ describe('Tabela de capacidades', () => {
   });
 
   /**
-   * Comitê e faturista ENXERGAM a operação e não escrevem nada. Quando a etapa
-   * de cada um for definida, este teste é o que vai obrigar a decisão a ser
-   * explícita — ele quebra no momento em que alguém der escrita a um deles. Foi
-   * exatamente o que aconteceu com o gerente, que saiu daqui ao ganhar o
-   * parecer e passou a ter o próprio caso, abaixo.
+   * CADA POSTO DA LINHA ESCREVE UMA COISA SÓ — e é isto que faz a etapa ter
+   * dono.
    *
-   * `pricesRead` entrou na lista e continua sendo leitura: a retaguarda avalia
-   * negociação, e negociação sem R$ não se avalia. Quem fica de fora dela é só o
-   * consultor — ver o comentário de `pricesRead` em policy.ts.
+   * Comitê e faturista eram só leitura enquanto as etapas deles não existiam.
+   * Agora existem, e o que este teste guarda é o TAMANHO do que cada um ganhou:
+   * o comitê decide (e não fatura), o faturista fatura (e não decide). Um papel
+   * que acumulasse os dois seria a mesma pessoa aprovando e emitindo a nota, que
+   * é exatamente a separação que a linha de produção existe para manter.
+   *
+   * `pricesRead` continua sendo leitura: a retaguarda avalia negociação, e
+   * negociação sem R$ não se avalia. Quem fica de fora dela é só o consultor —
+   * ver o comentário de `pricesRead` em policy.ts.
    */
-  it('comitê e faturista seguem em leitura, sem nenhuma escrita', () => {
-    for (const role of [ROLE.committee, ROLE.biller]) {
-      expect([...ROLE_CAPABILITIES[role]].sort()).toEqual(
-        [CAPABILITY.bartersReadAll, CAPABILITY.producersReadAll, CAPABILITY.pricesRead].sort(),
-      );
-    }
+  it('o comitê decide e não fatura; o faturista fatura e não decide', () => {
+    expect([...ROLE_CAPABILITIES[ROLE.committee]].sort()).toEqual(
+      [
+        CAPABILITY.bartersReadAll,
+        CAPABILITY.producersReadAll,
+        CAPABILITY.bartersReview,
+        CAPABILITY.pricesRead,
+      ].sort(),
+    );
+    expect(can({ role: ROLE.committee }, CAPABILITY.bartersInvoice)).toBe(false);
+
+    expect([...ROLE_CAPABILITIES[ROLE.biller]].sort()).toEqual(
+      [
+        CAPABILITY.bartersReadAll,
+        CAPABILITY.producersReadAll,
+        CAPABILITY.bartersInvoice,
+        CAPABILITY.pricesRead,
+      ].sort(),
+    );
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersReview)).toBe(false);
   });
 
   it('o gerente enxerga o TIME dele e escreve UMA coisa: o parecer', () => {

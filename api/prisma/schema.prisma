@@ -2,7 +2,8 @@
 //
 // Observações de domínio:
 // - Os "enums" são String: role admin|consultant|manager|committee|biller,
-//   type grain|input, kind grain|input, status sentToManager|pending|approved|denied,
+//   type grain|input, kind grain|input, status sentToManager|pending|approved|
+//   denied|invoiced,
 //   ruleType none|percentOfTotal|valuePerHa. Vieram assim do SQLite, que não
 //   tem enum, e continuam assim de propósito — a validação mora nos DTOs
 //   (`@IsIn`) e um valor novo não pede migration nem deploy coordenado.
@@ -17,8 +18,9 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Usuário que loga no app: admin (gerencia e revisa) ou consultant (consultor,
-/// registra permutas para a própria carteira). Produtor NÃO é usuário.
+/// Usuário que loga no app: admin (administra o sistema), gerente, comitê e
+/// faturista (os três postos da linha de análise) ou consultant (registra
+/// permutas para a própria carteira). Produtor NÃO é usuário.
 model User {
   id        Int      @id @default(autoincrement())
   fullName  String
@@ -415,19 +417,25 @@ model PriceHistoryEntry {
 /// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
 /// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
 ///
-/// O CAMINHO dela é o `status`, e ele tem quatro paradas:
+/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de três postos:
 ///
-///     sentToManager → pending → approved
-///                             ↘ denied
+///     sentToManager → pending → approved → invoiced
+///      (gerente)     (comitê)  (faturista)
+///                        ↘ denied
 ///
 /// `sentToManager` é onde ela nasce: o consultor a registrou e ela está na mesa
-/// do GERENTE DELE, esperando o parecer técnico. Escrito o parecer, ela vira
-/// `pending` — a fila de REVISÃO, onde alguém aprova ou nega (hoje o admin;
-/// comitê e faturista entram nas próximas etapas do fluxo).
+/// do GERENTE DELE, esperando o parecer técnico. Escrito o parecer, ela vai ao
+/// COMITÊ (`pending`), que lê o pedido do consultor e o parecer do gerente e
+/// decide — é a única instância que aprova ou nega. Aprovada, ela cai na fila do
+/// FATURISTA, que fatura (`invoiced`) e encerra a linha.
 ///
-/// "Revisão" e não "análise" é a palavra do sistema para esta etapa: a rota é
-/// `POST /barters/:code/review` e os campos são `reviewedBy`/`reviewedAt`. O
-/// gerente também analisa — chamar as duas coisas de análise deixava as etapas
+/// Quem guarda esse caminho — quem move o quê, de onde para onde, e o que
+/// responder a quem chega fora de hora — é `src/barters/barter-workflow.ts`. O
+/// schema só grava o estado; a máquina de estados é quem sabe que ele significa.
+///
+/// "Revisão" e não "análise" é a palavra do sistema para a etapa do comitê: a
+/// rota é `POST /barters/:code/review` e os campos são `reviewedBy`/`reviewedAt`.
+/// O gerente também analisa — chamar as duas coisas de análise deixava as etapas
 /// indistinguíveis no vocabulário.
 model Barter {
   id               Int            @id @default(autoincrement())
@@ -496,18 +504,90 @@ model Barter {
   managerNote       String?
   managerReviewedAt DateTime?
 
-  adminNote    String?
+  /// A DECISÃO DO COMITÊ: quem decidiu, quando, e a observação que acompanha.
+  ///
+  /// `reviewNote` se chamava `adminNote`, e o nome saiu junto com o poder: o
+  /// admin não decide mais permuta (ver CAPABILITY.bartersReview). Um campo
+  /// chamado "admin" guardando o texto do comitê seria uma pista falsa exatamente
+  /// no registro que alguém vai ler para entender por que a permuta foi negada.
+  ///
+  /// `reviewedBy` é snapshot pelo mesmo motivo de `managerName` — a decisão
+  /// continua assinada depois que a conta for excluída.
+  reviewNote   String?
   reviewedBy   String?
   reviewedById Int?
   reviewedAt   DateTime?
+
+  /// O FATURAMENTO — o último posto da linha, e o único que mexe com dinheiro
+  /// para fora.
+  ///
+  /// Os campos são os mesmos da decisão, de propósito: quem fez, quando, e o que
+  /// anotou. O faturista não avalia e não devolve — ele só carimba o que o comitê
+  /// aprovou —, então não há aqui nenhum campo de "resultado": ou a permuta foi
+  /// faturada, e estas colunas dizem por quem, ou ela não foi.
+  invoicedBy   String?
+  invoicedById Int?
+  invoicedAt   DateTime?
+  invoiceNote  String?
+
   createdAt    DateTime  @default(now())
 
-  items BarterItem[]
+  items  BarterItem[]
+  events BarterEvent[]
 
   @@index([versionId])
   @@index([unitId])
   // A fila do gerente: as permutas endereçadas a ele que ainda esperam parecer.
   @@index([managerId, status])
+  // As filas do comitê e do faturista: elas não têm destinatário — quem as
+  // define é o ESTADO ("as que esperam decisão", "as aprovadas a faturar"), e
+  // esta é a consulta que as duas telas fazem o tempo todo.
+  @@index([status, createdAt])
+}
+
+/// O HISTÓRICO DA PERMUTA — cada passagem dela de um estado para o outro.
+///
+/// É PARTE DO DOCUMENTO, e não da trilha de segurança. Os dois registros
+/// existem e são diferentes de propósito:
+///
+/// - `AuditLog` responde "quem mexeu no sistema": é global, só o admin lê, e a
+///   gravação é best-effort — perder uma linha não pode derrubar o ato;
+/// - `BarterEvent` responde "por onde esta permuta passou": é do registro,
+///   qualquer um que enxergue a permuta o enxerga junto, e ele é gravado na
+///   MESMA TRANSAÇÃO da mudança de estado. Sem o evento não há mudança — é o que
+///   torna o histórico completo por construção, em vez de por hábito.
+///
+/// É também o que o faturista recebe: as peças das etapas anteriores (o pedido,
+/// o parecer, a decisão) na ordem em que aconteceram, sem depender de campo
+/// nenhum ter sobrevivido a uma edição.
+///
+/// Tudo é SNAPSHOT em texto — nome e papel de quem agiu ficam congelados, como
+/// no AuditLog, porque a linha precisa continuar legível depois que a conta for
+/// excluída. Não há rota que edite nem apague evento.
+model BarterEvent {
+  id       Int    @id @default(autoincrement())
+  barterId Int
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O ato praticado — ver BARTER_ACTION em barters/barter-workflow.ts.
+  action String
+
+  /// A transição. `fromStatus` é null no registro, que não vem de estado nenhum.
+  fromStatus String?
+  toStatus   String
+
+  actorId   Int?
+  actorName String
+  actorRole String
+
+  /// O texto que acompanhou o ato (o parecer, a observação da decisão, a nota do
+  /// faturamento). É a MESMA coisa que está no campo da permuta, e está aqui de
+  /// novo porque o campo é sobrescrito e o evento não.
+  note String?
+
+  at DateTime @default(now())
+
+  @@index([barterId, at])
 }
 
 /// Item da permuta com snapshots imutáveis de nome/unidade/preço. O preço é

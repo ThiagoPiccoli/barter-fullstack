@@ -124,7 +124,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     ]);
   });
 
-  it('retaguarda não escreve cadastro nem revisão: isso é do admin', async () => {
+  it('retaguarda não escreve cadastro: isso é do admin', async () => {
     for (const email of BACK_OFFICE) {
       const auth = await asUser(email);
       const post = (url: string, body: object) =>
@@ -167,11 +167,6 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
         ),
       ).resolves.toBe(403);
 
-      // PRM-2026-002 está em análise no dataset.
-      await expect(
-        post('/api/v1/barters/PRM-2026-002/review', { status: 'approved' }).then((r) => r.status),
-      ).resolves.toBe(403);
-
       // Abrir e fechar praça é operação do admin. A retaguarda LÊ a lista (ela
       // aparece nas permutas), mas não mexe nela.
       await expect(
@@ -184,25 +179,53 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
   });
 
   /**
-   * O gerente é o único da retaguarda que escreve — e escreve UMA coisa. Este
-   * caso é o par do de cima: ele fixa o que o gerente ganhou sem deixar a lista
-   * de "não escreve nada" perder o sentido para comitê e faturista.
+   * A LINHA DE PRODUÇÃO, vista pelo RBAC: cada posto escreve UMA coisa, e
+   * nenhum escreve a do outro.
+   *
+   * Este é o caso que segura a separação inteira. Ele varre a matriz completa —
+   * três papéis × três atos — em vez de testar só o caminho feliz de cada um,
+   * porque o erro que interessa não é "o comitê não consegue aprovar": é o
+   * faturista conseguindo, ou o gerente decidindo o próprio parecer.
    */
-  it('o parecer é do gerente; comitê e faturista não alcançam a etapa', async () => {
-    for (const email of [COMITE, FATURISTA]) {
-      const response = await request(app.getHttpServer())
-        .post('/api/v1/barters/PRM-2026-005/opinion')
-        .set('Authorization', await asUser(email))
-        .send({ note: 'Parecer que este papel não deveria conseguir dar.' });
-      expect(response.status).toBe(403);
-    }
+  it('cada posto da linha escreve o seu ato, e só o seu', async () => {
+    const atos = {
+      opinion: (auth: string) =>
+        request(app.getHttpServer())
+          .post('/api/v1/barters/PRM-2026-005/opinion')
+          .set('Authorization', auth)
+          .send({ note: 'Estoque conferido na unidade, volume compatível com a área.' }),
+      review: (auth: string) =>
+        request(app.getHttpServer())
+          .post('/api/v1/barters/PRM-2026-002/review')
+          .set('Authorization', auth)
+          .send({ status: 'approved' }),
+      invoice: (auth: string) =>
+        request(app.getHttpServer())
+          .post('/api/v1/barters/PRM-2026-004/invoice')
+          .set('Authorization', auth)
+          .send({}),
+    };
 
-    const gerente = await request(app.getHttpServer())
-      .post('/api/v1/barters/PRM-2026-005/opinion')
-      .set('Authorization', await asUser(GERENTE))
-      .send({ note: 'Estoque conferido na unidade, volume compatível com a área.' });
-    expect(gerente.status).toBe(200);
-    expect(gerente.body.data.status).toBe('pending');
+    // Quem pode cada ato — e, por consequência, quem NÃO pode os outros dois.
+    const dono: Record<keyof typeof atos, string> = {
+      opinion: GERENTE,
+      review: COMITE,
+      invoice: FATURISTA,
+    };
+
+    for (const ato of Object.keys(atos) as (keyof typeof atos)[]) {
+      for (const email of [...BACK_OFFICE, ADMIN]) {
+        const response = await atos[ato](await asUser(email));
+        // O ato do dono precisa PASSAR; o dos outros precisa levar 403 — e o
+        // admin está na varredura de propósito: ele não é dono de nenhum.
+        expect([ato, email, response.status]).toEqual([
+          ato,
+          email,
+          email === dono[ato] ? 200 : 403,
+        ]);
+      }
+      await resetDb(app);
+    }
   });
 
   it('permuta é ato do consultor da carteira — nem retaguarda nem admin registram', async () => {

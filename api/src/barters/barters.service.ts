@@ -4,7 +4,7 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { Barter, BarterItem, Prisma, User } from '@prisma/client';
+import type { Barter, BarterEvent, BarterItem, Prisma, User } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -17,6 +17,14 @@ import {
   sacksToCover,
   type PricedInput,
 } from './barter-math';
+import {
+  BARTER_ACTION,
+  BARTER_STATUS,
+  BARTER_STEPS,
+  refusalFor,
+  type BarterAction,
+  type BarterStatus,
+} from './barter-workflow';
 import { TAX_REGIME, taxRateOf } from './tax-regime';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
@@ -25,11 +33,15 @@ import { SeasonsService } from '../seasons/seasons.service';
 import {
   BarterOpinionDto,
   CreateBarterDto,
+  InvoiceBarterDto,
   ListBartersQuery,
   ReviewBarterDto,
 } from './dto/barter.dto';
 
 type BarterWithItems = Barter & { items: BarterItem[] };
+
+/** A permuta com a LINHA DO TEMPO junto — a forma do detalhe. */
+type BarterDetail = BarterWithItems & { events: BarterEvent[] };
 
 /** Quanto de um texto longo cabe numa linha da trilha sem afogá-la. */
 const AUDIT_DETAIL_LIMIT = 180;
@@ -107,10 +119,17 @@ export class BartersService {
    * exatamente essa a fresta que o `scopeFor` fecha — a listagem filtrava, o
    * detalhe conferia por conta própria, e as duas regras podiam divergir.
    */
-  async findFor(user: User, code: string): Promise<BarterWithItems> {
+  async findFor(user: User, code: string): Promise<BarterDetail> {
     const barter = await this.prisma.barter.findFirst({
       where: { code, ...this.scopeFor(user) },
-      include: { items: true },
+      // O DETALHE leva a linha do tempo; a LISTAGEM não. É o mesmo motivo de a
+      // listagem não trazer o histórico de preço do produto: uma tela de lista
+      // mostra estado, não trajetória, e cobrar do banco os eventos de cinquenta
+      // permutas para desenhar cinquenta linhas de tabela é trabalho jogado fora.
+      //
+      // Quem precisa da trajetória inteira é quem abre a permuta — em especial o
+      // faturista, que fatura lendo o que as etapas anteriores produziram.
+      include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
     });
     if (barter) return barter;
 
@@ -142,7 +161,7 @@ export class BartersService {
    * gerente do consultor, que precisa dar o parecer técnico antes de a
    * negociação seguir para a revisão.
    */
-  async create(consultant: User, dto: CreateBarterDto): Promise<BarterWithItems> {
+  async create(consultant: User, dto: CreateBarterDto): Promise<BarterDetail> {
     // A rota já exige a capacidade `barters.register`; aqui a regra é repetida
     // como invariante do DOMÍNIO, e na forma de LISTA DE PERMITIDOS. Enquanto
     // isto perguntava "é admin?", cada papel novo entrava por omissão — gerente,
@@ -328,9 +347,88 @@ export class BartersService {
       // recebeu. Ver o comentário de `managerId` no schema.
       managerId: manager.id,
       managerName: manager.fullName,
-      status: 'sentToManager',
+      status: BARTER_STATUS.sentToManager,
       items: { create: items },
+      // O PRIMEIRO EVENTO da linha do tempo nasce junto com a permuta, na mesma
+      // transação — não existe permuta sem o registro de que ela foi registrada.
+      events: {
+        create: [
+          this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.sentToManager),
+        ],
+      },
     });
+  }
+
+  /**
+   * Uma linha da LINHA DO TEMPO, com o autor congelado em texto.
+   *
+   * Snapshot pelo mesmo motivo do AuditLog: o histórico precisa continuar
+   * legível depois que a conta for excluída — e é justamente o registro de quem
+   * decidiu que alguém vai querer ler nesse dia.
+   */
+  private eventOf(
+    actor: User,
+    action: BarterAction,
+    from: BarterStatus | null,
+    to: BarterStatus,
+    note?: string | null,
+  ): Prisma.BarterEventCreateWithoutBarterInput {
+    return {
+      action,
+      fromStatus: from,
+      toStatus: to,
+      actorId: actor.id,
+      actorName: actor.fullName,
+      actorRole: actor.role,
+      note: note ?? null,
+    };
+  }
+
+  /**
+   * UM PASSO da máquina de estados: grava a mudança e o evento JUNTOS.
+   *
+   * Os dois na mesma transação, e isso é a regra do histórico: sem o evento não
+   * há mudança de estado. É o que separa esta trilha da de auditoria, que é
+   * best-effort de propósito (ver AuditService.record) — ali perder uma linha
+   * não pode derrubar o ato; aqui a linha É parte do ato.
+   *
+   * O `status` entra no `where` do update, e não só na conferência de antes: dois
+   * membros do comitê decidindo a mesma permuta no mesmo segundo passariam os
+   * dois pela leitura e o segundo sobrescreveria a decisão do primeiro em
+   * silêncio. Com ele, o segundo não encontra a linha (P2025) e recebe a mesma
+   * resposta de quem chega tarde — que é o que de fato aconteceu com ele.
+   */
+  private async applyStep(
+    barter: Barter,
+    action: BarterAction,
+    actor: User,
+    to: BarterStatus,
+    fields: Prisma.BarterUncheckedUpdateInput,
+    note?: string | null,
+  ): Promise<BarterDetail> {
+    try {
+      return await this.prisma.barter.update({
+        where: { id: barter.id, status: barter.status },
+        data: {
+          ...fields,
+          status: to,
+          events: {
+            create: [this.eventOf(actor, action, barter.status as BarterStatus, to, note)],
+          },
+        },
+        // A resposta de um ATO é do tamanho do detalhe, e leva a linha do tempo
+        // com o passo que ele acabou de criar. Sem isso, a tela que agiu ficava
+        // com uma permuta SEM histórico na mão — e a linha do tempo que estava
+        // ali sumia no instante seguinte ao clique, até alguém reabrir o
+        // registro. Quem não carrega eventos é só a LISTAGEM.
+        include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new UnprocessableEntityException(BARTER_STEPS[action].done);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -346,22 +444,23 @@ export class BartersService {
    * é a fila de REVISÃO. Quem aprova ou nega continua sendo quem tem
    * `barters.review`, e lê este texto antes.
    */
-  async giveOpinion(manager: User, code: string, dto: BarterOpinionDto): Promise<BarterWithItems> {
-    const barter = await this.prisma.barter.findUnique({ where: { code } });
-    if (!barter) throw new NotFoundException('Registro não encontrado.');
+  async giveOpinion(manager: User, code: string, dto: BarterOpinionDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(code, BARTER_ACTION.opinion);
 
-    if (barter.status !== 'sentToManager') {
-      throw new UnprocessableEntityException('Esta permuta já recebeu o parecer do gerente');
-    }
+    // A política sobre o RECURSO, que a máquina de estados não alcança: ela diz
+    // que a permuta está no ponto do parecer, não que este gerente é o dono
+    // desta. Sem isto, qualquer gerente opinaria sobre o time de qualquer outro.
     if (barter.managerId !== manager.id) {
       throw new ForbiddenException('Esta permuta foi enviada a outro gerente');
     }
 
     const note = dto.note.trim();
-    const reviewed = await this.prisma.barter.update({
-      where: { code },
-      data: {
-        status: 'pending',
+    const reviewed = await this.applyStep(
+      barter,
+      BARTER_ACTION.opinion,
+      manager,
+      BARTER_STATUS.pending,
+      {
         // O nome é regravado porque ele é a ASSINATURA do parecer, e não só o
         // rótulo do destinatário: entre o envio e o parecer, a pessoa pode ter
         // corrigido o próprio nome no cadastro.
@@ -369,8 +468,8 @@ export class BartersService {
         managerNote: note,
         managerReviewedAt: new Date(),
       },
-      include: { items: true },
-    });
+      note,
+    );
 
     await this.audit.record({
       actor: manager,
@@ -407,14 +506,14 @@ export class BartersService {
    */
   private async createWithCode(
     data: Omit<Prisma.BarterUncheckedCreateInput, 'code'>,
-  ): Promise<BarterWithItems> {
+  ): Promise<BarterDetail> {
     const MAX_ATTEMPTS = 5;
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.prisma.$transaction(async (tx) =>
           tx.barter.create({
             data: { ...data, code: await this.nextCode(tx) },
-            include: { items: true },
+            include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
           }),
         );
       } catch (error) {
@@ -433,54 +532,119 @@ export class BartersService {
   }
 
   /**
-   * Revisão do admin: aprova ou nega uma permuta pendente, com observação
-   * opcional. Grava o snapshot do revisor e o momento da revisão.
+   * A DECISÃO DO COMITÊ: aprova ou nega a permuta que já tem parecer, com
+   * observação opcional. Grava o snapshot de quem decidiu e o momento.
    *
-   * Só alcança quem está em `pending` — e as duas maneiras de não estar têm
-   * mensagens diferentes de propósito. "Já foi revisada" respondido a uma
-   * permuta que ainda espera o gerente mandaria o revisor procurar uma decisão
-   * que ninguém tomou; o que ele precisa saber é que a etapa anterior não
-   * terminou, e com quem ela está parada.
+   * É a única etapa que decide o negócio, e ela é do comitê — o admin
+   * administra o sistema (contas, catálogo, valores) e não passa por aqui. Ver
+   * CAPABILITY.bartersReview.
+   *
+   * Só alcança quem está em `pending`, e as maneiras de não estar têm mensagens
+   * diferentes de propósito: quem chega antes precisa saber com quem a permuta
+   * está parada, não que "já foi decidida" — quem lê isso vai procurar uma
+   * decisão que ninguém tomou. Quem escreve as mensagens é a máquina de estados.
    */
-  async review(admin: User, code: string, dto: ReviewBarterDto): Promise<BarterWithItems> {
-    const barter = await this.prisma.barter.findUnique({ where: { code } });
-    if (!barter) throw new NotFoundException('Registro não encontrado.');
-    if (barter.status === 'sentToManager') {
-      throw new UnprocessableEntityException(
-        `Esta permuta aguarda o parecer do gerente ${barter.managerName ?? 'responsável'}`,
-      );
-    }
-    if (barter.status !== 'pending') {
-      throw new UnprocessableEntityException('Esta permuta já foi revisada');
-    }
+  async review(committee: User, code: string, dto: ReviewBarterDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(code, BARTER_ACTION.review);
 
-    const reviewed = await this.prisma.barter.update({
-      where: { code },
-      data: {
-        status: dto.status,
-        adminNote: dto.note?.trim() ? dto.note.trim() : null,
-        reviewedBy: admin.fullName,
-        reviewedById: admin.id,
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const reviewed = await this.applyStep(
+      barter,
+      BARTER_ACTION.review,
+      committee,
+      dto.status,
+      {
+        reviewNote: note,
+        reviewedBy: committee.fullName,
+        reviewedById: committee.id,
         reviewedAt: new Date(),
       },
-      include: { items: true },
-    });
+      note,
+    );
 
-    // A permuta já guarda `reviewedBy`, mas ele é sobrescrito a cada revisão e
-    // vive dentro do próprio registro. A trilha é outra coisa: fica fora, não
-    // se reescreve, e é onde se lê a SEQUÊNCIA de decisões — que é o que o
-    // fluxo de aprovação por etapas vai precisar.
+    // A permuta já guarda `reviewedBy`, e a linha do tempo dela já guarda o
+    // evento. A trilha de auditoria é uma terceira coisa, e responde a outra
+    // pergunta: "quem mexeu no sistema" — ela é global, cruza usuários,
+    // unidades e permutas, e é onde uma investigação começa. Decidir permuta é
+    // dinheiro, então continua entrando nela.
     await this.audit.record({
-      actor: admin,
+      actor: committee,
       action: AUDIT_ACTION.barterReviewed,
       targetType: 'barter',
       targetId: reviewed.id,
       targetLabel: reviewed.code,
-      detail: `${dto.status === 'approved' ? 'aprovada' : 'negada'}${
-        reviewed.adminNote ? ` — ${reviewed.adminNote}` : ''
+      detail: `${dto.status === BARTER_STATUS.approved ? 'aprovada' : 'negada'}${
+        reviewed.reviewNote ? ` — ${summarize(reviewed.reviewNote)}` : ''
       }`,
     });
     return reviewed;
+  }
+
+  /**
+   * O FATURAMENTO — o último posto da linha, e o mais simples de todos.
+   *
+   * O faturista não avalia nem devolve: ele recebe o que as etapas anteriores
+   * produziram (o pedido, o parecer, a decisão — tudo na linha do tempo da
+   * permuta) e fatura o que foi APROVADO. Por isso não há aqui nenhuma decisão a
+   * tomar, e por isso o único portão é o estado: negada não fatura, e sem
+   * decisão do comitê também não.
+   *
+   * `invoiced` é fim de linha. Não existe "desfaturar" — corrigir faturamento é
+   * ato do sistema de nota fiscal, não deste; um botão aqui apagaria o rastro do
+   * que já saiu para fora.
+   */
+  async invoice(biller: User, code: string, dto: InvoiceBarterDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(code, BARTER_ACTION.invoice);
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const invoiced = await this.applyStep(
+      barter,
+      BARTER_ACTION.invoice,
+      biller,
+      BARTER_STATUS.invoiced,
+      {
+        invoiceNote: note,
+        invoicedBy: biller.fullName,
+        invoicedById: biller.id,
+        invoicedAt: new Date(),
+      },
+      note,
+    );
+
+    await this.audit.record({
+      actor: biller,
+      action: AUDIT_ACTION.barterInvoiced,
+      targetType: 'barter',
+      targetId: invoiced.id,
+      targetLabel: invoiced.code,
+      detail: `faturada${invoiced.invoiceNote ? ` — ${summarize(invoiced.invoiceNote)}` : ''}`,
+    });
+    return invoiced;
+  }
+
+  /**
+   * A permuta pronta para receber um ato — ou o erro que explica por que não.
+   *
+   * As duas perguntas que TODA etapa faz, no mesmo lugar e na mesma ordem: ela
+   * existe? e ela está no ponto desta etapa? A segunda é da máquina de estados,
+   * e é ela quem escreve a mensagem — inclusive a que diz com quem a permuta
+   * está parada.
+   *
+   * Repare que a permuta é buscada SEM escopo, de propósito: quem chega aqui já
+   * passou pela capacidade do passo, e as três etapas são de papéis que enxergam
+   * a operação inteira (ou, no caso do gerente, cuja posse é conferida logo
+   * depois). Filtrar por escopo aqui devolveria 404 para o gerente do outro time
+   * em vez do 403 que ele merece — "não é sua" é informação diferente de "não
+   * existe".
+   */
+  private async requireBarter(code: string, action: BarterAction): Promise<Barter> {
+    const barter = await this.prisma.barter.findUnique({ where: { code } });
+    if (!barter) throw new NotFoundException('Registro não encontrado.');
+
+    const refusal = refusalFor(action, barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    return barter;
   }
 
   /**

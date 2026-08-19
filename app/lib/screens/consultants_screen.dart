@@ -7,13 +7,22 @@ import 'producer_profile_screen.dart';
 import 'consultant_profile_screen.dart';
 import 'edit_forms.dart';
 
-/// O que a aba de cadastros administra. A ordem é a da dependência: o produtor
-/// precisa de um consultor, o consultor precisa de uma unidade e de um gerente.
-enum _Registry { producers, consultants, managers, units }
+/// O que a aba de cadastros administra.
+///
+/// A ordem é a da LINHA DE PRODUÇÃO, depois do produtor que a origina: ele
+/// precisa de um consultor, o consultor precisa de uma unidade e de um gerente,
+/// o gerente entrega ao comitê, e o comitê ao faturista. Lida da esquerda para
+/// a direita, a fila de segmentos conta o caminho da permuta.
+enum _Registry { producers, consultants, managers, committee, billers, units }
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
-/// (quem registra permuta), GERENTES (quem dá o parecer) e UNIDADES (os locais
-/// de retirada), com busca em cada lista.
+/// (quem registra permuta), GERENTES (quem dá o parecer), COMITÊ (quem decide),
+/// FATURISTAS (quem fatura) e UNIDADES (os locais de retirada), com busca em
+/// cada lista.
+///
+/// O COMITÊ é o único segmento que não é uma lista: ele é uma reunião, e o
+/// cadastro é um só (ver CommitteeRepository). Ou ele existe — e o segmento
+/// mostra o cartão dele — ou não existe, e mostra o convite para criá-lo.
 class ConsultantsScreen extends StatefulWidget {
   const ConsultantsScreen({super.key});
   @override
@@ -49,6 +58,8 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           _Registry.producers => const EditProducerScreen(),
           _Registry.consultants => const EditStaffScreen(role: UserRole.consultant),
           _Registry.managers => const EditStaffScreen(role: UserRole.manager),
+          _Registry.committee => const EditStaffScreen(role: UserRole.committee),
+          _Registry.billers => const EditStaffScreen(role: UserRole.biller),
           _Registry.units => const EditUnitScreen(),
         },
       ),
@@ -82,6 +93,13 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             m.branch.toLowerCase().contains(q) ||
             m.email.toLowerCase().contains(q))
         .toList();
+    final billers = AppData.billers
+        .where((b) =>
+            q.isEmpty ||
+            b.name.toLowerCase().contains(q) ||
+            b.branch.toLowerCase().contains(q) ||
+            b.email.toLowerCase().contains(q))
+        .toList();
     final units = AppData.units
         .where((u) =>
             q.isEmpty ||
@@ -105,6 +123,19 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           '${managers.length} gerente(s)',
           'Novo gerente',
         ),
+      // O comitê não se busca: é um só. A contagem diz se ele existe, e o rótulo
+      // do botão muda com isso — "cadastrar" enquanto não há, e nada depois,
+      // porque não existe um segundo para criar.
+      _Registry.committee => (
+          'Buscar não se aplica — o comitê é um cadastro só',
+          AppData.committee == null ? 'sem cadastro' : '1 comitê',
+          'Cadastrar comitê',
+        ),
+      _Registry.billers => (
+          'Buscar faturista, unidade ou e-mail...',
+          '${billers.length} faturista(s)',
+          'Novo faturista',
+        ),
       _Registry.units => (
           'Buscar unidade ou cidade...',
           '${units.length} unidade(s)',
@@ -112,16 +143,22 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
         ),
     };
 
+    // O comitê já cadastrado não ganha botão de "novo": ele é único, e um botão
+    // que só serve para levar a um 422 é pior do que botão nenhum.
+    final showFab = _tab != _Registry.committee || AppData.committee == null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Cadastros'),
         actions: const [LogoutButton()],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _createNew,
-        icon: const Icon(Icons.add),
-        label: Text(fab),
-      ),
+      floatingActionButton: showFab
+          ? FloatingActionButton.extended(
+              onPressed: _createNew,
+              icon: const Icon(Icons.add),
+              label: Text(fab),
+            )
+          : null,
       body: Column(
         children: [
           Padding(
@@ -132,11 +169,14 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 _Registry.producers: AppData.producers.length,
                 _Registry.consultants: AppData.consultants.length,
                 _Registry.managers: AppData.managers.length,
+                _Registry.committee: AppData.committee == null ? 0 : 1,
+                _Registry.billers: AppData.billers.length,
                 _Registry.units: AppData.units.length,
               },
               onChanged: _setTab,
             ),
           ),
+          if (_tab != _Registry.committee)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: SearchField(
@@ -165,6 +205,8 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
               _Registry.producers => _buildProducerList(producers),
               _Registry.consultants => _buildConsultantList(consultants),
               _Registry.managers => _buildManagerList(managers),
+              _Registry.committee => _buildCommittee(),
+              _Registry.billers => _buildBillerList(billers),
               _Registry.units => _buildUnitList(units),
             },
           ),
@@ -296,6 +338,94 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     );
   }
 
+  /// O COMITÊ — um cartão, ou o convite para criá-lo.
+  ///
+  /// Não é lista porque não é gente: é uma reunião, e o cadastro é um só. O
+  /// cartão mostra o que o admin precisa saber antes de mexer nele — o e-mail
+  /// com que a reunião entra e o tamanho da fila esperando decisão.
+  Widget _buildCommittee() {
+    final committee = AppData.committee;
+    if (committee == null) {
+      return _NoCommitteeHint(onCreate: _createNew);
+    }
+
+    final queue = AppData.committeeQueue.length;
+    final decided = AppData.barters.where((b) => b.hasDecision).length;
+    return ListView(
+      key: const PageStorageKey('cadastros_comite'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      children: [
+        _PersonCard(
+          initials: committee.avatarInitials,
+          name: committee.name,
+          subtitle: committee.email,
+          accent: AppColors.pending,
+          badgeIcon: Icons.groups_2,
+          chips: [
+            if (queue > 0)
+              _StatChip(label: '$queue esperando decisão', color: AppColors.pending),
+            if (decided > 0) _StatChip(label: '$decided decidida(s)', color: AppColors.approved),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditStaffScreen(user: committee, role: UserRole.committee),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            'O comitê é uma reunião: o acesso é um só, e quem participa entra com ele. '
+            'A decisão de cada permuta sai assinada pelo comitê — a ata (quem estava e o '
+            'que foi acordado) vai na observação da decisão.',
+            style: TextStyle(fontSize: 11, color: AppColors.textLight),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Os FATURISTAS. O cartão mostra o que cada um já faturou — é a leitura da
+  /// lista, e a pergunta que sobra depois ("quem emitiu esta nota?") se responde
+  /// na linha do tempo da permuta.
+  Widget _buildBillerList(List<UserModel> list) {
+    if (list.isEmpty) return const _EmptyState(label: 'Nenhum faturista encontrado');
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_faturistas'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final b = list[i];
+        final invoiced = AppData.barters.where((p) => p.invoicedBy == b.name).length;
+        return _PersonCard(
+          initials: b.avatarInitials,
+          name: b.name,
+          subtitle: b.branch,
+          accent: AppColors.invoiced,
+          badgeIcon: Icons.receipt_long,
+          chips: [
+            if (invoiced > 0)
+              _StatChip(label: '$invoiced faturada(s)', color: AppColors.invoiced),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditStaffScreen(user: b, role: UserRole.biller),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
   /// As UNIDADES de retirada. O cartão mostra quantas permutas são retiradas em
   /// cada uma — que é a leitura de logística da lista, e a única pergunta que
   /// ela responde: a unidade não tem dono nem participa da revisão.
@@ -333,15 +463,15 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
 }
 
 List<Widget> _statChips(List<BarterModel> bs) {
-  final approved = bs.where((b) => b.status == BarterStatus.approved).length;
+  final approved = bs.where((b) => b.wasApproved).length;
   final pending = bs.where((b) => b.status == BarterStatus.pending).length;
   final atManager = bs.where((b) => b.awaitsManager).length;
   return [
     _StatChip(label: '${bs.length} permutas', color: AppColors.primary),
     if (approved > 0) _StatChip(label: '$approved aprov.', color: AppColors.approved),
-    if (pending > 0) _StatChip(label: '$pending revisão', color: AppColors.pending),
-    // A etapa nova precisa de contagem própria: somada a "revisão", ela
-    // esconderia justamente o que ainda não saiu da mesa do gerente.
+    if (pending > 0) _StatChip(label: '$pending no comitê', color: AppColors.pending),
+    // A etapa do gerente precisa de contagem própria: somada à do comitê, ela
+    // esconderia justamente o que ainda não saiu da mesa dele.
     if (atManager > 0) _StatChip(label: '$atManager no gerente', color: AppColors.atManager),
   ];
 }
@@ -363,13 +493,21 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.producers: ('Produtores', Icons.agriculture),
     _Registry.consultants: ('Consultores', Icons.badge),
     _Registry.managers: ('Gerentes', Icons.assignment_ind),
+    _Registry.committee: ('Comitê', Icons.groups_2),
+    _Registry.billers: ('Faturistas', Icons.receipt_long),
     _Registry.units: ('Unidades', Icons.store),
   };
 
+  /// A cor de cada segmento é a da ETAPA dele no fluxo — o mesmo índigo do
+  /// gerente, o mesmo âmbar do comitê, o mesmo verde-azulado do faturamento que
+  /// a permuta tem na lista. Quem aprendeu as cores numa tela não reaprende na
+  /// outra.
   Color _accentOf(_Registry registry) => switch (registry) {
         _Registry.producers => AppColors.primary,
         _Registry.consultants => AppColors.input,
         _Registry.managers => AppColors.atManager,
+        _Registry.committee => AppColors.pending,
+        _Registry.billers => AppColors.invoiced,
         _Registry.units => AppColors.primaryMedium,
       };
 
@@ -381,11 +519,17 @@ class _SegmentedToggle extends StatelessWidget {
         color: AppColors.disabledBg,
         borderRadius: BorderRadius.circular(14),
       ),
-      child: Row(
-        children: [
-          for (final entry in _segments.entries)
-            Expanded(
-              child: _seg(
+      // SEIS segmentos não cabem repartidos em partes iguais num celular
+      // estreito: com `Expanded`, o FittedBox encolhia "Consultores" até um
+      // tamanho que ninguém lê. Cada um passa a ocupar a largura do próprio
+      // rótulo e a faixa ROLA — os três primeiros aparecem inteiros, e o
+      // caminho continua à direita, na ordem do fluxo.
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final entry in _segments.entries)
+              _seg(
                 label: entry.value.$1,
                 icon: entry.value.$2,
                 count: counts[entry.key] ?? 0,
@@ -393,8 +537,8 @@ class _SegmentedToggle extends StatelessWidget {
                 accent: _accentOf(entry.key),
                 onTap: () => onChanged(entry.key),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -413,7 +557,7 @@ class _SegmentedToggle extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         decoration: BoxDecoration(
           color: selected ? accent : Colors.transparent,
           borderRadius: BorderRadius.circular(10),
@@ -421,11 +565,10 @@ class _SegmentedToggle extends StatelessWidget {
               ? [BoxShadow(color: accent.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 2))]
               : null,
         ),
-        // Com QUATRO segmentos, ícone + rótulo + contagem lado a lado não cabe
-        // num celular estreito, e o `ellipsis` comia o rótulo até sobrar uma
-        // letra. Empilhar (ícone em cima, rótulo e contagem embaixo) devolve a
-        // largura ao texto, e o FittedBox garante que nada estoure quando o
-        // nome for longo ou a fonte do sistema for maior.
+        // Ícone em cima, rótulo e contagem embaixo: lado a lado eles não cabiam
+        // nem com quatro segmentos, e o `ellipsis` comia o rótulo até sobrar uma
+        // letra. O FittedBox garante que nada estoure quando a fonte do sistema
+        // for maior.
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -555,6 +698,90 @@ class _StatChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
       ),
       child: Text(label, style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+/// O comitê ainda não existe — e isso PARA a linha de produção.
+///
+/// Não é um "nenhum registro encontrado" qualquer: sem comitê, toda permuta que
+/// o gerente despachar fica esperando uma decisão que ninguém pode tomar. O
+/// bloco diz isso e oferece a saída, em vez de deixar o admin descobrir pela
+/// fila crescendo.
+class _NoCommitteeHint extends StatelessWidget {
+  final VoidCallback onCreate;
+  const _NoCommitteeHint({required this.onCreate});
+
+  @override
+  Widget build(BuildContext context) {
+    final waiting = AppData.committeeQueue.length;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      children: [
+        Card(
+          shape: RoundedRectangleBorder(
+            borderRadius: AppShape.card,
+            side: BorderSide(color: AppColors.pending.withValues(alpha: 0.45), width: 1.5),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppColors.pendingBg,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.groups_2, size: 20, color: AppColors.pending),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text('O comitê ainda não tem cadastro',
+                          style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.textDark)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'O comitê é uma REUNIÃO, e o acesso dele é um só — não se cadastra um '
+                  'integrante por vez. Crie o cadastro e passe a senha de primeira entrada '
+                  'a quem conduz a reunião.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                ),
+                if (waiting > 0) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Há $waiting permuta(s) esperando decisão. Sem este cadastro, '
+                    'ninguém consegue aprovar nem negar.',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.pending),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: onCreate,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Cadastrar comitê'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.pending,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

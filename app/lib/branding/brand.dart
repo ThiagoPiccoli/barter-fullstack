@@ -82,6 +82,15 @@ class BrandPalette {
   final Color pendingBg;
   final Color deniedBg;
 
+  /// [invoiced] é a permuta FATURADA — o fim da linha.
+  ///
+  /// Ela também precisa de cor própria, e pelo motivo inverso do [atManager]:
+  /// "aprovada" e "faturada" são as duas boas, mas a primeira é uma FILA (o
+  /// faturista ainda tem trabalho a fazer) e a segunda é o fim. Pintadas do
+  /// mesmo verde, a lista do faturista deixaria de mostrar o que falta fazer.
+  final Color invoiced;
+  final Color invoicedBg;
+
   /// Separadores e bordas de campo.
   final Color divider;
 
@@ -138,6 +147,8 @@ class BrandPalette {
     required this.approvedBg,
     required this.pendingBg,
     required this.deniedBg,
+    required this.invoiced,
+    required this.invoicedBg,
     required this.divider,
     required this.borderSubtle,
     required this.cardShadow,

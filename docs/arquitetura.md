@@ -42,18 +42,44 @@ Consequências que aparecem no código inteiro:
 - sem Barter aberto, `POST /barters` responde 422 e o app mostra "Barter
   fechado". Não é erro, é estado.
 
-E, uma vez montada, a permuta **não vai direto para a análise**:
+E, uma vez montada, a permuta entra numa **linha de produção de três postos**:
 
 ```
-consultor registra ──▶ Enviada ao Gerente ──▶ Aguardando Revisão ──▶ Aprovada
-                       (parecer técnico)      (admin, hoje)        ↘ Negada
+consultor registra ──▶ No gerente ──▶ No comitê ──▶ A faturar ──▶ Faturada
+                       (parecer)      (decide)      (faturista)
+                                          ↘ Negada
 ```
 
-O nome da segunda etapa é **revisão**, e não "análise", porque é a palavra que o
-sistema já usava para ela: a rota é `POST /barters/:code/review` e os campos são
-`reviewedBy`/`reviewedAt`. Enquanto a tela dizia "em análise", ela dava um
-segundo nome à mesma coisa — e "análise" descreve igualmente bem o que o gerente
-faz no passo anterior, o que deixava as duas etapas indistinguíveis para quem lê.
+Cada posto tem UM dono e UMA pergunta: o **gerente** conhece o produtor e a
+negociação e escreve o parecer técnico (não decide); o **comitê** lê o pedido do
+consultor e o parecer do gerente e **decide** — é a única instância que aprova ou
+nega; o **faturista** recebe o que as etapas anteriores produziram e **fatura** o
+que foi aprovado.
+
+**O admin não decide.** Ele administra o sistema (contas, catálogo, valores,
+unidades) e enxerga tudo. A capacidade `barters.review` era dele e foi para o
+comitê: quem administra o acesso não pode ser também quem decide o negócio,
+porque aí é a mesma pessoa concedendo o poder e usando-o.
+
+O caminho inteiro mora em [barter-workflow.ts](../api/src/barters/barter-workflow.ts) —
+os estados, quem move o quê e **o que responder a quem chega fora de hora**. Essa
+última parte não é enfeite: dizer "já foi decidida" a quem espera o gerente manda
+a pessoa procurar uma decisão que ninguém tomou, quando o que ela precisa saber é
+com quem a permuta está parada. O JSON da permuta carrega isso resolvido
+(`waitingFor`, `nextAction`, `statusLabel`), e é por isso que o app não tem uma
+segunda cópia do fluxo em Dart.
+
+O nome técnico da etapa do comitê continua sendo **revisão** — a rota é
+`POST /barters/:code/review`, os campos são `reviewedBy`/`reviewedAt` —, e nas
+telas ela aparece como **decisão**, que é o que ela é. O que não muda é a
+distinção que motivou o vocabulário: o gerente ANALISA, o comitê DECIDE, e dar o
+mesmo nome às duas deixava as etapas indistinguíveis para quem lê.
+
+Toda passagem de um estado para o outro vira um **evento** na linha do tempo da
+permuta (`BarterEvent`), gravado na mesma transação da mudança: sem evento não há
+mudança de estado. É o histórico do documento — quem enxerga a permuta enxerga
+por onde ela passou —, e é diferente da trilha de auditoria (`AuditLog`), que é
+global, só o admin lê e é best-effort de propósito.
 
 O consultor tem um **gerente**, e é a ele que a permuta chega. O gerente
 escreve um **parecer técnico** — texto, e só texto: ele não aprova nem nega — e
@@ -117,15 +143,15 @@ E as regras de acesso — **cinco papéis**, definidos em um só lugar
 
 | Papel | `role` | Enxerga | Faz hoje |
 |---|---|---|---|
-| Administrador | `admin` | tudo | cadastros, unidades, catálogo/preços, revisão das permutas |
+| Administrador | `admin` | tudo | cadastros, unidades, catálogo/preços (**não decide permuta**) |
 | Gerente | `manager` | **só o time dele** | **parecer técnico** das permutas que recebe |
-| Comitê | `committee` | tudo | leitura (fluxo próprio em construção) |
-| Faturista | `biller` | tudo | leitura (fluxo próprio em construção) |
+| Comitê | `committee` | tudo | **decide** as permutas com parecer (aprova/nega). É um ÓRGÃO: cadastro único |
+| Faturista | `biller` | tudo | **fatura** as permutas aprovadas |
 | Consultor | `consultant` | só a **própria carteira** | registra permuta para os produtores que atende |
 
-- O **gerente já escreve uma coisa**: o parecer técnico. Comitê e faturista
-  seguem em leitura — não é esquecimento, as ações de cada um entram com a
-  etapa deles no fluxo, e até lá o correto é a linha vazia de escrita
+- Cada posto escreve UMA coisa, e nenhum escreve a do outro: o gerente opina, o
+  comitê decide, o faturista fatura. A matriz inteira — três papéis × três atos,
+  mais o admin, que não é dono de nenhum — é varrida em
   ([rbac.e2e-spec.ts](../api/test/rbac.e2e-spec.ts)).
 
 Quem responde "o que cada papel pode" é **uma tabela só**,
@@ -133,15 +159,37 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 
 | Capacidade | Quem tem |
 |---|---|
-| `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `barters.review` · `audit.read` | admin |
+| `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `audit.read` | admin |
 | `producers.readAll` | admin, gerente, comitê, faturista |
 | `barters.readAll` | admin, comitê, faturista |
 | `barters.readTeam` · `barters.opinion` | gerente |
+| `barters.review` | **comitê** (era do admin) |
+| `barters.invoice` | **faturista** |
 | `barters.register` | consultor |
 
 `barter.manage` (lançar safra e versões) é separada de `catalog.manage`
 (cadastro do produto e regra das classes) de propósito: uma decide **por
 quanto** se troca, a outra só mexe em nome, unidade e classe.
+
+**O COMITÊ É UM ÓRGÃO, NÃO UMA PESSOA.** Ele é uma *reunião*: quem decide a
+permuta não é o fulano do comitê, é o comitê reunido. O cadastro segue isso — um
+só, na rota singular `/committee`, sem `:id` e sem exclusão
+(`isSingleAccount` em [roles.ts](../api/src/common/roles.ts)). Uma conta por
+integrante criaria três problemas de uma vez: a decisão do colegiado sairia
+assinada por um nome, entrar no comitê viraria cadastro de usuário (quando é ata
+de reunião) e o admin teria de manter em dia uma lista que muda a cada
+composição. A unicidade é do PAPEL e não do e-mail — senão um segundo cadastro
+passaria batido e a operação teria dois órgãos decidindo a mesma fila.
+
+O preço é real e está assumido: com o login compartilhado, a trilha registra
+"Comitê", não quem estava na sala. Por isso a observação da decisão se chama
+**ata** na tela — é ali que se guarda quem participou e o que foi acordado. O dia
+em que isso precisar ser estruturado, o caminho é um cadastro de REUNIÃO com
+participantes, e não uma conta por pessoa.
+
+Os outros três continuam sendo pessoas, com rota plural: consultor, gerente e
+faturista. Faturar é ofício de gente — vários fazem, e cada um responde pelo que
+emitiu (o nome dele fica na linha do tempo da permuta).
 
 **O gerente é o único com escopo de TIME.** Ele enxerga as permutas endereçadas
 a ele, e não a operação inteira: ele não é auditor — responde por um time, e a
@@ -242,7 +290,7 @@ a ele por quanto se troca hoje.
 
 `users` também foge do formato: **quatro controllers, um service**. Cada
 papel provisionável tem a sua rota (`/consultants`, `/managers`,
-`/committee-members`, `/billers`) para poder ser guardado e evoluir sozinho,
+`/committee`, `/billers`) para poder ser guardado e evoluir sozinho,
 enquanto senha provisória, e-mail único e reset moram uma vez só em
 [user-provisioning.service.ts](../api/src/users/user-provisioning.service.ts).
 Todo método dele recebe o papel da rota — é o que faz `PUT /managers/2`
@@ -575,16 +623,23 @@ abertas, o catálogo e a versão discordariam, e quem precifica é a versão.
 [schema.prisma](../api/prisma/schema.prisma). Dois padrões merecem atenção:
 
 **Enums são `String`**: `role`, `type`, `kind`, `status`, `ruleType`. Foi o que
-permitiu `sentToManager` entrar sem migration de tipo — e o app já tolerava um
-status desconhecido, então as versões instaladas continuaram carregando a lista
-(mostrando a permuta nova como "Aguardando Revisão", impreciso mas visível). Vieram
-assim do SQLite, que não tem enum, e ficaram: a validação mora nos DTOs
-(`@IsIn`), e um valor novo não pede migration nem deploy coordenado entre banco
-e aplicação.
+permitiu `sentToManager` — e depois `invoiced` — entrarem sem migration de tipo;
+e como o app tolera status desconhecido, as versões instaladas continuaram
+carregando a lista (mostrando a permuta na etapa errada: impreciso, mas visível
+e sem ação indevida). Vieram assim do SQLite, que não tem enum, e ficaram: a
+validação mora nos DTOs (`@IsIn`), e um valor novo não pede migration nem deploy
+coordenado entre banco e aplicação.
+
+O que o app deixou de deduzir foi o RÓTULO: `statusLabel`, `waitingFor` e
+`nextAction` vêm resolvidos no JSON, do mesmo lugar em que o fluxo está escrito
+([barter-workflow.ts](../api/src/barters/barter-workflow.ts)). Uma etapa nova
+aparece com o nome certo nas telas já instaladas.
 
 **Permuta é registro histórico.** `BarterItem` guarda `productName`, `unit`,
 `unitValue` e `unitCost` como *snapshot*; `Barter` guarda `consultantName`,
-`producerName`, `reviewedBy` e `versionCode`. Os FKs usam `onDelete: SetNull`.
+`producerName`, `reviewedBy`, `invoicedBy` e `versionCode`; e cada passagem de
+etapa vira um `BarterEvent` — a linha do tempo da permuta, gravada na mesma
+transação da mudança de estado e nunca reescrita. Os FKs usam `onDelete: SetNull`.
 Resultado: excluir um produto, um produtor ou um consultor **não** reescreve nem
 apaga o histórico — e publicar uma versão nova não altera permutas antigas.
 
@@ -703,7 +758,8 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST/PUT/DELETE | `/producers` | admin | |
 | GET/POST/PUT/DELETE | `/consultants` | admin | consultores |
 | GET/POST/PUT/DELETE | `/managers` | admin | gerentes |
-| GET/POST/PUT/DELETE | `/committee-members` | admin | integrantes do comitê |
+| GET/POST/PUT | `/committee` | admin | o comitê — cadastro ÚNICO, sem `:id` e sem DELETE |
+| POST | `/committee/reset-password` | admin | nova senha da conta da reunião |
 | GET/POST/PUT/DELETE | `/billers` | admin | faturistas |
 | POST | `/<papel>/:id/reset-password` | admin | nova provisória + derruba as sessões dele |
 | GET | `/audit-logs` `?action=` `?targetType=` | admin | trilha, mais recentes primeiro; só leitura |
@@ -726,7 +782,8 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST/PUT/DELETE | `/units`, `/units/:id` | admin | cadastro dos locais |
 | POST | `/barters` | consultor | com `unitId`; sem `grainId`; 422 se não há Barter aberto |
 | POST | `/barters/:code/opinion` | gerente | parecer técnico; só na permuta endereçada a ele |
-| POST | `/barters/:code/review` | admin | só permuta em análise (o parecer já veio) |
+| POST | `/barters/:code/review` | comitê | decide: só permuta com o parecer já dado |
+| POST | `/barters/:code/invoice` | faturista | fatura: só permuta aprovada; fim da linha |
 
 As quatro rotas de usuário seguem o mesmo desenho e **só alcançam o próprio
 papel**: papel diferente responde 404, e o admin não é gerenciado por nenhuma
@@ -734,8 +791,9 @@ delas (ver `ManagedRole` em [roles.ts](../api/src/common/roles.ts)) — ele nasc
 do `bootstrap-admin` e se recupera por script.
 
 "Escopado" = consultor vê a própria carteira; gerente vê o time dele (as
-permutas endereçadas a ele); admin, comitê e faturista veem tudo. "admin" nas linhas de escrita é o estado de hoje:
-é onde os papéis novos vão ganhar as próprias ações.
+permutas endereçadas a ele); admin, comitê e faturista veem tudo. As três rotas
+de escrita da permuta são de três papéis diferentes — é a linha de produção, e
+nenhuma delas é do admin.
 
 \* também liberadas com senha provisória.
 
@@ -1034,10 +1092,10 @@ safra ser aberta.
 |---|---|
 | [admin_main_screen.dart](../app/lib/screens/admin_main_screen.dart) | casca do admin + dashboard (herói de sacas a receber, mix por grão, rankings, fila de pendentes) |
 | [consultant_main_screen.dart](../app/lib/screens/consultant_main_screen.dart) | casca do consultor + dashboard + aba de perfil |
-| [back_office_main_screen.dart](../app/lib/screens/back_office_main_screen.dart) | casca de **gerente, comitê e faturista**, parametrizada pelo papel. O gerente abre na **fila de parecer** dele, com selo de pendências na navegação; comitê e faturista seguem em leitura |
+| [back_office_main_screen.dart](../app/lib/screens/back_office_main_screen.dart) | casca de **gerente, comitê e faturista**, parametrizada pelo POSTO de cada um (`_Post`): cada um abre na fila que pede ação dele — parecer, decisão ou faturamento —, com selo de pendências na navegação, na cor da etapa |
 | [barter_screen.dart](../app/lib/screens/barter_screen.dart) | **o construtor de permuta** (a tela mais complexa) |
 | [barters_screen.dart](../app/lib/screens/barters_screen.dart) | listagem com abas por status + busca |
-| [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe (com a versão do Barter), revisão do admin, PDF |
+| [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe (com a versão do Barter), a ação da etapa de quem abre (parecer, decisão ou faturamento), a **linha do tempo** da permuta e o PDF |
 | [prices_screen.dart](../app/lib/screens/prices_screen.dart) | ⚠️ é a aba **Barter** inteira (lançamento, valores, histórico, pastas) |
 | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) | o lançamento: versão vigente, metas, publicação por planilha, encerramento |
 | [product_report_screen.dart](../app/lib/screens/product_report_screen.dart) | relatório de um produto + diálogos de preço/categoria/exigência |

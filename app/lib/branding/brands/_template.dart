@@ -70,6 +70,10 @@ const Brand templateBrand = Brand(
     approvedBg: Color(0xFFECFDF3),
     pendingBg: Color(0xFFFEF6E7),
     deniedBg: Color(0xFFFEECEC),
+    // `invoiced` = permuta faturada (fim da linha). Mantenha-o distinguível de
+    // `approved`: aprovada é a FILA do faturista, faturada é o trabalho feito.
+    invoiced: Color(0xFF0F766E),
+    invoicedBg: Color(0xFFE0F2F1),
 
     // --- Traços e estados neutros ----------------------------------------
     divider: Color(0xFFD8DDD8),

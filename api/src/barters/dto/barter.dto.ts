@@ -14,6 +14,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { PaginationQuery } from '../../common/pagination';
+import { BARTER_STATUS, BARTER_STATUSES, type BarterStatus } from '../barter-workflow';
 import { TAX_REGIMES, TAX_REGIME_MESSAGE } from '../tax-regime';
 import type { TaxRegime } from '../tax-regime';
 
@@ -87,10 +88,34 @@ export class CreateBarterDto {
   taxRegime?: TaxRegime;
 }
 
+/**
+ * A DECISÃO DO COMITÊ. Duas saídas, e só elas: quem lê o pedido e o parecer ou
+ * aprova ou nega. Não há "devolver para o gerente" — o parecer já foi dado, e
+ * uma permuta que anda para trás perde o dono da etapa.
+ */
 export class ReviewBarterDto {
-  @IsIn(['approved', 'denied'])
-  status!: 'approved' | 'denied';
+  @IsIn([BARTER_STATUS.approved, BARTER_STATUS.denied])
+  status!: Extract<BarterStatus, 'approved' | 'denied'>;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/**
+ * O FATURAMENTO. Repare no que NÃO existe aqui: um `status`.
+ *
+ * O faturista não decide nada — ele fatura o que o comitê aprovou, e o estado da
+ * permuta é quem lhe entrega o trabalho. Um campo de decisão aqui criaria uma
+ * segunda aprovação depois da aprovação.
+ *
+ * A observação é OPCIONAL, ao contrário do parecer do gerente: o faturamento
+ * normal não tem o que explicar, e exigir texto de quem só carimba produziria
+ * quinhentos "ok" no histórico. Ela existe para o caso que foge (nota emitida
+ * parcialmente, combinação de entrega), que é quando alguém vai querer ler.
+ */
+export class InvoiceBarterDto {
   @IsOptional()
   @IsString()
   @MaxLength(500)
@@ -102,9 +127,9 @@ export class ReviewBarterDto {
  *
  * Repare no que NÃO existe aqui: um `status`. O parecer não aprova nem nega —
  * ele é o que o gerente do consultor tem a dizer sobre o negócio, e quem decide
- * é quem REVISA, lendo isto antes. Um campo de decisão aqui
- * transformaria a etapa numa segunda aprovação, deixando duas pessoas com o
- * mesmo poder e nenhuma com uma responsabilidade própria.
+ * é o COMITÊ, lendo isto antes. Um campo de decisão aqui transformaria a etapa
+ * numa segunda aprovação, deixando duas pessoas com o mesmo poder e nenhuma com
+ * uma responsabilidade própria.
  *
  * O texto é OBRIGATÓRIO pelo mesmo motivo: parecer em branco não é parecer, é
  * um botão de "seguir".
@@ -116,11 +141,6 @@ export class BarterOpinionDto {
   note!: string;
 }
 
-/** Os quatro estados de uma permuta, na ordem em que ela passa por eles. */
-export const BARTER_STATUSES = ['sentToManager', 'pending', 'approved', 'denied'] as const;
-
-export type BarterStatusValue = (typeof BARTER_STATUSES)[number];
-
 /**
  * Filtros da listagem. Um status desconhecido é RECUSADO em vez de ignorado:
  * ignorar devolvia a base inteira com cara de lista filtrada, e quem estivesse
@@ -131,7 +151,7 @@ export class ListBartersQuery extends PaginationQuery {
   @IsIn(BARTER_STATUSES, {
     message: `Filtro de status inválido: use ${BARTER_STATUSES.join(', ')}`,
   })
-  status?: BarterStatusValue;
+  status?: BarterStatus;
 
   /**
    * As permutas a retirar em uma UNIDADE — o recorte da logística: o que

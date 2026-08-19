@@ -35,7 +35,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 
 /**
  * Papéis que o admin provisiona pelas rotas de usuário (`/consultants`,
- * `/managers`, `/committee-members`, `/billers`).
+ * `/managers`, `/committee`, `/billers`).
  *
  * `admin` fica de fora — e fica de fora no TIPO, não numa checagem que alguém
  * pode esquecer de escrever: o primeiro admin nasce do
@@ -45,3 +45,30 @@ export const ROLE_LABELS: Record<Role, string> = {
  * dessas transformaria "provisionar usuário" em "fabricar um par seu".
  */
 export type ManagedRole = Exclude<Role, typeof ROLE.admin>;
+
+/**
+ * Papéis cujo cadastro é ÚNICO no sistema — a conta é do ÓRGÃO, não de uma
+ * pessoa.
+ *
+ * O COMITÊ é o caso: ele é uma REUNIÃO. Quem decide a permuta não é o fulano do
+ * comitê — é o comitê reunido —, e o cadastro segue essa verdade em vez de
+ * contrariá-la. Uma conta por integrante criaria três problemas de uma vez: a
+ * decisão passaria a ser assinada por uma pessoa (quando ela é do colegiado),
+ * entrar no comitê viraria cadastro de usuário (quando é ata de reunião), e o
+ * admin teria de manter em dia uma lista de gente que muda a cada composição.
+ *
+ * O que se perde, e vale dizer: com o login compartilhado, a trilha registra
+ * "Comitê", não quem estava na sala. É por isso que a observação da decisão é o
+ * lugar da ATA — quem participou e o que foi acordado. Se um dia isso precisar
+ * ser estruturado, o caminho é um cadastro de reunião com participantes, e não
+ * uma conta por pessoa.
+ *
+ * O FATURISTA não está aqui de propósito: faturar é ofício de gente, várias
+ * pessoas fazem, e cada uma responde pelo que emitiu.
+ */
+export const SINGLE_ACCOUNT_ROLES: readonly Role[] = [ROLE.committee];
+
+/** O cadastro deste papel é único (o órgão), e não um por pessoa? */
+export function isSingleAccount(role: Role): boolean {
+  return SINGLE_ACCOUNT_ROLES.includes(role);
+}

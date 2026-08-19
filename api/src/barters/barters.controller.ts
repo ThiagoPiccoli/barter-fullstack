@@ -7,6 +7,7 @@ import { BartersService } from './barters.service';
 import {
   BarterOpinionDto,
   CreateBarterDto,
+  InvoiceBarterDto,
   ListBartersQuery,
   ReviewBarterDto,
 } from './dto/barter.dto';
@@ -62,15 +63,39 @@ export class BartersController {
     return toBarterJson(await this.bartersService.giveOpinion(manager, code, dto), manager);
   }
 
-  /** Revisão do admin: aprova/nega uma pendente, com observação opcional. */
+  /**
+   * A DECISÃO DO COMITÊ: aprova ou nega a permuta que já tem parecer, com
+   * observação opcional.
+   *
+   * A rota continua sendo `/review` — o vocabulário da etapa não mudou, só o
+   * papel que a exerce. Quem decide agora é o comitê; o admin administra o
+   * sistema e não passa por aqui (ver CAPABILITY.bartersReview).
+   */
   @Post(':code/review')
   @RequireCapability(CAPABILITY.bartersReview)
   @HttpCode(200)
   async review(
-    @CurrentUser() admin: User,
+    @CurrentUser() committee: User,
     @Param('code') code: string,
     @Body() dto: ReviewBarterDto,
   ) {
-    return toBarterJson(await this.bartersService.review(admin, code, dto), admin);
+    return toBarterJson(await this.bartersService.review(committee, code, dto), committee);
+  }
+
+  /**
+   * O FATURAMENTO da permuta aprovada — o último posto da linha.
+   *
+   * A capacidade abre a porta para o faturista; quem confere que só o APROVADO
+   * fatura é a máquina de estados, no service.
+   */
+  @Post(':code/invoice')
+  @RequireCapability(CAPABILITY.bartersInvoice)
+  @HttpCode(200)
+  async invoice(
+    @CurrentUser() biller: User,
+    @Param('code') code: string,
+    @Body() dto: InvoiceBarterDto,
+  ) {
+    return toBarterJson(await this.bartersService.invoice(biller, code, dto), biller);
   }
 }

@@ -54,6 +54,9 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333       # emulador Android
 | Gerente  | gerente@agrobarter.com.br       | demo-2026-agro |
 | Comitê   | comite@agrobarter.com.br        | demo-2026-agro |
 | Faturista | faturista@agrobarter.com.br    | demo-2026-agro |
+
+> O acesso do **Comitê** é do órgão, não de uma pessoa: é uma reunião, e quem
+> participa entra com o mesmo login.
 | Consultor | joao.silva@agrobarter.com.br   | demo-2026-agro |
 | Consultor | ana.ferreira@agrobarter.com.br | demo-2026-agro |
 
@@ -68,10 +71,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 135 testes de unidade (matemática, senha, sessão, throttling, setup)
-cd api && npm run test:e2e  # 173 testes funcionais da API (auth, escopo, regras, contrato de erro)
-cd api && npm run test:cov  # as duas suítes juntas, com cobertura (92% de statements)
-cd app && flutter test      # 48 testes (matemática espelhada, parsers, formulários, abertura)
+cd api && npm test          # 160 testes de unidade (matemática, máquina de estados, senha, sessão, políticas)
+cd api && npm run test:e2e  # 199 testes funcionais da API (auth, escopo, fluxo, contrato de erro)
+cd api && npm run test:cov  # as duas suítes juntas, com cobertura
+cd app && flutter test      # 109 testes (matemática espelhada, parsers, formulários, abertura)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -120,6 +123,20 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   autenticação/papel e um interceptor global para o envelope `{ data: ... }`
   que o app espera. Prisma como ORM (schema declarativo, migrations, client
   tipado). Detalhes em `api/README.md`.
+- **O comitê é um ÓRGÃO, não uma pessoa**: ele é uma reunião, e o cadastro dele é
+  um só (`/committee`, no singular, sem exclusão) — quem participa entra com o
+  mesmo acesso, e a decisão sai assinada pelo comitê. Consultor, gerente e
+  faturista continuam sendo pessoas, cada um com a sua conta. Detalhes em
+  `api/README.md`.
+- **A permuta tem uma linha de produção, e ela mora no servidor**: gerente →
+  comitê → faturista. O gerente escreve o parecer técnico, o **comitê** decide
+  (aprova ou nega) e o **faturista** fatura o que foi aprovado. O admin
+  administra o sistema e **não decide permuta** — quem concede o acesso não pode
+  ser quem decide o negócio. O caminho inteiro (estados, transições e o que
+  responder a quem chega fora de hora) está em `api/src/barters/barter-workflow.ts`,
+  e cada permuta guarda a própria linha do tempo, gravada na mesma transação da
+  mudança de estado. O app pergunta ao servidor o que cada pessoa pode fazer
+  (`capabilities`) em vez de manter uma segunda cópia das regras em Dart.
 - **Servidor é a autoridade**: o payload de criação de permuta leva apenas
   produtos e quantidades; preços saem do banco, mínimos são revalidados e as
   sacas são recalculadas no servidor. Itens guardam *snapshots* de preço/nome

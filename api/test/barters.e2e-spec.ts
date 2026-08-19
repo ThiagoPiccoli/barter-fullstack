@@ -3,6 +3,8 @@ import request from 'supertest';
 import {
   ADMIN,
   ANA,
+  COMITE,
+  FATURISTA,
   GERENTE,
   GERENTE_SUL,
   JOAO,
@@ -325,30 +327,33 @@ describe('Barters (e2e)', () => {
     expect(response.status).toBe(403);
   });
 
-  it('admin aprova pendente com observação e snapshot do revisor', async () => {
+  it('o comitê aprova pendente com observação e snapshot de quem decidiu', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-002/review')
-      .set('Authorization', await asUser(ADMIN))
+      .set('Authorization', await asUser(COMITE))
       .send({ status: 'approved', note: 'Tudo certo com o estoque.' });
 
     expect(response.status).toBe(200);
     const barter = response.body.data;
     expect(barter.status).toBe('approved');
-    expect(barter.reviewedBy).toBe('Carlos Mendes');
-    expect(barter.adminNote).toBe('Tudo certo com o estoque.');
+    expect(barter.reviewedBy).toBe('Comitê de Permutas');
+    expect(barter.reviewNote).toBe('Tudo certo com o estoque.');
     expect(barter.reviewedAt).toBeTruthy();
+    // Aprovada é a fila do faturista: quem está com ela agora é ele.
+    expect(barter.waitingFor).toBe('biller');
   });
 
-  it('permuta já revisada não pode ser revisada de novo', async () => {
-    // PRM-2026-001 já está aprovada no dataset.
+  it('permuta já decidida não é decidida de novo', async () => {
+    // PRM-2026-004 já está aprovada no dataset.
     const response = await request(app.getHttpServer())
-      .post('/api/v1/barters/PRM-2026-001/review')
-      .set('Authorization', await asUser(ADMIN))
+      .post('/api/v1/barters/PRM-2026-004/review')
+      .set('Authorization', await asUser(COMITE))
       .send({ status: 'denied' });
     expect(response.status).toBe(422);
+    expect(response.body.message).toContain('já foi decidida');
   });
 
-  it('consultor não revisa permuta', async () => {
+  it('consultor não decide permuta', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-005/review')
       .set('Authorization', await asUser(JOAO))
@@ -382,7 +387,7 @@ describe('Barters (e2e)', () => {
       const code = created.body.data.code as string;
       const cedoDemais = await request(app.getHttpServer())
         .post(`/api/v1/barters/${code}/review`)
-        .set('Authorization', await asUser(ADMIN))
+        .set('Authorization', await asUser(COMITE))
         .send({ status: 'approved' });
       expect(cedoDemais.status).toBe(422);
       // A mensagem diz COM QUEM ela está parada, não "já foi revisada".
@@ -390,7 +395,7 @@ describe('Barters (e2e)', () => {
       expect(cedoDemais.body.message).toContain('Beatriz Nogueira');
     });
 
-    it('o gerente dá o parecer e a permuta segue para a análise', async () => {
+    it('o gerente dá o parecer e a permuta segue para o comitê', async () => {
       // PRM-2026-005 é do João, do time da Beatriz, e espera o parecer dela.
       const response = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-005/opinion')
@@ -404,10 +409,10 @@ describe('Barters (e2e)', () => {
       expect(barter.managerNote).toBe(opinion);
       expect(barter.managerReviewedAt).toBeTruthy();
 
-      // E agora sim o admin alcança.
+      // E agora sim o comitê alcança.
       const review = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-005/review')
-        .set('Authorization', await asUser(ADMIN))
+        .set('Authorization', await asUser(COMITE))
         .send({ status: 'approved' });
       expect(review.status).toBe(200);
       // O parecer não é apagado pela decisão seguinte: os dois convivem.
@@ -544,6 +549,288 @@ describe('Barters (e2e)', () => {
         .delete('/api/v1/managers/10') // Gustavo, que agora tem o time inteiro
         .set('Authorization', admin)
         .expect(422);
+    });
+  });
+
+  /**
+   * OS DOIS ÚLTIMOS POSTOS DA LINHA — a decisão do comitê e o faturamento.
+   *
+   * O que estes casos prendem é a separação: quem decide não fatura, quem fatura
+   * não decide, e quem administra o sistema não faz nem uma coisa nem outra. Sem
+   * eles, devolver a decisão ao admin — de propósito ou por descuido numa linha
+   * da tabela de capacidades — passaria em silêncio.
+   */
+  describe('a decisão do comitê e o faturamento', () => {
+    /**
+     * O ADMIN NÃO DECIDE MAIS. Este é o caso que a mudança inteira existe para
+     * produzir: ele continua enxergando tudo e administrando tudo, e a única
+     * coisa que perdeu foi decidir o negócio.
+     */
+    it('o admin não decide permuta — ele administra o sistema', async () => {
+      const admin = await asUser(ADMIN);
+      const decisão = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', admin)
+        .send({ status: 'approved' });
+      expect(decisão.status).toBe(403);
+      expect(decisão.body.message).toContain('Comitê');
+
+      // E o que ele perdeu foi só isso: continua vendo a operação inteira.
+      const lista = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', admin);
+      expect(lista.body.data).toHaveLength(8);
+    });
+
+    it('a permuta aprovada é faturada pelo faturista, e aí acabou a linha', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', await asUser(COMITE))
+        .send({ status: 'approved' })
+        .expect(200);
+
+      const faturista = await asUser(FATURISTA);
+      const faturada = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/invoice')
+        .set('Authorization', faturista)
+        .send({ note: 'Nota emitida em 12/05.' });
+
+      expect(faturada.status).toBe(200);
+      expect(faturada.body.data.status).toBe('invoiced');
+      expect(faturada.body.data.invoicedBy).toBe('Patrícia Lemos');
+      expect(faturada.body.data.invoicedAt).toBeTruthy();
+      expect(faturada.body.data.invoiceNote).toBe('Nota emitida em 12/05.');
+      // Fim de linha: ninguém mais está com ela, e não há próximo ato.
+      expect(faturada.body.data.waitingFor).toBeNull();
+      expect(faturada.body.data.nextAction).toBeNull();
+
+      const denovo = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/invoice')
+        .set('Authorization', faturista)
+        .send({});
+      expect(denovo.status).toBe(422);
+      expect(denovo.body.message).toContain('já foi faturada');
+    });
+
+    /**
+     * "Ele apenas faturará o que foi aprovado" — em três recusas, uma para cada
+     * jeito de a permuta não estar aprovada. Repare que a NEGADA é a que mais
+     * importa: é a única forma de dinheiro sair por engano daqui.
+     */
+    it('só o aprovado fatura — e cada recusa diz onde a permuta está', async () => {
+      const faturista = await asUser(FATURISTA);
+
+      const noGerente = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-005/invoice')
+        .set('Authorization', faturista)
+        .send({});
+      expect(noGerente.status).toBe(422);
+      expect(noGerente.body.message).toContain('parecer do gerente');
+
+      const noComitê = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/invoice')
+        .set('Authorization', faturista)
+        .send({});
+      expect(noComitê.status).toBe(422);
+      expect(noComitê.body.message).toContain('decisão do comitê');
+
+      const negada = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-003/invoice')
+        .set('Authorization', faturista)
+        .send({});
+      expect(negada.status).toBe(422);
+      expect(negada.body.message).toContain('negada');
+    });
+
+    it('o comitê não fatura e o faturista não decide', async () => {
+      const semFaturar = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-004/invoice')
+        .set('Authorization', await asUser(COMITE))
+        .send({});
+      expect(semFaturar.status).toBe(403);
+      expect(semFaturar.body.message).toContain('Faturista');
+
+      const semDecidir = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', await asUser(FATURISTA))
+        .send({ status: 'approved' });
+      expect(semDecidir.status).toBe(403);
+      expect(semDecidir.body.message).toContain('Comitê');
+    });
+
+    /**
+     * DUAS DECISÕES AO MESMO TEMPO. O comitê é um colegiado — mais de uma pessoa
+     * com a mesma capacidade —, então dois membros podem abrir a mesma permuta e
+     * clicar quase junto.
+     *
+     * O que não pode acontecer é a segunda decisão sobrescrever a primeira em
+     * silêncio: as duas passariam pela leitura do estado antes de qualquer uma
+     * gravar. Quem impede é o `status` no `where` do update (ver applyStep) —
+     * exatamente uma das duas encontra a linha, e a outra recebe a resposta de
+     * quem chegou tarde.
+     */
+    it('duas decisões simultâneas: uma vale, a outra é recusada', async () => {
+      const comitê = await asUser(COMITE);
+      const decidir = (status: string) =>
+        request(app.getHttpServer())
+          .post('/api/v1/barters/PRM-2026-002/review')
+          .set('Authorization', comitê)
+          .send({ status });
+
+      const [uma, outra] = await Promise.all([decidir('approved'), decidir('denied')]);
+      const status = [uma.status, outra.status].sort();
+      expect(status).toEqual([200, 422]);
+
+      // E a permuta ficou com UMA decisão, a de quem chegou primeiro.
+      const depois = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-002')
+        .set('Authorization', comitê);
+      const events = depois.body.data.events as { action: string }[];
+      expect(events.filter((e) => e.action === 'review')).toHaveLength(1);
+    });
+
+    /** A fila de cada posto é um filtro de estado — nenhuma delas tem dono. */
+    it('cada posto tem a própria fila, e ela é o estado da permuta', async () => {
+      const filas: [string, string, number][] = [
+        [FATURISTA, 'approved', 3],
+        [COMITE, 'pending', 1],
+        [FATURISTA, 'invoiced', 1],
+      ];
+
+      for (const [email, status, quantas] of filas) {
+        const response = await request(app.getHttpServer())
+          .get(`/api/v1/barters?status=${status}`)
+          .set('Authorization', await asUser(email));
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(quantas);
+      }
+    });
+  });
+
+  /**
+   * A LINHA DO TEMPO da permuta — a auditoria do fluxo, dentro do documento.
+   *
+   * Ela é o que o faturista recebe das etapas anteriores: o pedido, o parecer e
+   * a decisão, na ordem em que aconteceram, sem depender de nenhum campo ter
+   * sobrevivido a uma edição posterior.
+   */
+  describe('histórico da permuta', () => {
+    it('o detalhe conta a permuta inteira, um passo por etapa', async () => {
+      // PRM-2026-001 nasceu, teve parecer, foi decidida e foi faturada.
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-001')
+        .set('Authorization', await asUser(FATURISTA));
+
+      expect(response.status).toBe(200);
+      const events = response.body.data.events as {
+        action: string;
+        fromStatus: string | null;
+        toStatus: string;
+        actorName: string;
+        actorRole: string;
+        actorRoleLabel: string;
+        note: string | null;
+      }[];
+
+      expect(events.map((e) => [e.action, e.fromStatus, e.toStatus])).toEqual([
+        ['register', null, 'sentToManager'],
+        ['opinion', 'sentToManager', 'pending'],
+        ['review', 'pending', 'approved'],
+        ['invoice', 'approved', 'invoiced'],
+      ]);
+      expect(events.map((e) => e.actorRole)).toEqual([
+        'consultant',
+        'manager',
+        'committee',
+        'biller',
+      ]);
+      expect(events.map((e) => e.actorName)).toEqual([
+        'João Silva',
+        'Beatriz Nogueira',
+        'Comitê de Permutas',
+        'Patrícia Lemos',
+      ]);
+      // O texto de cada etapa fica no evento, e não só no campo da permuta —
+      // que é sobrescrito.
+      expect(events[1].note).toContain('Volume compatível');
+      expect(events[3].note).toContain('nota única');
+      expect(events[0].actorRoleLabel).toBe('Consultor');
+    });
+
+    it('cada ato acrescenta um passo, e nenhum apaga o anterior', async () => {
+      const antes = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-002')
+        .set('Authorization', await asUser(COMITE));
+      expect(antes.body.data.events).toHaveLength(2);
+
+      const decisão = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', await asUser(COMITE))
+        .send({ status: 'denied', note: 'Fora da política de risco desta safra.' });
+      expect(decisão.status).toBe(200);
+
+      // A RESPOSTA DO ATO já traz o passo que ele acabou de criar. Sem isso, a
+      // tela que agiu ficaria com uma permuta sem histórico na mão, e a linha do
+      // tempo sumiria no instante seguinte ao clique.
+      expect(decisão.body.data.events).toHaveLength(3);
+
+      const depois = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-002')
+        .set('Authorization', await asUser(COMITE));
+      const events = depois.body.data.events;
+      expect(events).toHaveLength(3);
+      expect(events[2]).toMatchObject({
+        action: 'review',
+        fromStatus: 'pending',
+        toStatus: 'denied',
+        actorName: 'Comitê de Permutas',
+        note: 'Fora da política de risco desta safra.',
+      });
+      // O parecer do gerente continua lá, intacto.
+      expect(events[1].action).toBe('opinion');
+    });
+
+    /**
+     * A LISTAGEM não traz histórico. Não é economia de bytes: é a diferença
+     * entre uma tela que mostra estado e uma que mostra trajetória — e cinquenta
+     * linhas de tabela não têm o que fazer com quatro eventos cada uma.
+     */
+    it('a listagem não carrega a linha do tempo de cada permuta', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', await asUser(FATURISTA));
+      expect(response.body.data[0].events).toBeUndefined();
+    });
+
+    /**
+     * O REGISTRO também nasce com a linha do tempo na resposta — um passo só,
+     * que é o dele. Toda resposta de UMA permuta é do tamanho do detalhe; quem
+     * não carrega histórico é a listagem.
+     */
+    it('a permuta recém-registrada já volta com o primeiro passo', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(JOAO))
+        .send(validPayload);
+
+      expect(created.status).toBe(201);
+      expect(created.body.data.events).toHaveLength(1);
+      expect(created.body.data.events[0]).toMatchObject({
+        action: 'register',
+        fromStatus: null,
+        toStatus: 'sentToManager',
+        actorName: 'João Silva',
+      });
+    });
+
+    /** O consultor acompanha o andamento da PRÓPRIA permuta pelo mesmo caminho. */
+    it('o consultor enxerga a linha do tempo da permuta dele', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-005')
+        .set('Authorization', await asUser(JOAO));
+      expect(response.status).toBe(200);
+      expect(response.body.data.events).toHaveLength(1);
+      expect(response.body.data.waitingFor).toBe('manager');
     });
   });
 

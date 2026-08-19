@@ -26,6 +26,24 @@ describe('Metas e vigência da versão do Barter', () => {
     });
   });
 
+  /**
+   * FATURADA CONTINUA REALIZADA. É a mesma permuta aprovada, um posto adiante —
+   * e sem isto ela sumiria da meta no dia em que o faturista emitisse a nota,
+   * fazendo a barra andar para trás justamente no negócio mais consolidado que
+   * existe.
+   */
+  it('a permuta faturada continua contando — ela é a aprovada que andou', () => {
+    const faturada = {
+      status: 'invoiced',
+      items: [item('grain', 30, 148.5), item('input', 2, 115)],
+    };
+    expect(realizedFrom([...barters, faturada])).toEqual({
+      sales: 10 * 115 + 20 * 18.9 + 5 * 320 + 2 * 115,
+      sacks: 180,
+      barters: 3,
+    });
+  });
+
   it('sem permuta aprovada, o realizado é zero em todas as unidades', () => {
     expect(realizedFrom([{ status: 'pending', items: [item('input', 1, 10)] }])).toEqual({
       sales: 0,

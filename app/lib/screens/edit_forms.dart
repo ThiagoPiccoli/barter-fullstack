@@ -298,8 +298,9 @@ class EditStaffScreen extends StatefulWidget {
   /// O registro a editar, ou null para criar um novo.
   final UserModel? user;
 
-  /// [UserRole.consultant] ou [UserRole.manager]. Decide a rota, o título e se
-  /// o formulário pergunta o gerente.
+  /// O papel que este formulário cadastra: consultor, gerente, faturista ou
+  /// comitê. Decide a rota, o título, se o formulário pergunta o gerente e se o
+  /// cadastro é de uma PESSOA ou de um ÓRGÃO (ver [_isCommittee]).
   final UserRole role;
 
   const EditStaffScreen({super.key, this.user, required this.role});
@@ -326,6 +327,18 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 
   bool get _isNew => widget.user == null;
   bool get _isConsultant => widget.role == UserRole.consultant;
+
+  /// O COMITÊ não é uma pessoa: é uma reunião, e o cadastro é um só.
+  ///
+  /// Três coisas mudam por causa disso, e todas aparecem na tela: o campo de
+  /// nome pede o nome do ÓRGÃO (não "nome completo"), não há exclusão — sem o
+  /// cadastro nenhuma permuta é decidida — e o texto explica que o acesso é
+  /// compartilhado por quem participa. O servidor impõe o resto: um segundo
+  /// cadastro leva 422 (ver committee.controller.ts).
+  bool get _isCommittee => widget.role == UserRole.committee;
+
+  bool get _isBiller => widget.role == UserRole.biller;
+
   String get _roleLabel => widget.role.label;
 
   @override
@@ -374,22 +387,38 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
     );
     try {
       if (_isNew) {
-        final provisioned = _isConsultant
-            ? await AppData.createConsultant(draft)
-            : await AppData.createManager(draft);
+        final provisioned = await _create(draft);
         if (!mounted) return;
         await showProvisionalPassword(context, provisioned, isReset: false);
         if (mounted) Navigator.pop(context, provisioned.consultant);
       } else {
-        final saved = _isConsultant
-            ? await AppData.updateConsultant(draft)
-            : await AppData.updateManager(draft);
+        final saved = await _update(draft);
         if (mounted) Navigator.pop(context, saved);
       }
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
+
+  /// A rota vem do PAPEL — o mesmo desenho do servidor, onde cada papel tem a
+  /// sua e o motor de provisionamento é um só. O admin não aparece: ele não se
+  /// cadastra por aqui (ver `ManagedRole` em common/roles.ts), e o consultor não
+  /// chega neste método sem gerente porque o formulário o exige antes.
+  Future<ProvisionedConsultant> _create(UserModel draft) => switch (widget.role) {
+        UserRole.consultant => AppData.createConsultant(draft),
+        UserRole.manager => AppData.createManager(draft),
+        UserRole.biller => AppData.createBiller(draft),
+        UserRole.committee => AppData.createCommittee(draft),
+        UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
+      };
+
+  Future<UserModel> _update(UserModel draft) => switch (widget.role) {
+        UserRole.consultant => AppData.updateConsultant(draft),
+        UserRole.manager => AppData.updateManager(draft),
+        UserRole.biller => AppData.updateBiller(draft),
+        UserRole.committee => AppData.updateCommittee(draft),
+        UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
+      };
 
   /// Nova senha de primeira entrada. Derruba as sessões abertas do titular no
   /// servidor — a confirmação avisa isso antes.
@@ -402,9 +431,17 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         icon: Icon(Icons.lock_reset, color: AppColors.pending, size: 40),
         title: const Text('Redefinir senha?'),
         content: Text(
-          'Uma nova senha provisória será gerada para ${user.name.split(' ').first}, '
-          'e a senha atual deixa de valer.\n\n'
-          'Qualquer sessão aberta nesta conta será encerrada.',
+          _isCommittee
+              // Na conta compartilhada a frase é outra porque o efeito é outro:
+              // a senha circula entre quem participa da reunião, e trocá-la tira
+              // o acesso de TODO MUNDO que estava com a anterior — que é
+              // exatamente o que se quer quando a composição muda.
+              ? 'Uma nova senha provisória será gerada para o ${user.name}, e a atual '
+                  'deixa de valer para todos que a tinham.\n\n'
+                  'Qualquer sessão aberta nesta conta será encerrada.'
+              : 'Uma nova senha provisória será gerada para ${user.name.split(' ').first}, '
+                  'e a senha atual deixa de valer.\n\n'
+                  'Qualquer sessão aberta nesta conta será encerrada.',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 14, color: AppColors.textMedium),
         ),
@@ -422,36 +459,78 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
     if (ok != true || !mounted) return;
 
     try {
-      final provisioned = await AppData.resetManagerPassword(user.id);
+      // O comitê não tem id na rota: o cadastro é um só (ver CommitteeRepository).
+      final provisioned = _isCommittee
+          ? await AppData.resetCommitteePassword()
+          : _isBiller
+              ? await AppData.resetBillerPassword(user.id)
+              : await AppData.resetManagerPassword(user.id);
       if (mounted) await showProvisionalPassword(context, provisioned, isReset: true);
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
 
-  /// Exclusão do gerente. O servidor RECUSA enquanto ele tiver consultores no
-  /// time ou permutas esperando o parecer dele, e a mensagem diz qual dos dois
-  /// falta — a tela só a exibe, em vez de repetir a regra aqui e arriscar
-  /// divergir dela.
+  /// Exclusão de GERENTE e FATURISTA — as duas pessoas que este formulário
+  /// cadastra e que podem sair.
+  ///
+  /// No gerente o servidor RECUSA enquanto ele tiver consultores no time ou
+  /// permutas esperando o parecer dele, e a mensagem diz qual dos dois falta — a
+  /// tela só a exibe, em vez de repetir a regra aqui e arriscar divergir dela.
+  /// O faturista sai sem trava: o que ele faturou guarda o nome dele no próprio
+  /// registro, e a fila dele é o estado da permuta, não uma caixa de entrada.
+  ///
+  /// O COMITÊ não tem este botão, e nem rota: o cadastro é a ETAPA, e sem ele
+  /// nenhuma permuta é decidida. Para tirar o acesso, redefine-se a senha.
   Future<void> _delete() async {
     final user = widget.user;
     if (user == null) return;
     await confirmDeleteRegistration(
       context,
-      title: 'Excluir Gerente',
+      title: 'Excluir $_roleLabel',
       name: user.name,
-      barterCount: AppData.barters.where((b) => b.managerId == user.id).length,
+      barterCount: _isBiller
+          ? AppData.barters.where((b) => b.invoicedBy == user.name).length
+          : AppData.barters.where((b) => b.managerId == user.id).length,
       onConfirm: () async {
-        await AppData.deleteManager(user.id);
+        await (_isBiller ? AppData.deleteBiller(user.id) : AppData.deleteManager(user.id));
         if (mounted) Navigator.pop(context);
       },
     );
   }
 
+  /// O que este cadastro faz no fluxo, em uma frase — a linha que explica ao
+  /// admin o que ele está criando, e por que a próxima etapa depende dela.
+  String _footerFor(UserRole role) => switch (role) {
+        UserRole.consultant =>
+          'As permutas registradas por este consultor são enviadas ao gerente escolhido '
+              'acima, que dá o parecer técnico antes de elas seguirem para o comitê. A '
+              'unidade é onde ele trabalha — ela não decide o parecer, e a retirada de cada '
+              'permuta é combinada caso a caso.',
+        UserRole.manager =>
+          'O gerente recebe as permutas dos consultores do time dele e escreve o parecer '
+              'técnico de cada uma. Ele passa a aparecer na lista de gerentes do cadastro de '
+              'consultor — é lá que o time é montado.',
+        UserRole.committee =>
+          'O comitê é uma REUNIÃO, e este é o cadastro dela: um acesso só, compartilhado '
+              'por quem participa. É por ele que se aprova ou nega a permuta depois do '
+              'parecer do gerente, e a decisão sai assinada pelo comitê — a ata (quem '
+              'estava, o que foi acordado) vai na observação da decisão.',
+        UserRole.biller =>
+          'O faturista fatura o que o comitê aprovou — a última etapa da permuta. A fila '
+              'dele não é pessoal: é o estado da permuta, e todos os faturistas veem a '
+              'mesma. Quem emitiu cada uma fica registrado na linha do tempo dela.',
+        UserRole.admin => '',
+      };
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('${_isNew ? 'Novo' : 'Editar'} $_roleLabel')),
+      appBar: AppBar(
+        title: Text(_isCommittee
+            ? (_isNew ? 'Cadastrar Comitê' : 'Editar Comitê')
+            : '${_isNew ? 'Novo' : 'Editar'} $_roleLabel'),
+      ),
       body: Form(
         key: _formKey,
         child: ListView(
@@ -470,10 +549,18 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               ),
               const SizedBox(height: 14),
             ],
-            _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
+            // O comitê não tem NOME DE PESSOA: o que se escreve aqui é o nome do
+            // órgão, e é ele que vai assinar cada decisão. O rótulo dizer isso
+            // evita o cadastro nascer com o nome de quem preencheu o formulário.
+            _EditField(
+              controller: _name,
+              label: _isCommittee ? 'Nome do comitê' : 'Nome',
+              icon: _isCommittee ? Icons.groups_2_outlined : Icons.person_outline,
+              required: true,
+            ),
             _EditField(
               controller: _email,
-              label: 'E-mail',
+              label: _isCommittee ? 'E-mail de acesso do comitê' : 'E-mail',
               icon: Icons.email_outlined,
               keyboardType: TextInputType.emailAddress,
               required: true,
@@ -509,7 +596,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
                     .toList(),
                 onChanged: (v) => setState(() => _unitId = v),
                 validator: (v) =>
-                    v == null ? 'Escolha a unidade ${_isConsultant ? 'do consultor' : 'do gerente'}' : null,
+                    v == null ? 'Escolha a unidade ${_isCommittee ? 'em que o comitê se reúne' : 'de trabalho'}' : null,
               ),
             ),
             // Só o consultor tem gerente. Perguntar isso a um gerente criaria
@@ -536,23 +623,13 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
                   validator: (v) => v == null ? 'Escolha o gerente deste consultor' : null,
                 ),
               ),
-            Text(
-              _isConsultant
-                  ? 'As permutas registradas por este consultor são enviadas ao gerente '
-                      'escolhido acima, que dá o parecer técnico antes de elas seguirem para '
-                      'a revisão. A unidade é onde ele trabalha — ela não decide o parecer, e '
-                      'a retirada de cada permuta é combinada caso a caso.'
-                  : 'O gerente recebe as permutas dos consultores do time dele e escreve o '
-                      'parecer técnico de cada uma. Ele passa a aparecer na lista de gerentes '
-                      'do cadastro de consultor — é lá que o time é montado.',
-              style: TextStyle(fontSize: 11, color: AppColors.textLight),
-            ),
+            Text(_footerFor(widget.role), style: TextStyle(fontSize: 11, color: AppColors.textLight)),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
-            // Senha e exclusão só do GERENTE: o consultor tem as dele na tela
-            // de perfil, que existe porque ele tem carteira e histórico para
-            // mostrar. O gerente não tem tela própria — e criar uma só para
-            // pendurar dois botões seria pior do que tê-los aqui.
+            // Senha e exclusão de quem NÃO tem tela própria: o consultor tem as
+            // dele no perfil, que existe porque ele tem carteira e histórico
+            // para mostrar. Gerente, faturista e comitê não têm — e criar uma
+            // tela só para pendurar dois botões seria pior do que tê-los aqui.
             if (!_isNew && !_isConsultant) ...[
               const SizedBox(height: 24),
               const Divider(),
@@ -566,16 +643,22 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
               ),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _delete,
-                icon: Icon(Icons.delete_outline, color: AppColors.denied),
-                label: Text('Excluir gerente', style: TextStyle(color: AppColors.denied)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: AppColors.denied),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+              // O COMITÊ não se exclui: o cadastro é a ETAPA, e sem ele nenhuma
+              // permuta é decidida. Não há rota para isso no servidor, e a tela
+              // não oferece um botão que levaria a um 422.
+              if (!_isCommittee) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _delete,
+                  icon: Icon(Icons.delete_outline, color: AppColors.denied),
+                  label: Text('Excluir ${_roleLabel.toLowerCase()}',
+                      style: TextStyle(color: AppColors.denied)),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: AppColors.denied),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
                 ),
-              ),
+              ],
             ],
           ],
         ),

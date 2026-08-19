@@ -49,6 +49,10 @@ class AppColors {
   static Color get pendingBg => brand.palette.pendingBg;
   static Color get deniedBg => brand.palette.deniedBg;
 
+  /// Faturada — o fim da linha.
+  static Color get invoiced => brand.palette.invoiced;
+  static Color get invoicedBg => brand.palette.invoicedBg;
+
   // --- Traços e estados neutros ------------------------------------------
   static Color get divider => brand.palette.divider;
   static Color get borderSubtle => brand.palette.borderSubtle;

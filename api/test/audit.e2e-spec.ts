@@ -3,6 +3,8 @@ import request from 'supertest';
 import {
   ADMIN,
   BACK_OFFICE,
+  COMITE,
+  FATURISTA,
   JOAO,
   SEED_PASSWORD,
   MANAGER,
@@ -147,18 +149,38 @@ describe('Auditoria (e2e)', () => {
     expect(reset.detail).toContain('sessões abertas encerradas');
   });
 
-  it('a revisão de permuta deixa rastro com a decisão e a observação', async () => {
+  /**
+   * A LINHA DE PRODUÇÃO inteira na trilha global: a decisão do comitê e o
+   * faturamento, com quem os praticou.
+   *
+   * Cada permuta também tem a própria linha do tempo (ver o histórico em
+   * barters.e2e-spec.ts), e as duas coisas convivem de propósito: aquela conta a
+   * história DE UM registro, esta responde "o que aconteceu no sistema" — e é a
+   * segunda que atravessa contas, unidades e permutas quando alguém investiga.
+   */
+  it('a decisão do comitê e o faturamento deixam rastro, com o ator de cada etapa', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-002/review')
-      .set('Authorization', await admin())
+      .set('Authorization', `Bearer ${await loginAs(app, COMITE)}`)
       .send({ status: 'approved', note: 'ok pelo comitê' })
       .expect(200);
 
+    await request(app.getHttpServer())
+      .post('/api/v1/barters/PRM-2026-002/invoice')
+      .set('Authorization', `Bearer ${await loginAs(app, FATURISTA)}`)
+      .send({ note: 'NF 4471' })
+      .expect(200);
+
     const rows = await trail('?targetType=barter');
-    expect(rows).toHaveLength(1);
-    expect(rows[0].action).toBe('barter.reviewed');
-    expect(rows[0].targetLabel).toBe('PRM-2026-002');
-    expect(rows[0].detail).toBe('aprovada — ok pelo comitê');
+    expect(rows).toHaveLength(2);
+    // Mais recentes primeiro: o faturamento veio depois da decisão.
+    expect(rows.map((r) => [r.action, r.actorName])).toEqual([
+      ['barter.invoiced', 'Patrícia Lemos'],
+      ['barter.reviewed', 'Comitê de Permutas'],
+    ]);
+    expect(rows[0].detail).toBe('faturada — NF 4471');
+    expect(rows[1].targetLabel).toBe('PRM-2026-002');
+    expect(rows[1].detail).toBe('aprovada — ok pelo comitê');
   });
 
   /**

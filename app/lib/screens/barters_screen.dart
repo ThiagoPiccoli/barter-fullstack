@@ -26,10 +26,6 @@ class BartersScreen extends StatefulWidget {
   /// foi entregue.
   final UserModel? consultant;
 
-  /// Pode aprovar/negar. Ver [BarterDetailScreen.canReview]: gerente, comitê e
-  /// faturista enxergam tudo, mas quem revisa hoje é só o admin.
-  final bool canReview;
-
   /// Quem pode dar PARECER — o gerente logado. Quando preenchido, as permutas
   /// endereçadas a ele ganham o botão de parecer, e a aba "No gerente" abre
   /// primeiro: para ele, essa é a lista que pede ação.
@@ -47,7 +43,6 @@ class BartersScreen extends StatefulWidget {
     required this.isAdmin,
     required this.consultantId,
     this.consultant,
-    this.canReview = true,
     this.opinionManagerId,
     this.onChanged,
   });
@@ -66,20 +61,31 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    final pending = _hasSimulations ? AppData.mySimulations.length : 0;
     _tabController = TabController(
-      length: _hasSimulations ? 6 : 5,
+      length: _hasSimulations ? 7 : 6,
       vsync: this,
-      // Cada um entra na lista que PEDE AÇÃO DELE: o gerente na fila de
-      // pareceres, o consultor nas simulações que ainda precisa enviar. Sem
-      // simulação guardada, ele entra em "Todas" — abrir numa lista vazia seria
-      // esconder o histórico dele atrás de uma tela em branco.
-      initialIndex: widget.opinionManagerId != null
-          ? 1
-          : pending > 0
-          ? 0
-          : (_hasSimulations ? 1 : 0),
+      initialIndex: _initialTab(),
     );
+  }
+
+  /// A aba em que cada um ENTRA: a lista que pede ação dele.
+  ///
+  /// O gerente cai na fila de pareceres, o comitê na de decisões, o faturista no
+  /// que há para faturar e o consultor nas simulações que ainda precisa enviar.
+  /// Quem não tem posto na linha entra em "Todas" — abrir numa lista vazia seria
+  /// esconder o histórico atrás de uma tela em branco, que é o caso do admin.
+  ///
+  /// A ordem das perguntas segue a da linha de produção, e nenhum papel tem duas
+  /// (ver a tabela de capacidades no servidor).
+  int _initialTab() {
+    // A aba de simulações, quando existe, vem antes de "Todas" e empurra todas
+    // as outras uma casa.
+    final offset = _hasSimulations ? 1 : 0;
+    if (widget.opinionManagerId != null) return offset + 1;
+    if (AppData.can(Capability.bartersReview)) return offset + 2;
+    if (AppData.can(Capability.bartersInvoice)) return offset + 3;
+    if (_hasSimulations && AppData.mySimulations.isNotEmpty) return 0;
+    return offset;
   }
 
   /// Simulações do consultor, filtradas pela mesma busca das outras abas.
@@ -147,12 +153,14 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             // esquerda para a direita conta o caminho dela.
             if (_hasSimulations) Tab(text: 'Simulações (${_filteredSimulations.length})'),
             Tab(text: 'Todas (${_filtered(null).length})'),
-            // Na ordem do fluxo: a permuta passa pelo gerente ANTES da
-            // revisão, e a lista lida da esquerda para a direita conta o
-            // caminho dela.
+            // Na ordem da LINHA DE PRODUÇÃO: gerente → comitê → faturamento.
+            // A lista lida da esquerda para a direita conta o caminho da
+            // permuta, e é por isso que "Negadas" fica no fim: ela é saída
+            // lateral, não um degrau adiante.
             Tab(text: 'No gerente (${_filtered(BarterStatus.sentToManager).length})'),
-            Tab(text: 'Revisão (${_filtered(BarterStatus.pending).length})'),
-            Tab(text: 'Aprovadas (${_filtered(BarterStatus.approved).length})'),
+            Tab(text: 'No comitê (${_filtered(BarterStatus.pending).length})'),
+            Tab(text: 'A faturar (${_filtered(BarterStatus.approved).length})'),
+            Tab(text: 'Faturadas (${_filtered(BarterStatus.invoiced).length})'),
             Tab(text: 'Negadas (${_filtered(BarterStatus.denied).length})'),
           ],
         ),
@@ -187,12 +195,12 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
                   BarterStatus.sentToManager,
                   BarterStatus.pending,
                   BarterStatus.approved,
+                  BarterStatus.invoiced,
                   BarterStatus.denied,
                 ])
                   _BarterList(
                     barters: _filtered(status),
                     isAdmin: widget.isAdmin,
-                    canReview: widget.canReview,
                     opinionManagerId: widget.opinionManagerId,
                     onChanged: _onChanged,
                   ),
@@ -208,13 +216,11 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
 class _BarterList extends StatelessWidget {
   final List<BarterModel> barters;
   final bool isAdmin;
-  final bool canReview;
   final String? opinionManagerId;
   final VoidCallback onChanged;
   const _BarterList({
     required this.barters,
     required this.isAdmin,
-    required this.canReview,
     required this.onChanged,
     this.opinionManagerId,
   });
@@ -242,7 +248,6 @@ class _BarterList extends StatelessWidget {
       itemBuilder: (context, index) => _BarterCard(
         barter: barters[index],
         isAdmin: isAdmin,
-        canReview: canReview,
         opinionManagerId: opinionManagerId,
         onChanged: onChanged,
       ),
@@ -253,13 +258,11 @@ class _BarterList extends StatelessWidget {
 class _BarterCard extends StatelessWidget {
   final BarterModel barter;
   final bool isAdmin;
-  final bool canReview;
   final String? opinionManagerId;
   final VoidCallback onChanged;
   const _BarterCard({
     required this.barter,
     required this.isAdmin,
-    required this.canReview,
     required this.onChanged,
     this.opinionManagerId,
   });
@@ -277,8 +280,7 @@ class _BarterCard extends StatelessWidget {
               builder: (_) => BarterDetailScreen(
                 barter: barter,
                 isAdmin: isAdmin,
-                canReview: canReview,
-                opinionManagerId: opinionManagerId,
+                        opinionManagerId: opinionManagerId,
               ),
             ),
           );
@@ -397,7 +399,11 @@ class _BarterCard extends StatelessWidget {
                   ),
                 ),
               ],
-              if (isAdmin && canReview && barter.status == BarterStatus.pending) ...[
+              // A DECISÃO e o FATURAMENTO, cada um oferecido a quem tem a
+              // capacidade e só quando a permuta está no posto certo. Quem
+              // responde às duas perguntas é o servidor: a primeira pelas
+              // capacidades do usuário, a segunda pelo estado da permuta.
+              if (AppData.can(Capability.bartersReview) && barter.awaitsCommittee) ...[
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -436,6 +442,22 @@ class _BarterCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ],
+              if (AppData.can(Capability.bartersInvoice) && barter.awaitsInvoice) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () =>
+                        invoiceBarter(context, barter, onInvoiced: (_) => onChanged()),
+                    icon: const Icon(Icons.receipt_long_outlined, size: 16),
+                    label: const Text('Faturar', style: TextStyle(fontSize: 13)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.invoiced,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
                 ),
               ],
             ],

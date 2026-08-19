@@ -106,7 +106,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
   Widget build(BuildContext context) {
     final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final approved = myBarters.where((b) => b.status == BarterStatus.approved).toList();
+    final approved = myBarters.where((b) => b.wasApproved).toList();
     final pending = myBarters.where((b) => b.status == BarterStatus.pending).length;
     final sacksDelivered = approved.fold<double>(0, (s, b) => s + b.totalGrainQty);
 
@@ -177,7 +177,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
                 color: AppColors.approved,
               ),
               SummaryCard(
-                title: 'Em Revisão',
+                title: 'No Comitê',
                 value: pending.toString(),
                 icon: Icons.hourglass_top,
                 color: AppColors.pending,
@@ -346,7 +346,7 @@ class _ConsultantProfileTab extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(child: SummaryCard(
                 title: 'Aprovadas',
-                value: myBarters.where((b) => b.status == BarterStatus.approved).length.toString(),
+                value: myBarters.where((b) => b.wasApproved).length.toString(),
                 icon: Icons.check_circle_outline,
                 color: AppColors.approved,
               )),

@@ -31,6 +31,7 @@ export const SEED_PASSWORD = 'demo-2026-agro';
 export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // Ordem respeita os FKs (filhos primeiro).
   await prisma.barterItem.deleteMany();
+  await prisma.barterEvent.deleteMany();
   await prisma.barter.deleteMany();
   await prisma.versionPrice.deleteMany();
   await prisma.barterVersion.deleteMany();
@@ -121,15 +122,21 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     branch: 'Matriz',
     createdAt: at(2020, 2, 3),
   });
-  await mkUser({
-    fullName: 'Ricardo Alencar',
+  // O comitê DECIDE e o faturista FATURA — os dois últimos postos da linha —,
+  // então os dois assinam permutas do dataset e precisam de nome aqui.
+  //
+  // O COMITÊ não é uma pessoa: é uma reunião, e o cadastro é do ÓRGÃO (ver
+  // `isSingleAccount` em common/roles.ts). Por isso o nome é institucional e há
+  // UM só no dataset — a decisão sai assinada pelo colegiado, que é quem a toma.
+  const comite = await mkUser({
+    fullName: 'Comitê de Permutas',
     email: 'comite@agrobarter.com.br',
     role: ROLE.committee,
     phone: '(44) 99999-0011',
     branch: 'Matriz',
     createdAt: at(2020, 2, 3),
   });
-  await mkUser({
+  const patricia = await mkUser({
     fullName: 'Patrícia Lemos',
     email: 'faturista@agrobarter.com.br',
     role: ROLE.biller,
@@ -204,10 +211,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await lotar(lucas, filial18, gustavo);
   await lotar(beatriz, matriz);
   await lotar(gustavo, filial34);
-  for (const email of ['comite@agrobarter.com.br', 'faturista@agrobarter.com.br']) {
-    const user = await prisma.user.findUnique({ where: { email } });
-    if (user) await lotar(user, matriz);
-  }
+  await lotar(comite, matriz);
+  await lotar(patricia, matriz);
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
@@ -630,20 +635,30 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // duas, deixadas em `sentToManager` de propósito: são as filas de Beatriz
   // (PRM-2026-005, do João) e de Gustavo (PRM-2026-007, do Lucas), e sem elas a
   // tela do gerente abriria vazia no dataset de demonstração.
+  //
+  // O dataset cobre a LINHA INTEIRA pelo mesmo motivo: uma em cada posto, para
+  // nenhuma tela do fluxo abrir vazia — duas no gerente, uma no comitê
+  // (PRM-2026-002), três aprovadas esperando o faturista, uma negada e uma já
+  // faturada.
   const barters = [
     {
       code: 'PRM-2026-001',
       version: sojaV2,
       consultant: joao,
       producer: antonio,
-      status: 'approved',
+      // A mais antiga do dataset já andou a linha inteira: parecer, decisão do
+      // comitê e faturamento. É a única `invoiced` — sem ela, o painel do
+      // faturista não teria nada faturado para mostrar, só a fila.
+      status: 'invoiced',
       createdAt: at(2026, 1, 10, 9, 30),
       managerNote:
         'Volume compatível com a área declarada e com o histórico do produtor. ' +
         'Estoque de NPK e glifosato disponível na unidade para o período.',
       managerReviewedAt: at(2026, 1, 10, 16, 45),
       reviewedAt: at(2026, 1, 11, 14, 0),
-      adminNote: 'Permuta aprovada. Entrega dos grãos confirmada no armazém.',
+      reviewNote: 'Permuta aprovada. Entrega dos grãos confirmada no armazém.',
+      invoicedAt: at(2026, 1, 12, 10, 15),
+      invoiceNote: 'Faturada em nota única, retirada agendada com o produtor.',
       items: [
         grainItem(soja, 251.4142, 148.5),
         inputItem(npk, 300, 115.0),
@@ -679,7 +694,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         'chega depois da janela de plantio dele. Sugiro reprogramar ou dividir a retirada.',
       managerReviewedAt: at(2026, 2, 5, 17, 20),
       reviewedAt: at(2026, 2, 6, 10, 30),
-      adminNote: 'Estoque de fertilizante indisponível nesta filial para o período solicitado.',
+      reviewNote: 'Estoque de fertilizante indisponível nesta filial para o período solicitado.',
       items: [grainItem(milho, 276.8861, 62.3), inputItem(npk, 150, 115.0)],
     },
     {
@@ -694,7 +709,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         'de estoque na unidade.',
       managerReviewedAt: at(2026, 3, 1, 15, 30),
       reviewedAt: at(2026, 3, 2, 9, 0),
-      adminNote: 'Aprovada.',
+      reviewNote: 'Aprovada.',
       items: [
         grainItem(soja, 358.7879, 148.5),
         inputItem(npk, 400, 115.0),
@@ -728,7 +743,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         'costuma retirar tudo de uma vez — reservei doca para o dia 15.',
       managerReviewedAt: at(2026, 4, 10, 14, 5),
       reviewedAt: at(2026, 4, 11, 11, 0),
-      adminNote: 'Aprovada com prioridade.',
+      reviewNote: 'Aprovada com prioridade.',
       items: [
         grainItem(soja, 134.0068, 148.5),
         inputItem(lambda, 200, 42.0),
@@ -761,7 +776,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         'em pousio entram agora. Estoque comporta.',
       managerReviewedAt: at(2026, 3, 20, 17, 0),
       reviewedAt: at(2026, 3, 21, 8, 30),
-      adminNote: 'Aprovada.',
+      reviewNote: 'Aprovada.',
       items: [
         grainItem(trigo, 172.9412, 85.0),
         inputItem(glifosato, 500, 18.9),
@@ -827,13 +842,90 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         managerName: manager.fullName,
         managerNote: entry.managerNote ?? null,
         managerReviewedAt: entry.managerReviewedAt ?? null,
-        adminNote: entry.adminNote ?? null,
-        reviewedBy: entry.reviewedAt ? admin.fullName : null,
-        reviewedById: entry.reviewedAt ? admin.id : null,
+        // Quem decide é o COMITÊ. Era o admin quando o dataset foi escrito, e a
+        // assinatura mudou junto com a regra: uma demonstração em que o admin
+        // aprova ensinaria errado o fluxo que o sistema passou a ter.
+        reviewNote: entry.reviewNote ?? null,
+        reviewedBy: entry.reviewedAt ? comite.fullName : null,
+        reviewedById: entry.reviewedAt ? comite.id : null,
         reviewedAt: entry.reviewedAt ?? null,
+        invoiceNote: entry.invoiceNote ?? null,
+        invoicedBy: entry.invoicedAt ? patricia.fullName : null,
+        invoicedById: entry.invoicedAt ? patricia.id : null,
+        invoicedAt: entry.invoicedAt ?? null,
         createdAt: entry.createdAt,
         items: { create: entry.items },
+        events: { create: timelineOf(entry) },
       },
     });
+  }
+
+  /**
+   * A LINHA DO TEMPO de uma permuta do dataset, montada a partir dos marcos que
+   * a entrada declara.
+   *
+   * Ela é derivada, e não escrita à mão em cada permuta, de propósito: uma
+   * história inventada linha a linha teria como divergir dos campos da própria
+   * permuta — um parecer no histórico que não está em `managerNote`, uma decisão
+   * com data diferente de `reviewedAt` — e a demonstração passaria a mostrar uma
+   * inconsistência que o sistema real não produz. Aqui as duas coisas saem da
+   * mesma fonte, como saem no BartersService.
+   */
+  function timelineOf(entry: (typeof barters)[number]) {
+    const manager = managerOfConsultant.get(entry.consultant.id)!;
+    const steps: Prisma.BarterEventCreateWithoutBarterInput[] = [
+      {
+        action: 'register',
+        fromStatus: null,
+        toStatus: 'sentToManager',
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        at: entry.createdAt,
+      },
+    ];
+
+    if (entry.managerReviewedAt) {
+      steps.push({
+        action: 'opinion',
+        fromStatus: 'sentToManager',
+        toStatus: 'pending',
+        actorId: manager.id,
+        actorName: manager.fullName,
+        actorRole: ROLE.manager,
+        note: entry.managerNote ?? null,
+        at: entry.managerReviewedAt,
+      });
+    }
+
+    if (entry.reviewedAt) {
+      steps.push({
+        action: 'review',
+        fromStatus: 'pending',
+        // A decisão foi APROVAR ou NEGAR. `invoiced` veio depois, do faturista —
+        // ler o estado atual aqui faria o comitê parecer ter faturado.
+        toStatus: entry.status === 'denied' ? 'denied' : 'approved',
+        actorId: comite.id,
+        actorName: comite.fullName,
+        actorRole: ROLE.committee,
+        note: entry.reviewNote ?? null,
+        at: entry.reviewedAt,
+      });
+    }
+
+    if (entry.invoicedAt) {
+      steps.push({
+        action: 'invoice',
+        fromStatus: 'approved',
+        toStatus: 'invoiced',
+        actorId: patricia.id,
+        actorName: patricia.fullName,
+        actorRole: ROLE.biller,
+        note: entry.invoiceNote ?? null,
+        at: entry.invoicedAt,
+      });
+    }
+
+    return steps;
   }
 }

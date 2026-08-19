@@ -33,6 +33,40 @@ enum UserRole {
       );
 }
 
+/// As CAPACIDADES que o servidor concede — o que a pessoa PODE FAZER, decidido
+/// lá e apenas lido aqui.
+///
+/// A lista espelha `api/src/common/policy.ts`, e o app não guarda nenhuma regra
+/// própria sobre quem tem o quê: ele recebe as capacidades do usuário no login e
+/// monta as telas a partir delas. É o que permite mover uma etapa de um papel
+/// para outro — como a decisão da permuta, que saiu do admin e foi para o
+/// comitê — sem publicar versão nova do aplicativo.
+///
+/// Só estão aqui as que a interface consulta. Uma capacidade que o app não
+/// pergunta não precisa de constante.
+class Capability {
+  /// Dar o parecer técnico (gerente).
+  static const bartersOpinion = 'barters.opinion';
+
+  /// DECIDIR a permuta: aprovar ou negar (comitê).
+  static const bartersReview = 'barters.review';
+
+  /// FATURAR a permuta aprovada (faturista).
+  static const bartersInvoice = 'barters.invoice';
+
+  /// Registrar permuta (consultor).
+  static const bartersRegister = 'barters.register';
+
+  /// Enxergar as permutas do PRÓPRIO TIME — o escopo do gerente, entre "só as
+  /// minhas" e "todas". É por ela que as telas dizem "do seu time".
+  static const bartersReadTeam = 'barters.readTeam';
+
+  /// Ver valores em R$ — todo mundo menos o consultor.
+  static const pricesRead = 'prices.read';
+
+  const Capability._();
+}
+
 /// Conversões defensivas do JSON da API: números podem chegar como int/double
 /// e ids são expostos como String para o restante do app.
 double _asDouble(dynamic v) => v == null ? 0 : (v as num).toDouble();
@@ -74,6 +108,14 @@ class UserModel {
   /// antes de usar o app. O servidor é quem decide isso.
   final bool mustChangePassword;
 
+  /// O QUE ESTA PESSOA PODE FAZER, resolvido pelo servidor (ver [Capability]).
+  ///
+  /// Vazio quando a resposta não traz o campo — e vazio significa "não pode
+  /// nada", nunca "pode tudo". É a mesma escolha do servidor com papel
+  /// desconhecido: falhar fechando deixa a tela pobre, e o contrário ofereceria
+  /// um botão que levaria 403.
+  final Set<String> capabilities;
+
   const UserModel({
     required this.id,
     required this.name,
@@ -89,7 +131,12 @@ class UserModel {
     this.totalBarters = 0,
     this.totalSacks = 0,
     this.mustChangePassword = false,
+    this.capabilities = const {},
   });
+
+  /// Esta pessoa pode isto? A única pergunta de autorização do app — e a
+  /// resposta é sempre do servidor.
+  bool can(String capability) => capabilities.contains(capability);
 
   factory UserModel.fromJson(Map<String, dynamic> json) => UserModel(
         id: _asId(json['id']),
@@ -104,6 +151,9 @@ class UserModel {
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
         mustChangePassword: json['mustChangePassword'] == true,
+        capabilities: ((json['capabilities'] as List?) ?? const [])
+            .map((c) => c as String)
+            .toSet(),
       );
 }
 
@@ -254,24 +304,36 @@ class ProducerModel {
 /// grão é o pagamento — e a quantidade de sacas é consequência do custo dos insumos.
 enum ProductType { grain, input }
 
-/// O caminho de uma permuta, na ordem em que ela o percorre:
+/// O caminho de uma permuta — uma LINHA DE PRODUÇÃO de três postos:
 ///
-///     sentToManager → pending → approved
-///                             ↘ denied
+///     sentToManager → pending → approved → invoiced
+///      (gerente)     (comitê)  (faturista)
+///                        ↘ denied
 ///
-/// [sentToManager] é onde ela nasce: ela está na mesa do gerente do consultor,
-/// esperando o parecer técnico. Escrito o parecer, ela vira [pending] — a fila
-/// de REVISÃO, que é onde alguém aprova ou nega.
+/// [sentToManager] é onde ela nasce: está na mesa do gerente do consultor,
+/// esperando o parecer técnico. Escrito o parecer, ela vai ao COMITÊ
+/// ([pending]), que lê o pedido e o parecer e decide — é a única instância que
+/// aprova ou nega. Aprovada, ela cai na fila do FATURISTA, que fatura
+/// ([invoiced]) e encerra a linha.
 ///
-/// "Revisão" e não "análise" porque é a palavra que o resto do sistema já usa
-/// para esta etapa: a rota é `POST /barters/:code/review` e os campos são
-/// `reviewedBy` e `reviewedAt`. Enquanto a tela dizia "em análise", ela dava um
-/// segundo nome à mesma coisa — e "análise" descrevia igualmente bem o que o
-/// gerente faz, deixando as duas etapas indistinguíveis no vocabulário.
+/// "Revisão" continua sendo a palavra da etapa do comitê no vocabulário técnico
+/// (a rota é `POST /barters/:code/review`, os campos são `reviewedBy` e
+/// `reviewedAt`); nas telas ela aparece como DECISÃO, que é o que ela é. O que
+/// não muda é a distinção do começo: o gerente ANALISA e o comitê DECIDE — dar o
+/// mesmo nome às duas deixava as etapas indistinguíveis.
 ///
-/// Os nomes são os MESMOS que a API grava (ver BARTER_STATUSES em
-/// api/src/barters/dto/barter.dto.ts) — é o que [_asStatus] compara.
-enum BarterStatus { sentToManager, pending, approved, denied }
+/// Os nomes são os MESMOS que a API grava (ver BARTER_STATUS em
+/// api/src/barters/barter-workflow.ts) — é o que [_asStatus] compara.
+/// Os estados de uma permuta, na ordem da LINHA DE PRODUÇÃO:
+///
+///     sentToManager → pending → approved → invoiced
+///      (gerente)     (comitê)  (faturista)
+///                        ↘ denied
+///
+/// Espelham `api/src/barters/barter-workflow.ts`, que é quem decide o caminho.
+/// `pending` é a permuta na mesa do COMITÊ — o nome ficou de quando a decisão
+/// era do admin, e ficou porque descreve o estado, não o cargo de quem decide.
+enum BarterStatus { sentToManager, pending, approved, denied, invoiced }
 
 /// Status vindo do servidor, tolerante ao desconhecido.
 ///
@@ -280,17 +342,110 @@ enum BarterStatus { sentToManager, pending, approved, denied }
 /// lista inteira parar de carregar nas versões do app já instaladas — uma tela
 /// vazia no lugar de todas as permutas.
 ///
-/// Um status que o app não conhece cai em "aguardando revisão": o registro continua
-/// visível, e quem decide se ele aceita ação continua sendo o servidor, que
-/// recusa revisar o que não está pendente. Foi o que aconteceu quando
-/// `sentToManager` nasceu: as versões instaladas do app passaram a mostrar as
-/// permutas novas como "Aguardando Revisão" — impreciso, mas visível e sem ação
-/// indevida, que é exatamente o que este padrão existe para dar.
+/// Um status que o app não conhece cai em [BarterStatus.pending]: o registro
+/// continua visível, e quem decide se ele aceita ação continua sendo o servidor,
+/// que recusa qualquer ato fora da etapa dele. Foi o que aconteceu quando
+/// `sentToManager` nasceu, e de novo com `invoiced`: as versões instaladas do
+/// app passaram a mostrar as permutas novas na etapa errada — impreciso, mas
+/// visível e sem ação indevida, que é exatamente o que este padrão existe para
+/// dar. O rótulo, esse vem certo mesmo assim: quem o escreve é o servidor (ver
+/// [BarterModel.statusLabel]).
 BarterStatus _asStatus(dynamic v) {
   for (final status in BarterStatus.values) {
     if (status.name == v) return status;
   }
   return BarterStatus.pending;
+}
+
+/// Papel vindo da API quando ele pode simplesmente NÃO VIR — é o caso de
+/// `waitingFor`, que é null nos fins de linha (negada, faturada).
+///
+/// Diferente de [UserRole.fromWire], que cai em consultor: aqui um valor
+/// desconhecido vira null, e a tela não diz nada em vez de dizer errado quem
+/// está com a permuta.
+UserRole? _asRoleOrNull(Object? value) {
+  for (final role in UserRole.values) {
+    if (role.wire == value) return role;
+  }
+  return null;
+}
+
+/// Um passo da LINHA DO TEMPO da permuta: quem a moveu, de onde para onde e o
+/// que escreveu ao fazê-lo.
+///
+/// Vem só no DETALHE (`GET /barters/:code`) — a listagem não carrega histórico,
+/// pelo mesmo motivo do histórico de preço do produto: lista mostra estado,
+/// não trajetória.
+///
+/// O autor chega em texto, congelado no momento do ato: o histórico precisa
+/// continuar legível depois que a conta for excluída.
+class BarterEventModel {
+  /// O ato: `register`, `opinion`, `review` ou `invoice`.
+  final String action;
+
+  /// De onde para onde. [fromStatus] é null no registro, que não vem de
+  /// estado nenhum.
+  final BarterStatus? fromStatus;
+  final BarterStatus toStatus;
+
+  final String actorName;
+  final UserRole? actorRole;
+
+  /// O papel escrito como se lê, resolvido pelo SERVIDOR — um papel que este
+  /// app ainda não conhece aparece com o nome certo mesmo assim.
+  final String actorRoleLabel;
+
+  /// O texto que acompanhou o ato (o parecer, a observação da decisão, a nota
+  /// do faturamento).
+  final String? note;
+
+  final DateTime at;
+
+  const BarterEventModel({
+    required this.action,
+    required this.fromStatus,
+    required this.toStatus,
+    required this.actorName,
+    required this.actorRole,
+    required this.actorRoleLabel,
+    required this.note,
+    required this.at,
+  });
+
+  factory BarterEventModel.fromJson(Map<String, dynamic> json) => BarterEventModel(
+        action: (json['action'] ?? '') as String,
+        fromStatus: json['fromStatus'] == null ? null : _asStatus(json['fromStatus']),
+        toStatus: _asStatus(json['toStatus']),
+        actorName: (json['actorName'] ?? '') as String,
+        actorRole: _asRoleOrNull(json['actorRole']),
+        actorRoleLabel: (json['actorRoleLabel'] ?? '') as String,
+        note: json['note'] as String?,
+        at: _asDate(json['at']),
+      );
+
+  /// O título do passo na linha do tempo — o que ACONTECEU, não o estado a que
+  /// se chegou.
+  String get title {
+    switch (action) {
+      case 'register':
+        return 'Registrada pelo consultor';
+      case 'opinion':
+        return 'Parecer do gerente';
+      case 'review':
+        // As duas saídas conhecidas, e nada além delas: uma decisão que este app
+        // não conhece vira "Decisão do comitê" em vez de virar "Aprovada" por
+        // eliminação — errar para o vago é diferente de errar para o oposto.
+        if (toStatus == BarterStatus.approved) return 'Aprovada pelo comitê';
+        if (toStatus == BarterStatus.denied) return 'Negada pelo comitê';
+        return 'Decisão do comitê';
+      case 'invoice':
+        return 'Faturada';
+      default:
+        // Ato de um servidor mais novo que este app: mostra o passo em vez de
+        // esconder um pedaço da história por não saber nomeá-lo.
+        return 'Andamento';
+    }
+  }
 }
 
 /// Item de uma permuta. Serve tanto para o grão entregue quanto para o
@@ -381,8 +536,33 @@ class BarterModel {
   final String? managerNote;
   final DateTime? managerReviewedAt;
 
-  final String? adminNote;
+  /// A DECISÃO DO COMITÊ: a observação e quem assinou.
+  ///
+  /// [reviewNote] se chamava `adminNote` — o nome saiu junto com o poder, porque
+  /// quem decide permuta é o comitê, e não o admin.
+  final String? reviewNote;
   final String? reviewedBy;
+
+  /// O FATURAMENTO — o último posto da linha. Null enquanto ela não foi
+  /// faturada, que é o que [isInvoiced] lê.
+  final String? invoicedBy;
+  final DateTime? invoicedAt;
+  final String? invoiceNote;
+
+  /// COM QUEM a permuta está parada agora, resolvido pelo servidor. Null nos
+  /// dois fins de linha (negada, faturada), onde não há próximo passo.
+  ///
+  /// A tela pergunta isto em vez de deduzir do status: o caminho mora no
+  /// servidor, e uma etapa nova aparece aqui sem versão nova do app.
+  final UserRole? waitingFor;
+
+  /// O rótulo do estado, vindo do servidor. Null nas respostas anteriores ao
+  /// campo — aí vale o rótulo local (ver [statusLabel]).
+  final String? serverStatusLabel;
+
+  /// A LINHA DO TEMPO — só vem no detalhe (`GET /barters/:code`). Vazia na
+  /// listagem, e é [hasHistory] que separa "não veio" de "não tem".
+  final List<BarterEventModel> events;
 
   const BarterModel({
     required this.id,
@@ -405,8 +585,14 @@ class BarterModel {
     this.managerName,
     this.managerNote,
     this.managerReviewedAt,
-    this.adminNote,
+    this.reviewNote,
     this.reviewedBy,
+    this.invoicedBy,
+    this.invoicedAt,
+    this.invoiceNote,
+    this.waitingFor,
+    this.serverStatusLabel,
+    this.events = const [],
   });
 
   /// O `id` exibido no app é o código público da permuta (ex.: PRM-2026-001);
@@ -441,8 +627,17 @@ class BarterModel {
       managerName: json['managerName'] as String?,
       managerNote: json['managerNote'] as String?,
       managerReviewedAt: _asDateOrNull(json['managerReviewedAt']),
-      adminNote: json['adminNote'] as String?,
+      reviewNote: json['reviewNote'] as String?,
       reviewedBy: json['reviewedBy'] as String?,
+      invoicedBy: json['invoicedBy'] as String?,
+      invoicedAt: _asDateOrNull(json['invoicedAt']),
+      invoiceNote: json['invoiceNote'] as String?,
+      waitingFor: _asRoleOrNull(json['waitingFor']),
+      serverStatusLabel: json['statusLabel'] as String?,
+      events: ((json['events'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(BarterEventModel.fromJson)
+          .toList(),
     );
   }
 
@@ -518,12 +713,36 @@ class BarterModel {
   /// Folga do pagamento expressa em sacas do grão de pagamento (~0).
   double get balanceInSacks => referenceValue > 0 ? balance / referenceValue : 0;
 
-  /// O parecer técnico já foi escrito? É o que separa a etapa do gerente da
-  /// revisão — e o que decide se o detalhe mostra o bloco do parecer.
+  /// O parecer técnico já foi escrito? É o que separa a etapa do gerente da do
+  /// comitê — e o que decide se o detalhe mostra o bloco do parecer.
   bool get hasManagerOpinion => (managerNote ?? '').trim().isNotEmpty;
 
   /// Está esperando o parecer do gerente a quem foi enviada.
   bool get awaitsManager => status == BarterStatus.sentToManager;
+
+  /// Está na mesa do COMITÊ, esperando ser aprovada ou negada.
+  bool get awaitsCommittee => status == BarterStatus.pending;
+
+  /// Foi aprovada e espera o FATURAMENTO — a fila do faturista.
+  bool get awaitsInvoice => status == BarterStatus.approved;
+
+  /// Já foi faturada: fim da linha.
+  bool get isInvoiced => status == BarterStatus.invoiced;
+
+  /// FOI APROVADA pelo comitê — inclusive se já foi faturada.
+  ///
+  /// É esta a pergunta dos painéis ("quanto já foi fechado?"), e não
+  /// `status == approved`: faturar não desfaz a aprovação. Enquanto os totais
+  /// olhavam um estado só, a permuta sumia da conta no dia em que a nota saía —
+  /// o negócio mais consolidado que existe fazia a barra andar para trás.
+  bool get wasApproved => awaitsInvoice || isInvoiced;
+
+  /// A decisão do comitê já foi tomada? (aprovada, negada ou já faturada).
+  bool get hasDecision => reviewedBy != null && reviewedBy!.isNotEmpty;
+
+  /// A linha do tempo veio nesta resposta? Distingue "não carregada" (listagem)
+  /// de "sem passos" — que não existe: toda permuta nasce com o registro.
+  bool get hasHistory => events.isNotEmpty;
 
   /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
   /// — repetida aqui só para a tela não oferecer um botão que levaria 403.
@@ -537,16 +756,26 @@ class BarterModel {
   /// anteriores ao cadastro de unidades).
   String get unitLabel => unitName.isEmpty ? '—' : unitName;
 
+  /// O estado como se lê na tela.
+  ///
+  /// Prefere o rótulo do SERVIDOR quando ele vem: é lá que a linha de produção
+  /// está escrita, e um estado que este app ainda não conhece chega com o nome
+  /// certo em vez de cair no rótulo genérico do `_asStatus`. O switch abaixo é
+  /// o que sustenta as respostas antigas e os testes de unidade.
   String get statusLabel {
+    final fromServer = serverStatusLabel;
+    if (fromServer != null && fromServer.isNotEmpty) return fromServer;
     switch (status) {
       case BarterStatus.sentToManager:
-        return 'Enviada ao Gerente';
+        return 'No gerente';
       case BarterStatus.pending:
-        return 'Aguardando Revisão';
+        return 'No comitê';
       case BarterStatus.approved:
-        return 'Aprovada';
+        return 'Aprovada — a faturar';
       case BarterStatus.denied:
         return 'Negada';
+      case BarterStatus.invoiced:
+        return 'Faturada';
     }
   }
 }

@@ -3,7 +3,7 @@ import type { User } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { CLEARED_LOCKOUT } from '../auth/lockout';
 import { generateProvisionalPassword, hashPassword } from '../auth/password.util';
-import { ROLE, ROLE_LABELS, type ManagedRole } from '../common/roles';
+import { ROLE, ROLE_LABELS, isSingleAccount, type ManagedRole } from '../common/roles';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 
@@ -25,7 +25,7 @@ const MANAGER_FIELDS = { select: { id: true, fullName: true } } as const;
 
 /**
  * O motor de provisionamento, compartilhado pelas quatro rotas de usuário
- * (`/consultants`, `/managers`, `/committee-members`, `/billers`).
+ * (`/consultants`, `/managers`, `/committee`, `/billers`).
  *
  * Cada papel tem a SUA rota — é o que permite guardar, documentar e evoluir um
  * sem mexer nos outros —, mas as regras que valem para todos vivem aqui, uma
@@ -37,6 +37,10 @@ const MANAGER_FIELDS = { select: { id: true, fullName: true } } as const;
  * que fecha o escopo. `PUT /managers/7` procura um registro que seja gerente E
  * tenha id 7 — se o 7 for um consultor, a resposta é 404, e nenhuma rota
  * alcança usuário de papel alheio nem por engano.
+ *
+ * O COMITÊ entra por aqui pelo mesmo motor, com uma diferença que é do domínio e
+ * não da rota: o cadastro dele é ÚNICO (ver `isSingleAccount` em roles.ts). Quem
+ * escolhe o registro não é um id vindo da URL — é o papel, que só tem um.
  */
 @Injectable()
 export class UserProvisioningService {
@@ -69,6 +73,7 @@ export class UserProvisioningService {
    * vire uma fábrica de administradores.
    */
   async create(actor: User, role: ManagedRole, dto: CreateUserDto): Promise<ProvisionedUser> {
+    await this.ensureSingleAccountIsFree(role);
     await this.ensureEmailIsFree(dto.email);
 
     const { password, unitId, managerId, ...data } = dto as CreateUserDto & {
@@ -189,6 +194,16 @@ export class UserProvisioningService {
    * e esvaziar a fila são decisões de gente, e a mensagem diz qual falta.
    */
   async delete(actor: User, role: ManagedRole, id: number): Promise<void> {
+    // Conta de ÓRGÃO não se exclui: sem ela a linha de produção para, e nenhuma
+    // permuta é decidida até alguém reparar. A rota nem existe (ver
+    // CommitteeController); isto é a mesma regra como invariante do domínio,
+    // para uma rota futura não reabrir o buraco sem ninguém decidir isso.
+    if (isSingleAccount(role)) {
+      throw new UnprocessableEntityException(
+        `O cadastro do ${ROLE_LABELS[role]} não se exclui — ele é a etapa, não uma pessoa. ` +
+          'Para tirar o acesso de quem está com ele, redefina a senha.',
+      );
+    }
     const user = await this.findWithRole(role, id);
     if (role === ROLE.manager) await this.ensureManagerIsFree(user.id);
     await this.prisma.user.delete({ where: { id: user.id } });
@@ -201,6 +216,50 @@ export class UserProvisioningService {
       targetLabel: user.email,
       detail: `papel: ${ROLE_LABELS[role]}`,
     });
+  }
+
+  /**
+   * A CONTA ÚNICA de um papel de órgão — ou `null` quando ela ainda não existe.
+   *
+   * Null e não 404: "o comitê ainda não foi cadastrado" é um estado legítimo do
+   * sistema recém-instalado, e é a tela do admin que existe para resolvê-lo. Um
+   * erro aqui faria a tela ter de tratar como falha o caso normal do primeiro
+   * dia.
+   */
+  async findSingle(role: ManagedRole): Promise<UserWithManager | null> {
+    return this.prisma.user.findFirst({
+      where: { role },
+      include: { manager: MANAGER_FIELDS },
+      orderBy: { id: 'asc' },
+    });
+  }
+
+  /** A conta única para quem vai ESCREVER nela — 404 enquanto ela não existe. */
+  async requireSingle(role: ManagedRole): Promise<UserWithManager> {
+    const account = await this.findSingle(role);
+    if (!account) {
+      throw new NotFoundException(`O ${ROLE_LABELS[role]} ainda não tem cadastro.`);
+    }
+    return account;
+  }
+
+  /**
+   * O papel de conta única já tem dono?
+   *
+   * A unicidade é do PAPEL, não do e-mail: um segundo comitê com outro endereço
+   * passaria pela conferência de e-mail sem problema nenhum, e a operação
+   * passaria a ter dois órgãos decidindo a mesma coisa — cada um sem saber do
+   * outro, e a fila aparecendo inteira para os dois.
+   */
+  private async ensureSingleAccountIsFree(role: ManagedRole): Promise<void> {
+    if (!isSingleAccount(role)) return;
+    const existing = await this.prisma.user.count({ where: { role } });
+    if (existing > 0) {
+      throw new UnprocessableEntityException(
+        `O cadastro do ${ROLE_LABELS[role]} é único e já existe — edite o que está lá, ` +
+          'ou redefina a senha dele.',
+      );
+    }
   }
 
   /**

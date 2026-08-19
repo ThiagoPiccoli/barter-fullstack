@@ -40,7 +40,7 @@ class BarterRepository {
   }
 
   /// PARECER TÉCNICO do gerente da unidade — a etapa que move a permuta de
-  /// "enviada ao gerente" para "aguardando revisão".
+  /// "no gerente" para "no comitê".
   ///
   /// Repare que não há status no corpo: o parecer não aprova nem nega. O
   /// servidor recusa (403) se a permuta for de uma unidade de outro gerente.
@@ -49,12 +49,36 @@ class BarterRepository {
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Revisão do admin (aprovar/negar). [code] é o id público (PRM-2026-001).
+  /// A DECISÃO DO COMITÊ (aprovar/negar). [code] é o id público (PRM-2026-001).
+  ///
+  /// Quem decide é o comitê — o admin administra o sistema e não passa por aqui.
+  /// A rota continua sendo `/review`: o que mudou foi o papel, não a etapa.
   Future<BarterModel> review(String code, BarterStatus status, String note) async {
     final data = await api.post('/barters/$code/review', body: {
       'status': status.name,
       if (note.trim().isNotEmpty) 'note': note.trim(),
     });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O FATURAMENTO da permuta aprovada — o último posto da linha.
+  ///
+  /// Repare que não há status no corpo: o faturista não decide nada, ele fatura
+  /// o que o comitê aprovou. O servidor recusa (422) o que não estiver aprovado.
+  Future<BarterModel> invoice(String code, String note) async {
+    final data = await api.post('/barters/$code/invoice', body: {
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O DETALHE de uma permuta — é ele que traz a LINHA DO TEMPO.
+  ///
+  /// A listagem não carrega histórico (lista mostra estado, não trajetória),
+  /// então a tela de detalhe pede a permuta de novo para desenhar por onde ela
+  /// passou. Ver [BarterModel.events].
+  Future<BarterModel> find(String code) async {
+    final data = await api.get('/barters/$code');
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 }

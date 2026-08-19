@@ -15,6 +15,8 @@
  * Se um dia a meta precisar travar como a data, o lugar é `isOpenAt`.
  */
 
+import { BARTER_STATUS } from '../barters/barter-workflow';
+
 /** Item já precificado de uma permuta (o snapshot do BarterItem). */
 export interface CountedItem {
   kind: string;
@@ -72,12 +74,21 @@ export interface Goal {
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 /**
- * O realizado das permutas APROVADAS. Pendentes e negadas ficam de fora de
- * propósito: meta é sobre negócio fechado — contar o que ainda pode ser negado
+ * O realizado das permutas DECIDIDAS A FAVOR — as aprovadas e as que já foram
+ * faturadas. As que ainda esperam gerente ou comitê ficam de fora, e as negadas
+ * também: meta é sobre negócio fechado, e contar o que ainda pode ser negado
  * faria a barra andar para trás na frente do admin.
+ *
+ * `invoiced` entra porque ela É uma aprovada — só que já faturada. Enquanto esta
+ * conta olhava um estado só, a permuta SUMIA da meta no dia em que o faturista
+ * emitia a nota: o negócio mais consolidado que existe zerava a barra. Ver
+ * `barters/barter-workflow.ts` — quem passa por `approved` ou fica lá, ou anda
+ * para `invoiced`.
  */
+const COUNTS_AS_REALIZED: readonly string[] = [BARTER_STATUS.approved, BARTER_STATUS.invoiced];
+
 export function realizedFrom(barters: CountedBarter[]): Realized {
-  const approved = barters.filter((barter) => barter.status === 'approved');
+  const approved = barters.filter((barter) => COUNTS_AS_REALIZED.includes(barter.status));
   const inputs = approved.flatMap((barter) => barter.items.filter((item) => item.kind !== 'grain'));
   const sacks = approved
     .flatMap((barter) => barter.items.filter((item) => item.kind === 'grain'))

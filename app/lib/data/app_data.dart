@@ -9,8 +9,8 @@ import '../repositories/barter_program_repository.dart';
 import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
-import '../repositories/consultant_repository.dart';
-import '../repositories/manager_repository.dart';
+import '../repositories/committee_repository.dart';
+import '../repositories/staff_repository.dart';
 import '../repositories/unit_repository.dart';
 
 /// Estado de dados do app: um cache em memória hidratado da API no login.
@@ -25,15 +25,33 @@ class AppData {
 
   static final AuthRepository _auth = AuthRepository();
   static final ProducerRepository _producers = ProducerRepository();
-  static final ConsultantRepository _consultants = ConsultantRepository();
+  static const StaffRepository _consultants = StaffRepository('/consultants');
   static final CatalogRepository _catalog = CatalogRepository();
   static final BarterRepository _barters = BarterRepository();
   static final BarterProgramRepository _program = BarterProgramRepository();
   static final UnitRepository _units = UnitRepository();
-  static final ManagerRepository _managers = ManagerRepository();
+  static const StaffRepository _managers = StaffRepository('/managers');
+
+  /// FATURISTAS — quem fatura o que o comitê aprovou. Rota de admin, como as
+  /// outras duas de pessoas.
+  static const StaffRepository _billers = StaffRepository('/billers');
+
+  /// O COMITÊ — cadastro único, e por isso um repositório de outra forma: sem
+  /// lista, sem id e sem exclusão.
+  static final CommitteeRepository _committee = CommitteeRepository();
 
   /// Usuário logado (admin ou consultor).
   static UserModel? currentUser;
+
+  /// O usuário logado pode isto?
+  ///
+  /// É a ÚNICA pergunta de autorização do app, e a resposta é sempre do
+  /// servidor (ver [Capability]): as telas perguntam "pode decidir?" em vez de
+  /// "é admin?". Foi assim que a decisão da permuta pôde sair do admin e ir
+  /// para o comitê sem uma linha de tela mudar de lugar.
+  ///
+  /// Sem ninguém logado, não pode nada — falha fechando.
+  static bool can(String capability) => currentUser?.can(capability) ?? false;
 
   /// Consultores (visível só para admin — a API restringe a rota).
   static List<UserModel> consultants = [];
@@ -41,6 +59,16 @@ class AppData {
   /// Gerentes (idem). O app os carrega por um motivo só: o cadastro do
   /// consultor precisa escolher a quem as permutas dele serão enviadas.
   static List<UserModel> managers = [];
+
+  /// FATURISTAS cadastrados (só o admin enxerga — a API restringe a rota).
+  static List<UserModel> billers = [];
+
+  /// O CADASTRO DO COMITÊ, ou null enquanto ele não existe.
+  ///
+  /// Um, e não uma lista: o comitê é uma REUNIÃO, e a conta é do órgão (ver
+  /// CommitteeRepository). Null é estado normal do sistema recém-instalado — e é
+  /// o que a tela de cadastros do admin existe para resolver.
+  static UserModel? committee;
 
   /// Produtores visíveis: a API devolve a carteira do consultor logado, ou
   /// todas as carteiras para o admin.
@@ -233,6 +261,8 @@ class AppData {
     currentUser = null;
     consultants = [];
     managers = [];
+    billers = [];
+    committee = null;
     producers = [];
     units = [];
     grains = [];
@@ -260,6 +290,8 @@ class AppData {
       refreshBarters(),
       if (isAdmin) refreshConsultants(),
       if (isAdmin) refreshManagers(),
+      if (isAdmin) refreshBillers(),
+      if (isAdmin) refreshCommittee(),
       if (isAdmin) refreshSeasons(),
     ]);
   }
@@ -354,6 +386,14 @@ class AppData {
     managers = await _managers.list();
   }
 
+  static Future<void> refreshBillers() async {
+    billers = await _billers.list();
+  }
+
+  static Future<void> refreshCommittee() async {
+    committee = await _committee.find();
+  }
+
   static Future<void> refreshBarters() async {
     barters = await _barters.list();
   }
@@ -415,6 +455,17 @@ class AppData {
   /// de outro gerente.
   static List<BarterModel> opinionQueueFor(String managerId) =>
       barters.where((b) => b.awaitsOpinionFrom(managerId)).toList();
+
+  /// A fila do COMITÊ: as permutas com parecer, esperando decisão.
+  ///
+  /// Diferente da do gerente, ela não tem destinatário — o comitê é um só, e a
+  /// fila dele é o ESTADO da permuta. É a mesma regra do servidor.
+  static List<BarterModel> get committeeQueue =>
+      barters.where((b) => b.awaitsCommittee).toList();
+
+  /// A fila do FATURISTA: o que o comitê aprovou e ainda não foi faturado.
+  static List<BarterModel> get invoiceQueue =>
+      barters.where((b) => b.awaitsInvoice).toList();
 
   /// Busca uma classe pelo id (null se não encontrada ou id null).
   static ProductClassModel? classById(String? id) {
@@ -626,8 +677,7 @@ class AppData {
   /// o cache guarda a resposta dele, nunca uma versão montada aqui.
   static Future<BarterModel> giveOpinion(String code, String note) async {
     final updated = await _barters.giveOpinion(code, note);
-    final index = barters.indexWhere((b) => b.id == updated.id);
-    if (index != -1) barters[index] = updated;
+    _replaceBarter(updated);
     return updated;
   }
 
@@ -699,17 +749,36 @@ class AppData {
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
+  /// A DECISÃO DO COMITÊ (aprovar/negar). O cache guarda a resposta do
+  /// servidor, nunca uma versão montada aqui.
   static Future<BarterModel> reviewBarter(
     String code,
     BarterStatus status,
     String note,
   ) async {
     final updated = await _barters.review(code, status, note);
-    final index = barters.indexWhere((b) => b.id == updated.id);
-    if (index != -1) {
-      barters[index] = updated;
-    }
+    _replaceBarter(updated);
     return updated;
+  }
+
+  /// O FATURAMENTO da permuta aprovada — o último posto da linha.
+  static Future<BarterModel> invoiceBarter(String code, String note) async {
+    final updated = await _barters.invoice(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O DETALHE de uma permuta, com a LINHA DO TEMPO.
+  ///
+  /// Não entra no cache: o cache é alimentado pela LISTAGEM, que não carrega
+  /// histórico — guardar o detalhe ali faria a mesma permuta ter ou não ter
+  /// linha do tempo conforme a tela por onde se passou.
+  static Future<BarterModel> barterDetail(String code) => _barters.find(code);
+
+  /// Troca uma permuta do cache pela versão que o servidor devolveu.
+  static void _replaceBarter(BarterModel updated) {
+    final index = barters.indexWhere((b) => b.id == updated.id);
+    if (index != -1) barters[index] = updated;
   }
 
   static Future<ProducerModel> saveProducer(ProducerModel producer, {required bool isNew}) async {
@@ -782,6 +851,65 @@ class AppData {
   static Future<void> deleteManager(String id) async {
     await _managers.delete(id);
     managers.removeWhere((m) => m.id == id);
+  }
+
+  /* ── Faturistas (pessoas, várias) ───────────────────────────────────── */
+
+  static Future<ProvisionedConsultant> createBiller(UserModel biller) async {
+    final provisioned = await _billers.create(biller);
+    _cacheBiller(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateBiller(UserModel biller) async {
+    final saved = await _billers.update(biller);
+    _cacheBiller(saved);
+    return saved;
+  }
+
+  static Future<ProvisionedConsultant> resetBillerPassword(String id) async {
+    final provisioned = await _billers.resetPassword(id);
+    _cacheBiller(provisioned.consultant);
+    return provisioned;
+  }
+
+  /// Excluir faturista não trava em nada: as permutas que ele faturou guardam o
+  /// nome dele no próprio registro (snapshot), e o que estava na fila continua
+  /// aparecendo para os outros — a fila é o ESTADO da permuta, não uma caixa
+  /// de entrada pessoal.
+  static Future<void> deleteBiller(String id) async {
+    await _billers.delete(id);
+    billers.removeWhere((b) => b.id == id);
+  }
+
+  static void _cacheBiller(UserModel saved) {
+    final index = billers.indexWhere((b) => b.id == saved.id);
+    if (index == -1) {
+      billers.add(saved);
+    } else {
+      billers[index] = saved;
+    }
+  }
+
+  /* ── Comitê (um órgão, um cadastro) ─────────────────────────────────── */
+
+  /// Cria o cadastro do comitê. O servidor recusa se já houver um — o app não
+  /// repete essa conferência, ele mostra a mensagem de lá.
+  static Future<ProvisionedConsultant> createCommittee(UserModel draft) async {
+    final provisioned = await _committee.create(draft);
+    committee = provisioned.consultant;
+    return provisioned;
+  }
+
+  static Future<UserModel> updateCommittee(UserModel draft) async {
+    committee = await _committee.update(draft);
+    return committee!;
+  }
+
+  static Future<ProvisionedConsultant> resetCommitteePassword() async {
+    final provisioned = await _committee.resetPassword();
+    committee = provisioned.consultant;
+    return provisioned;
   }
 
   static void _cacheManager(UserModel saved) {

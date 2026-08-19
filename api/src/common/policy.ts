@@ -71,8 +71,30 @@ export const CAPABILITY = {
    * arquivo previa.
    */
   bartersOpinion: 'barters.opinion',
-  /** Aprovar ou negar uma permuta pendente. */
+  /**
+   * DECIDIR a permuta: aprovar ou negar a que já tem parecer do gerente.
+   *
+   * Era do admin, e saiu de lá. O admin administra o sistema — cria as contas,
+   * lança os valores, abre e fecha praça —, e quem administra o acesso não pode
+   * ser também quem decide o negócio: é a mesma pessoa concedendo o poder e
+   * usando-o, sem ninguém a quem a decisão preste contas.
+   *
+   * Quem decide é o COMITÊ, e ele decide lendo as duas peças que chegam prontas:
+   * o pedido do consultor e o parecer técnico do gerente. Como em
+   * `bartersOpinion`, a capacidade é só o portão — a etapa só aceita permuta que
+   * esteja no ponto dela, e disso cuida a máquina de estados
+   * (`barters/barter-workflow.ts`).
+   */
   bartersReview: 'barters.review',
+  /**
+   * FATURAR a permuta aprovada — o último posto da linha.
+   *
+   * É a etapa mais simples do fluxo de propósito: o faturista não avalia nada,
+   * não devolve para trás e não escolhe. Ele recebe o que as etapas anteriores
+   * produziram e fatura o que foi APROVADO — o estado é quem lhe entrega o
+   * trabalho, e é por isso que ele não precisa de nenhuma capacidade de decisão.
+   */
+  bartersInvoice: 'barters.invoice',
   /** Ler a trilha de auditoria. */
   auditRead: 'audit.read',
   /**
@@ -101,10 +123,14 @@ export const CAPABILITIES = Object.values(CAPABILITY) as Capability[];
  * compila até alguém escrever, aqui, o que ele pode — que é exatamente a
  * decisão que não pode passar batida.
  *
- * O GERENTE já escreve: ele dá o parecer técnico das permutas destinadas às
- * unidades por que responde. Comitê e faturista continuam em leitura — não é
- * esquecimento, as ações de cada um nascem com a etapa deles no fluxo, e até lá
- * o correto é a linha vazia de escrita: papel novo não herda poder por omissão.
+ * Os TRÊS POSTOS da linha de produção estão escritos abaixo, um por papel:
+ * o gerente dá o parecer técnico, o comitê decide e o faturista fatura. Cada um
+ * escreve UMA coisa, e nenhum escreve a do outro — é o que faz a etapa ter dono.
+ * A ordem em que elas acontecem não está aqui: quem guarda o caminho é
+ * `barters/barter-workflow.ts`, e esta tabela só responde quem pode agir.
+ *
+ * Repare no que o admin PERDEU: `bartersReview`. Ele administra o sistema e
+ * enxerga tudo, mas não decide permuta — ver o comentário da capacidade.
  */
 export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   [ROLE.admin]: [
@@ -115,7 +141,6 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.barterManage,
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadAll,
-    CAPABILITY.bartersReview,
     CAPABILITY.auditRead,
     CAPABILITY.pricesRead,
   ],
@@ -131,8 +156,24 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersOpinion,
     CAPABILITY.pricesRead,
   ],
-  [ROLE.committee]: [CAPABILITY.producersReadAll, CAPABILITY.bartersReadAll, CAPABILITY.pricesRead],
-  [ROLE.biller]: [CAPABILITY.producersReadAll, CAPABILITY.bartersReadAll, CAPABILITY.pricesRead],
+  // O COMITÊ decide. É a única instância que aprova ou nega — e ele o faz sobre
+  // o que já chegou pronto das duas etapas anteriores, daí a leitura de tudo
+  // andar junto com `bartersReview`.
+  [ROLE.committee]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadAll,
+    CAPABILITY.bartersReview,
+    CAPABILITY.pricesRead,
+  ],
+  // O FATURISTA fatura, e é só isso. Ele enxerga tudo porque precisa acompanhar
+  // o que vem vindo pela linha, mas a única coisa que escreve é o faturamento
+  // do que o comitê aprovou.
+  [ROLE.biller]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadAll,
+    CAPABILITY.bartersInvoice,
+    CAPABILITY.pricesRead,
+  ],
   [ROLE.consultant]: [CAPABILITY.bartersRegister],
 };
 

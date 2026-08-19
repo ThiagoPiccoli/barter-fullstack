@@ -1,8 +1,16 @@
+import {
+  BARTER_HOLDER,
+  BARTER_STATUS_LABELS,
+  nextActionOf,
+  type BarterStatus,
+} from '../barters/barter-workflow';
 import { CAPABILITY, can, capabilitiesOf } from './policy';
+import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
 import type {
   AuditLog,
   Barter,
+  BarterEvent,
   BarterItem,
   BarterVersion,
   ProductClass,
@@ -408,8 +416,34 @@ export function toBarterItemJson(item: BarterItem, lens: ValueLens = CURRENCY_LE
   };
 }
 
+/**
+ * Um passo da LINHA DO TEMPO da permuta.
+ *
+ * Sai com o autor já em texto, como a trilha de auditoria: quem lê precisa
+ * entender o que houve mesmo que a conta envolvida não exista mais. E sai com a
+ * transição inteira (`from` → `to`), não só o estado final — é o que permite ao
+ * app desenhar "no gerente → no comitê" sem conhecer o desenho do fluxo.
+ */
+export function toBarterEventJson(event: BarterEvent) {
+  return {
+    id: event.id,
+    action: event.action,
+    fromStatus: event.fromStatus,
+    toStatus: event.toStatus,
+    actorId: event.actorId,
+    actorName: event.actorName,
+    actorRole: event.actorRole,
+    // O rótulo do papel resolvido pelo SERVIDOR, pelo mesmo motivo de
+    // `capabilities` em `toUserJson`: um papel novo aparece escrito certo nas
+    // versões do app já instaladas.
+    actorRoleLabel: ROLE_LABELS[event.actorRole as Role] ?? event.actorRole,
+    note: event.note,
+    at: event.at,
+  };
+}
+
 export function toBarterJson(
-  barter: Barter & { items?: BarterItem[] },
+  barter: Barter & { items?: BarterItem[]; events?: BarterEvent[] },
   viewer?: Pick<User, 'role'>,
 ) {
   const lens = lensFor(viewer);
@@ -445,11 +479,29 @@ export function toBarterJson(
     managerName: barter.managerName,
     managerNote: barter.managerNote,
     managerReviewedAt: barter.managerReviewedAt,
-    adminNote: barter.adminNote,
+    // A DECISÃO DO COMITÊ. `reviewNote` se chamava `adminNote` até o admin deixar
+    // de decidir permuta — os dois lados deste repositório sobem juntos, e um
+    // campo que mente sobre quem decidiu é pior do que um campo que sumiu.
+    reviewNote: barter.reviewNote,
     reviewedBy: barter.reviewedBy,
     reviewedAt: barter.reviewedAt,
+    // O FATURAMENTO — o último posto. Null enquanto ela não foi faturada.
+    invoicedBy: barter.invoicedBy,
+    invoicedAt: barter.invoicedAt,
+    invoiceNote: barter.invoiceNote,
+    // COM QUEM ela está parada e QUAL é o próximo ato, resolvidos pela máquina de
+    // estados do servidor. Vão no JSON para o app não ter uma segunda cópia do
+    // fluxo em Dart: uma etapa nova aparece nas telas já instaladas em vez de
+    // exigir versão nova. Null nos dois fins de linha (negada, faturada).
+    waitingFor: BARTER_HOLDER[barter.status as BarterStatus] ?? null,
+    nextAction: nextActionOf(barter.status) ?? null,
+    statusLabel: BARTER_STATUS_LABELS[barter.status as BarterStatus] ?? barter.status,
     createdAt: barter.createdAt,
     items: barter.items?.map((item) => toBarterItemJson(item, lens)),
+    // A LINHA DO TEMPO só vem no detalhe (o service a inclui lá). `undefined` na
+    // listagem some do JSON, e o app distingue "não veio nesta resposta" de
+    // "esta permuta não tem eventos" — que seriam a mesma coisa com `[]`.
+    events: barter.events?.map(toBarterEventJson),
   };
 }
 

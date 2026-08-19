@@ -85,14 +85,23 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    final approvedList = AppData.barters.where((b) => b.status == BarterStatus.approved).toList();
+    // Aprovadas E faturadas: os totais do painel são sobre negócio FECHADO, e
+    // faturar não desfaz a aprovação (ver BarterModel.wasApproved).
+    final approvedList = AppData.barters.where((b) => b.wasApproved).toList();
     // Pendentes da mais antiga para a mais nova: são a fila de "ação necessária".
     final pendingList = AppData.barters.where((b) => b.status == BarterStatus.pending).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    // O total de FECHADAS (aprovadas + faturadas): é ele que os números em R$ e
+    // em sacas descrevem, e é o mesmo recorte de `approvedList`.
     final approved = approvedList.length;
+    // A BARRA DE STATUS é a outra pergunta — ela conta os POSTOS da linha, um a
+    // um. Aqui "a faturar" e "faturadas" andam separadas de propósito: somadas,
+    // esconderiam justamente o que ainda tem trabalho pela frente.
+    final toInvoice = AppData.barters.where((b) => b.awaitsInvoice).length;
+    final invoiced = AppData.barters.where((b) => b.isInvoiced).length;
     final pending = pendingList.length;
     final denied = AppData.barters.where((b) => b.status == BarterStatus.denied).length;
-    // Ainda na mesa do gerente: não é "em revisão" nem "aprovada", e somá-la a
+    // Ainda na mesa do gerente: não está no comitê nem aprovada, e somá-la a
     // qualquer uma das duas contaria como decidido o que ninguém decidiu.
     final atManager = AppData.barters.where((b) => b.awaitsManager).length;
 
@@ -101,7 +110,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     final sacksReceivable = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     final grainValue = approvedList.fold<double>(0, (s, b) => s + b.grainCredit);
     final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
-    // Sacas ainda em revisão (potencial a entrar se aprovadas).
+    // Sacas ainda no comitê (potencial a entrar se aprovadas).
     final pendingSacks = pendingList.fold<double>(0, (s, b) => s + b.totalGrainQty);
     // Produtores distintos com permuta aprovada.
     final activeProducers = approvedList.map((b) => b.producerId).toSet().length;
@@ -205,8 +214,9 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             const SizedBox(height: 12),
             _StatusBreakdownCard(
               atManager: atManager,
-              approved: approved,
               pending: pending,
+              toInvoice: toInvoice,
+              invoiced: invoiced,
               denied: denied,
             ),
             const SizedBox(height: 20),
@@ -214,7 +224,12 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Pendentes – Ação Necessária',
+                // O ADMIN NÃO DECIDE MAIS: esta lista era a fila de ação dele e
+                // passou a ser acompanhamento — quem decide é o comitê. Ela fica
+                // porque continua sendo a pergunta do painel ("o que está
+                // parado, e há quanto tempo?"), mas o título não pode chamar de
+                // ação de quem está olhando o que é trabalho de outra pessoa.
+                Text('No Comitê – Esperando Decisão',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 TextButton(
                   onPressed: () => onNavigate(1),
@@ -226,7 +241,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             if (pendingList.isEmpty)
               const _EmptyHint(
                 icon: Icons.check_circle_outline,
-                text: 'Nenhuma permuta aguardando revisão. Tudo em dia!',
+                text: 'Nenhuma permuta esperando o comitê. Tudo em dia!',
               )
             else
               ...pendingList.map((b) => _PendingActionCard(barter: b)),
@@ -267,7 +282,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 Color _grainColor(int i) => AppColors.series(i);
 
 /// Cartão-herói: as sacas a receber (compromisso de entrega das permutas
-/// aprovadas) como número-estrela, com o valor em R$ e o potencial em revisão.
+/// aprovadas) como número-estrela, com o valor em R$ e o potencial parado no comitê.
 class _ReceivableHero extends StatelessWidget {
   final double sacks;
   final double value;
@@ -339,8 +354,8 @@ class _ReceivableHero extends StatelessWidget {
                   Expanded(
                     child: Text(
                       pendingCount > 0
-                          ? '$pendingCount em revisão • +${formatSacks(pendingSacks)} se aprovadas'
-                          : 'Nenhuma permuta aguardando revisão',
+                          ? '$pendingCount no comitê • +${formatSacks(pendingSacks)} se aprovadas'
+                          : 'Nenhuma permuta esperando o comitê',
                       style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
                   ),
@@ -561,8 +576,13 @@ class _RankingBars extends StatelessWidget {
   }
 }
 
-/// Card de permuta pendente com o tempo de espera ("há X dias") destacado, para
-/// priorizar a fila de revisão. Quanto mais antiga, mais quente a cor.
+/// Card de permuta parada no comitê, com o tempo de espera ("há X dias")
+/// destacado. Quanto mais antiga, mais quente a cor.
+///
+/// Para o admin isto é ACOMPANHAMENTO, não fila: ele não decide permuta. O
+/// tempo de espera continua sendo a informação que importa — uma permuta parada
+/// há três semanas é assunto de quem administra a operação, mesmo que a decisão
+/// seja de outro.
 class _PendingActionCard extends StatelessWidget {
   final BarterModel barter;
   const _PendingActionCard({required this.barter});
@@ -678,11 +698,12 @@ class _EmptyHint extends StatelessWidget {
 }
 
 class _StatusBreakdownCard extends StatelessWidget {
-  final int atManager, approved, pending, denied;
+  final int atManager, pending, toInvoice, invoiced, denied;
   const _StatusBreakdownCard({
     required this.atManager,
-    required this.approved,
     required this.pending,
+    required this.toInvoice,
+    required this.invoiced,
     required this.denied,
   });
 
@@ -704,7 +725,10 @@ class _StatusBreakdownCard extends StatelessWidget {
                     if (atManager > 0)
                       Expanded(flex: atManager, child: Container(color: AppColors.atManager)),
                     if (pending > 0) Expanded(flex: pending, child: Container(color: AppColors.pending)),
-                    if (approved > 0) Expanded(flex: approved, child: Container(color: AppColors.approved)),
+                    if (toInvoice > 0)
+                      Expanded(flex: toInvoice, child: Container(color: AppColors.approved)),
+                    if (invoiced > 0)
+                      Expanded(flex: invoiced, child: Container(color: AppColors.invoiced)),
                     if (denied > 0) Expanded(flex: denied, child: Container(color: AppColors.denied)),
                   ],
                 ),
@@ -717,8 +741,9 @@ class _StatusBreakdownCard extends StatelessWidget {
               runSpacing: 8,
               children: [
                 _LegendItem(color: AppColors.atManager, label: 'No Gerente', count: atManager),
-                _LegendItem(color: AppColors.pending, label: 'Em Revisão', count: pending),
-                _LegendItem(color: AppColors.approved, label: 'Aprovadas', count: approved),
+                _LegendItem(color: AppColors.pending, label: 'No Comitê', count: pending),
+                _LegendItem(color: AppColors.approved, label: 'A Faturar', count: toInvoice),
+                _LegendItem(color: AppColors.invoiced, label: 'Faturadas', count: invoiced),
                 _LegendItem(color: AppColors.denied, label: 'Negadas', count: denied),
               ],
             ),

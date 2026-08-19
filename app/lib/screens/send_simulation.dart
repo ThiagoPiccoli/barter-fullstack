@@ -279,7 +279,7 @@ Future<void> _showSent(BuildContext context, SendResult result) {
           const SizedBox(height: 8),
           Text(
             'Ela foi enviada a ${barter.managerLabel}, que dará o parecer técnico '
-            'antes de a permuta seguir para revisão.',
+            'antes de a permuta seguir para o comitê.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.textMedium),
           ),

@@ -8,7 +8,7 @@ import 'package:printing/printing.dart';
 import '../branding/active_brand.dart';
 import '../models/models.dart';
 import '../theme/app_theme.dart';
-import '../widgets/common_widgets.dart' show formatCurrency, formatQty, formatSacks;
+import '../widgets/common_widgets.dart' show formatCurrency, formatDate, formatQty, formatSacks;
 
 /// Comprovante de permuta em PDF, para controle e assinatura das partes.
 ///
@@ -101,9 +101,21 @@ class BarterPdf {
               barter.managerNote!,
             ),
           ],
-          if (barter.adminNote != null && barter.adminNote!.isNotEmpty) ...[
+          if (barter.reviewNote != null && barter.reviewNote!.isNotEmpty) ...[
             pw.SizedBox(height: 14),
-            _noteBox('OBSERVAÇÃO DO ADMINISTRADOR', barter.adminNote!),
+            _noteBox('DECISÃO DO COMITÊ • ${barter.reviewedBy ?? 'COMITÊ'}', barter.reviewNote!),
+          ],
+          // O FATURAMENTO fecha o comprovante porque fecha a permuta: é o
+          // último ato da linha, e quem lê o documento depois quer saber se a
+          // nota saiu — e quando.
+          if (barter.isInvoiced) ...[
+            pw.SizedBox(height: 14),
+            _noteBox(
+              'FATURAMENTO • ${barter.invoicedBy ?? 'FATURISTA'}',
+              barter.invoiceNote?.isNotEmpty == true
+                  ? barter.invoiceNote!
+                  : 'Permuta faturada em ${formatDate(barter.invoicedAt ?? barter.createdAt)}.',
+            ),
           ],
           pw.SizedBox(height: 44),
           _signatures(barter, producer),
@@ -206,6 +218,9 @@ class BarterPdf {
         break;
       case BarterStatus.sentToManager:
         color = _c(AppColors.atManagerBg);
+        break;
+      case BarterStatus.invoiced:
+        color = _c(AppColors.invoicedBg);
         break;
     }
     return pw.Container(

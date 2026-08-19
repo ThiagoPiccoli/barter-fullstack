@@ -67,6 +67,12 @@ const Brand agroBarterBrand = Brand(
     approvedBg: Color(0xFFECFDF3),
     pendingBg: Color(0xFFFFF7ED),
     deniedBg: Color(0xFFFEECEC),
+    // Verde-azulado para "faturada": ela e a aprovada são as duas boas, e
+    // precisam se separar à primeira vista — aprovada é fila do faturista,
+    // faturada é fim de linha. Um segundo verde deixaria a fila dele
+    // indistinguível do trabalho já feito.
+    invoiced: Color(0xFF0F766E),
+    invoicedBg: Color(0xFFE0F2F1),
 
     // --- Traços e estados neutros ----------------------------------------
     divider: Color(0xFFD8DDD8),
