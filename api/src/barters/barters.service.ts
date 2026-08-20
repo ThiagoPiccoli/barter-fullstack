@@ -650,11 +650,7 @@ export class BartersService {
    * texto certo em vez de um "sem acesso" genérico: quem chega ali sabe que a
    * permuta existe e a quem cobrar.
    */
-  private async requireBarter(
-    actor: User,
-    code: string,
-    action: BarterAction,
-  ): Promise<Barter> {
+  private async requireBarter(actor: User, code: string, action: BarterAction): Promise<Barter> {
     const barter = await this.prisma.barter.findUnique({ where: { code } });
     if (!barter) throw new NotFoundException('Registro não encontrado.');
 
