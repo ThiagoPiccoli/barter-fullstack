@@ -161,8 +161,9 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 |---|---|
 | `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `audit.read` | admin |
 | `producers.readAll` | admin, gerente, comitê, faturista |
-| `barters.readAll` | admin, comitê, faturista |
+| `barters.readAll` | admin, comitê |
 | `barters.readTeam` · `barters.opinion` | gerente |
+| `barters.readInvoicing` | **faturista** |
 | `barters.review` | **comitê** (era do admin) |
 | `barters.invoice` | **faturista** |
 | `barters.register` | consultor |
@@ -195,15 +196,46 @@ emitiu (o nome dele fica na linha do tempo da permuta).
 a ele, e não a operação inteira: ele não é auditor — responde por um time, e a
 permuta de outro time não é assunto dele. Enquanto teve `barters.readAll`, a
 fila que pedia ação dele ficava misturada com tudo, e a tela não tinha como dar
-ênfase ao que era dele. Os três escopos vivem numa função só
+ênfase ao que era dele. Os quatro escopos vivem numa função só
 (`scopeFor` em [barters.service.ts](../api/src/barters/barters.service.ts)), e a
 listagem e o detalhe leem a MESMA — antes eram duas regras que podiam divergir.
 
-`barters.opinion` é o primeiro caso em que a capacidade **não basta**. Ela diz
-que gerente dá parecer; ela não diz que ESTE gerente dá parecer NESTA permuta —
-isso depende do recurso (a permuta foi endereçada a ele?) e mora no service. É
-o encaixe que o comentário no fim de [policy.ts](../api/src/common/policy.ts)
-previa, agora com um caso dentro dele.
+**O faturista enxerga o TRECHO DELE da linha**, e nada antes: as permutas
+aprovadas e as já faturadas (`barters.readInvoicing`). Ele também teve
+`barters.readAll`, e o preço aparecia na tela — a fila do gerente, a mesa do
+comitê e as permutas negadas contadas no painel de quem não participa de nenhuma
+dessas etapas. Ele recebe o que as etapas anteriores produziram; negociação em
+aberto não é informação de quem emite a nota. QUAIS estados são esses não está
+escrito no service: quem responde é `lineFrom(invoice)` em
+[barter-workflow.ts](../api/src/barters/barter-workflow.ts), de modo que mexer na
+linha mexa no alcance junto.
+
+**O comitê é o único posto que olha para TRÁS.** Ele mantém `barters.readAll` de
+propósito: o que está no gerente é a fila que vai cair na mesa dele. O painel
+dele conta esse número ao lado do que já espera decisão e abre um bloco *No
+gerente* agrupado **por gerente**, com o total em sacas e há quantos dias a mais
+antiga de cada um espera (mesmos cortes de urgência do painel do admin: 7 e 14
+dias). Agrupar por pessoa em vez de listar permuta a permuta é a escolha do
+painel — a lista completa está a um toque, na aba *No gerente*; o que não estava
+em lugar nenhum é **quem está segurando e há quanto tempo**.
+
+**Toda ação confere a LEITURA antes de agir.** `requireBarter` pergunta, nesta
+ordem: a permuta existe? você a enxerga? ela está no ponto desta etapa? A do
+meio chegou com o escopo do faturista, e é ela que fecha a porta dos fundos —
+enquanto a permuta era buscada sem recorte, pedir o faturamento de um código
+qualquer respondia *"aguarda o parecer do gerente Fulano"*, isto é, o estado e o
+nome de gente de uma etapa que não é dele. A mensagem da etapa continua existindo
+para quem ENXERGA a permuta (é o que diz a quem chegou cedo com quem ela está
+parada); ela só não é mais a maneira de descobrir o que o escopo esconde.
+
+`barters.opinion` é o caso em que a capacidade **não basta**. Ela diz que gerente
+dá parecer; ela não diz que ESTE gerente dá parecer NESTA permuta — isso depende
+do recurso. Hoje quem responde é o próprio escopo de leitura dele: o do gerente é
+o time (`managerId`), então "fora do escopo" e "endereçada a outro gerente" são a
+mesma frase dita de dois jeitos, e o 403 traz o texto certo. Era uma comparação à
+parte dentro do `giveOpinion`, e ela saiu quando toda ação passou a conferir a
+leitura: duas regras respondendo à mesma pergunta é uma a mais do que se mantém
+em dia.
 
 A rota declara a CAPACIDADE de que precisa (`@RequireCapability`), não quem
 entra; os services perguntam à mesma tabela (`can(user, ...)`) para decidir o

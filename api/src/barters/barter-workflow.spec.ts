@@ -8,6 +8,7 @@ import {
   BARTER_STATUSES,
   BARTER_STATUS_LABELS,
   BARTER_STEPS,
+  lineFrom,
   nextActionOf,
   refusalFor,
   stepAt,
@@ -67,6 +68,31 @@ describe('Máquina de estados da permuta', () => {
     for (const status of BARTER_STATUSES) {
       expect(BARTER_STATUS_LABELS[status]).toBeTruthy();
     }
+  });
+
+  /**
+   * O ALCANCE DE UM POSTO: o estado em que ele age e tudo o que vem depois.
+   *
+   * É `lineFrom` que recorta o que o faturista enxerga (ver
+   * `bartersReadInvoicing` em policy.ts). Duas coisas ficam presas aqui: o
+   * faturista NÃO alcança o que ainda está no gerente ou no comitê, e não
+   * alcança permuta negada — ela morre no comitê e nunca chegou ao faturamento.
+   */
+  it('o alcance de um posto é o trecho da linha a partir dele', () => {
+    expect(lineFrom(BARTER_ACTION.invoice)).toEqual([
+      BARTER_STATUS.approved,
+      BARTER_STATUS.invoiced,
+    ]);
+    expect(lineFrom(BARTER_ACTION.invoice)).not.toContain(BARTER_STATUS.denied);
+
+    expect(lineFrom(BARTER_ACTION.review)).toEqual([
+      BARTER_STATUS.pending,
+      BARTER_STATUS.approved,
+      BARTER_STATUS.invoiced,
+    ]);
+
+    // O registro não sai de estado nenhum: quem o faz alcança a linha inteira.
+    expect(lineFrom(BARTER_ACTION.register)).toEqual([...BARTER_LINE]);
   });
 
   /* ── Quem move o quê ────────────────────────────────────────────────── */

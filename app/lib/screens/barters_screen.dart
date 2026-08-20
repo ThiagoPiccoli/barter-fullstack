@@ -58,11 +58,47 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// [BartersScreen.consultant].
   bool get _hasSimulations => widget.consultant != null;
 
+  /// AS ABAS DESTA PESSOA: uma por etapa que ela ENXERGA, na ordem da linha de
+  /// produção. `null` é a aba "Todas".
+  ///
+  /// Não são as mesmas para todo mundo. O faturista alcança só o que chegou ao
+  /// faturamento (`barters.readInvoicing` no servidor), e abas "No gerente" e
+  /// "No comitê" na tela dele eram portas para cômodos onde ele não entra: o
+  /// servidor responde vazio, e quem olha não sabe se não há permuta nenhuma ou
+  /// se o app não carregou. "Todas" sai junto — com duas etapas, ela seria a
+  /// soma das duas que estão ao lado.
+  ///
+  /// Quem decide o recorte continua sendo o servidor; esta lista só evita
+  /// desenhar o que ele não vai responder.
+  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadInvoicing)
+      ? const [BarterStatus.approved, BarterStatus.invoiced]
+      : const [
+          null,
+          // Na ordem da LINHA DE PRODUÇÃO: gerente → comitê → faturamento. A
+          // lista lida da esquerda para a direita conta o caminho da permuta, e
+          // é por isso que "Negadas" fica no fim: ela é saída lateral, não um
+          // degrau adiante.
+          BarterStatus.sentToManager,
+          BarterStatus.pending,
+          BarterStatus.approved,
+          BarterStatus.invoiced,
+          BarterStatus.denied,
+        ];
+
+  String _tabLabel(BarterStatus? status) => switch (status) {
+        null => 'Todas',
+        BarterStatus.sentToManager => 'No gerente',
+        BarterStatus.pending => 'No comitê',
+        BarterStatus.approved => 'A faturar',
+        BarterStatus.invoiced => 'Faturadas',
+        BarterStatus.denied => 'Negadas',
+      };
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(
-      length: _hasSimulations ? 7 : 6,
+      length: _statuses.length + (_hasSimulations ? 1 : 0),
       vsync: this,
       initialIndex: _initialTab(),
     );
@@ -81,11 +117,19 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     // A aba de simulações, quando existe, vem antes de "Todas" e empurra todas
     // as outras uma casa.
     final offset = _hasSimulations ? 1 : 0;
-    if (widget.opinionManagerId != null) return offset + 1;
-    if (AppData.can(Capability.bartersReview)) return offset + 2;
-    if (AppData.can(Capability.bartersInvoice)) return offset + 3;
     if (_hasSimulations && AppData.mySimulations.isNotEmpty) return 0;
-    return offset;
+
+    final BarterStatus? mine = widget.opinionManagerId != null
+        ? BarterStatus.sentToManager
+        : AppData.can(Capability.bartersReview)
+            ? BarterStatus.pending
+            : AppData.can(Capability.bartersInvoice)
+                ? BarterStatus.approved
+                : null;
+    // A posição vem da LISTA de abas, e não de um número contado à mão: quem
+    // tem menos abas continua entrando na etapa dele.
+    final at = _statuses.indexOf(mine);
+    return at < 0 ? offset : offset + at;
   }
 
   /// Simulações do consultor, filtradas pela mesma busca das outras abas.
@@ -152,16 +196,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             // montada, guardada e só então enviada ao gerente. A fila lida da
             // esquerda para a direita conta o caminho dela.
             if (_hasSimulations) Tab(text: 'Simulações (${_filteredSimulations.length})'),
-            Tab(text: 'Todas (${_filtered(null).length})'),
-            // Na ordem da LINHA DE PRODUÇÃO: gerente → comitê → faturamento.
-            // A lista lida da esquerda para a direita conta o caminho da
-            // permuta, e é por isso que "Negadas" fica no fim: ela é saída
-            // lateral, não um degrau adiante.
-            Tab(text: 'No gerente (${_filtered(BarterStatus.sentToManager).length})'),
-            Tab(text: 'No comitê (${_filtered(BarterStatus.pending).length})'),
-            Tab(text: 'A faturar (${_filtered(BarterStatus.approved).length})'),
-            Tab(text: 'Faturadas (${_filtered(BarterStatus.invoiced).length})'),
-            Tab(text: 'Negadas (${_filtered(BarterStatus.denied).length})'),
+            for (final status in _statuses)
+              Tab(text: '${_tabLabel(status)} (${_filtered(status).length})'),
           ],
         ),
       ),
@@ -190,14 +226,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
                     consultant: widget.consultant!,
                     onChanged: _onChanged,
                   ),
-                for (final status in <BarterStatus?>[
-                  null,
-                  BarterStatus.sentToManager,
-                  BarterStatus.pending,
-                  BarterStatus.approved,
-                  BarterStatus.invoiced,
-                  BarterStatus.denied,
-                ])
+                for (final status in _statuses)
                   _BarterList(
                     barters: _filtered(status),
                     isAdmin: widget.isAdmin,

@@ -52,29 +52,82 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     }
   });
 
-  it('comitê e faturista acompanham a operação inteira, não uma carteira', async () => {
-    for (const email of [COMITE, FATURISTA]) {
-      const auth = await asUser(email);
+  /**
+   * O COMITÊ acompanha a linha inteira — inclusive o que ainda está no gerente.
+   *
+   * Não é curiosidade: o que está no gerente é a fila que vai cair na mesa dele,
+   * e é a única maneira de ele saber o que vem vindo antes de chegar.
+   */
+  it('o comitê acompanha a operação inteira, e enxerga o que está no gerente', async () => {
+    const auth = await asUser(COMITE);
 
-      const barters = await request(app.getHttpServer())
-        .get('/api/v1/barters')
-        .set('Authorization', auth);
-      expect(barters.status).toBe(200);
-      // As 8 do dataset — o consultor João, por comparação, vê 2.
-      expect(barters.body.data).toHaveLength(8);
+    const barters = await request(app.getHttpServer())
+      .get('/api/v1/barters')
+      .set('Authorization', auth);
+    expect(barters.status).toBe(200);
+    // As 8 do dataset — o consultor João, por comparação, vê 2.
+    expect(barters.body.data).toHaveLength(8);
+    expect(
+      barters.body.data.filter((b: { status: string }) => b.status === 'sentToManager'),
+    ).toHaveLength(2);
 
-      const producers = await request(app.getHttpServer())
-        .get('/api/v1/producers')
-        .set('Authorization', auth);
-      expect(producers.status).toBe(200);
-      expect(producers.body.data).toHaveLength(7);
+    const producers = await request(app.getHttpServer())
+      .get('/api/v1/producers')
+      .set('Authorization', auth);
+    expect(producers.status).toBe(200);
+    expect(producers.body.data).toHaveLength(7);
 
-      // Permuta de um consultor qualquer abre sem 403 (não é "carteira alheia").
-      const one = await request(app.getHttpServer())
-        .get('/api/v1/barters/PRM-2026-002')
+    // Permuta de um consultor qualquer abre sem 403 (não é "carteira alheia").
+    const one = await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-002')
+      .set('Authorization', auth);
+    expect(one.status).toBe(200);
+  });
+
+  /**
+   * O FATURISTA enxerga o TRECHO DELE da linha, e nada antes.
+   *
+   * Ele teve a operação inteira enquanto a etapa dele não existia, e o preço
+   * disso aparecia na tela: a fila do gerente, a mesa do comitê e as permutas
+   * negadas contadas no painel de quem não participa de nenhuma dessas etapas.
+   * O que ele fatura chega pronto — o que ainda está sendo decidido não é
+   * trabalho dele nem informação dele.
+   */
+  it('o faturista só enxerga o que chegou ao faturamento', async () => {
+    const auth = await asUser(FATURISTA);
+
+    const barters = await request(app.getHttpServer())
+      .get('/api/v1/barters')
+      .set('Authorization', auth);
+    expect(barters.status).toBe(200);
+    // As 3 aprovadas e a 1 já faturada. As outras 4 (no gerente, no comitê e a
+    // negada) não são dele.
+    expect(barters.body.data.map((b: { code: string }) => b.code).sort()).toEqual([
+      'PRM-2026-001',
+      'PRM-2026-004',
+      'PRM-2026-006',
+      'PRM-2026-008',
+    ]);
+
+    // O detalhe segue o MESMO recorte: o que não aparece na lista não abre pelo
+    // código. Vale para a que está no comitê e para a negada.
+    await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-004')
+      .set('Authorization', auth)
+      .expect(200);
+    for (const fora of ['PRM-2026-002', 'PRM-2026-003', 'PRM-2026-005']) {
+      const resposta = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${fora}`)
         .set('Authorization', auth);
-      expect(one.status).toBe(200);
+      expect(resposta.status).toBe(403);
     }
+
+    // A carteira de produtores continua inteira: ele fatura para qualquer um.
+    const producers = await request(app.getHttpServer())
+      .get('/api/v1/producers')
+      .set('Authorization', auth);
+    expect(producers.status).toBe(200);
+    expect(producers.body.data).toHaveLength(7);
   });
 
   /**

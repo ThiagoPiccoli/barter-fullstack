@@ -594,9 +594,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             child: _hint(
               icon: Icons.person_pin_circle_outlined,
               color: AppColors.primary,
-              text:
-                  'Etapa 1: escolha um produtor da sua carteira. A área da propriedade '
-                  'define os insumos obrigatórios e a quantidade mínima de cada um.',
+              // Só o que fazer agora. Que a área manda nos obrigatórios é
+              // verdade, mas é assunto da etapa 3 — e lá ela é dita no lugar
+              // onde a pessoa vê o efeito, em vez de duas telas antes.
+              text: 'Etapa 1: escolha um produtor da sua carteira.',
             ),
           ),
           Padding(
@@ -977,11 +978,12 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         _hint(
           icon: _hasRequiredInputs ? Icons.rule : Icons.info_outline,
           color: AppColors.input,
+          // A REGRA que ele pode esbarrar, sem a narração de como o app chegou
+          // nela: o que trava a mão dele é o mínimo, e é isso que precisa estar
+          // escrito.
           text: _hasRequiredInputs
-              ? 'Os insumos obrigatórios para a área deste produtor já vêm com a '
-                    'quantidade mínima preenchida. Você pode aumentar, não reduzir.'
-              : 'Escolha os insumos que o produtor precisa. Eles serão '
-                    'convertidos em sacas do grão desta safra.',
+              ? 'Os obrigatórios já vêm no mínimo da área — você pode aumentar, não reduzir.'
+              : 'Escolha os insumos que o produtor precisa.',
         ),
         const SizedBox(height: 8),
         ..._ruledClasses.map(
@@ -1200,8 +1202,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             // ar — "então já foi para o gerente?". Vale com e sem sinal: ter
             // rede não faz a permuta escapar; quem decide o momento é ele.
             Text(
-              'Nada é enviado agora. Você encaminha ao gerente quando quiser, '
-              'em Minhas ${brand.copy.barterPluralTitle} › Simulações.',
+              'Nada é enviado agora: ela fica em Minhas ${brand.copy.barterPluralTitle} › '
+              'Simulações até você encaminhar.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),

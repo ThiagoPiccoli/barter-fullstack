@@ -61,6 +61,14 @@ class Capability {
   /// minhas" e "todas". É por ela que as telas dizem "do seu time".
   static const bartersReadTeam = 'barters.readTeam';
 
+  /// Enxergar só o que CHEGOU AO FATURAMENTO — o escopo do faturista.
+  ///
+  /// A tela pergunta por ela para não desenhar cômodo que não existe: sem isto,
+  /// o faturista abria abas "No gerente" e "No comitê" que o servidor responde
+  /// vazias, e um painel que contava permutas de etapas das quais ele não
+  /// participa.
+  static const bartersReadInvoicing = 'barters.readInvoicing';
+
   /// Ver valores em R$ — todo mundo menos o consultor.
   static const pricesRead = 'prices.read';
 

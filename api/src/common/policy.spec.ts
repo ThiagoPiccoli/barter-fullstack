@@ -92,7 +92,7 @@ describe('Tabela de capacidades', () => {
 
     expect([...ROLE_CAPABILITIES[ROLE.biller]].sort()).toEqual(
       [
-        CAPABILITY.bartersReadAll,
+        CAPABILITY.bartersReadInvoicing,
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersInvoice,
         CAPABILITY.pricesRead,
@@ -134,8 +134,19 @@ describe('Tabela de capacidades', () => {
     expect(can({ role: ROLE.manager }, CAPABILITY.bartersReadAll)).toBe(false);
   });
 
-  it('quem acompanha a operação inteira são admin, comitê e faturista', () => {
-    expect(rolesWith(CAPABILITY.bartersReadAll)).toEqual([ROLE.admin, ROLE.committee, ROLE.biller]);
+  /**
+   * QUEM ACOMPANHA A OPERAÇÃO INTEIRA são o admin e o comitê — e o faturista
+   * NÃO.
+   *
+   * Ele já teve `bartersReadAll`, e o custo disso aparecia na tela dele: a fila
+   * do gerente, a mesa do comitê e as permutas negadas, tudo na conta de quem
+   * não participa de nenhuma dessas etapas. O comitê fica com o alcance largo
+   * de propósito — ler o que está no gerente é ler a própria fila de amanhã.
+   */
+  it('acompanham a operação inteira o admin e o comitê; o faturista, só o que chegou nele', () => {
+    expect(rolesWith(CAPABILITY.bartersReadAll)).toEqual([ROLE.admin, ROLE.committee]);
+    expect(rolesWith(CAPABILITY.bartersReadInvoicing)).toEqual([ROLE.biller]);
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersReadAll)).toBe(false);
   });
 
   it('o consultor não enxerga além da própria carteira', () => {

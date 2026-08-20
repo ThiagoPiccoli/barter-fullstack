@@ -179,6 +179,26 @@ export function stepAt(status: string): WorkflowStep | undefined {
   return Object.values(BARTER_STEPS).find((step) => step.from === status);
 }
 
+/**
+ * A esteira A PARTIR de um posto: o estado em que ele age e tudo o que vem
+ * depois — ou seja, o que JÁ CHEGOU nele.
+ *
+ * É o que define o alcance de quem só enxerga o próprio trecho da linha. O
+ * faturista é o caso: ele recebe o que as etapas anteriores produziram, e o que
+ * ainda está no gerente ou no comitê não é trabalho dele nem informação dele.
+ *
+ * Vem da esteira, e não de uma lista escrita à mão no service, porque a resposta
+ * MUDA quando a linha muda: uma etapa nova depois do faturamento entra sozinha
+ * no alcance do faturista, e uma etapa nova antes dele fica de fora sozinha.
+ * Repare que `denied` não está em [BARTER_LINE] e por isso nunca aparece aqui —
+ * uma permuta negada morre no comitê e não chega ao faturamento.
+ */
+export function lineFrom(action: BarterAction): BarterStatus[] {
+  const from = BARTER_STEPS[action].from;
+  const at = from === null ? 0 : (BARTER_LINE as readonly string[]).indexOf(from);
+  return at < 0 ? [] : BARTER_LINE.slice(at);
+}
+
 /** O próximo ato que esta permuta espera — `undefined` nos fins de linha. */
 export function nextActionOf(status: string): BarterAction | undefined {
   return stepAt(status)?.action;

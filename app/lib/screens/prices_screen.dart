@@ -880,8 +880,8 @@ class _ClassList extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'As classes vêm da lista de preços do fornecedor. Toque em uma '
-                  'para definir o mínimo que ela precisa representar na permuta.',
+                  'Toque em uma classe para definir o mínimo que ela precisa '
+                  'representar na permuta.',
                   style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                 ),
               ),

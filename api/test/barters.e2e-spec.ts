@@ -613,31 +613,64 @@ describe('Barters (e2e)', () => {
     });
 
     /**
-     * "Ele apenas faturará o que foi aprovado" — em três recusas, uma para cada
-     * jeito de a permuta não estar aprovada. Repare que a NEGADA é a que mais
-     * importa: é a única forma de dinheiro sair por engano daqui.
+     * "Ele apenas faturará o que foi aprovado" — e as três maneiras de a permuta
+     * não estar aprovada agora param ANTES, no escopo.
+     *
+     * O faturista alcança o que chegou ao faturamento e nada antes disso, então
+     * pedir a nota de uma permuta que está no gerente, no comitê ou negada não é
+     * "chegou fora de hora": é uma permuta que não é dele. A NEGADA continua
+     * sendo a que mais importa — é a única forma de dinheiro sair por engano
+     * daqui —, e ela agora nem abre.
+     *
+     * O que a recusa NÃO pode fazer é contar o que ele não pode ler. Enquanto a
+     * permuta era buscada sem escopo, a resposta vinha com o estado e o nome do
+     * gerente dentro: a mensagem da etapa virava a porta dos fundos do recorte,
+     * e um código chutado devolvia o andamento de uma negociação em aberto.
      */
-    it('só o aprovado fatura — e cada recusa diz onde a permuta está', async () => {
+    it('o faturista não alcança o que ainda não chegou nele — e a recusa não conta nada', async () => {
       const faturista = await asUser(FATURISTA);
 
-      const noGerente = await request(app.getHttpServer())
-        .post('/api/v1/barters/PRM-2026-005/invoice')
-        .set('Authorization', faturista)
-        .send({});
-      expect(noGerente.status).toBe(422);
-      expect(noGerente.body.message).toContain('parecer do gerente');
+      // 005 está no gerente, 002 no comitê e 003 foi negada.
+      for (const code of ['PRM-2026-005', 'PRM-2026-002', 'PRM-2026-003']) {
+        const resposta = await request(app.getHttpServer())
+          .post(`/api/v1/barters/${code}/invoice`)
+          .set('Authorization', faturista)
+          .send({});
+        expect([code, resposta.status]).toEqual([code, 403]);
+        // A resposta é a MESMA para os três: nem o estado nem o nome de quem
+        // está com ela vazam pela mensagem.
+        expect(resposta.body.message).toBe('Você não tem acesso a esta permuta');
+      }
+    });
 
-      const noComitê = await request(app.getHttpServer())
-        .post('/api/v1/barters/PRM-2026-002/invoice')
-        .set('Authorization', faturista)
-        .send({});
-      expect(noComitê.status).toBe(422);
-      expect(noComitê.body.message).toContain('decisão do comitê');
+    /**
+     * A MENSAGEM DA ETAPA continua existindo — para quem ENXERGA a permuta.
+     *
+     * Quem chega cedo precisa saber com quem ela está parada; quem chega tarde,
+     * que a etapa dele já foi cumprida. O comitê é o caso: ele lê a linha
+     * inteira, então a recusa pode lhe dizer onde a permuta está sem contar nada
+     * que ele já não pudesse abrir.
+     */
+    it('para quem enxerga a permuta, a recusa diz onde ela está', async () => {
+      const comitê = await asUser(COMITE);
+      const decidir = (code: string) =>
+        request(app.getHttpServer())
+          .post(`/api/v1/barters/${code}/review`)
+          .set('Authorization', comitê)
+          .send({ status: 'approved' });
 
-      const negada = await request(app.getHttpServer())
-        .post('/api/v1/barters/PRM-2026-003/invoice')
-        .set('Authorization', faturista)
-        .send({});
+      // Cedo: ainda no gerente.
+      const cedo = await decidir('PRM-2026-005');
+      expect(cedo.status).toBe(422);
+      expect(cedo.body.message).toContain('parecer do gerente');
+
+      // Tarde: já faturada.
+      const tarde = await decidir('PRM-2026-001');
+      expect(tarde.status).toBe(422);
+      expect(tarde.body.message).toContain('já foi decidida');
+
+      // Negada: fim de linha, e nenhuma das duas explicações serve.
+      const negada = await decidir('PRM-2026-003');
       expect(negada.status).toBe(422);
       expect(negada.body.message).toContain('negada');
     });

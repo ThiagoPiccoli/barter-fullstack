@@ -21,6 +21,7 @@ import {
   BARTER_ACTION,
   BARTER_STATUS,
   BARTER_STEPS,
+  lineFrom,
   refusalFor,
   type BarterAction,
   type BarterStatus,
@@ -64,20 +65,27 @@ export class BartersService {
 
   /**
    * O RECORTE de quem enxerga o quê — a regra de acesso central do domínio, em
-   * um lugar só. Três escopos, e cada um responde a uma pergunta diferente:
+   * um lugar só. Quatro escopos, e cada um responde a uma pergunta diferente:
    *
-   * - **tudo** (admin, comitê, faturista): acompanham a operação inteira;
+   * - **tudo** (admin, comitê): acompanham a operação inteira. Para o comitê
+   *   isso inclui o que ainda está no gerente — é a fila que vai cair na mesa
+   *   dele;
    * - **o time** (gerente): as permutas endereçadas a ele. Ele não é auditor —
    *   responde por um time, e a permuta de outro time não é assunto dele;
+   * - **o que chegou ao faturamento** (faturista): o próprio trecho da linha,
+   *   e nada antes dele. Ver `bartersReadInvoicing` em policy.ts;
    * - **as próprias** (consultor): as que ele registrou.
    *
-   * A ordem das perguntas importa: `readAll` vence `readTeam`, de modo que um
-   * papel que ganhe as duas continue enxergando tudo em vez de ficar preso ao
-   * recorte mais estreito.
+   * A ordem das perguntas importa: ela vai do escopo mais largo ao mais
+   * estreito, de modo que um papel que acumule duas capacidades enxergue o
+   * maior dos dois alcances em vez de ficar preso ao menor.
    */
   private scopeFor(user: User): Prisma.BarterWhereInput {
     if (can(user, CAPABILITY.bartersReadAll)) return {};
     if (can(user, CAPABILITY.bartersReadTeam)) return { managerId: user.id };
+    if (can(user, CAPABILITY.bartersReadInvoicing)) {
+      return { status: { in: lineFrom(BARTER_ACTION.invoice) } };
+    }
     return { consultantId: user.id };
   }
 
@@ -445,14 +453,12 @@ export class BartersService {
    * `barters.review`, e lê este texto antes.
    */
   async giveOpinion(manager: User, code: string, dto: BarterOpinionDto): Promise<BarterDetail> {
-    const barter = await this.requireBarter(code, BARTER_ACTION.opinion);
-
-    // A política sobre o RECURSO, que a máquina de estados não alcança: ela diz
-    // que a permuta está no ponto do parecer, não que este gerente é o dono
-    // desta. Sem isto, qualquer gerente opinaria sobre o time de qualquer outro.
-    if (barter.managerId !== manager.id) {
-      throw new ForbiddenException('Esta permuta foi enviada a outro gerente');
-    }
+    // A POSSE — "esta permuta é do time deste gerente?" — não está aqui porque
+    // deixou de precisar estar: ela É o escopo de leitura do gerente
+    // (`managerId`), e `requireBarter` já a confere junto com o de todo mundo.
+    // Enquanto foram duas regras, a de leitura e esta, elas podiam divergir —
+    // e foi assim que a mesma pergunta passou a ter dois donos no arquivo.
+    const barter = await this.requireBarter(manager, code, BARTER_ACTION.opinion);
 
     const note = dto.note.trim();
     const reviewed = await this.applyStep(
@@ -545,7 +551,7 @@ export class BartersService {
    * decisão que ninguém tomou. Quem escreve as mensagens é a máquina de estados.
    */
   async review(committee: User, code: string, dto: ReviewBarterDto): Promise<BarterDetail> {
-    const barter = await this.requireBarter(code, BARTER_ACTION.review);
+    const barter = await this.requireBarter(committee, code, BARTER_ACTION.review);
 
     const note = dto.note?.trim() ? dto.note.trim() : null;
     const reviewed = await this.applyStep(
@@ -594,7 +600,7 @@ export class BartersService {
    * que já saiu para fora.
    */
   async invoice(biller: User, code: string, dto: InvoiceBarterDto): Promise<BarterDetail> {
-    const barter = await this.requireBarter(code, BARTER_ACTION.invoice);
+    const barter = await this.requireBarter(biller, code, BARTER_ACTION.invoice);
 
     const note = dto.note?.trim() ? dto.note.trim() : null;
     const invoiced = await this.applyStep(
@@ -630,21 +636,51 @@ export class BartersService {
    * e é ela quem escreve a mensagem — inclusive a que diz com quem a permuta
    * está parada.
    *
-   * Repare que a permuta é buscada SEM escopo, de propósito: quem chega aqui já
-   * passou pela capacidade do passo, e as três etapas são de papéis que enxergam
-   * a operação inteira (ou, no caso do gerente, cuja posse é conferida logo
-   * depois). Filtrar por escopo aqui devolveria 404 para o gerente do outro time
-   * em vez do 403 que ele merece — "não é sua" é informação diferente de "não
-   * existe".
+   * A ORDEM DAS TRÊS é o que fecha o vazamento: primeiro "existe?", depois
+   * "você enxerga?", só então "está no ponto?". A pergunta do meio é nova e
+   * chegou com o escopo do faturista — enquanto ela não existia, a permuta era
+   * buscada sem recorte e a recusa CONTAVA o que ele não podia ler: pedir o
+   * faturamento de um código qualquer respondia "aguarda o parecer do gerente
+   * Fulano", isto é, o estado e o nome de gente de uma etapa que não é dele. A
+   * mensagem da etapa é boa; ela só não pode ser a porta dos fundos do escopo.
+   *
+   * Ela também absorve a posse do gerente. O escopo dele é o próprio time
+   * (`managerId`), então "fora do escopo" e "endereçada a outro gerente" são a
+   * mesma frase dita de dois jeitos — e é por isso que [_noAccessFor] devolve o
+   * texto certo em vez de um "sem acesso" genérico: quem chega ali sabe que a
+   * permuta existe e a quem cobrar.
    */
-  private async requireBarter(code: string, action: BarterAction): Promise<Barter> {
+  private async requireBarter(
+    actor: User,
+    code: string,
+    action: BarterAction,
+  ): Promise<Barter> {
     const barter = await this.prisma.barter.findUnique({ where: { code } });
     if (!barter) throw new NotFoundException('Registro não encontrado.');
+
+    const visible = await this.prisma.barter.count({
+      where: { code, ...this.scopeFor(actor) },
+    });
+    if (visible === 0) throw new ForbiddenException(this.noAccessFor(actor));
 
     const refusal = refusalFor(action, barter);
     if (refusal) throw new UnprocessableEntityException(refusal);
 
     return barter;
+  }
+
+  /**
+   * POR QUE esta permuta não é sua — na língua do escopo de quem perguntou.
+   *
+   * "Você não tem acesso" é verdade para todo mundo e não ajuda ninguém: para o
+   * gerente, o que ele precisa ouvir é que a permuta tem OUTRO destinatário, e é
+   * a essa frase que ele reage (ela vira "então não é comigo" em vez de "o
+   * sistema está errado"). Ver `scopeFor`, de onde saem os recortes.
+   */
+  private noAccessFor(user: User): string {
+    return can(user, CAPABILITY.bartersReadTeam)
+      ? 'Esta permuta foi enviada a outro gerente'
+      : 'Você não tem acesso a esta permuta';
   }
 
   /**

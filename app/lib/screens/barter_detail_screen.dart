@@ -176,7 +176,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
 
           _ItemsSection(
             title: 'Insumos Retirados',
-            subtitle: 'O que o produtor precisa — origem da permuta',
+            subtitle: 'O que o produtor retira na unidade',
             icon: Icons.science_outlined,
             accent: AppColors.input,
             items: _barter.inputs,
@@ -250,9 +250,11 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             Text('Ação do Gerente',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 4),
+            // O FATO, e não a explicação da etapa: quem enviou e quando. O que
+            // o parecer é, e para onde a permuta vai depois dele, o gerente já
+            // sabe — é o trabalho dele.
             Text(
-              '${_barter.consultantName} enviou esta permuta a você. Ela espera o seu '
-              'parecer técnico para seguir para o comitê.',
+              '${_barter.consultantName} enviou esta permuta a você.',
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
             const SizedBox(height: 12),
@@ -317,8 +319,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 4),
             Text(
-              'Aprovada pelo comitê${_barter.hasDecision ? ' (${_barter.reviewedBy})' : ''}. '
-              'É a última etapa da permuta.',
+              'Aprovada pelo comitê${_barter.hasDecision ? ' por ${_barter.reviewedBy}' : ''}.',
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
             const SizedBox(height: 12),
@@ -482,9 +483,6 @@ class _HistorySection extends StatelessWidget {
                         fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
               ],
             ),
-            const SizedBox(height: 4),
-            Text('Por onde esta permuta passou, na ordem em que aconteceu.',
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
             const SizedBox(height: 12),
             for (var i = 0; i < barter.events.length; i++)
               _HistoryStep(

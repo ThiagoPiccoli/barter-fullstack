@@ -882,8 +882,7 @@ void giveBarterOpinion(
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   const SizedBox(height: 12),
                   Text(
-                    'Escreva a sua avaliação da negociação. Ela segue com a permuta '
-                    'para o comitê — o parecer não aprova nem nega.',
+                    'Sua avaliação da negociação, para o comitê ler antes de decidir.',
                     style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                   ),
                   const SizedBox(height: 12),

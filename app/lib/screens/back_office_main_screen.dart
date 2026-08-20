@@ -137,11 +137,21 @@ class _Post {
   /// "3 permutas esperando o seu parecer" — a manchete da fila.
   final String Function(int count) headline;
 
-  /// Por que elas não andam sem esta pessoa.
-  final String urgency;
-
-  /// O que a etapa é, em uma frase.
-  final String explanation;
+  /// A ETAPA VIZINHA que esta pessoa acompanha, e que vira o segundo número do
+  /// painel.
+  ///
+  /// Vizinha, e nunca uma etapa qualquer: para quem empurra a permuta adiante é
+  /// a SEGUINTE (o gerente vê o que já mandou ao comitê); para o faturista, que
+  /// é o fim da linha, é o que ele já faturou. O comitê é o único que olha para
+  /// TRÁS — o que está no gerente é a fila que vai cair na mesa dele.
+  ///
+  /// Nenhum posto conta aqui uma etapa que ele não enxerga: o painel do
+  /// faturista mostrava "No comitê" enquanto ele lia a operação inteira, e era
+  /// um número que ele não podia abrir, conferir nem fazer nada a respeito.
+  final BarterStatus followStatus;
+  final String followLabel;
+  final IconData followIcon;
+  final Color followColor;
 
   /// O atalho de cada linha da fila.
   final String actionLabel;
@@ -159,14 +169,20 @@ class _Post {
     required this.surface,
     required this.icon,
     required this.headline,
-    required this.urgency,
-    required this.explanation,
+    required this.followStatus,
+    required this.followLabel,
+    required this.followIcon,
+    required this.followColor,
     required this.actionLabel,
     required this.actionIcon,
     required this.onAction,
     required this.emptyTitle,
     required this.emptyText,
   });
+
+  /// Quantas permutas estão na etapa vizinha, dentro do que esta pessoa enxerga.
+  int get followCount =>
+      AppData.barters.where((b) => b.status == followStatus).length;
 
   /// O posto desta pessoa — null para quem não tem etapa na linha (o admin, que
   /// administra o sistema e não decide permuta).
@@ -182,10 +198,11 @@ class _Post {
         headline: (count) => count == 1
             ? '1 permuta esperando o seu parecer'
             : '$count permutas esperando o seu parecer',
-        urgency: 'Elas não seguem para o comitê até você escrever.',
-        explanation:
-            'O parecer técnico não aprova nem nega — ele segue com a permuta para o '
-            'comitê, que o lê antes de decidir.',
+        // Adiante: o que ele já mandou ao comitê.
+        followStatus: BarterStatus.pending,
+        followLabel: 'No comitê',
+        followIcon: Icons.groups_2_outlined,
+        followColor: AppColors.pending,
         actionLabel: 'Parecer',
         actionIcon: Icons.rate_review_outlined,
         onAction: (context, barter, onChanged) =>
@@ -204,10 +221,13 @@ class _Post {
         headline: (count) => count == 1
             ? '1 permuta esperando a decisão do comitê'
             : '$count permutas esperando a decisão do comitê',
-        urgency: 'Nada é faturado antes daqui.',
-        explanation:
-            'O comitê lê o pedido do consultor e o parecer do gerente, e decide: '
-            'aprovada segue para o faturamento, negada encerra ali.',
+        // O comitê é o único que olha para TRÁS: o que está no gerente é a fila
+        // que vai cair na mesa dele, e saber o tamanho dela antes de ela chegar
+        // é o começo de acompanhar a linha.
+        followStatus: BarterStatus.sentToManager,
+        followLabel: 'No gerente',
+        followIcon: Icons.assignment_ind_outlined,
+        followColor: AppColors.atManager,
         // "Analisar" e não "Aprovar": a decisão tem duas saídas, e escolher uma
         // delas num botão de lista seria decidir antes de ler.
         actionLabel: 'Analisar',
@@ -228,10 +248,12 @@ class _Post {
         headline: (count) => count == 1
             ? '1 permuta aprovada a faturar'
             : '$count permutas aprovadas a faturar',
-        urgency: 'É a última etapa: daqui elas não andam mais.',
-        explanation:
-            'Só o que o comitê aprovou chega até aqui. O parecer do gerente e a '
-            'decisão vêm junto com a permuta — abra para lê-los antes de faturar.',
+        // O faturista é fim de linha: não há etapa adiante, e o número que dá
+        // tamanho ao trabalho dele é o que ele já faturou.
+        followStatus: BarterStatus.invoiced,
+        followLabel: 'Faturadas',
+        followIcon: Icons.receipt_long_outlined,
+        followColor: AppColors.invoiced,
         actionLabel: 'Faturar',
         actionIcon: Icons.receipt_long_outlined,
         onAction: (context, barter, onChanged) =>
@@ -256,60 +278,6 @@ class _Post {
       ),
     );
     onChanged();
-  }
-}
-
-/// O que cada papel de retaguarda acompanha, na linguagem da cooperativa.
-class _RoleBriefing {
-  final IconData icon;
-  final String focus;
-  final List<String> nextSteps;
-  const _RoleBriefing({required this.icon, required this.focus, required this.nextSteps});
-
-  static _RoleBriefing of(UserRole role) {
-    switch (role) {
-      case UserRole.manager:
-        // O gerente já não está "em construção": a etapa dele existe. O que
-        // sobra na lista é o que ainda não existe — e ela encurtou de propósito.
-        return const _RoleBriefing(
-          icon: Icons.assignment_ind,
-          focus: 'Parecer técnico das permutas do seu time, antes do comitê.',
-          nextSteps: [
-            'Alçadas: até onde o gerente decide sozinho',
-            'Painel por consultor do time',
-          ],
-        );
-      case UserRole.committee:
-        // A etapa do comitê existe: ele decide. O que sobra na lista é o que
-        // ainda não existe — e ela encurtou pelo mesmo motivo que a do gerente.
-        return const _RoleBriefing(
-          icon: Icons.groups_2,
-          focus: 'Decisão das permutas que já têm parecer do gerente.',
-          nextSteps: [
-            'Alçadas: até que valor cada instância decide',
-            'Voto por membro do comitê',
-            'Devolução ao consultor com pendências',
-          ],
-        );
-      case UserRole.biller:
-        return const _RoleBriefing(
-          icon: Icons.receipt_long,
-          focus: 'Faturamento das permutas aprovadas pelo comitê.',
-          nextSteps: [
-            'Emissão da nota a partir da permuta',
-            'Conferência de itens e quantidades',
-          ],
-        );
-      case UserRole.admin:
-      case UserRole.consultant:
-        // Estes papéis têm tela própria; o caso existe para o switch ficar
-        // exaustivo — se um papel novo aparecer, o compilador cobra aqui.
-        return const _RoleBriefing(
-          icon: Icons.badge_outlined,
-          focus: 'Acompanhamento da operação.',
-          nextSteps: [],
-        );
-    }
   }
 }
 
@@ -343,11 +311,23 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
     widget.onQueueChanged();
   }
 
+  /// A LEGENDA do cabeçalho: o TAMANHO do que é desta pessoa, não a descrição
+  /// do cargo dela.
+  ///
+  /// Ela já dizia o que o papel faz ("Faturamento das permutas aprovadas pelo
+  /// comitê"), e isso é o app explicando à pessoa o trabalho que ela conhece
+  /// melhor do que ele. O que ela não sabe de cor é quantas permutas estão na
+  /// mão dela agora.
+  String get _scopeCaption {
+    final total = AppData.barters.length;
+    final plural = total == 1 ? 'permuta' : 'permutas';
+    if (user.can(Capability.bartersReadTeam)) return '$total $plural do seu time';
+    if (user.can(Capability.bartersReadInvoicing)) return '$total $plural no faturamento';
+    return '$total $plural na operação';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final briefing = _RoleBriefing.of(user.role);
-    final approved = AppData.barters.where((b) => b.awaitsInvoice).toList();
-    final pending = AppData.barters.where((b) => b.status == BarterStatus.pending).toList();
     // As SACAS A RECEBER contam as aprovadas E as faturadas: faturar não desfaz
     // a entrega combinada — a permuta continua devendo as sacas dela.
     final sacksReceivable =
@@ -384,24 +364,11 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
             DashboardHeader(
               greetingName: user.name.split(' ')[0],
               subtitle: '${user.role.label} • ${_todayDate()}',
-              // Para o gerente, a legenda conta o TAMANHO do que é dele: quantas
-              // permutas do time passaram por ele. "Acompanhamento da operação"
-              // era verdade quando ele via tudo — hoje ele vê o time.
-              caption: user.can(Capability.bartersReadTeam)
-                  ? '${AppData.barters.length} permuta(s) do seu time'
-                  : briefing.focus,
-              icon: briefing.icon,
+              caption: _scopeCaption,
+              icon: post?.icon ?? Icons.badge_outlined,
             ),
             const SizedBox(height: 16),
-            _SummaryStrip(
-              // O PRIMEIRO NÚMERO é o de quem está olhando: o que espera ação
-              // dele. Os outros dois dão o tamanho da operação em volta.
-              waiting: post?.queue.length,
-              waitingColor: post?.color,
-              pending: pending.length,
-              approved: approved.length,
-              sacks: sacksReceivable,
-            ),
+            _SummaryStrip(post: post, sacks: sacksReceivable),
             const SizedBox(height: 20),
             // A fila vem ANTES de tudo o mais: é a única coisa desta tela que
             // pede ação de quem está olhando, e o resto é acompanhamento.
@@ -417,16 +384,24 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
                 _WorkQueueCard(post: post, onChanged: _onQueueChanged),
               const SizedBox(height: 20),
             ],
-            if (briefing.nextSteps.isNotEmpty) ...[
-              _NextStepsCard(role: user.role, steps: briefing.nextSteps),
+            // O QUE VEM VINDO — só para quem decide. Depois da fila porque não
+            // pede ação: é a leitura da etapa de trás, e ela informa a decisão
+            // de hoje sem competir com ela.
+            if (user.can(Capability.bartersReview)) ...[
+              _UpstreamPanel(
+                atManager: AppData.barters.where((b) => b.awaitsManager).toList(),
+              ),
               const SizedBox(height: 20),
             ],
             Text(
-              // "do Time" é sobre o ESCOPO de quem olha, não sobre o cargo: quem
-              // enxerga só o próprio time é quem tem `barters.readTeam`.
+              // O título diz o ESCOPO de quem olha, não o cargo: quem enxerga só
+              // o próprio time tem `barters.readTeam`, e quem enxerga só o que
+              // chegou ao faturamento tem `barters.readInvoicing`.
               user.can(Capability.bartersReadTeam)
                   ? '${brand.copy.barterPluralTitle} do Time'
-                  : '${brand.copy.barterPluralTitle} Recentes',
+                  : user.can(Capability.bartersReadInvoicing)
+                      ? '${brand.copy.barterPluralTitle} no Faturamento'
+                      : '${brand.copy.barterPluralTitle} Recentes',
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
             ),
             const SizedBox(height: 12),
@@ -472,9 +447,15 @@ String _todayDate() {
 /// é acompanhamento, e uma permuta parada não deveria depender de alguém pensar
 /// em procurá-la numa aba.
 ///
-/// O cartão é o mesmo para os três postos, e as palavras vêm do [_Post]: a fila
-/// do faturista tem a mesma urgência que a do gerente, e um desenho diferente
-/// para cada uma só faria a pessoa reaprender a tela ao trocar de papel.
+/// O cartão é o mesmo para os três postos, e as palavras vêm do [_Post]: um
+/// desenho diferente para cada fila só faria a pessoa reaprender a tela ao
+/// trocar de papel.
+///
+/// Ele diz O QUE ESPERA e mais nada. Já trouxe também um parágrafo explicando o
+/// que a etapa é ("o parecer não aprova nem nega", "só o que o comitê aprovou
+/// chega até aqui") — texto escrito para quem nunca viu o app, parado na tela de
+/// quem trabalha nele todo dia. Quem precisa de contexto abre a permuta, onde a
+/// linha do tempo mostra por onde ela passou.
 class _WorkQueueCard extends StatelessWidget {
   final _Post post;
   final VoidCallback onChanged;
@@ -506,27 +487,14 @@ class _WorkQueueCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        post.headline(post.queue.length),
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        post.urgency,
-                        style: TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w600, color: post.color),
-                      ),
-                    ],
+                  child: Text(
+                    post.headline(post.queue.length),
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 6),
-            Text(post.explanation, style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
             const Divider(height: 20),
             for (final barter in post.queue.take(4))
               _QueueRow(barter: barter, post: post, onChanged: onChanged),
@@ -656,49 +624,229 @@ class _QueueRow extends StatelessWidget {
   }
 }
 
-/// Três números para dar o tamanho do que está na mão de quem olha.
+/// O QUE VEM VINDO: as permutas ainda na mesa dos gerentes, POR GERENTE.
 ///
-/// [waiting] é o do POSTO de quem está olhando: o que espera ação dele. Quando
-/// vem preenchido, ele toma o lugar de "aprovadas" na faixa — a tela de quem tem
-/// trabalho a fazer precisa mostrá-lo entre os três números, não escondido
-/// embaixo. Ele vem com a COR da etapa pelo mesmo motivo do selo.
-class _SummaryStrip extends StatelessWidget {
-  final int? waiting;
-  final Color? waitingColor;
-  final int pending;
-  final int approved;
+/// É do COMITÊ e de mais ninguém — ele é o único posto que enxerga a etapa
+/// anterior à sua (ver `barters.readAll` em policy.ts). Saber o tamanho da fila
+/// antes de ela chegar é o que separa decidir de reagir: três permutas paradas
+/// há duas semanas com o mesmo gerente são uma ligação hoje, e não uma surpresa
+/// na semana que vem, quando caírem juntas na mesa.
+///
+/// Ele agrupa por GERENTE, e não lista permuta a permuta: a lista completa está
+/// a um toque, na aba "No gerente". O que não está em lugar nenhum — e é o que
+/// este painel existe para dar — é quem está segurando e há quanto tempo.
+class _UpstreamPanel extends StatelessWidget {
+  final List<BarterModel> atManager;
+  const _UpstreamPanel({required this.atManager});
+
+  /// Há quantos dias a mais antiga do grupo espera. A conta é sobre a CRIAÇÃO
+  /// porque a permuta chega ao gerente no instante em que nasce: entre registrar
+  /// e o parecer não há outra etapa que segure o relógio.
+  static int _waitOf(List<BarterModel> barters) {
+    final now = DateTime.now();
+    return barters
+        .map((b) => now.difference(b.createdAt).inDays)
+        .fold(0, (a, b) => a > b ? a : b);
+  }
+
+  /// Quanto mais antiga, mais quente — os mesmos cortes do painel do admin.
+  static Color _urgencyOf(int days) => days >= 14
+      ? AppColors.denied
+      : days >= 7
+          ? AppColors.pending
+          : AppColors.primaryMedium;
+
+  static String _waitLabel(int days) =>
+      days <= 0 ? 'entrou hoje' : 'há $days dia${days == 1 ? '' : 's'}';
+
+  @override
+  Widget build(BuildContext context) {
+    final byManager = <String, List<BarterModel>>{};
+    for (final barter in atManager) {
+      byManager.putIfAbsent(barter.managerLabel, () => []).add(barter);
+    }
+    // QUEM ESTÁ SEGURANDO HÁ MAIS TEMPO primeiro: a ordem alfabética esconderia
+    // justamente a linha que se quer ler.
+    final groups = byManager.entries.toList()
+      ..sort((a, b) => _waitOf(b.value).compareTo(_waitOf(a.value)));
+    final sacks = atManager.fold<double>(0, (s, b) => s + b.totalGrainQty);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.atManagerBg,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.assignment_ind_outlined,
+                      size: 20, color: AppColors.atManager),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text('No gerente',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                ),
+                if (atManager.isNotEmpty)
+                  Text(
+                    '${atManager.length} • ${formatSacks(sacks)}',
+                    style: TextStyle(
+                        fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.atManager),
+                  ),
+              ],
+            ),
+            // Vazio, o painel FICA e diz que está vazio. Um bloco que some
+            // conforme o dia deixa a tela mudando de forma, e quem olha sem
+            // saber se não há nada vindo ou se o app não carregou — é o mesmo
+            // motivo do cartão de fila vazia.
+            if (groups.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text('Nenhuma permuta esperando parecer agora.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+              )
+            else ...[
+              const Divider(height: 20),
+              for (final group in groups)
+                _UpstreamRow(
+                  manager: group.key,
+                  count: group.value.length,
+                  sacks: group.value.fold<double>(0, (s, b) => s + b.totalGrainQty),
+                  days: _waitOf(group.value),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Um gerente na fila de trás: quantas ele tem, quanto elas somam e há quanto
+/// tempo a mais antiga espera.
+class _UpstreamRow extends StatelessWidget {
+  final String manager;
+  final int count;
   final double sacks;
-  const _SummaryStrip({
-    required this.pending,
-    required this.approved,
+  final int days;
+  const _UpstreamRow({
+    required this.manager,
+    required this.count,
     required this.sacks,
-    this.waiting,
-    this.waitingColor,
+    required this.days,
   });
 
   @override
   Widget build(BuildContext context) {
+    final urgency = _UpstreamPanel._urgencyOf(days);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          // A barra de cor é a leitura rápida da linha: dá para varrer o painel
+          // e achar o vermelho sem ler número nenhum.
+          Container(
+            width: 4,
+            height: 34,
+            decoration: BoxDecoration(color: urgency, borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  manager,
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark),
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '$count ${count == 1 ? 'permuta' : 'permutas'} • ${formatSacks(sacks)}',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: urgency.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.schedule, size: 11, color: urgency),
+                const SizedBox(width: 3),
+                Text(
+                  _UpstreamPanel._waitLabel(days),
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: urgency),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Três números para dar o tamanho do que está na mão de quem olha.
+///
+/// Todos os três saem do POSTO de quem está olhando (ver [_Post]): o que espera
+/// ação dele, a etapa vizinha que ele acompanha e as sacas a receber. Nenhum
+/// deles conta permuta de uma etapa que a pessoa não enxerga — a faixa trazia
+/// "No comitê" fixo, e no painel do faturista isso era um número de um lugar
+/// onde ele não entra.
+///
+/// Sem posto (o admin, que administra o sistema e não decide permuta) a faixa
+/// volta a ser o retrato da operação: o que espera decisão e o que espera nota.
+class _SummaryStrip extends StatelessWidget {
+  final _Post? post;
+  final double sacks;
+  const _SummaryStrip({required this.post, required this.sacks});
+
+  @override
+  Widget build(BuildContext context) {
+    final post = this.post;
     final cells = [
-      if (waiting != null)
+      if (post != null) ...[
         _SummaryCell(
           icon: Icons.pending_actions_outlined,
-          color: waitingColor ?? AppColors.atManager,
-          value: '$waiting',
+          color: post.color,
+          value: '${post.queue.length}',
           label: 'Esperando você',
         ),
-      _SummaryCell(
-        icon: Icons.hourglass_top,
-        color: AppColors.pending,
-        value: '$pending',
-        label: 'No comitê',
-      ),
-      if (waiting == null)
+        _SummaryCell(
+          icon: post.followIcon,
+          color: post.followColor,
+          value: '${post.followCount}',
+          label: post.followLabel,
+        ),
+      ] else ...[
+        _SummaryCell(
+          icon: Icons.hourglass_top,
+          color: AppColors.pending,
+          value: '${AppData.barters.where((b) => b.status == BarterStatus.pending).length}',
+          label: 'No comitê',
+        ),
         _SummaryCell(
           icon: Icons.check_circle_outline,
           color: AppColors.approved,
-          value: '$approved',
+          value: '${AppData.barters.where((b) => b.awaitsInvoice).length}',
           label: 'A faturar',
         ),
+      ],
       _SummaryCell(
         icon: Icons.grass,
         color: AppColors.grain,
@@ -756,81 +904,6 @@ class _SummaryCell extends StatelessWidget {
         Text(label, textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
       ],
-    );
-  }
-}
-
-/// Diz, na cara, o que este papel AINDA não faz. É preferível a uma tela que
-/// parece pronta: quem entra como comitê ou faturista precisa saber que o
-/// acesso já existe e que as ações dele vêm na sequência.
-///
-/// Para o GERENTE o texto é outro, e a diferença importa: ele JÁ trabalha aqui.
-/// Dizer-lhe "por enquanto é modo leitura" logo abaixo da fila que pede o
-/// parecer dele seria a tela contradizendo a si mesma.
-class _NextStepsCard extends StatelessWidget {
-  final UserRole role;
-  final List<String> steps;
-  const _NextStepsCard({required this.role, required this.steps});
-
-  bool get _alreadyWorks => role == UserRole.manager;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.construction, size: 18, color: AppColors.pending),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _alreadyWorks
-                        ? 'Ainda vem por aí'
-                        : 'Acesso de ${role.label} liberado',
-                    style: TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              _alreadyWorks
-                  ? 'Além do parecer técnico, estas são as próximas do seu papel:'
-                  : 'Por enquanto o acompanhamento é em modo leitura. Em construção:',
-              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-            ),
-            const SizedBox(height: 10),
-            for (final step in steps)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(top: 5),
-                      child: Container(
-                        width: 6,
-                        height: 6,
-                        decoration:
-                            BoxDecoration(color: AppColors.primaryMedium, shape: BoxShape.circle),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(step,
-                          style: TextStyle(fontSize: 12.5, color: AppColors.textDark)),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

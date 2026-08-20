@@ -228,10 +228,11 @@ Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserMode
                 ),
               ),
               const SizedBox(height: 8),
+              // O que ACONTECE COM ELE, e não como o sistema funciona por
+              // dentro: "o servidor recalcula tudo ao registrar" era o app
+              // contando a própria arquitetura a quem só quer encaminhar.
               Text(
-                'O servidor recalcula tudo ao registrar — mínimos por classe e '
-                'por hectare inclusive. Se algo não fechar, a simulação volta '
-                'para você corrigir.',
+                'Se algum mínimo não fechar, a simulação volta para você corrigir.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ],
@@ -277,9 +278,10 @@ Future<void> _showSent(BuildContext context, SendResult result) {
             style: const TextStyle(fontSize: 14),
           ),
           const SizedBox(height: 8),
+          // COM QUEM ela está agora — a única pergunta que o consultor faz
+          // depois de enviar.
           Text(
-            'Ela foi enviada a ${barter.managerLabel}, que dará o parecer técnico '
-            'antes de a permuta seguir para o comitê.',
+            'Está com ${barter.managerLabel}, esperando o parecer técnico.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.textMedium),
           ),

@@ -59,6 +59,21 @@ export const CAPABILITY = {
    * operação inteira — e a tela não tinha como dar ênfase ao que era dele.
    */
   bartersReadTeam: 'barters.readTeam',
+  /**
+   * Enxergar as permutas QUE CHEGARAM AO FATURAMENTO — as aprovadas e as já
+   * faturadas.
+   *
+   * É o quarto escopo, e o mais estreito da retaguarda. O faturista trabalhava
+   * com `bartersReadAll` desde que o papel nasceu, e isso lhe dava a operação
+   * inteira: a fila do gerente, a mesa do comitê e as permutas negadas apareciam
+   * na tela de quem não participa de nenhuma dessas etapas. Não é só ruído —
+   * é o andamento de negociações em aberto na mão de quem só emite a nota.
+   *
+   * Ele enxerga o próprio trecho da linha e nada antes dele. QUAIS estados são
+   * esses não está escrito aqui: quem responde é `lineFrom(invoice)` em
+   * `barters/barter-workflow.ts`, que é onde o caminho da permuta mora.
+   */
+  bartersReadInvoicing: 'barters.readInvoicing',
   /** Registrar permuta (ato do consultor dono da carteira). */
   bartersRegister: 'barters.register',
   /**
@@ -68,7 +83,9 @@ export const CAPABILITY = {
    * não diz sobre QUAL permuta. Isso é política sobre o recurso, e mora no
    * service: o parecer é do gerente A QUEM a permuta foi enviada, e qualquer
    * outro gerente leva 403. É o primeiro caso do que o comentário no fim deste
-   * arquivo previa.
+   * arquivo previa — e hoje quem responde por ele é o ESCOPO DE LEITURA do
+   * gerente (`bartersReadTeam`), porque "não é do meu time" e "não posso opinar
+   * nela" acabaram sendo a mesma pergunta.
    */
   bartersOpinion: 'barters.opinion',
   /**
@@ -158,19 +175,23 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   ],
   // O COMITÊ decide. É a única instância que aprova ou nega — e ele o faz sobre
   // o que já chegou pronto das duas etapas anteriores, daí a leitura de tudo
-  // andar junto com `bartersReview`.
+  // andar junto com `bartersReview`. Ele é também o único posto que enxerga a
+  // etapa ANTERIOR à sua: o que está no gerente é o que vai cair na mesa dele,
+  // e prever a fila é parte de decidir.
   [ROLE.committee]: [
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadAll,
     CAPABILITY.bartersReview,
     CAPABILITY.pricesRead,
   ],
-  // O FATURISTA fatura, e é só isso. Ele enxerga tudo porque precisa acompanhar
-  // o que vem vindo pela linha, mas a única coisa que escreve é o faturamento
-  // do que o comitê aprovou.
+  // O FATURISTA fatura, e é só isso — inclusive no que enxerga. Ele alcança o
+  // que CHEGOU ao faturamento e nada antes disso: o parecer que o gerente ainda
+  // não deu e a permuta que o comitê ainda não decidiu não são trabalho dele, e
+  // uma negociação em aberto não precisa passar pela tela de quem emite a nota.
+  // Ver `bartersReadInvoicing`.
   [ROLE.biller]: [
     CAPABILITY.producersReadAll,
-    CAPABILITY.bartersReadAll,
+    CAPABILITY.bartersReadInvoicing,
     CAPABILITY.bartersInvoice,
     CAPABILITY.pricesRead,
   ],
@@ -205,7 +226,11 @@ export function rolesWith(capability: Capability): Role[] {
  * pede: a permuta foi endereçada a um gerente, e a de outro time não é dele.
  * Isso não cabe nesta tabela e não foi forçado dentro dela: a capacidade é o
  * portão (`barters.opinion` abre a rota) e o BartersService decide o caso
- * concreto, comparando `barter.managerId` com quem pede.
+ * concreto — hoje pelo ESCOPO (`scopeFor`), que para o gerente já é o próprio
+ * time. Era uma comparação à parte de `barter.managerId`, e ela saiu quando o
+ * escopo do faturista obrigou toda ação a conferir a leitura antes de agir:
+ * duas regras respondendo à mesma pergunta é uma a mais do que se pode manter
+ * em dia.
  *
  * As alçadas seguem o mesmo desenho quando existirem ("o gerente aprova até
  * R$ 50 mil" depende do valor da permuta). O erro a evitar continua sendo o

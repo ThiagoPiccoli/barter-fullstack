@@ -110,7 +110,7 @@ curl -X POST http://localhost:3333/api/v1/barters \
 | **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo; administra, não decide) |
 | Gerente | `gerente@agrobarter.com.br` | — (o time dele; dá o parecer técnico) |
 | Comitê | `comite@agrobarter.com.br` | — (o ÓRGÃO, um acesso só; **decide** as permutas) |
-| Faturista | `faturista@agrobarter.com.br` | — (enxerga tudo; **fatura** as aprovadas) |
+| Faturista | `faturista@agrobarter.com.br` | — (só o que chegou ao faturamento; **fatura** as aprovadas) |
 | Consultor | `joao.silva@agrobarter.com.br` | Antônio Carvalho, Sebastião Ramos |
 | Consultor | `ana.ferreira@agrobarter.com.br` | Helena Prado, Cláudia Nunes |
 | Consultor | `roberto.souza@agrobarter.com.br` | Joaquim Tavares |
@@ -168,7 +168,9 @@ São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts
   consultor e o parecer do gerente. É a única instância que decide, e é um
   ÓRGÃO: uma reunião, com um cadastro só (ver "O comitê é um cadastro só").
 - **biller (faturista)** — **fatura** o que foi aprovado. É o último posto da
-  linha, e o mais simples: ele não avalia e não devolve.
+  linha, e o mais simples: ele não avalia e não devolve. Enxerga só o trecho
+  dele — aprovadas e faturadas (`barters.readInvoicing`); o que ainda está no
+  gerente ou no comitê não aparece para ele.
 - Cada um dos três escreve UMA coisa, e nenhum escreve a do outro — a matriz
   inteira é varrida em [`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts).
 - **consultant (consultor)** — loga no app e registra permutas **apenas para os
@@ -405,11 +407,11 @@ quem move o quê, e **o que responder a quem chega fora de hora**. Essa última
 parte é metade do valor — as três recusas dizem coisas diferentes de propósito:
 
 ```bash
-# faturista tentando faturar o que ainda está no comitê
-422 "Esta permuta aguarda a decisão do comitê"
+# comitê tentando decidir o que ainda está no gerente
+422 "Esta permuta aguarda o parecer do gerente Beatriz Nogueira"
 # comitê tentando decidir o que já decidiu
 422 "Esta permuta já foi decidida pelo comitê"
-# qualquer um tentando faturar uma negada
+# comitê tentando decidir uma negada
 422 "Esta permuta foi negada pelo comitê"
 ```
 
@@ -417,6 +419,13 @@ Dizer "já foi decidida" a quem espera o gerente mandaria a pessoa procurar uma
 decisão que ninguém tomou; o que ela precisa saber é **com quem a permuta está
 parada**. O JSON da permuta carrega isso pronto (`waitingFor`, `nextAction`,
 `statusLabel`), para o app não manter uma segunda cópia do fluxo em Dart.
+
+Repare no ator dos três exemplos: o **comitê**, que enxerga a linha inteira. A
+mensagem da etapa é para quem PODE LER a permuta — toda ação confere o escopo
+antes (`requireBarter`: existe? você enxerga? está no ponto?). O faturista
+pedindo a nota de algo que ainda está no gerente recebe `403 "Você não tem acesso
+a esta permuta"`, e não o andamento dela: sem essa ordem, a recusa vira a porta
+dos fundos do recorte de leitura.
 
 **O admin não decide.** Ele administra o sistema — contas, catálogo, valores,
 unidades — e enxerga tudo; a capacidade `barters.review` saiu dele e foi para o
