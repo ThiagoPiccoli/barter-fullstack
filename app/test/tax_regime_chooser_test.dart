@@ -95,7 +95,7 @@ void main() {
           productId: '5',
           productName: 'NPK 04-14-08',
           unit: 'saco 50kg',
-          price: 100,
+          perUnit: 100,
         ),
       ],
     );

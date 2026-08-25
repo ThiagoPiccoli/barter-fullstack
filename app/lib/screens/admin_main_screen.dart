@@ -655,7 +655,7 @@ class _PendingActionCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                      barter.referenceValue > 0
+                      barter.hasSacks
                           ? formatSacks(barter.sacksToDeliver)
                           : '—',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),

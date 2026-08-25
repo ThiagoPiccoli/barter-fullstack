@@ -7,9 +7,12 @@ import {
   BARTER_STATUS,
   BARTER_STATUSES,
   BARTER_STATUS_LABELS,
+  BARTER_STEP_STATE,
   BARTER_STEPS,
   lineFrom,
   nextActionOf,
+  outcomeLabelOf,
+  progressOf,
   refusalFor,
   stepAt,
   type BarterAction,
@@ -215,5 +218,118 @@ describe('Máquina de estados da permuta', () => {
     expect(refusalFor(BARTER_ACTION.review, barterIn('cancelada'))).toBe(
       'Esta permuta está em uma etapa que não permite esta ação',
     );
+  });
+
+  /* ── O andamento: a linha inteira, e não só o trecho já andado ──────── */
+
+  /**
+   * O que estes testes protegem é a promessa que a tela faz. O andamento é a
+   * checklist que o consultor lê para responder ao produtor "e a minha
+   * permuta?" — uma etapa marcada errado ali não é um pixel fora do lugar: é
+   * ele dizendo ao produtor que falta o comitê quando quem está devendo é o
+   * gerente, ou que o faturamento vem aí quando a permuta foi negada.
+   */
+  describe('andamento da permuta', () => {
+    /** Só os estados, na ordem da esteira — é a forma de ler os casos abaixo. */
+    const estadosEm = (status: string) => progressOf(barterIn(status)).map((step) => step.state);
+
+    const { done, current, ahead, halted } = BARTER_STEP_STATE;
+
+    it('a esteira aparece inteira desde o primeiro dia da permuta', () => {
+      const andamento = progressOf(barterIn(BARTER_STATUS.sentToManager));
+
+      // As quatro etapas, sempre — inclusive as que ainda não aconteceram. É a
+      // diferença entre uma checklist e uma linha do tempo.
+      expect(andamento.map((step) => step.action)).toEqual([
+        BARTER_ACTION.register,
+        BARTER_ACTION.opinion,
+        BARTER_ACTION.review,
+        BARTER_ACTION.invoice,
+      ]);
+      expect(andamento.map((step) => step.label)).toEqual([
+        'Registro do consultor',
+        'Parecer do gerente',
+        'Decisão do comitê',
+        'Faturamento',
+      ]);
+      // Cada etapa diz de quem ela é — o que a tela mostra nas que ainda vêm,
+      // onde não há autor para mostrar.
+      expect(andamento.map((step) => step.role)).toEqual([
+        ROLE.consultant,
+        ROLE.manager,
+        ROLE.committee,
+        ROLE.biller,
+      ]);
+    });
+
+    it('a permuta anda, e o que ficou para trás vira etapa cumprida', () => {
+      expect(estadosEm(BARTER_STATUS.sentToManager)).toEqual([done, current, ahead, ahead]);
+      expect(estadosEm(BARTER_STATUS.pending)).toEqual([done, done, current, ahead]);
+      expect(estadosEm(BARTER_STATUS.approved)).toEqual([done, done, done, current]);
+      expect(estadosEm(BARTER_STATUS.invoiced)).toEqual([done, done, done, done]);
+    });
+
+    /**
+     * A NEGATIVA é o caso que justifica `halted` existir. Uma permuta negada
+     * nunca fatura — mostrar o faturamento dela como etapa pendente prometeria
+     * um passo que ninguém vai dar, e quem lesse ficaria esperando.
+     */
+    it('a permuta negada não fica devendo um faturamento que não vem', () => {
+      expect(estadosEm(BARTER_STATUS.denied)).toEqual([done, done, done, halted]);
+
+      // A etapa que não acontece DIZ que não acontece, e por quê. Deixá-la muda
+      // seria a mesma coisa que mostrá-la pendente: quem lê fica esperando.
+      expect(progressOf(barterIn(BARTER_STATUS.denied)).map((s) => s.stateNote)).toEqual([
+        null,
+        null,
+        null,
+        'Não acontece: a permuta foi negada',
+      ]);
+    });
+
+    it('a etapa de agora diz o que espera, com nome e tudo — e só ela', () => {
+      const notas = (status: string) => progressOf(barterIn(status)).map((step) => step.stateNote);
+
+      expect(notas(BARTER_STATUS.sentToManager)).toEqual([
+        null,
+        'Esta permuta aguarda o parecer do gerente Beatriz Nogueira',
+        null,
+        null,
+      ]);
+      expect(notas(BARTER_STATUS.pending)).toEqual([
+        null,
+        null,
+        'Esta permuta aguarda a decisão do comitê',
+        null,
+      ]);
+    });
+
+    /**
+     * O rótulo da SAÍDA sai do estado que o ato alcançou, e não de onde a
+     * permuta está hoje: a decisão de uma permuta já faturada continua tendo
+     * sido uma aprovação, e é isso que a linha do tempo mostra.
+     */
+    it('a decisão do comitê diz para que lado foi', () => {
+      expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.approved)).toBe('Aprovada');
+      expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.denied)).toBe('Negada');
+
+      // As outras etapas não têm saída para escolher — "Faturamento: faturada"
+      // seria o nome da etapa dito duas vezes.
+      for (const action of [BARTER_ACTION.register, BARTER_ACTION.opinion, BARTER_ACTION.invoice]) {
+        for (const status of BARTER_STATUSES) {
+          expect(outcomeLabelOf(action, status)).toBeNull();
+        }
+      }
+    });
+
+    /**
+     * Estado que nenhuma etapa produz — banco adulterado, ou um servidor à
+     * frente deste. Devolve nada, e a tela cai na linha do tempo dos eventos,
+     * que é fato gravado: não desenhar caminho nenhum vale mais do que desenhar
+     * um caminho inventado.
+     */
+    it('estado desconhecido não produz um andamento inventado', () => {
+      expect(progressOf(barterIn('cancelada'))).toEqual([]);
+    });
   });
 });

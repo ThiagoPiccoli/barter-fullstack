@@ -1298,23 +1298,55 @@ simulações offline quantas vezes quiser.
 **O que ainda não é offline:** as permutas JÁ ENVIADAS não são cacheadas, de
 propósito — elas são do servidor, e uma lista velha de permutas alheias vale
 menos que a ausência dela; o que o consultor precisa em campo são as simulações,
-que vêm de outro lugar. E o pacote grava **preços em R$** no aparelho de um papel
-que não vê R$: não é exposição nova (`/products` já devolve preço a qualquer
-autenticado, e o cofre é criptografado), mas sai da RAM e passa a existir em
-disco. Reduzir isso exigiria a API devolver ao consultor as sacas já resolvidas
-por insumo, em vez do preço.
+que vêm de outro lugar.
+
+O pacote **não grava R$ nenhum** no aparelho do consultor. Chegou a gravar: o
+`/products` devolvia preço a qualquer autenticado, e depois do cache offline a
+tabela do fornecedor passava a existir em disco. Foi o que a **lente de valor**
+resolveu (ver [2.8](#28-privacidade-por-papel)) — o servidor converte antes de
+enviar, e o que é gravado já vem em sacas.
 
 ## 2.8 Privacidade por papel
 
 O **consultor nunca vê R$**. Para ele a permuta é "insumos retirados → sacas do
-grão". A flag `showValue` / `showValues` atravessa telas e PDF:
+grão". Isso é decidido em DOIS lugares, e a ordem importa:
 
-- [barter_screen.dart](../app/lib/screens/barter_screen.dart) → sempre `false`
-- [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) → `widget.isAdmin`
-- [barter_pdf.dart](../app/lib/services/barter_pdf.dart) → mesmo critério
+**1. Na API — a lente de valor.** É a regra de verdade, e é de segurança, não de
+apresentação. A capacidade `prices.read` ([policy.ts](../api/src/common/policy.ts))
+decide quem recebe R$; para quem não a tem, o servidor converte antes de enviar
+(`lensFor` / `inSacks` em [serializers.ts](../api/src/common/serializers.ts)):
 
-Note que isso é **regra de apresentação, não de segurança**: os preços vêm no
-JSON de `/products` para qualquer autenticado.
+| Campo | Com `prices.read` | Sem |
+|---|---|---|
+| Tabela da versão | `price` (R$) | `sacksPerUnit` |
+| Cotação da saca | `grainPrice` | *ausente* |
+| Regra da classe | `ruleValue` em R$/ha | em sacas/ha, com `ruleUnit` |
+| Item da permuta | `unitValue` | *ausente* |
+| Cadastro do produto | `currentPrice`, `priceHistory` | *ausentes* |
+
+A cotação **não** acompanha a tabela em sacas de propósito: junto com ela, uma
+multiplicação devolveria os R$ e a conversão não teria servido para nada.
+
+**2. No app — o `showValue` das telas.** Continua existindo, e agora é o que ele
+sempre deveria ter sido: acabamento, e não a defesa. As telas do consultor
+(`barter_screen` → sempre `false`; `barter_detail_screen` e `barter_pdf` →
+`widget.isAdmin`) não teriam R$ para mostrar mesmo que quisessem.
+
+**O lado de cá precisa LER a lente**, e é o que
+[`VersionPriceModel.perUnit`](../app/lib/models/models.dart) e
+[`BarterVersionModel.costPerSack`](../app/lib/models/models.dart) fazem: o valor
+por unidade chega na moeda da lente, e o divisor é a cotação em R$ ou **1** em
+sacas — a mesma conta de `barter_math.dart` atravessa as duas, porque
+`Σ(qtd × preço/cotação)` é `Σ(qtd × preço)/cotação`.
+
+> Essa metade demorou a chegar. A API passou a converter e o app continuou lendo
+> `price`, que para o consultor não vem: `_asDouble(null)` devolvia zero, e a
+> prévia dele mostrava **0 saca** para qualquer permuta, com o detalhe anunciando
+> "0 sc" em TOTAL A ENTREGAR. As duas suítes estavam verdes o tempo todo — os
+> e2e conferiam o formato do JSON, os testes do app escreviam `price` à mão nos
+> fixtures, e nada amarrava os dois. O grupo *"a lente de valor"* em
+> [models_test.dart](../app/test/models_test.dart) é esse laço: os fixtures dele
+> são cópias do que os e2e provam que a API devolve.
 
 ## 2.9 Widgets e tema
 

@@ -330,8 +330,15 @@ class BarterPdf {
   static pw.Widget _sectionTitle(String text, PdfColor color) => pw.Text(text,
       style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: color, letterSpacing: 1));
 
-  /// Tabela dos insumos retirados. Sempre mostra quantidade e o equivalente em
-  /// sacas do grão de pagamento; as colunas de R$ só entram para o admin.
+  /// Tabela dos insumos retirados. Sempre mostra quantidade; as colunas de R$
+  /// só entram para o admin.
+  ///
+  /// A coluna de EQUIVALENTE POR ITEM depende de R$ e por isso não sai no
+  /// comprovante do consultor: converter item a item exige o valor unitário, que
+  /// a lente de valor não manda para ele. O que ele precisa saber — quantas
+  /// sacas paga a permuta INTEIRA — está no quadro de total, que a API responde
+  /// pela linha do grão. Some a coluna toda, cabeçalho junto, em vez de deixar
+  /// células vazias fingindo um número que não veio.
   static pw.Widget _inputsTable(BarterModel barter, bool showValues) {
     final hasRef = barter.referenceValue > 0;
     final grain = barter.referenceGrainName.toLowerCase();
@@ -405,7 +412,10 @@ class BarterPdf {
   /// Destaque final: o compromisso da permuta — quantas sacas o produtor
   /// entrega na colheita para pagar os insumos retirados.
   static pw.Widget _totalBox(BarterModel barter, bool showValues) {
-    final hasRef = barter.referenceValue > 0;
+    // `hasSacks`, e não `referenceValue > 0`: o comprovante do CONSULTOR chega
+    // sem R$ (a lente de valor da API retém o `unitValue`), e a cotação zerada
+    // fazia justamente o número que este quadro existe para dizer sair como "-".
+    final hasRef = barter.hasSacks;
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
       decoration: pw.BoxDecoration(

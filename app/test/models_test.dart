@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:agrobarter_app/models/models.dart';
+import 'package:agrobarter_app/services/barter_math.dart';
 
 /// O parse do JSON da API é o ponto em que uma mudança no servidor chega ao
 /// app já instalado no aparelho de alguém. Um campo novo é inofensivo; um
@@ -265,6 +266,113 @@ void main() {
       expect(barter.events.single.actorRole, isNull);
     });
 
+    /// O ANDAMENTO é a esteira INTEIRA — inclusive o que ainda não aconteceu.
+    ///
+    /// É a diferença entre a linha do tempo e a checklist, e o app não a calcula:
+    /// o caminho mora no servidor, e o que chega aqui já vem com cada etapa
+    /// dizendo em que pé está. O que este teste prende é a LEITURA disso.
+    test('o andamento traz as etapas que faltam, e não só as que passaram', () {
+      final barter = BarterModel.fromJson(barterJson(status: 'pending')
+        ..['steps'] = [
+          {
+            'action': 'register',
+            'state': 'done',
+            'label': 'Registro do consultor',
+            'role': 'consultant',
+            'roleLabel': 'Consultor',
+            'stateNote': null,
+            'at': '2026-01-10T09:30:00.000Z',
+            'toStatus': 'sentToManager',
+            'actorName': 'João Silva',
+            'actorRoleLabel': 'Consultor',
+            'note': null,
+            'outcomeLabel': null,
+          },
+          {
+            'action': 'review',
+            'state': 'current',
+            'label': 'Decisão do comitê',
+            'role': 'committee',
+            'roleLabel': 'Comitê',
+            'stateNote': 'Esta permuta aguarda a decisão do comitê',
+            'at': null,
+            'toStatus': null,
+            'actorName': null,
+            'actorRoleLabel': null,
+            'note': null,
+            'outcomeLabel': null,
+          },
+          {
+            'action': 'invoice',
+            'state': 'ahead',
+            'label': 'Faturamento',
+            'role': 'biller',
+            'roleLabel': 'Faturista',
+            'stateNote': null,
+            'at': null,
+            'toStatus': null,
+            'actorName': null,
+            'actorRoleLabel': null,
+            'note': null,
+            'outcomeLabel': null,
+          },
+        ]);
+
+      expect(barter.hasProgress, isTrue);
+      expect(barter.steps.map((s) => s.state), [
+        BarterStepState.done,
+        BarterStepState.current,
+        BarterStepState.ahead,
+      ]);
+
+      // A cumprida vem assinada e com o estado que alcançou — é dele que sai a
+      // cor do passo na tela.
+      expect(barter.steps.first.actorName, 'João Silva');
+      expect(barter.steps.first.toStatus, BarterStatus.sentToManager);
+
+      // A de agora não tem autor (ninguém agiu ainda): o que ela tem é o que
+      // está esperando, e é isso que a tela mostra no lugar da assinatura.
+      expect(barter.steps[1].isCurrent, isTrue);
+      expect(barter.steps[1].actorName, isNull);
+      expect(barter.steps[1].stateNote, 'Esta permuta aguarda a decisão do comitê');
+
+      // E a que ainda vem tem só o dono — quem vai ter de agir.
+      expect(barter.steps.last.roleLabel, 'Faturista');
+      expect(barter.steps.last.role, UserRole.biller);
+    });
+
+    /// A listagem não carrega o andamento, e a tela precisa distinguir "não veio
+    /// nesta resposta" de "esta permuta não tem etapas" — que não existe.
+    test('a listagem chega sem andamento, e isso não é uma permuta sem etapas', () {
+      expect(BarterModel.fromJson(barterJson()).hasProgress, isFalse);
+      expect(BarterModel.fromJson(barterJson()).steps, isEmpty);
+    });
+
+    /// Estado de etapa que este app não conhece — um servidor à frente dele.
+    ///
+    /// Cai em `ahead` ("ainda vem"), que é a leitura menos comprometida: dizer
+    /// que uma etapa está cumprida quando ninguém a cumpriu é a mentira que
+    /// custa caro numa tela de acompanhamento.
+    test('estado de etapa desconhecido não vira etapa cumprida', () {
+      final barter = BarterModel.fromJson(barterJson()
+        ..['steps'] = [
+          {
+            'action': 'audit',
+            'state': 'skipped',
+            'label': 'Conferência',
+            'role': 'diretor',
+            'roleLabel': 'Diretor',
+          },
+        ]);
+
+      expect(barter.steps.single.state, BarterStepState.ahead);
+      expect(barter.steps.single.isDone, isFalse);
+      // Papel que este app não conhece não vira consultor por descuido — mas o
+      // rótulo, esse veio escrito do servidor e aparece certo.
+      expect(barter.steps.single.role, isNull);
+      expect(barter.steps.single.roleLabel, 'Diretor');
+    });
+
     /// A tela só oferece o botão de parecer a quem o servidor deixaria dar —
     /// oferecer um botão que a API recusa é pior do que não mostrá-lo.
     test('a permuta só espera o parecer de quem ela foi endereçada', () {
@@ -308,7 +416,7 @@ void main() {
       expect(version.grainName, 'Soja');
       expect(version.grainPrice, 148.5);
       expect(version.isOpen, isTrue);
-      expect(version.priceOf('5')?.price, 115.0);
+      expect(version.priceOf('5')?.perUnit, 115.0);
       // Insumo fora da tabela não é permutável nesta gestão.
       expect(version.priceOf('9'), isNull);
     });
@@ -329,6 +437,124 @@ void main() {
       expect(version.goals[1].kind, GoalKind.sales); // desconhecida → leitura mais comum
       expect(version.anyGoalMet, isTrue);
       expect(version.realizedBarters, 1);
+    });
+  });
+
+  /// A LENTE DE VALOR, do lado de cá.
+  ///
+  /// O servidor decide por quais olhos monta o JSON: quem tem `prices.read`
+  /// recebe R$, e o consultor recebe a MESMA tabela medida em sacas — `price`
+  /// vira `sacksPerUnit`, `unitValue` some, e a cotação da saca não vai junto
+  /// (ela devolveria os R$ por multiplicação). Ver `lensFor` em
+  /// `api/src/common/serializers.ts`.
+  ///
+  /// Este grupo existe porque a lente foi só até a metade uma vez: a API passou
+  /// a converter e o app continuou lendo `price`. Ninguém percebeu porque as
+  /// duas suítes estavam verdes — os e2e conferiam o formato do JSON, os testes
+  /// daqui escreviam `price` à mão nos fixtures, e NADA amarrava os dois. O
+  /// resultado é que a prévia do consultor mostrava 0 saca para qualquer permuta
+  /// e o detalhe dela anunciava "0 sc" em TOTAL A ENTREGAR.
+  ///
+  /// Os fixtures abaixo são cópias do que os e2e provam que a API devolve — é
+  /// esse laço, e não a boa vontade de quem escreve o fixture, que segura a
+  /// próxima mudança de lente.
+  group('a lente de valor (o consultor não vê R\$)', () {
+    /// A versão como o CONSULTOR a recebe. Espelha
+    /// `api/test/seasons.e2e-spec.ts` — "a versão vigente é a que o consultor
+    /// enxerga, com a tabela em sacas".
+    Map<String, dynamic> versionInSacks() => {
+          'id': 4,
+          'code': 'S2026.02',
+          'number': 2,
+          'seasonCode': 'S2026',
+          'grainName': 'Soja',
+          'grainUnit': 'saca 60kg',
+          // Sem `grainPrice` e sem `targetSales`: é assim que ela chega.
+          'status': 'active',
+          'isOpen': true,
+          'startsAt': '2026-01-08T00:00:00.000Z',
+          'prices': [
+            {
+              'productId': 5,
+              'productName': 'NPK',
+              'unit': 'saco 50kg',
+              // 115,00 ÷ 148,50 = 0,7744 saca por saco de NPK.
+              'sacksPerUnit': 115.0 / 148.5,
+            },
+          ],
+        };
+
+    test('a tabela em sacas é lida, e não parseada como zero', () {
+      final version = BarterVersionModel.fromJson(versionInSacks());
+
+      expect(version.showsCurrency, isFalse);
+      expect(version.grainPrice, 0);
+      expect(version.priceOf('5')?.perUnit, closeTo(115.0 / 148.5, 1e-9));
+    });
+
+    /// O NÚMERO QUE O CONSULTOR DIZ AO PRODUTOR, nas duas lentes.
+    ///
+    /// É o teste que prende o conserto: as duas moedas atravessam a mesma conta
+    /// de `barter_math.dart` e chegam ao mesmo lugar, porque
+    /// `Σ(qtd × preço/cotação)` é `Σ(qtd × preço)/cotação`. Se um dia as duas
+    /// discordarem, é aqui que aparece — e antes de aparecer na boca de alguém.
+    test('as duas lentes calculam as MESMAS sacas para a mesma permuta', () {
+      final emReais = BarterVersionModel.fromJson(versionJson());
+      final emSacas = BarterVersionModel.fromJson(versionInSacks());
+
+      double sacasDe(BarterVersionModel v) => sacksToCover(
+            inputCost([
+              PricedInput(
+                productId: '5',
+                quantity: 48,
+                unitPrice: v.priceOf('5')?.perUnit ?? 0,
+              ),
+            ]),
+            v.costPerSack,
+          );
+
+      // 48 sacos × R$ 115,00 ÷ R$ 148,50 = 37,1717 sacas de soja.
+      expect(sacasDe(emReais), closeTo(37.1717, 0.0001));
+      expect(sacasDe(emSacas), closeTo(37.1717, 0.0001));
+      expect(sacasDe(emSacas), sacasDe(emReais));
+    });
+
+    /// O divisor é o que faz a conta única funcionar nas duas moedas: em R$ ele
+    /// é a cotação, em sacas ele é 1 — porque o custo já ESTÁ em sacas.
+    test('o divisor conhece a moeda em que o custo foi somado', () {
+      expect(BarterVersionModel.fromJson(versionJson()).costPerSack, 148.5);
+      expect(BarterVersionModel.fromJson(versionInSacks()).costPerSack, 1);
+    });
+
+    /// A permuta JÁ REGISTRADA chega ao consultor sem `unitValue` — a API não o
+    /// converte em sacas porque a linha do GRÃO já é a resposta em sacas.
+    test('a permuta sem R\$ ainda diz quantas sacas o produtor entrega', () {
+      final json = barterJson(status: 'approved');
+      for (final item in json['items'] as List) {
+        (item as Map<String, dynamic>).remove('unitValue');
+      }
+      final barter = BarterModel.fromJson(json);
+
+      expect(barter.showsCurrency, isFalse);
+      // Sem R$ não há custo a somar — e as telas dele não mostram custo.
+      expect(barter.inputCost, 0);
+      // Mas o compromisso da permuta continua legível: é a linha do grão.
+      expect(barter.hasSacks, isTrue);
+      expect(barter.sacksToDeliver, closeTo(80.4444, 0.0001));
+      expect(barter.grainCreditInSacks, closeTo(80.4444, 0.0001));
+      // O imposto do consultor já saía das sacas, e continua saindo.
+      expect(barter.referenceGrainName, 'Soja');
+    });
+
+    /// A retaguarda não muda de comportamento: com R$ na resposta, as sacas
+    /// continuam saindo da divisão pelo valor congelado.
+    test('com R\$ na resposta, a permuta calcula as sacas como sempre calculou', () {
+      final barter = BarterModel.fromJson(barterJson(status: 'approved'));
+
+      expect(barter.showsCurrency, isTrue);
+      expect(barter.inputCost, closeTo(48 * 115.0, 0.0001));
+      expect(barter.referenceValue, 148.5);
+      expect(barter.sacksToDeliver, closeTo(48 * 115.0 / 148.5, 0.0001));
     });
   });
 

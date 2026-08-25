@@ -205,10 +205,10 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
         filtered.sort((a, b) => a.productName.compareTo(b.productName));
         break;
       case _ValueSort.priceDesc:
-        filtered.sort((a, b) => b.price.compareTo(a.price));
+        filtered.sort((a, b) => b.perUnit.compareTo(a.perUnit));
         break;
       case _ValueSort.priceAsc:
-        filtered.sort((a, b) => a.price.compareTo(b.price));
+        filtered.sort((a, b) => a.perUnit.compareTo(b.perUnit));
         break;
     }
     return filtered;
@@ -447,7 +447,7 @@ class _VersionPriceCard extends StatelessWidget {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text(formatCurrency(row.price),
+                Text(formatCurrency(row.perUnit),
                     style: TextStyle(
                         fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.primary)),
                 if (editable)
@@ -456,7 +456,7 @@ class _VersionPriceCard extends StatelessWidget {
                       context,
                       productId: row.productId,
                       productName: row.productName,
-                      price: row.price,
+                      price: row.perUnit,
                       onUpdated: onUpdate,
                     ),
                     style: TextButton.styleFrom(

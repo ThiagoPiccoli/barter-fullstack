@@ -189,11 +189,13 @@ SimulationCheck checkSimulation(
       continue;
     }
     priced.add(
-      PricedInput(productId: item.productId, quantity: item.quantity, unitPrice: price.price),
+      PricedInput(productId: item.productId, quantity: item.quantity, unitPrice: price.perUnit),
     );
   }
 
-  final sacks = sacksToCover(inputCost(priced), version.grainPrice);
+  // O custo sai na moeda da LENTE (sacas para o consultor, que é quem envia
+  // simulação), e `costPerSack` é o divisor que fecha a conta nas duas.
+  final sacks = sacksToCover(inputCost(priced), version.costPerSack);
   final rebuilt = simulation.copyWith(
     versionCode: version.code,
     simulatedSacks: sacks,

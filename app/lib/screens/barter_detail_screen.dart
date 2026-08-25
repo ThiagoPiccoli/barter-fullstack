@@ -185,6 +185,13 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             referenceValue: _barter.referenceValue,
             referenceGrainName: _barter.referenceGrainName,
             showValue: widget.isAdmin,
+            // O equivalente em sacas de UM insumo exige o valor unitário dele,
+            // que só chega a quem vê R$. O total da seção, não: ele é a permuta
+            // inteira, e o servidor já o gravou na linha do grão.
+            sacksOf: (item) => _barter.showsCurrency && _barter.referenceValue > 0
+                ? item.total / _barter.referenceValue
+                : null,
+            totalSacks: _barter.hasSacks ? _barter.sacksToDeliver : null,
           ),
           const SizedBox(height: 16),
 
@@ -199,6 +206,10 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             referenceValue: _barter.referenceValue,
             referenceGrainName: _barter.referenceGrainName,
             showValue: widget.isAdmin,
+            // Aqui a conversão não existe: a linha do grão JÁ é medida em sacas,
+            // nas duas lentes. É por isso que a API não converte estes itens.
+            sacksOf: (item) => item.quantity,
+            totalSacks: _barter.totalGrainQty,
           ),
           const SizedBox(height: 16),
 
@@ -216,7 +227,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        _barter.referenceValue > 0
+                        _barter.hasSacks
                             ? '${formatSacks(_barter.sacksToDeliver)} ${_barter.referenceGrainName.toLowerCase()}'
                             : '0 sc',
                         style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.primary),
@@ -339,11 +350,11 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           ],
 
           const SizedBox(height: 20),
-          // A LINHA DO TEMPO fecha a tela: ela é o histórico, e quem abre a
-          // permuta vem primeiro pelo que ela É — o que aconteceu com ela se lê
-          // depois. Para o faturista, é aqui que estão as peças das etapas
-          // anteriores.
-          _HistorySection(barter: _barter, loading: _loadingHistory),
+          // O ANDAMENTO fecha a tela: quem abre a permuta vem primeiro pelo que
+          // ela É — por onde ela passou e o que ainda falta se lê depois. Para o
+          // faturista, é aqui que estão as peças das etapas anteriores; para o
+          // consultor, é a resposta ao "e a minha permuta?".
+          _ProgressSection(barter: _barter, loading: _loadingHistory),
           const SizedBox(height: 16),
         ],
       ),
@@ -438,27 +449,44 @@ class _NoteBlock extends StatelessWidget {
   }
 }
 
-/// A LINHA DO TEMPO da permuta: por onde ela passou, quem a moveu e o que
-/// escreveu em cada posto.
+/// O ANDAMENTO da permuta: a esteira INTEIRA — do registro ao faturamento —
+/// com o que já aconteceu preenchido.
 ///
-/// É o histórico do documento, e não a trilha de auditoria do sistema (essa é
-/// global e só o admin lê). Quem enxerga a permuta enxerga a história dela —
-/// inclusive o consultor, que assim vê o andamento do que registrou sem
-/// perguntar a ninguém.
+/// É linha do tempo e CHECKLIST na mesma lista, e a segunda metade é a que
+/// faltava. Os eventos contam o que houve, e só: uma permuta parada no comitê
+/// mostrava dois passos, e nada neles dizia que faltavam dois nem com quem eles
+/// estavam — que é exatamente a pergunta que o produtor faz ao consultor, e a
+/// que ele não tinha como responder sem ligar para alguém.
 ///
-/// Ela é desenhada a partir dos EVENTOS, e não dos campos da permuta: os campos
-/// são sobrescritos a cada etapa, os eventos não. É essa diferença que faz uma
-/// permuta decidida continuar mostrando o parecer que a antecedeu.
-class _HistorySection extends StatelessWidget {
+/// Quem monta a lista é o SERVIDOR (`steps`), pelo motivo de sempre: o caminho
+/// mora lá, e uma etapa nova aparece aqui sem versão nova do app. [_HistoryStep]
+/// ficou como plano B — quando o andamento não vem (servidor anterior a ele, ou
+/// um estado que ele não sabe encaixar na esteira), a tela ainda mostra os
+/// eventos, que são fato gravado.
+///
+/// Nos dois casos o desenho sai dos EVENTOS, e não dos campos da permuta: os
+/// campos são sobrescritos a cada etapa, os eventos não. É essa diferença que
+/// faz uma permuta decidida continuar mostrando o parecer que a antecedeu.
+class _ProgressSection extends StatelessWidget {
   final BarterModel barter;
   final bool loading;
-  const _HistorySection({required this.barter, required this.loading});
+  const _ProgressSection({required this.barter, required this.loading});
+
+  /// Quantas etapas já foram cumpridas — a leitura de relance da checklist.
+  ///
+  /// Some quando a linha PAROU: numa permuta negada, "3 de 4" se leria como
+  /// "falta uma", e não falta — não vem mais nenhuma.
+  String? get _tally {
+    if (!barter.hasProgress || barter.steps.any((step) => step.isHalted)) return null;
+    final done = barter.steps.where((step) => step.isDone).length;
+    return '$done de ${barter.steps.length} etapas';
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (!barter.hasHistory) {
-      // Sem eventos e sem carregar: o servidor não os mandou (resposta antiga
-      // ou falha de rede). A seção some em vez de mostrar um vazio que pareceria
+    if (!barter.hasProgress && !barter.hasHistory) {
+      // Nada veio e nada está vindo: o servidor não mandou (resposta antiga ou
+      // falha de rede). A seção some em vez de mostrar um vazio que pareceria
       // "esta permuta não tem história" — toda permuta tem.
       if (!loading) return const SizedBox.shrink();
       return const Padding(
@@ -468,6 +496,7 @@ class _HistorySection extends StatelessWidget {
       );
     }
 
+    final tally = _tally;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -476,24 +505,219 @@ class _HistorySection extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.history, size: 18, color: AppColors.textMedium),
+                Icon(Icons.checklist_rounded, size: 18, color: AppColors.textMedium),
                 const SizedBox(width: 8),
                 Text('Andamento',
                     style: TextStyle(
                         fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                if (tally != null) ...[
+                  const Spacer(),
+                  Text(tally, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                ],
               ],
             ),
             const SizedBox(height: 12),
-            for (var i = 0; i < barter.events.length; i++)
-              _HistoryStep(
-                event: barter.events[i],
-                // O trilho não desce do último passo: ele marca o que veio
-                // DEPOIS, e depois do último não há nada.
-                last: i == barter.events.length - 1,
-              ),
+            if (barter.hasProgress)
+              for (var i = 0; i < barter.steps.length; i++)
+                _ProgressStep(
+                  step: barter.steps[i],
+                  // A cor do estado de AGORA é a mesma do crachá lá em cima —
+                  // a etapa de agora é onde a permuta está.
+                  liveColor: statusColor(barter.status),
+                  // O trilho não desce do último passo: ele marca o que veio
+                  // DEPOIS, e depois do último não há nada.
+                  last: i == barter.steps.length - 1,
+                )
+            else
+              for (var i = 0; i < barter.events.length; i++)
+                _HistoryStep(
+                  event: barter.events[i],
+                  last: i == barter.events.length - 1,
+                ),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Uma etapa da checklist: o marcador, o nome da etapa e — conforme ela já
+/// tenha acontecido ou não — quem a cumpriu ou o que ela ainda espera.
+class _ProgressStep extends StatelessWidget {
+  final BarterStepModel step;
+  final Color liveColor;
+  final bool last;
+
+  const _ProgressStep({required this.step, required this.liveColor, required this.last});
+
+  /// A cor do passo.
+  ///
+  /// A etapa cumprida usa o estado que ela ALCANÇOU — é o que distingue no
+  /// desenho a decisão que aprovou da que negou, sem depender de ler o texto. As
+  /// que ainda não aconteceram ficam em cinza de propósito: com cor, pesariam
+  /// igual às cumpridas e a checklist perderia o contraste que a faz ser lida de
+  /// relance.
+  Color get _color {
+    if (step.isCurrent) return liveColor;
+    if (step.isDone) {
+      return step.toStatus == null ? AppColors.textMedium : statusColor(step.toStatus!);
+    }
+    return AppColors.textLight;
+  }
+
+  /// A ASSINATURA da etapa: quem, com que papel e quando.
+  ///
+  /// Montada por partes porque nem toda etapa tem todas. A que ainda não
+  /// aconteceu tem só o papel de quem vai cumpri-la ("Faturista"), que é o que
+  /// há para dizer; e a permuta anterior à linha do tempo tem a etapa cumprida
+  /// sem autor gravado — aí sobra o papel, que é verdade, em vez de um traço no
+  /// lugar do nome.
+  String get _byline {
+    final actorRole = step.actorRoleLabel.isNotEmpty ? step.actorRoleLabel : step.roleLabel;
+    return [
+      if (step.actorName != null && step.actorName!.isNotEmpty) step.actorName!,
+      if (actorRole.isNotEmpty) actorRole,
+      if (step.at != null) formatDateTime(step.at!),
+    ].join(' • ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _color;
+    final walked = step.isDone || step.isCurrent;
+    // A etapa de agora é o que a pessoa veio ver: ela puxa o olho, e as que
+    // ainda não chegaram recuam para o cinza.
+    final subtitle = step.stateNote ?? _byline;
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Column(
+            children: [
+              _marker(color),
+              if (!last)
+                Expanded(
+                  // O trecho JÁ ANDADO fica colorido, o que falta fica cinza: o
+                  // trilho sozinho já mostra até onde a permuta chegou.
+                  child: Container(
+                    width: 2,
+                    color: step.isDone ? color.withValues(alpha: 0.35) : AppColors.divider,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: last ? 0 : 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          step.label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: step.isCurrent ? FontWeight.w800 : FontWeight.w700,
+                            color: walked ? AppColors.textDark : AppColors.textLight,
+                          ),
+                        ),
+                      ),
+                      if (step.outcomeLabel != null) ...[
+                        const SizedBox(width: 6),
+                        _OutcomeTag(label: step.outcomeLabel!, color: color),
+                      ],
+                    ],
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: step.isCurrent ? AppColors.textMedium : AppColors.textLight,
+                      ),
+                    ),
+                  ],
+                  if (step.note != null && step.note!.trim().isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(step.note!,
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// O marcador, que é o que dá à seção a cara de checklist: visto na cumprida,
+  /// anel na de agora, círculo vazio na que ainda vem e traço na que não vem.
+  Widget _marker(Color color) {
+    switch (step.state) {
+      case BarterStepState.done:
+        return Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          child: const Icon(Icons.check, size: 12, color: Colors.white),
+        );
+      case BarterStepState.current:
+        return Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: color.withValues(alpha: 0.15),
+            border: Border.all(color: color, width: 2.5),
+          ),
+        );
+      case BarterStepState.halted:
+        return Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: AppColors.divider, width: 1.5),
+          ),
+          child: Icon(Icons.remove, size: 10, color: AppColors.textLight),
+        );
+      case BarterStepState.ahead:
+        return Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: AppColors.divider, width: 1.5),
+          ),
+        );
+    }
+  }
+}
+
+/// COMO a etapa terminou, quando ela podia terminar de mais de um jeito. Hoje só
+/// a decisão do comitê tem — e é ela que o crachá precisa dizer, porque
+/// "Decisão do comitê" sozinho não conta se foi sim ou não.
+class _OutcomeTag extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _OutcomeTag({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(label,
+          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
     );
   }
 }
@@ -632,6 +856,18 @@ class _ItemsSection extends StatelessWidget {
   final String referenceGrainName;
   final bool showValue;
 
+  /// Quantas sacas ESTE item representa, ou null quando não dá para dizer.
+  ///
+  /// É uma função e não um número porque a resposta depende da seção: na do grão
+  /// a própria quantidade do item JÁ é a resposta, e na dos insumos ela exige o
+  /// valor unitário — que a lente de valor da API não manda ao consultor. Null
+  /// aí é honesto, e é o que substituiu o "0 sc" que a tela dele imprimia em
+  /// cada linha quando isto era uma divisão por uma cotação zerada.
+  final double? Function(BarterItem item) sacksOf;
+
+  /// As sacas da seção inteira, ou null quando não dá para dizer.
+  final double? totalSacks;
+
   const _ItemsSection({
     required this.title,
     required this.subtitle,
@@ -643,6 +879,8 @@ class _ItemsSection extends StatelessWidget {
     required this.referenceValue,
     required this.referenceGrainName,
     required this.showValue,
+    required this.sacksOf,
+    required this.totalSacks,
   });
 
   @override
@@ -702,12 +940,16 @@ class _ItemsSection extends StatelessWidget {
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text(
-                                referenceValue > 0
-                                    ? formatSacks(item.total / referenceValue)
-                                    : (showValue ? formatCurrency(item.total) : formatSacks(0)),
-                                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: accent),
-                              ),
+                              Builder(builder: (_) {
+                                final sacks = sacksOf(item);
+                                return Text(
+                                  sacks != null
+                                      ? formatSacks(sacks)
+                                      : (showValue ? formatCurrency(item.total) : ''),
+                                  style: TextStyle(
+                                      fontSize: 13, fontWeight: FontWeight.w700, color: accent),
+                                );
+                              }),
                               if (referenceValue > 0 && showValue)
                                 Text('≈ ${formatCurrency(item.total)}',
                                     style: TextStyle(fontSize: 10, color: AppColors.textLight)),
@@ -731,9 +973,9 @@ class _ItemsSection extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
                         Text(
-                          referenceValue > 0
-                              ? '${formatSacks(total / referenceValue)} ${referenceGrainName.toLowerCase()}'
-                              : (showValue ? formatCurrency(total) : formatSacks(0)),
+                          totalSacks != null
+                              ? '${formatSacks(totalSacks!)} ${referenceGrainName.toLowerCase()}'
+                              : (showValue ? formatCurrency(total) : ''),
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: accent),
                         ),
                         if (referenceValue > 0 && showValue)

@@ -867,6 +867,114 @@ describe('Barters (e2e)', () => {
     });
   });
 
+  /**
+   * O ANDAMENTO — a esteira inteira dentro da permuta, com o que já aconteceu
+   * preenchido.
+   *
+   * É o que separa uma CHECKLIST de uma linha do tempo, e é a pergunta que os
+   * eventos sozinhos não respondem: uma permuta parada no comitê tem dois
+   * eventos e nada neles diz que faltam duas etapas, nem com quem elas estão. O
+   * consultor precisa dessa resposta porque é ela que ele repassa ao produtor.
+   */
+  describe('andamento da permuta', () => {
+    type Step = {
+      action: string;
+      state: string;
+      label: string;
+      role: string | null;
+      roleLabel: string | null;
+      stateNote: string | null;
+      actorName: string | null;
+      note: string | null;
+      outcomeLabel: string | null;
+      at: string | null;
+    };
+
+    const stepsOf = async (code: string, user: string) => {
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}`)
+        .set('Authorization', await asUser(user));
+      expect(response.status).toBe(200);
+      return response.body.data.steps as Step[];
+    };
+
+    it('a permuta recém-enviada já mostra as quatro etapas, e quem falta', async () => {
+      // PRM-2026-005 está na mesa do gerente: um evento, quatro etapas.
+      const steps = await stepsOf('PRM-2026-005', JOAO);
+
+      expect(steps.map((s) => [s.action, s.state])).toEqual([
+        ['register', 'done'],
+        ['opinion', 'current'],
+        ['review', 'ahead'],
+        ['invoice', 'ahead'],
+      ]);
+      expect(steps.map((s) => s.label)).toEqual([
+        'Registro do consultor',
+        'Parecer do gerente',
+        'Decisão do comitê',
+        'Faturamento',
+      ]);
+
+      // A etapa cumprida vem ASSINADA (do evento); as que ainda vêm, não têm
+      // autor — têm o papel de quem vai cumpri-las, que é o que a tela mostra.
+      expect(steps[0].actorName).toBe('João Silva');
+      expect(steps[0].at).not.toBeNull();
+      expect(steps[2].actorName).toBeNull();
+      expect(steps[2].roleLabel).toBe('Comitê');
+      expect(steps[3].roleLabel).toBe('Faturista');
+
+      // E a etapa de agora diz o que espera, com o nome de quem está com ela.
+      expect(steps[1].stateNote).toBe('Esta permuta aguarda o parecer do gerente Beatriz Nogueira');
+      expect(steps.filter((s) => s.stateNote !== null)).toHaveLength(1);
+    });
+
+    it('a permuta faturada tem a esteira inteira cumprida, e a decisão assinada', async () => {
+      const steps = await stepsOf('PRM-2026-001', FATURISTA);
+
+      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done']);
+      expect(steps.every((s) => s.actorName !== null)).toBe(true);
+      // O texto de cada etapa vem do EVENTO, que não é sobrescrito pela etapa
+      // seguinte — é o que o faturista lê das etapas anteriores.
+      expect(steps[1].note).toContain('Volume compatível');
+      // A decisão diz para que lado foi, e continua dizendo depois do
+      // faturamento: a permuta está em `invoiced`, e a decisão foi "Aprovada".
+      expect(steps[2].outcomeLabel).toBe('Aprovada');
+      expect(steps[3].outcomeLabel).toBeNull();
+    });
+
+    /**
+     * NEGADA é fim de linha, e o andamento não promete um faturamento que não
+     * vem. `halted` existe por causa deste caso: como `ahead`, ele deixaria a
+     * tela dizendo que a permuta ainda vai ser faturada.
+     */
+    it('a permuta negada não fica devendo um faturamento', async () => {
+      const decisão = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', await asUser(COMITE))
+        .send({ status: 'denied', note: 'Fora da política de risco desta safra.' });
+      expect(decisão.status).toBe(200);
+
+      // A RESPOSTA DO ATO já traz o andamento novo — a tela que acabou de negar
+      // não pode continuar mostrando a permuta esperando decisão.
+      const steps = decisão.body.data.steps as Step[];
+      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'halted']);
+      expect(steps[2].outcomeLabel).toBe('Negada');
+      expect(steps[2].note).toBe('Fora da política de risco desta safra.');
+      // E a etapa que não vem DIZ que não vem, em vez de ficar muda — muda, ela
+      // se leria como "ainda falta faturar".
+      expect(steps[3].stateNote).toBe('Não acontece: a permuta foi negada');
+      expect(steps[3].actorName).toBeNull();
+    });
+
+    /** Mesma regra dos eventos, pela mesma razão: listagem mostra estado. */
+    it('a listagem não carrega o andamento de cada permuta', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', await asUser(FATURISTA));
+      expect(response.body.data[0].steps).toBeUndefined();
+    });
+  });
+
   describe('unidade de retirada', () => {
     it('permuta sem unidade é recusada — não há retirada sem lugar', async () => {
       const { unitId, ...semUnidade } = validPayload;

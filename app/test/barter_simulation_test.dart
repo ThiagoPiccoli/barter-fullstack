@@ -81,7 +81,7 @@ void main() {
               productId: entry.key,
               productName: 'Produto ${entry.key}',
               unit: 'un',
-              price: entry.value,
+              perUnit: entry.value,
             ),
         ],
       );

@@ -241,10 +241,16 @@ class SearchField extends StatelessWidget {
 /// formam um custo, e esse custo é convertido em SACAS do grão de pagamento.
 /// O número de sacas a entregar é a estrela; o valor em R$ é secundário.
 class BarterBalanceBar extends StatelessWidget {
-  /// Custo total dos insumos retirados (R$).
+  /// Custo total dos insumos retirados, na moeda da lente de quem chamou.
   final double inputCost;
 
-  /// Valor (R$) de uma saca do grão de pagamento. 0 = grão ainda não escolhido.
+  /// Quanto custa UMA SACA do grão de pagamento, na MESMA moeda de [inputCost]:
+  /// a cotação em R$ para a retaguarda, e 1 para o consultor — que já recebe a
+  /// tabela medida em sacas. 0 = grão ainda não escolhido.
+  ///
+  /// Os dois campos precisam vir na mesma moeda porque a divisão entre eles é
+  /// que produz as sacas. Quem monta permuta passa
+  /// [BarterVersionModel.costPerSack], que responde certo nas duas lentes.
   final double referenceValue;
 
   /// Nome do grão de pagamento (ex.: "Soja").
@@ -673,7 +679,7 @@ class MiniBarterCard extends StatelessWidget {
             StatusBadge(status: barter.status),
             const SizedBox(height: 2),
             Text(
-                barter.referenceValue > 0
+                barter.hasSacks
                     ? '${formatSacks(barter.sacksToDeliver)} ${barter.referenceGrainName.toLowerCase()}'
                     : '—',
                 style: TextStyle(fontSize: 10, color: AppColors.textMedium)),
@@ -733,7 +739,7 @@ class BarterLogItem extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                            barter.referenceValue > 0
+                            barter.hasSacks
                                 ? '${formatSacks(barter.sacksToDeliver)} ${barter.referenceGrainName.toLowerCase()}'
                                 : '—',
                             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),

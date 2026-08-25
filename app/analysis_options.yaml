@@ -34,5 +34,19 @@ linter:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
 
+# O que a análise NÃO olha: o que a build gera e o que cada plataforma traz
+# pronto. Nenhum desses diretórios tem Dart escrito à mão — excluí-los não
+# esconde defeito nosso, só evita que um `build/` esquecido no disco entre no
+# relatório do `flutter analyze` e polua o portão do CI.
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
+
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options

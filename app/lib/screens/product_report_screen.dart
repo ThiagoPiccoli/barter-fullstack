@@ -134,7 +134,7 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
       context,
       productId: product.id,
       productName: product.name,
-      price: row?.price ?? version.grainPrice,
+      price: row?.perUnit ?? version.grainPrice,
       // Corrigir o valor acrescenta um ponto na linha do tempo: a tela precisa
       // do detalhe de novo, não de um rebuild do que já estava em mãos.
       onUpdated: _loadDetail,

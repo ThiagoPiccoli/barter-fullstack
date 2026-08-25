@@ -2,6 +2,8 @@ import {
   BARTER_HOLDER,
   BARTER_STATUS_LABELS,
   nextActionOf,
+  outcomeLabelOf,
+  progressOf,
   type BarterStatus,
 } from '../barters/barter-workflow';
 import { CAPABILITY, can, capabilitiesOf } from './policy';
@@ -442,6 +444,62 @@ export function toBarterEventJson(event: BarterEvent) {
   };
 }
 
+/**
+ * O ANDAMENTO da permuta: a esteira INTEIRA, com o que já aconteceu preenchido.
+ *
+ * É a linha do tempo e a checklist na mesma lista, e elas são a mesma lista de
+ * propósito. `events` conta o que houve; sozinho, ele faz uma permuta parada no
+ * comitê parecer terminada — mostra dois passos, e nada diz que faltam dois.
+ * Aqui as quatro etapas aparecem sempre, e o evento entra em cada uma que já foi
+ * cumprida: quem lê vê de uma vez onde a permuta está, por onde passou e quem
+ * ainda precisa agir.
+ *
+ * Quem casa etapa e evento é o `action` — a etapa é a definição, o evento é o
+ * fato. Etapa cumprida SEM evento é permuta anterior à linha do tempo: ela sai
+ * marcada como cumprida e sem assinatura, que é a verdade, em vez de sumir da
+ * lista ou de inventar um autor.
+ */
+function toBarterProgressJson(
+  barter: Barter,
+  events: BarterEvent[],
+): ReturnType<typeof progressStepJson>[] {
+  const byAction = new Map<string, BarterEvent>();
+  // O primeiro evento de cada ato: um ato acontece uma vez só (a máquina de
+  // estados não deixa repetir), e na dúvida vale o que veio antes.
+  for (const event of events) {
+    if (!byAction.has(event.action)) byAction.set(event.action, event);
+  }
+
+  return progressOf(barter).map((step) => progressStepJson(step, byAction.get(step.action)));
+}
+
+function progressStepJson(
+  step: ReturnType<typeof progressOf>[number],
+  event: BarterEvent | undefined,
+) {
+  return {
+    action: step.action,
+    state: step.state,
+    label: step.label,
+    // Quem é o dono da etapa, resolvido aqui pelo mesmo motivo de
+    // `actorRoleLabel`: um papel novo aparece escrito certo no app já instalado.
+    role: step.role,
+    roleLabel: step.role ? (ROLE_LABELS[step.role] ?? step.role) : null,
+    stateNote: step.stateNote,
+    // A ASSINATURA da etapa cumprida, tirada do evento — quem, quando e o que
+    // escreveu. Null enquanto ela não aconteceu.
+    at: event?.at ?? null,
+    // O estado que o ato ALCANÇOU. É por ele que a tela colore o passo, do mesmo
+    // jeito que já colore a linha do tempo — e é o que distingue, no desenho, a
+    // decisão que aprovou da que negou.
+    toStatus: event?.toStatus ?? null,
+    actorName: event?.actorName ?? null,
+    actorRoleLabel: event ? (ROLE_LABELS[event.actorRole as Role] ?? event.actorRole) : null,
+    note: event?.note ?? null,
+    outcomeLabel: event ? outcomeLabelOf(event.action, event.toStatus) : null,
+  };
+}
+
 export function toBarterJson(
   barter: Barter & { items?: BarterItem[]; events?: BarterEvent[] },
   viewer?: Pick<User, 'role'>,
@@ -502,6 +560,14 @@ export function toBarterJson(
     // listagem some do JSON, e o app distingue "não veio nesta resposta" de
     // "esta permuta não tem eventos" — que seriam a mesma coisa com `[]`.
     events: barter.events?.map(toBarterEventJson),
+    // O ANDAMENTO acompanha a linha do tempo: as duas respondem à mesma pergunta
+    // e vão pela mesma porta (o detalhe), então a mesma regra de presença vale
+    // para as duas — a listagem mostra estado, não trajetória.
+    //
+    // `events` continua no contrato ao lado dele, e não foi absorvido: ele é o
+    // fato gravado, na ordem em que aconteceu, e é o que o comprovante e a
+    // auditoria do documento leem. `steps` é a LEITURA dele contra a esteira.
+    steps: barter.events ? toBarterProgressJson(barter, barter.events) : undefined,
   };
 }
 

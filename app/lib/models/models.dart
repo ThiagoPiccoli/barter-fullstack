@@ -456,6 +456,125 @@ class BarterEventModel {
   }
 }
 
+/// Em que pé está uma etapa da permuta — ver `BARTER_STEP_STATE` em
+/// `api/src/barters/barter-workflow.ts`, que é quem decide.
+enum BarterStepState {
+  /// Cumprida. É a parte que tem autor, data e texto para mostrar.
+  done,
+
+  /// É AQUI que a permuta está parada agora.
+  current,
+
+  /// Ainda vai acontecer.
+  ahead,
+
+  /// NÃO vai acontecer: a permuta saiu da linha antes de chegar aqui (foi
+  /// negada). Diferente de [ahead], e a diferença é o que impede a tela de
+  /// prometer um faturamento que ninguém vai fazer.
+  halted,
+}
+
+/// Estado de etapa vindo do servidor, tolerante ao desconhecido.
+///
+/// Cai em [BarterStepState.ahead] — a leitura menos comprometida das quatro. Um
+/// estado novo que este app não conhece vira "ainda vem", que é impreciso;
+/// virar `done` seria dizer que uma etapa que ninguém cumpriu está cumprida, e
+/// numa tela de acompanhamento essa é a mentira que custa caro.
+BarterStepState _asStepState(Object? value) {
+  for (final state in BarterStepState.values) {
+    if (state.name == value) return state;
+  }
+  return BarterStepState.ahead;
+}
+
+/// Uma etapa da permuta no ANDAMENTO dela: o caminho inteiro, do registro ao
+/// faturamento, com o que já aconteceu preenchido.
+///
+/// É a linha do tempo e a checklist na mesma lista. [BarterEventModel] conta o
+/// que houve; sozinho, ele faz uma permuta parada no comitê parecer terminada —
+/// mostra dois passos, e nada neles diz que faltam dois. Aqui as quatro etapas
+/// aparecem sempre, e é isso que responde à pergunta que o consultor leva do
+/// produtor: falta o quê, e com quem está?
+///
+/// Quem monta a lista é o SERVIDOR (`GET /barters/:code`), e não uma cópia do
+/// fluxo em Dart: uma etapa nova aparece nas telas já instaladas em vez de pedir
+/// versão nova do app — a mesma razão de `capabilities` e `waitingFor`.
+class BarterStepModel {
+  /// O ato desta etapa: `register`, `opinion`, `review` ou `invoice`.
+  final String action;
+
+  final BarterStepState state;
+
+  /// O nome da etapa ("Parecer do gerente"), escrito pelo servidor. Substantivo,
+  /// porque o mesmo rótulo serve à etapa cumprida e à que ainda vem.
+  final String label;
+
+  /// De quem é a etapa — quem a cumpriu, ou quem ainda vai cumpri-la. É o que a
+  /// tela mostra nas etapas que ainda não têm autor.
+  final UserRole? role;
+  final String roleLabel;
+
+  /// O que há para dizer sobre o ESTADO desta etapa, escrito pelo servidor: o
+  /// que a etapa de agora espera ("Esta permuta aguarda o parecer do gerente
+  /// Beatriz Nogueira") ou por que a que não vem não vem ("Não acontece: a
+  /// permuta foi negada"). Null nas cumpridas e nas que ainda estão por vir.
+  final String? stateNote;
+
+  /// A ASSINATURA da etapa cumprida — quem, quando, e o que escreveu. Tudo null
+  /// enquanto ela não aconteceu.
+  final String? actorName;
+  final String actorRoleLabel;
+  final DateTime? at;
+  final String? note;
+
+  /// COMO a etapa terminou, quando ela podia terminar de mais de um jeito
+  /// ("Aprovada", "Negada"). Null nas que só empurram adiante.
+  final String? outcomeLabel;
+
+  /// O estado que o ato alcançou — é dele que sai a COR do passo, igual à da
+  /// linha do tempo. Null enquanto a etapa não foi cumprida.
+  final BarterStatus? toStatus;
+
+  const BarterStepModel({
+    required this.action,
+    required this.state,
+    required this.label,
+    required this.role,
+    required this.roleLabel,
+    required this.stateNote,
+    required this.actorName,
+    required this.actorRoleLabel,
+    required this.at,
+    required this.note,
+    required this.outcomeLabel,
+    required this.toStatus,
+  });
+
+  factory BarterStepModel.fromJson(Map<String, dynamic> json) => BarterStepModel(
+        action: (json['action'] ?? '') as String,
+        state: _asStepState(json['state']),
+        label: (json['label'] ?? '') as String,
+        role: _asRoleOrNull(json['role']),
+        roleLabel: (json['roleLabel'] ?? '') as String,
+        stateNote: json['stateNote'] as String?,
+        actorName: json['actorName'] as String?,
+        actorRoleLabel: (json['actorRoleLabel'] ?? '') as String,
+        at: _asDateOrNull(json['at']),
+        note: json['note'] as String?,
+        outcomeLabel: json['outcomeLabel'] as String?,
+        toStatus: json['toStatus'] == null ? null : _asStatus(json['toStatus']),
+      );
+
+  /// Esta etapa já foi cumprida — é a que tem o que mostrar.
+  bool get isDone => state == BarterStepState.done;
+
+  /// É nesta etapa que a permuta está parada agora.
+  bool get isCurrent => state == BarterStepState.current;
+
+  /// Esta etapa não vai acontecer (a permuta foi negada antes de chegar nela).
+  bool get isHalted => state == BarterStepState.halted;
+}
+
 /// Item de uma permuta. Serve tanto para o grão entregue quanto para o
 /// insumo retirado. [unitValue] é o valor de referência (R$) por unidade no
 /// momento da permuta — é o que permite converter grão em insumo.
@@ -466,12 +585,22 @@ class BarterItem {
   final double quantity;
   final double unitValue;
 
+  /// O valor unitário VEIO nesta resposta?
+  ///
+  /// Separa "R$ 0,00" de "a lente de valor não manda R$ para este papel" — dois
+  /// casos que [unitValue] sozinho não distingue, porque o campo ausente parseia
+  /// zero. O consultor recebe o item sem `unitValue` (ver `toBarterItemJson`),
+  /// e era esse zero que fazia o detalhe da permuta dele anunciar "0 sc" em
+  /// TOTAL A ENTREGAR.
+  final bool hasUnitValue;
+
   const BarterItem({
     required this.productId,
     required this.productName,
     required this.unit,
     required this.quantity,
     required this.unitValue,
+    this.hasUnitValue = true,
   });
 
   factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
@@ -480,9 +609,11 @@ class BarterItem {
         unit: json['unit'] as String,
         quantity: _asDouble(json['quantity']),
         unitValue: _asDouble(json['unitValue']),
+        hasUnitValue: json['unitValue'] != null,
       );
 
-  /// Valor total de troca deste item (R$).
+  /// Valor total de troca deste item (R$). Zero para quem não vê R$ — ver
+  /// [hasUnitValue].
   double get total => quantity * unitValue;
 }
 
@@ -572,6 +703,15 @@ class BarterModel {
   /// listagem, e é [hasHistory] que separa "não veio" de "não tem".
   final List<BarterEventModel> events;
 
+  /// O ANDAMENTO: a esteira INTEIRA, com o que já aconteceu preenchido. Vem
+  /// pela mesma porta que [events] e pela mesma razão — listagem mostra estado,
+  /// detalhe mostra trajetória.
+  ///
+  /// Vazia também quando o servidor não sabe desenhar o caminho desta permuta
+  /// (um estado que nenhuma etapa produz). Aí vale [events], que é fato
+  /// gravado — ver [hasProgress].
+  final List<BarterStepModel> steps;
+
   const BarterModel({
     required this.id,
     this.versionCode = '',
@@ -601,6 +741,7 @@ class BarterModel {
     this.waitingFor,
     this.serverStatusLabel,
     this.events = const [],
+    this.steps = const [],
   });
 
   /// O `id` exibido no app é o código público da permuta (ex.: PRM-2026-001);
@@ -646,6 +787,10 @@ class BarterModel {
           .cast<Map<String, dynamic>>()
           .map(BarterEventModel.fromJson)
           .toList(),
+      steps: ((json['steps'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(BarterStepModel.fromJson)
+          .toList(),
     );
   }
 
@@ -688,14 +833,30 @@ class BarterModel {
   /// Total de unidades de insumos retiradas.
   double get totalInputQty => inputs.fold(0.0, (sum, i) => sum + i.quantity);
 
+  /// Esta permuta chegou com os valores em R$?
+  ///
+  /// É a LENTE DE VALOR da API vista do lado de cá — a mesma pergunta que
+  /// [BarterVersionModel.showsCurrency] faz sobre a tabela, agora sobre a
+  /// permuta gravada. Quem não vê R$ recebe os itens sem `unitValue`, e tudo o
+  /// que se mede em dinheiro aqui ([inputCost], [grainCredit], [balance],
+  /// [taxAmount]) vale zero para ele — as telas dele já escondem esses números,
+  /// e o que ele lê são as SACAS.
+  bool get showsCurrency =>
+      grains.any((i) => i.hasUnitValue) || inputs.any((i) => i.hasUnitValue);
+
   /// Grão de pagamento da permuta. Escolhe-se um único grão; havendo mais de um
-  /// (dados legados), usa-se o de maior valor como referência. Não fica preso à soja.
+  /// (dados legados), usa-se o maior como referência. Não fica preso à soja.
+  ///
+  /// O critério é o valor quando ele existe e a QUANTIDADE quando não — sem R$
+  /// na resposta todos os `total` empatam em zero, e o "maior" sairia sendo
+  /// simplesmente o primeiro da lista.
   BarterItem? get dominantGrain {
     BarterItem? best;
     double bestVal = -1;
     for (final g in grains) {
-      if (g.total > bestVal) {
-        bestVal = g.total;
+      final measure = g.hasUnitValue ? g.total : g.quantity;
+      if (measure > bestVal) {
+        bestVal = measure;
         best = g;
       }
     }
@@ -705,21 +866,45 @@ class BarterModel {
   /// Nome do grão de pagamento (ex.: "Soja"). Vazio se nenhum foi escolhido.
   String get referenceGrainName => dominantGrain?.productName ?? '';
 
-  /// Valor (R$) de uma saca do grão de pagamento.
+  /// Valor (R$) de uma saca do grão de pagamento. Zero para quem não vê R$ —
+  /// quem quer saber se dá para DIZER as sacas pergunta a [hasSacks].
   double get referenceValue => dominantGrain?.unitValue ?? 0;
+
+  /// Dá para dizer, em sacas, quanto esta permuta paga?
+  ///
+  /// Existe porque `referenceValue > 0` era a pergunta que as telas faziam no
+  /// lugar desta, e ela responde "não" ao consultor — de quem a API retém o R$
+  /// justamente por ele já receber o número em sacas.
+  bool get hasSacks => sacksToDeliver > 0;
 
   /// Sacas do grão de pagamento necessárias para cobrir o custo dos insumos — o
   /// coração da permuta: "quantas sacas o produtor precisa entregar para pagar".
-  double get sacksToDeliver => referenceValue > 0 ? inputCost / referenceValue : 0;
+  ///
+  /// Duas medidas para o MESMO número, e a lente decide qual está ao alcance.
+  /// Com R$ na resposta, é o custo dos insumos dividido pela cotação congelada;
+  /// sem R$, é a quantidade gravada na linha do grão — que é esta mesma conta,
+  /// já resolvida pelo servidor no momento do registro.
+  ///
+  /// A segunda medida é o conserto de um defeito real: enquanto isto dividia por
+  /// uma cotação que chega zerada ao consultor, o detalhe da permuta dele
+  /// mostrava "0 sc" em TOTAL A ENTREGAR, e o comprovante saía igual.
+  double get sacksToDeliver =>
+      showsCurrency && referenceValue > 0 ? inputCost / referenceValue : totalGrainQty;
 
   /// Valor pago em grãos, expresso em sacas do grão de pagamento.
-  double get grainCreditInSacks => referenceValue > 0 ? grainCredit / referenceValue : 0;
+  double get grainCreditInSacks =>
+      showsCurrency && referenceValue > 0 ? grainCredit / referenceValue : totalGrainQty;
 
   /// Custo dos insumos expresso em sacas do grão de pagamento (= [sacksToDeliver]).
-  double get inputCostInSacks => referenceValue > 0 ? inputCost / referenceValue : 0;
+  double get inputCostInSacks => sacksToDeliver;
 
   /// Folga do pagamento expressa em sacas do grão de pagamento (~0).
-  double get balanceInSacks => referenceValue > 0 ? balance / referenceValue : 0;
+  ///
+  /// Sem R$ na resposta ela é zero e não "desconhecida", e isso é exato: as duas
+  /// medidas de [sacksToDeliver] e [grainCreditInSacks] caem na mesma quantidade
+  /// gravada, então a folga que se pode afirmar dali é nenhuma.
+  double get balanceInSacks =>
+      showsCurrency && referenceValue > 0 ? balance / referenceValue : 0;
 
   /// O parecer técnico já foi escrito? É o que separa a etapa do gerente da do
   /// comitê — e o que decide se o detalhe mostra o bloco do parecer.
@@ -751,6 +936,13 @@ class BarterModel {
   /// A linha do tempo veio nesta resposta? Distingue "não carregada" (listagem)
   /// de "sem passos" — que não existe: toda permuta nasce com o registro.
   bool get hasHistory => events.isNotEmpty;
+
+  /// O andamento veio nesta resposta?
+  ///
+  /// Falso em dois casos, e a tela trata os dois igual (cai na linha do tempo
+  /// dos eventos): a resposta é uma listagem, ou é de um servidor anterior a
+  /// este campo. Nenhum dos dois é motivo para esconder a história da permuta.
+  bool get hasProgress => steps.isNotEmpty;
 
   /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
   /// — repetida aqui só para a tela não oferecer um botão que levaria 403.
@@ -1061,20 +1253,35 @@ class VersionPriceModel {
   final String productId;
   final String productName;
   final String unit;
-  final double price;
+
+  /// O valor de UMA unidade deste insumo, na MOEDA DA LENTE: R$ para quem vê
+  /// R$, SACAS do grão da safra para quem não vê — o consultor.
+  ///
+  /// O servidor manda um OU outro, nunca os dois: `price` ou `sacksPerUnit`
+  /// (ver `toVersionPriceJson` em `api/src/common/serializers.ts`). Guardar os
+  /// dois num campo só é deliberado, e é o que conserta o defeito que existia
+  /// aqui: enquanto este campo lia só `price`, o consultor — que recebe
+  /// `sacksPerUnit` — parseava zero, e a prévia da permuta dele mostrava 0 saca
+  /// para qualquer quantidade de insumo.
+  ///
+  /// A conta é a MESMA nas duas moedas — soma quantidade × valor, divide pelo
+  /// que custa uma saca —, e a única diferença é o divisor, que a versão sabe
+  /// dizer (ver [BarterVersionModel.costPerSack]). Dois campos convidariam cada
+  /// tela a escolher um, que foi exatamente como o defeito passou.
+  final double perUnit;
 
   const VersionPriceModel({
     required this.productId,
     required this.productName,
     required this.unit,
-    required this.price,
+    required this.perUnit,
   });
 
   factory VersionPriceModel.fromJson(Map<String, dynamic> json) => VersionPriceModel(
         productId: _asId(json['productId']),
         productName: json['productName'] as String,
         unit: json['unit'] as String,
-        price: _asDouble(json['price']),
+        perUnit: _asDouble(json['price'] ?? json['sacksPerUnit']),
       );
 }
 
@@ -1095,7 +1302,21 @@ class BarterVersionModel {
 
   /// Valor (R$) da saca do grão nesta versão — a taxa que converte o custo dos
   /// insumos em sacas.
+  ///
+  /// **Zero para quem não vê R$.** O servidor não a manda ao consultor de
+  /// propósito: entregá-la a quem recebe a tabela em sacas devolveria os R$ por
+  /// multiplicação. Quem precisa converter custo em sacas usa [costPerSack], que
+  /// responde nas duas lentes.
   final double grainPrice;
+
+  /// Esta versão chegou com os valores em R$?
+  ///
+  /// É a LENTE DE VALOR da API vista do lado de cá: quem tem `prices.read`
+  /// recebe `grainPrice` e a tabela em `price`; o consultor recebe a tabela já
+  /// convertida em `sacksPerUnit`, e sem a cotação. A presença de `grainPrice` é
+  /// o sinal porque é exatamente nela que o servidor decide — ver
+  /// `toBarterVersionJson` em `api/src/common/serializers.ts`.
+  final bool showsCurrency;
 
   final String status;
 
@@ -1129,6 +1350,11 @@ class BarterVersionModel {
     required this.grainName,
     required this.grainUnit,
     required this.grainPrice,
+    // Padrão da RETAGUARDA porque é o único que se pode montar à mão: quem
+    // escreve `grainPrice:` num construtor está escrevendo R$. O caminho que
+    // vem da rede — [BarterVersionModel.fromJson] — nunca usa este padrão, ele
+    // lê a lente do próprio JSON.
+    this.showsCurrency = true,
     required this.status,
     required this.isOpen,
     required this.startsAt,
@@ -1156,6 +1382,7 @@ class BarterVersionModel {
       grainName: (json['grainName'] ?? '') as String,
       grainUnit: (json['grainUnit'] ?? '') as String,
       grainPrice: _asDouble(json['grainPrice']),
+      showsCurrency: json['grainPrice'] != null,
       status: (json['status'] ?? 'closed') as String,
       isOpen: json['isOpen'] == true,
       startsAt: _asDate(json['startsAt']),
@@ -1177,6 +1404,21 @@ class BarterVersionModel {
       realizedBarters: (realized['barters'] as num?)?.toInt() ?? 0,
     );
   }
+
+  /// Quanto custa UMA SACA, na moeda da lente — o divisor que transforma custo
+  /// em sacas.
+  ///
+  /// Em R$ é a cotação do grão; em sacas é **1**, porque o custo somado a partir
+  /// de [VersionPriceModel.perUnit] já ESTÁ em sacas. É esta linha que permite
+  /// [sacksToCover] continuar sendo espelho exato de `barter-math.ts`: a conta
+  /// não muda, muda a unidade em que ela entra — e as duas dão o mesmo número,
+  /// porque `Σ(qtd × preço/cotação)` é `Σ(qtd × preço)/cotação`.
+  ///
+  /// Somar em sacas e só então arredondar é o que o próprio servidor pede (ver
+  /// o comentário de `inSacks` em `serializers.ts`): arredondar por linha
+  /// introduziria uma diferença por item, e a prévia deixaria de bater com o
+  /// que é gravado.
+  double get costPerSack => showsCurrency ? grainPrice : 1;
 
   /// O valor de um insumo nesta versão, ou null se ele não está na tabela —
   /// e um insumo fora da tabela não é permutável nesta gestão.

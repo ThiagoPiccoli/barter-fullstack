@@ -128,9 +128,13 @@ class AppData {
     return inputs.where((input) => version.priceOf(input.id) != null).toList();
   }
 
-  /// O valor (R$) de um insumo na versão vigente, ou 0 se ele não está nela.
-  static double priceOf(String productId) =>
-      currentVersion?.priceOf(productId)?.price ?? 0;
+  /// O valor de um insumo na versão vigente — na MOEDA DA LENTE (R$ para a
+  /// retaguarda, sacas para o consultor) —, ou 0 se ele não está nela.
+  ///
+  /// Quem soma isto obtém um custo na mesma moeda, e quem quer o custo em sacas
+  /// divide por [BarterVersionModel.costPerSack]. Ver [VersionPriceModel.perUnit].
+  static double valuePerUnitOf(String productId) =>
+      currentVersion?.priceOf(productId)?.perUnit ?? 0;
 
   /* ── Sessão ─────────────────────────────────────────────────────────── */
 

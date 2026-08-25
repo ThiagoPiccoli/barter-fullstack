@@ -71,10 +71,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 160 testes de unidade (matemática, máquina de estados, senha, sessão, políticas)
-cd api && npm run test:e2e  # 199 testes funcionais da API (auth, escopo, fluxo, contrato de erro)
+cd api && npm test          # 167 testes de unidade (matemática, máquina de estados, senha, sessão, políticas)
+cd api && npm run test:e2e  # 205 testes funcionais da API (auth, escopo, fluxo, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura
-cd app && flutter test      # 109 testes (matemática espelhada, parsers, formulários, abertura)
+cd app && flutter test      # 124 testes (matemática espelhada, parsers, lente de valor, formulários, abertura)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -137,6 +137,17 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   e cada permuta guarda a própria linha do tempo, gravada na mesma transação da
   mudança de estado. O app pergunta ao servidor o que cada pessoa pode fazer
   (`capabilities`) em vez de manter uma segunda cópia das regras em Dart.
+- **A permuta mostra o caminho inteiro, e não só o já andado**: o detalhe traz
+  um `steps` com as quatro etapas sempre — a cumprida com quem a assinou e o que
+  escreveu, a de agora com o que ela espera ("aguarda o parecer do gerente
+  Fulano"), as que faltam com quem vai ter de agir. É linha do tempo e checklist
+  na mesma lista, porque "por onde ela passou" e "o que falta" são a mesma
+  pergunta feita dos dois lados — e a segunda é a que o produtor faz ao
+  consultor. Quem monta a lista é a máquina de estados (`progressOf`), pelo mesmo
+  motivo das capacidades: uma etapa nova aparece nas telas já instaladas. Permuta
+  negada marca o faturamento como `halted`, e não como pendente — ela não vai ser
+  faturada, e uma tela de acompanhamento não pode prometer um passo que ninguém
+  vai dar.
 - **Servidor é a autoridade**: o payload de criação de permuta leva apenas
   produtos e quantidades; preços saem do banco, mínimos são revalidados e as
   sacas são recalculadas no servidor. Itens guardam *snapshots* de preço/nome

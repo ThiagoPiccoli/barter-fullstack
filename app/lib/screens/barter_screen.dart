@@ -114,13 +114,17 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
   /// Os insumos escolhidos, precificados PELA VERSÃO — a entrada da matemática
   /// da permuta (services/barter_math.dart, espelho do cálculo do servidor).
+  ///
+  /// O valor unitário vem na moeda da LENTE: R$ para a retaguarda, sacas do grão
+  /// para o consultor, que é quem monta permuta. As duas atravessam a mesma
+  /// conta — ver [BarterVersionModel.costPerSack].
   List<PricedInput> get _pricedInputs => [
     for (final e in _inputQty.entries)
       if (e.value > 0)
         PricedInput(
           productId: e.key,
           quantity: e.value,
-          unitPrice: AppData.priceOf(e.key),
+          unitPrice: AppData.valuePerUnitOf(e.key),
           classId: _productById(e.key)?.classId,
         ),
   ];
@@ -132,7 +136,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     return null;
   }
 
-  /// Custo total dos insumos escolhidos (R$) — o valor que a permuta paga.
+  /// Custo total dos insumos escolhidos, na moeda da lente — o valor que a
+  /// permuta paga. Ver [_pricedInputs].
   double get _inputCost => inputCost(_pricedInputs);
 
   /// Produtor (cliente) designado para esta permuta (ou null).
@@ -145,7 +150,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
   double get _sacksNeeded {
     final version = _version;
-    return version == null ? 0 : sacksToCover(_inputCost, version.grainPrice);
+    return version == null ? 0 : sacksToCover(_inputCost, version.costPerSack);
   }
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
@@ -721,7 +726,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
           child: BarterBalanceBar(
             inputCost: _inputCost,
-            referenceValue: version.grainPrice,
+            referenceValue: version.costPerSack,
             referenceGrainName: version.grainName,
             inputCount: inputCount,
             showValue: false,
