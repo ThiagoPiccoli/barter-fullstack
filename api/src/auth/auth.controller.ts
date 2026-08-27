@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import type { User } from '@prisma/client';
 import { Throttle } from '@nestjs/throttler';
 import { AllowProvisionalPassword, AnyRole, CurrentUser, Public } from '../common/decorators';
-import { toUserJson } from '../common/serializers';
+import { toUserJson, type UserWithManager } from '../common/serializers';
 import { loginThrottle } from '../common/throttling';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto, LoginDto } from './dto/login.dto';
@@ -37,7 +37,7 @@ export class AuthController {
   @AllowProvisionalPassword()
   @AnyRole()
   @Get('me')
-  me(@CurrentUser() user: User) {
+  me(@CurrentUser() user: UserWithManager) {
     return toUserJson(user);
   }
 

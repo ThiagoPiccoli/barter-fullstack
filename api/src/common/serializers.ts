@@ -87,12 +87,31 @@ export function initialsOf(name: string): string {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
+/** Só o que o serializer precisa do gerente. Evita levar o hash de senha junto. */
+export const MANAGER_FIELDS = { select: { id: true, fullName: true } } as const;
+
 /**
- * O usuário. `manager` chega preenchido nas rotas que o incluem (a listagem e o
- * provisionamento de consultores) — é o que dá `managerName` sem obrigar o app
- * a ter a lista de gerentes, que é rota de admin.
+ * O usuário COM o gerente resolvido — a única forma que [toUserJson] aceita.
+ *
+ * O `manager` é obrigatório de propósito, e essa obrigatoriedade é a correção de
+ * um defeito: enquanto ele era opcional, qualquer `User` cru passava por aqui, e
+ * as rotas de sessão (login, `/me`, troca de senha) passavam um — sem a relação
+ * carregada. O consultor recebia `managerName: null` e o app dizia "Meu gerente:
+ * —" e "Vai para: seu gerente" a quem tem gerente com nome e sobrenome.
+ *
+ * Nenhum teste pegou porque as asserções de `managerName` de usuário passam pela
+ * listagem e pelo provisionamento, que sempre incluíram. Com o campo obrigatório
+ * quem passa a cobrar é o compilador, em toda rota, inclusive nas que ainda não
+ * existem — que é a única barreira que não depende de alguém lembrar.
  */
-export function toUserJson(user: User & { manager?: { id: number; fullName: string } | null }) {
+export type UserWithManager = User & { manager: Pick<User, 'id' | 'fullName'> | null };
+
+/**
+ * O usuário. `manager` vem das rotas que o incluem (com [MANAGER_FIELDS]) — é o
+ * que dá `managerName` sem obrigar o app a ter a lista de gerentes, que é rota
+ * de admin.
+ */
+export function toUserJson(user: UserWithManager) {
   return {
     id: user.id,
     fullName: user.fullName,
@@ -133,7 +152,7 @@ export function toUserJson(user: User & { manager?: { id: number; fullName: stri
  * diálogo de "anote esta senha", e ele não precisa saber quem foi cadastrado.
  */
 export function toProvisionedUserJson(provisioned: {
-  user: User & { manager?: { id: number; fullName: string } | null };
+  user: UserWithManager;
   provisionalPassword: string;
 }) {
   return {

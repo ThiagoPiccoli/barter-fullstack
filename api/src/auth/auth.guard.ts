@@ -8,6 +8,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { ALLOWS_PROVISIONAL_PASSWORD_KEY, IS_PUBLIC_KEY } from '../common/decorators';
+import { MANAGER_FIELDS } from '../common/serializers';
 import { PrismaService } from '../prisma/prisma.service';
 import { hashToken, isIdle } from './token.util';
 
@@ -54,7 +55,10 @@ export class AuthGuard implements CanActivate {
     const tokenHash = hashToken(token);
     const access = await this.prisma.accessToken.findUnique({
       where: { hash: tokenHash },
-      include: { user: true },
+      // O gerente vem junto porque é ESTE usuário que o @CurrentUser() entrega
+      // às rotas, e o `/me` o serializa — sem a relação, o consultor retomava a
+      // sessão sem saber a quem as permutas dele vão. Ver [UserWithManager].
+      include: { user: { include: { manager: MANAGER_FIELDS } } },
     });
     if (!access) {
       throw new UnauthorizedException('Sessão inválida. Faça login novamente.');

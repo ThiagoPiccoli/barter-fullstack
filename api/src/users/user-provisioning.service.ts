@@ -4,6 +4,7 @@ import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { CLEARED_LOCKOUT } from '../auth/lockout';
 import { generateProvisionalPassword, hashPassword } from '../auth/password.util';
 import { ROLE, ROLE_LABELS, isSingleAccount, type ManagedRole } from '../common/roles';
+import { MANAGER_FIELDS, type UserWithManager } from '../common/serializers';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 
@@ -16,12 +17,6 @@ export interface ProvisionedUser {
   user: UserWithManager;
   provisionalPassword: string;
 }
-
-/** O usuário com o gerente resolvido — é a forma que o serializer espera. */
-export type UserWithManager = User & { manager: Pick<User, 'id' | 'fullName'> | null };
-
-/** Só o que o serializer precisa do gerente. Evita levar o hash de senha junto. */
-const MANAGER_FIELDS = { select: { id: true, fullName: true } } as const;
 
 /**
  * O motor de provisionamento, compartilhado pelas quatro rotas de usuário

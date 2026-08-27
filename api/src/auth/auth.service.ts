@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, UnprocessableEntityException } from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
+import { MANAGER_FIELDS, type UserWithManager } from '../common/serializers';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CLEARED_LOCKOUT,
@@ -25,8 +26,14 @@ export class AuthService {
    * sem distinguir "e-mail não existe" de "senha errada" — nem, agora, de
    * "conta trancada": dizer qual dos três seria dizer quais e-mails existem.
    */
-  async login(email: string, password: string): Promise<{ user: User; token: string }> {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+  async login(email: string, password: string): Promise<{ user: UserWithManager; token: string }> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      // O GERENTE junto, aqui e em toda releitura deste usuário abaixo: é a
+      // resposta do login que vira o usuário da sessão no app, e é dela que sai
+      // o "Meu gerente" do consultor. Ver [UserWithManager].
+      include: { manager: MANAGER_FIELDS },
+    });
 
     // E-mail desconhecido também paga o preço de um scrypt. Sem isso a
     // resposta volta rápido demais e o TEMPO responde o que a mensagem
@@ -99,9 +106,13 @@ export class AuthService {
   }
 
   /** Acertou: o contador e a trava somem, senão a conta erraria por herança. */
-  private async clearFailures(user: User): Promise<User> {
+  private async clearFailures(user: UserWithManager): Promise<UserWithManager> {
     if (user.failedLoginAttempts === 0 && user.lockedUntil === null) return user;
-    return this.prisma.user.update({ where: { id: user.id }, data: CLEARED_LOCKOUT });
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: CLEARED_LOCKOUT,
+      include: { manager: MANAGER_FIELDS },
+    });
   }
 
   /**
@@ -125,11 +136,15 @@ export class AuthService {
    * senha que o usuário acabou de digitar em mãos. É o que permite subir o
    * custo do scrypt depois sem pedir troca de senha a ninguém.
    */
-  private async upgradeHashIfStale(user: User, password: string): Promise<User> {
+  private async upgradeHashIfStale(
+    user: UserWithManager,
+    password: string,
+  ): Promise<UserWithManager> {
     if (!needsRehash(user.password)) return user;
     return this.prisma.user.update({
       where: { id: user.id },
       data: { password: await hashPassword(password) },
+      include: { manager: MANAGER_FIELDS },
     });
   }
 
@@ -148,7 +163,7 @@ export class AuthService {
     currentPassword: string,
     newPassword: string,
     currentTokenHash?: string,
-  ): Promise<User> {
+  ): Promise<UserWithManager> {
     if (!(await verifyPassword(currentPassword, user.password))) {
       throw new BadRequestException('Senha atual incorreta');
     }
@@ -174,6 +189,7 @@ export class AuthService {
         mustChangePassword: false,
         ...CLEARED_LOCKOUT,
       },
+      include: { manager: MANAGER_FIELDS },
     });
 
     await this.prisma.accessToken.deleteMany({

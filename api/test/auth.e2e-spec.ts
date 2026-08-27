@@ -35,6 +35,83 @@ describe('Auth (e2e)', () => {
     expect(response.body.data.user.initials).toBe('JS');
   });
 
+  /**
+   * O GERENTE do consultor vem em TODA porta de sessão — login, `/me` e a troca
+   * de senha —, porque é dessas três, e só dessas três, que sai o usuário que o
+   * app guarda como sessão. É o que faz a tela do consultor dizer "Meu gerente:
+   * Beatriz Nogueira" e a confirmação de envio dizer para quem a permuta vai.
+   *
+   * Existe porque faltava: `managerName` era testado na listagem e no
+   * provisionamento (rotas de admin, que sempre incluíram a relação) e em
+   * nenhuma rota de sessão. As três respostas traziam `managerId` preenchido e
+   * `managerName: null`, e o app caía nos textos genéricos ("—", "seu gerente")
+   * com a suíte inteira verde.
+   */
+  describe('o usuário da sessão sabe quem é o gerente dele', () => {
+    it('no login', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: SEED_PASSWORD })
+        .expect(200);
+
+      expect(response.body.data.user.managerId).toBe(MANAGER.beatriz);
+      expect(response.body.data.user.managerName).toBe('Beatriz Nogueira');
+    });
+
+    it('ao retomar a sessão pelo /me', async () => {
+      const token = await loginAs(app, JOAO);
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/me')
+        .set({ Authorization: `Bearer ${token}` })
+        .expect(200);
+
+      expect(response.body.data.managerId).toBe(MANAGER.beatriz);
+      expect(response.body.data.managerName).toBe('Beatriz Nogueira');
+    });
+
+    it('na resposta da troca de senha', async () => {
+      const token = await loginAs(app, JOAO);
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/auth/password')
+        .set({ Authorization: `Bearer ${token}` })
+        .send({ currentPassword: SEED_PASSWORD, newPassword: 'nova-senha-123' })
+        .expect(200);
+
+      expect(response.body.data.managerName).toBe('Beatriz Nogueira');
+    });
+
+    /**
+     * O caminho ESCONDIDO: errar a senha antes de acertar faz o login reler o
+     * usuário para zerar o contador de tentativas, e essa releitura é outra
+     * consulta — que também precisa trazer o gerente. Quem tivesse errado a
+     * senha uma vez entraria sem o nome, e só ele.
+     */
+    it('mesmo quando o login vem depois de uma tentativa errada', async () => {
+      await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: 'senha-errada' })
+        .expect(400);
+
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: JOAO, password: SEED_PASSWORD })
+        .expect(200);
+
+      expect(response.body.data.user.managerName).toBe('Beatriz Nogueira');
+    });
+
+    /** Quem não tem gerente continua sem: o campo é do consultor. */
+    it('e quem não tem gerente responde null, não um nome vazio', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/auth/login')
+        .send({ email: ADMIN, password: SEED_PASSWORD })
+        .expect(200);
+
+      expect(response.body.data.user.managerId).toBeNull();
+      expect(response.body.data.user.managerName).toBeNull();
+    });
+  });
+
   it('senha errada não loga', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
