@@ -16,13 +16,30 @@ import { PrismaClient } from '@prisma/client';
  * O pool fica com o `pg` (padrão de 10 conexões). Não há PRAGMA a ajustar aqui:
  * concorrência de leitura e escrita é o comportamento normal do Postgres, e era
  * justamente o que os PRAGMAs do SQLite tentavam emular.
+ *
+ * O TAMANHO DO POOL é ajustável por DATABASE_POOL_MAX, e existe por causa de
+ * hospedagem sem servidor. Num servidor de verdade há UM processo e UM pool de
+ * dez, e a conta fecha. Numa função (ver src/serverless.ts) há uma instância
+ * por requisição simultânea, cada uma com o pool dela: trinta chamadas ao mesmo
+ * tempo viram trezentas conexões pedidas, e o Postgres gerenciado — cujo plano
+ * gratuito costuma parar em algumas dezenas — recusa. O sintoma é
+ * `too many connections` sob carga, justamente quando o sistema está sendo
+ * usado, e some sozinho quando alguém vai investigar.
+ *
+ * Em função, portanto: `DATABASE_POOL_MAX=1` e a URL do POOLER do provedor (no
+ * Neon, o host com `-pooler`), que é quem multiplexa de verdade. O padrão
+ * continua sendo 10 — quem roda o `main.ts` não precisa saber que isto existe.
  */
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
+    const configured = Number(process.env.DATABASE_POOL_MAX);
+    const max = Number.isInteger(configured) && configured > 0 ? configured : undefined;
+
     super({
       adapter: new PrismaPg({
         connectionString: process.env.DATABASE_URL ?? 'postgresql://localhost:5432/barter_dev',
+        ...(max === undefined ? {} : { max }),
       }),
     });
   }
