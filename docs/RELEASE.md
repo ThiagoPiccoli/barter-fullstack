@@ -71,22 +71,26 @@ de debug.
 
 ---
 
-## 2. Credencial de distribuição depreciada 🟡
+## 2. Credencial de distribuição 🟡 — falta só o secret
 
-**Onde:** [`.github/workflows/distribute.yml`](../.github/workflows/distribute.yml)
+O workflow já usa o caminho atual (conta de serviço lida por
+`GOOGLE_APPLICATION_CREDENTIALS`). O `--token` que estava aqui era o login de CI
+legado do firebase-tools, **descontinuado** — e o secret que ele lia
+(`FIREBASE_TOKEN`) nunca existiu neste repositório: o log mostrava `--token ""` e
+`Failed to authenticate, have you run firebase login?`. A distribuição nunca
+autenticou desde que o workflow passou a rodar.
 
-```yaml
---token "${{ secrets.FIREBASE_TOKEN }}"
-```
+**O que falta fazer, uma vez:**
 
-O `firebase-tools --token` (login CI legado) está **descontinuado** e deixa de
-funcionar sem aviso útil. O caminho atual é uma **conta de serviço**:
+1. No projeto Firebase (`barter-app-f6219`), criar uma conta de serviço com o
+   papel *Firebase App Distribution Admin*.
+2. Baixar o JSON da chave.
+3. Guardar o conteúdo **inteiro** do JSON no secret
+   `FIREBASE_SERVICE_ACCOUNT` (Settings → Secrets and variables → Actions):
 
-1. Criar a conta de serviço no projeto Firebase com o papel *Firebase App
-   Distribution Admin*.
-2. Guardar o JSON da chave como secret e expor via
-   `GOOGLE_APPLICATION_CREDENTIALS`.
-3. Trocar a linha do `--token` por essa variável.
+   ```bash
+   gh secret set FIREBASE_SERVICE_ACCOUNT < caminho/da/chave.json
+   ```
 
 Melhor ainda, se a conta permitir: **Workload Identity Federation** (OIDC), que
 dispensa guardar chave de longa duração no GitHub.
@@ -104,12 +108,14 @@ Itens que aparecem junto com a primeira publicação de verdade:
 - **`versionCode` / `versionName`.** Hoje saem do `pubspec.yaml` (`1.0.0+1`) e
   ninguém os incrementa. Dois envios com o mesmo `versionCode` são recusados
   pela loja; o caminho é derivar do número da execução do CI ou de uma *tag*.
-- **`API_URL` do build de release.** O padrão é `http://localhost:3333`
-  ([`api_client.dart`](../app/lib/services/api/api_client.dart)); o APK
-  distribuído hoje aponta para lugar nenhum. Precisa entrar como
-  `--dart-define=API_URL=https://...` no passo de build — e **em https**, que é
-  o que a política de rede do app já exige de qualquer host que não seja
-  localhost.
+- **`API_URL` do build de release.** ✅ Resolvido no workflow: o passo de build
+  passa `--dart-define=API_URL=${{ vars.API_URL }}`. Falta **definir a variável**
+  `API_URL` (Settings → Secrets and variables → Actions → Variables) com o
+  endereço da API, em **https** — que é o que a política de rede do app exige de
+  qualquer host que não seja localhost. Enquanto ela não existir, o workflow
+  recusa o build em vez de produzir um APK apontando para `localhost:3333`
+  (o padrão de [`api_client.dart`](../app/lib/services/api/api_client.dart)).
+  Ver [DEPLOY.md](DEPLOY.md).
 - **Ofuscação.** `flutter build apk --obfuscate --split-debug-info=...` para o
   release público, guardando os símbolos para conseguir ler os relatórios de
   falha depois.

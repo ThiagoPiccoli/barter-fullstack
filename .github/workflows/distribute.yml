@@ -7,10 +7,12 @@
 # Agora ele espera o CI: `workflow_run` só entrega o APK depois que as duas
 # suítes passaram. Suíte vermelha não vira build na mão dos testadores.
 # PENDÊNCIAS DE RELEASE — ver docs/RELEASE.md antes de publicar de verdade:
-#   1. o APK sai assinado com a chave de DEBUG (item 1, o mais grave);
-#   2. `--token` do firebase-tools está descontinuado (item 2);
-#   3. o build não define API_URL, então o APK aponta para localhost (item 3).
-# Nada disso atrapalha o desenvolvimento; tudo isso bloqueia a publicação.
+#   1. o APK sai assinado com a chave de DEBUG (item 1, o mais grave, e ainda
+#      aberto: vale para o ambiente de teste também).
+# Os itens 2 e 3 (credencial depreciada e API_URL) foram resolvidos aqui, mas
+# dependem de duas configurações que só existem fora do repositório — o secret
+# FIREBASE_SERVICE_ACCOUNT e a variável API_URL. O passo "Conferir configuração"
+# abaixo recusa o build enquanto faltar uma delas, dizendo qual e onde definir.
 
 name: Build and distribute APK
 
@@ -44,13 +46,60 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter build apk --release
-
-      - name: Distribute to Firebase App Distribution
+      # AS DUAS CONFIGURAÇÕES QUE FALTAM FALHAM EM SILÊNCIO, cada uma do seu
+      # jeito, e é por isso que a conferência vem antes do build de cinco
+      # minutos em vez de depois:
+      #
+      # - sem API_URL o build passa e o APK sai apontando para
+      #   `http://localhost:3333` (o padrão de api_client.dart). Ninguém percebe
+      #   no CI: o erro aparece no aparelho do testador, como "não conecta";
+      #
+      # - sem a credencial o `firebase-tools` recebe uma string vazia e responde
+      #   "Failed to authenticate, have you run firebase login?" — mensagem que
+      #   manda procurar login local numa máquina que nunca teve um.
+      - name: Conferir configuração da distribuição
+        env:
+          API_URL: ${{ vars.API_URL }}
+          SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
+          faltou=0
+          if [ -z "$API_URL" ]; then
+            echo "::error::A variável API_URL não está definida. Sem ela o APK aponta para localhost e não conversa com servidor nenhum. Defina em Settings → Secrets and variables → Actions → Variables, como https://SEU-PROJETO.vercel.app (https é exigido pela política de rede do app)."
+            faltou=1
+          fi
+          if [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "::error::O secret FIREBASE_SERVICE_ACCOUNT não está definido. Crie uma conta de serviço no projeto Firebase com o papel 'Firebase App Distribution Admin', baixe o JSON da chave e guarde o conteúdo inteiro nesse secret. Ver docs/RELEASE.md, item 2."
+            faltou=1
+          fi
+          [ "$faltou" -eq 0 ] || exit 1
+
+      - name: Build do APK
+        run: flutter build apk --release --dart-define=API_URL=${{ vars.API_URL }}
+
+      # O APK fica guardado na execução mesmo quando a distribuição falha: é o
+      # que permite instalar na mão enquanto a esteira do Firebase não está de
+      # pé, sem ter de reconstruir localmente.
+      - name: Guardar o APK na execução
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-${{ github.event.workflow_run.head_sha }}
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+
+      # A CREDENCIAL, pelo caminho atual. O `--token` que estava aqui é o login
+      # de CI legado do firebase-tools, descontinuado — e o secret que ele lia
+      # nunca existiu neste repositório, então a distribuição nunca autenticou.
+      # A conta de serviço é lida por GOOGLE_APPLICATION_CREDENTIALS, que quer
+      # um CAMINHO, não o conteúdo: daí o arquivo temporário.
+      - name: Distribute to Firebase App Distribution
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          umask 077
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-service-account.json"
           npx firebase-tools appdistribution:distribute \
             build/app/outputs/flutter-apk/app-release.apk \
             --app 1:1030524586097:android:c613df505800ff5ae7b3d0 \
             --groups "testers" \
-            --release-notes "Build automático a partir do commit ${{ github.event.workflow_run.head_sha }}" \
-            --token "${{ secrets.FIREBASE_TOKEN }}"
+            --release-notes "Build automático a partir do commit ${{ github.event.workflow_run.head_sha }}"
