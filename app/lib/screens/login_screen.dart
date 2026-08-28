@@ -1,8 +1,6 @@
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../data/app_data.dart';
-import '../data/demo_seed.dart';
 import '../services/api/api_client.dart';
 import '../widgets/common_widgets.dart';
 import '../branding/active_brand.dart';
@@ -14,25 +12,6 @@ class LoginScreen extends StatefulWidget {
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
-
-/// Uma conta do dataset de demonstração no atalho de acesso rápido. Guarda só
-/// a caixa postal — o domínio vem da marca ativa, como no resto do app.
-class _DemoAccount {
-  final String label;
-  final String mailbox;
-  final IconData icon;
-  const _DemoAccount(this.label, this.mailbox, this.icon);
-}
-
-/// Um login por PAPEL, na mesma ordem de alcance do RBAC do servidor
-/// (api/src/common/roles.ts). Só aparece em build de debug — ver abaixo.
-const _demoAccounts = [
-  _DemoAccount('Admin', 'admin', Icons.admin_panel_settings_outlined),
-  _DemoAccount('Gerente', 'gerente', Icons.insights_outlined),
-  _DemoAccount('Comitê', 'comite', Icons.groups_2_outlined),
-  _DemoAccount('Faturista', 'faturista', Icons.receipt_long_outlined),
-  _DemoAccount('Consultor', 'joao.silva', Icons.person_outlined),
-];
 
 class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
@@ -66,13 +45,6 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  /// Preenche o formulário com uma conta do seed, sem entrar: quem confere qual
-  /// papel está prestes a abrir é quem toca em "Entrar".
-  void _fill(String mailbox) {
-    _emailCtrl.text = '$mailbox@${brand.identity.emailDomain}';
-    _passCtrl.text = demoSeedPassword;
   }
 
   /// Não há recuperação por e-mail: quem provisiona e redefine senhas é o
@@ -185,40 +157,6 @@ class _LoginScreenState extends State<LoginScreen> {
                             : const Text('Entrar'),
                       ),
                     ),
-                    // Atalhos da demonstração só existem em build de debug: em
-                    // release este bloco é removido na compilação (kDebugMode
-                    // é constante). Sem isso, o app de produção sairia com as
-                    // credenciais do seed impressas na tela de login.
-                    if (kDebugMode) ...[
-                      const SizedBox(height: 16),
-                      const Divider(),
-                      const SizedBox(height: 12),
-                      Text(
-                        'Acesso rápido (demonstração):',
-                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        alignment: WrapAlignment.center,
-                        children: [
-                          for (final account in _demoAccounts)
-                            OutlinedButton.icon(
-                              onPressed: () => _fill(account.mailbox),
-                              icon: Icon(account.icon, size: 15),
-                              label: Text(account.label, style: const TextStyle(fontSize: 12)),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: AppColors.primaryMedium,
-                                side: BorderSide(color: AppColors.primaryMedium),
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
                   ],
                 ),
               ),

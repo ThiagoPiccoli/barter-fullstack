@@ -6,6 +6,18 @@
 .env
 .env.test.local
 
+# A SAÍDA DO PROVISIONAMENTO — senhas em texto puro.
+#
+# `scripts/provision-tenant.ts` sorteia uma senha por conta e as escreve aqui;
+# `scripts/credentials-pdf.mjs` as compõe na folha de acessos. É a única cópia
+# legível que existe delas, e este repositório é PÚBLICO: um `git add -A`
+# distraído publicaria as credenciais do ambiente inteiro. O padrão é largo de
+# propósito — é mais barato ignorar um arquivo a mais do que vazar um.
+credenciais*.json
+credentials*.json
+acessos*.pdf
+acessos*.html
+
 # SQLite (dev/test) e artefatos do Prisma
 *.db
 *.db-journal

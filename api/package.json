@@ -22,6 +22,7 @@
     "test:e2e": "dotenv -e .env.test.local -e .env.test -- jest --config ./test/jest-e2e.json --runInBand",
     "db:seed": "prisma db seed",
     "db:reset": "prisma migrate reset --force && npm run db:seed",
+    "provision": "ts-node scripts/provision-tenant.ts",
     "password:reset": "ts-node scripts/reset-password.ts",
     "pretest:e2e": "dotenv -e .env.test.local -e .env.test -- prisma migrate deploy"
   },
