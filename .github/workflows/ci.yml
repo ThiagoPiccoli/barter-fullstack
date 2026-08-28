@@ -36,9 +36,15 @@ jobs:
     # morria na primeira linha (`prisma.config.ts` exige DATABASE_URL) e o
     # portão inteiro caía ANTES de rodar lint, build ou teste algum — vermelho
     # desde a migração, com o `distribute.yml` pulando por consequência.
+    # A VERSÃO acompanha a de produção (Neon, Postgres 18), e é nessa direção
+    # que ela deve ser mantida. O ambiente de teste nasceu no 18 e o CI estava
+    # no 16: a saída certa para essa diferença é subir o portão até onde o
+    # sistema roda de verdade, não rebaixar o servidor até onde o portão está —
+    # testar numa versão que ninguém usa não prova nada sobre a que todo mundo
+    # usa. Trocando o banco de produção um dia, esta linha muda junto.
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
