@@ -175,3 +175,58 @@ API nenhuma nesse endereço. Precisa entrar como
 `--dart-define=API_URL=https://agrobarter-api.fly.dev`, em **https**: a política
 de rede do app recusa texto puro para qualquer host que não seja localhost. O Fly
 já serve em https (`force_https` no `fly.toml`).
+
+---
+
+## 5. A versão web (Firebase Hosting)
+
+O mesmo app, no navegador, para quem só quer **ver** sem instalar APK:
+
+**https://barter-app-f6219.firebaseapp.com**
+
+O Hosting serve o site nos **dois** endereços — este e
+`https://barter-app-f6219.web.app` —, e o conteúdo é o mesmo arquivo. Compartilhe
+o `.firebaseapp.com`: o `.web.app` já recebeu um deploy antigo deste projeto, e
+quem abriu aquele endereço na época tem um **service worker** do Flutter
+registrado no navegador, que serve o app em cache antes de ir à rede. O sintoma é
+inconfundível — abre a primeira versão do app, sem erro nenhum.
+
+Não é o Hosting: dá para conferir comparando o `main.dart.js` servido com o que
+saiu do build (`curl -s <url>/main.dart.js | shasum -a 256`), que bate. Quem
+esbarrar nisso resolve no próprio navegador, com **Ctrl+Shift+R** (ou DevTools →
+Application → Service Workers → *Unregister*). O cache do service worker vence
+sozinho depois de uma hora, então o endereço se recupera com o tempo — mas não a
+tempo de salvar a primeira impressão de um testador.
+
+Serve para mostrar o produto a quem não tem Android à mão e para testar em tela
+grande. Não substitui o APK: é o mesmo código Flutter, mas o navegador não
+guarda o token no Keychain do sistema (o `flutter_secure_storage` cai no
+armazenamento do próprio navegador) e o compartilhamento do PDF vira download.
+
+Para publicar uma versão nova, da raiz do repositório:
+
+```bash
+cd app && flutter build web --release \
+  --dart-define=API_URL=https://agrobarter-api.fly.dev
+cd .. && firebase deploy --only hosting
+```
+
+O `--dart-define` é obrigatório aqui pelo mesmo motivo do APK: sem ele o build
+sai apontando para `localhost:3333`. E é um passo manual — `build/web` não é
+versionado, então **quem publica constrói antes**; não há workflow fazendo isso.
+
+**O que precisou mudar para a web existir:**
+
+- `api_client.dart` importava `dart:io` só para reconhecer `SocketException`, e
+  `dart:io` não compila para o navegador — o `flutter build web` falhava inteiro.
+  A distinção foi para trás de um import condicional
+  ([`connection_error.dart`](../app/lib/services/api/connection_error.dart)); no
+  nativo a mensagem "Verifique sua rede" continua igual.
+- `CORS_ORIGINS` no [`fly.toml`](../api/fly.toml). Sem ela, `NODE_ENV=production`
+  fecha a API para toda origem, e a versão web tomaria erro de CORS em cada
+  chamada. **Mudando o endereço do site, essa variável muda junto** — e ela lista
+  os dois domínios que o Hosting serve (`.web.app` e `.firebaseapp.com`), porque
+  para o navegador são origens diferentes.
+
+O app nativo não é afetado por nada disso: requisição nativa não manda `Origin`,
+então a política fechada nunca valeu para ele.

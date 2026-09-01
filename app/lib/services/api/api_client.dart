@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:http/http.dart' as http;
+
+import 'connection_error.dart';
 
 /// Erro de API legível para o usuário. [message] vem do backend quando
 /// disponível (regras de negócio chegam em pt-BR prontas para exibir).
@@ -144,10 +145,13 @@ class ApiClient {
       response = await http.Response.fromStream(streamed);
     } on TimeoutException {
       throw const ApiException(0, 'O envio do arquivo demorou demais. Tente novamente.');
-    } on SocketException {
-      throw const ApiException(0, 'Sem conexão com o servidor. Verifique sua rede.');
-    } on http.ClientException {
-      throw const ApiException(0, 'Falha ao enviar o arquivo.');
+    } on http.ClientException catch (error) {
+      throw ApiException(
+        0,
+        isConnectionFailure(error)
+            ? 'Sem conexão com o servidor. Verifique sua rede.'
+            : 'Falha ao enviar o arquivo.',
+      );
     }
 
     final decoded = response.body.isEmpty ? null : _tryDecode(response.body);
@@ -187,10 +191,17 @@ class ApiClient {
       response = await http.Response.fromStream(streamed);
     } on TimeoutException {
       throw const ApiException(0, 'O servidor demorou para responder. Tente novamente.');
-    } on SocketException {
-      throw const ApiException(0, 'Sem conexão com o servidor. Verifique sua rede.');
-    } on http.ClientException {
-      throw const ApiException(0, 'Falha de comunicação com o servidor.');
+    } on http.ClientException catch (error) {
+      // As duas cláusulas viraram uma: o `package:http` já entrega a falha de
+      // socket como `ClientException`, e quem separa os casos é o
+      // `isConnectionFailure` — que no nativo continua reconhecendo a
+      // `SocketException` por baixo, e na web responde `false`.
+      throw ApiException(
+        0,
+        isConnectionFailure(error)
+            ? 'Sem conexão com o servidor. Verifique sua rede.'
+            : 'Falha de comunicação com o servidor.',
+      );
     }
 
     final decoded = response.body.isEmpty ? null : _tryDecode(response.body);

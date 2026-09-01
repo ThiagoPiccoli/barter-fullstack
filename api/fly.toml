@@ -30,6 +30,19 @@ primary_region = "gru"
   # servidor avisa na subida, e este é o aviso atendido.
   TRUST_PROXY = "1"
 
+  # Quem pode chamar esta API de dentro de um navegador.
+  #
+  # Sem a variável, `NODE_ENV=production` fecha a porta para TODA origem
+  # (`origin: false`, em app.setup.ts) — que era o certo enquanto só existia o
+  # app nativo: requisição nativa não manda `Origin` e nunca passou por aqui.
+  # A versão web hospedada no Firebase passa, e por isso precisa ser nomeada.
+  #
+  # Os dois endereços são o MESMO site: o Firebase Hosting serve todo projeto
+  # em `.web.app` e em `.firebaseapp.com`, e o navegador trata cada um como uma
+  # origem sua. Listar só um faz o app funcionar por um endereço e falhar pelo
+  # outro, com o erro de CORS que não diz o que houve.
+  CORS_ORIGINS = "https://barter-app-f6219.web.app,https://barter-app-f6219.firebaseapp.com"
+
 [deploy]
   # As migrations rodam ANTES da versão nova receber tráfego, e num contêiner à
   # parte. Falhando, o deploy para e a versão antiga continua no ar — que é o

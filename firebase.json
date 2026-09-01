@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "Hospedagem da versão WEB do app, para testar no navegador sem instalar APK.",
+    "O diretório publicado é a saída do `flutter build web`, que o app/.gitignore",
+    "não versiona: quem publica constrói antes. Ver docs/DEPLOY.md.",
+    "",
+    "O `rewrites` manda toda rota para o index.html porque o Flutter web resolve",
+    "a navegação do lado do cliente — sem ele, recarregar a página numa tela",
+    "interna pediria ao Hosting um arquivo que não existe e voltaria 404.",
+    "",
+    "Os `headers` existem para o app ATUALIZAR. O Flutter web guarda os assets",
+    "em cache agressivo pelo service worker, e o par index.html +",
+    "flutter_service_worker.js é o único caminho por onde uma versão nova se",
+    "anuncia: cacheado, o testador ficaria preso na build antiga até limpar o",
+    "navegador na mão."
+  ],
+  "hosting": {
+    "public": "app/build/web",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ],
+    "headers": [
+      {
+        "source": "/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "_comment": [
+          "A raiz precisa da própria regra. O Hosting casa `source` com o",
+          "CAMINHO PEDIDO, não com o arquivo entregue: quem abre",
+          "`https://barter-app-f6219.web.app` pede `/`, que a regra de",
+          "`/index.html` acima não alcança — o mesmo arquivo saía com",
+          "`max-age=3600`. Como `/` é justamente o endereço que se compartilha,",
+          "era o único jeito de entrar no site e era o que ficava uma hora preso",
+          "na versão velha."
+        ],
+        "source": "/",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/flutter_service_worker.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      }
+    ]
+  }
+}
