@@ -63,6 +63,16 @@
     "do pacote na árvore, e a 8.x mantém o formato (CJS + ESM) e o export nomeado",
     "`deepmerge`, que é tudo que o @prisma/config usa dele.",
     "",
+    "mysql2: o prisma prende a 3.15.3, e as <3.22.0 aceitam o servidor REBAIXAR",
+    "a autenticação para `mysql_clear_password` — o cliente entrega a senha em",
+    "texto puro a quem pedir. Grave onde é alcançável; aqui não é alcançável de",
+    "forma nenhuma: este projeto fala com PostgreSQL pelo @prisma/adapter-pg, e",
+    "o driver de MySQL vem junto na caixa sem nunca ser carregado. O override",
+    "existe pelo motivo de sempre — o alarme precisa significar algo — e porque",
+    "`npm audit fix --force` \"resolve\" DESCENDO o prisma para a 6.19.3, um",
+    "major inteiro para trás no que gera o client e aplica as migrations. O",
+    "escopo é o prisma porque é a única entrada do pacote na árvore.",
+    "",
     "REVISAR quando @nestjs/swagger, exceljs e prisma subirem as suas: um",
     "override que sobreviveu ao problema que o motivou é dívida silenciosa."
   ],
@@ -74,7 +84,8 @@
       "uuid": "^11.1.1"
     },
     "prisma": {
-      "deepmerge-ts": "^8.0.1"
+      "deepmerge-ts": "^8.0.1",
+      "mysql2": "^3.24.2"
     }
   },
   "dependencies": {
