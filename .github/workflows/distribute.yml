@@ -64,7 +64,7 @@ jobs:
         run: |
           faltou=0
           if [ -z "$API_URL" ]; then
-            echo "::error::A variável API_URL não está definida. Sem ela o APK aponta para localhost e não conversa com servidor nenhum. Defina em Settings → Secrets and variables → Actions → Variables, como https://SEU-PROJETO.vercel.app (https é exigido pela política de rede do app)."
+            echo "::error::A variável API_URL não está definida. Sem ela o APK aponta para localhost e não conversa com servidor nenhum. Defina em Settings → Secrets and variables → Actions → Variables, como https://agrobarter-api.fly.dev (https é exigido pela política de rede do app)."
             faltou=1
           fi
           if [ -z "$SERVICE_ACCOUNT" ]; then
