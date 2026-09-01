@@ -1,0 +1,26 @@
+# O que NÃO entra na imagem.
+#
+# `node_modules` é o item que importa: copiá-lo de fora traria os binários
+# compilados para macOS/arm64 por cima dos que o `npm ci` instala no contêiner,
+# e o Prisma falharia na primeira consulta. O `npm ci` da build reinstala tudo
+# para a plataforma certa.
+node_modules
+dist
+coverage
+
+# Segredos e bancos locais não têm o que fazer numa imagem publicada.
+.env
+.env.test.local
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+credenciais*.json
+credentials*.json
+acessos*.pdf
+acessos*.html
+
+.git
+.gitignore
+Dockerfile
+.dockerignore

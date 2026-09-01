@@ -17,18 +17,16 @@ import { PrismaClient } from '@prisma/client';
  * concorrência de leitura e escrita é o comportamento normal do Postgres, e era
  * justamente o que os PRAGMAs do SQLite tentavam emular.
  *
- * O TAMANHO DO POOL é ajustável por DATABASE_POOL_MAX, e existe por causa de
- * hospedagem sem servidor. Num servidor de verdade há UM processo e UM pool de
- * dez, e a conta fecha. Numa função (ver src/serverless.ts) há uma instância
- * por requisição simultânea, cada uma com o pool dela: trinta chamadas ao mesmo
- * tempo viram trezentas conexões pedidas, e o Postgres gerenciado — cujo plano
- * gratuito costuma parar em algumas dezenas — recusa. O sintoma é
- * `too many connections` sob carga, justamente quando o sistema está sendo
- * usado, e some sozinho quando alguém vai investigar.
+ * O TAMANHO DO POOL é ajustável por DATABASE_POOL_MAX. O padrão de dez serve a
+ * um processo só, que é o caso normal; a variável existe para quando houver
+ * MAIS DE UM — cada máquina abre o pool dela, e o total é o que o banco vê. Num
+ * Postgres gerenciado de plano gratuito, cujo teto de conexões é modesto,
+ * quatro máquinas com dez cada já disputam o limite, e o sintoma aparece como
+ * `too many connections` sob carga, justamente quando o sistema está em uso.
  *
- * Em função, portanto: `DATABASE_POOL_MAX=1` e a URL do POOLER do provedor (no
- * Neon, o host com `-pooler`), que é quem multiplexa de verdade. O padrão
- * continua sendo 10 — quem roda o `main.ts` não precisa saber que isto existe.
+ * Vale sempre apontar para a URL do POOLER do provedor (no Neon, o host com
+ * `-pooler`): é ele que multiplexa de verdade, e o pool daqui passa a ser um
+ * teto local em cima de um teto que já existe.
  */
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {

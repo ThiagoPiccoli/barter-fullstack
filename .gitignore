@@ -6,3 +6,15 @@ node_modules/
 # ruído de runtime em todo diff — e o arquivo chegou a ser commitado uma vez,
 # com 191 linhas de churn.
 *.log
+
+# SAÍDA DO PROVISIONAMENTO — senhas em texto puro.
+#
+# O `api/.gitignore` já barra estes nomes, mas ele só vale de `api/` para
+# dentro, e o caminho natural de quem roda o comando de lá é `--out=../algo`:
+# um nível acima é a RAIZ, onde aquele arquivo não alcançava. Como o
+# repositório é público, a falha teria uma consequência só — publicar as
+# credenciais do ambiente inteiro. Repetido aqui de propósito.
+credenciais*.json
+credentials*.json
+acessos*.pdf
+acessos*.html

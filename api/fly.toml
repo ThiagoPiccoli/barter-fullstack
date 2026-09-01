@@ -1,0 +1,65 @@
+# A API no Fly.
+#
+# Aqui ela roda como sempre rodou: um processo que sobe, escuta uma porta e
+# fica de pé. É o `main.ts` inteiro, sem adaptação — inclusive a limpeza
+# periódica de sessões vencidas, que só faz sentido em processo longo.
+#
+# O que NÃO está neste arquivo é a DATABASE_URL. Ela é segredo e entra por
+# `fly secrets set`, que a guarda cifrada e a injeta no ambiente da máquina;
+# este arquivo é versionado num repositório público.
+
+app = "agrobarter-api"
+
+# São Paulo, para ficar ao lado do banco. O app faz uma requisição à API e a
+# API faz várias consultas ao banco: separar os dois entre continentes faz cada
+# uma dessas consultas pagar a travessia. O Neon está em `sa-east-1`, que é
+# esta mesma praça.
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3333"
+
+  # O Fly põe um proxy na frente de toda máquina. Sem esta variável o Express
+  # enxerga o IP DELE em toda requisição, e o limite de dez tentativas de login
+  # por minuto passa a valer para todos os usuários somados — o primeiro que
+  # errar a senha tira os outros do ar. Não gera erro em lugar nenhum; o
+  # servidor avisa na subida, e este é o aviso atendido.
+  TRUST_PROXY = "1"
+
+[deploy]
+  # As migrations rodam ANTES da versão nova receber tráfego, e num contêiner à
+  # parte. Falhando, o deploy para e a versão antiga continua no ar — que é o
+  # comportamento desejado: banco a meio caminho com código novo em cima é o
+  # jeito mais rápido de transformar um deploy ruim em incidente.
+  release_command = "npx prisma migrate deploy"
+
+[http_service]
+  internal_port = 3333
+  force_https = true
+
+  # A máquina dorme sozinha quando ninguém usa e acorda na primeira requisição.
+  # Para um ambiente de teste é o arranjo certo: custo perto de zero enquanto
+  # ninguém está testando. O preço é a primeira chamada depois de uma pausa
+  # demorar alguns segundos — e ela soma com o banco do Neon acordando, que faz
+  # o mesmo. Não é defeito; some da segunda em diante.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    # A sonda que já existia na API. Ela confere o banco também, então uma
+    # máquina que subiu mas não alcança o Neon é reprovada aqui em vez de
+    # receber tráfego e responder 500 a quem estiver usando.
+    path = "/health"
+    method = "GET"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
