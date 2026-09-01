@@ -98,8 +98,15 @@ jobs:
           umask 077
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/firebase-service-account.json"
+          # O App ID acompanha o PACOTE do app (com.agrobarter.app), e não o
+          # nome do projeto Firebase. O que estava aqui apontava para o registro
+          # antigo, `com.barter.barter_app`, herdado de quando o app se chamava
+          # assim — e o Firebase recusava o envio dizendo que o pacote do APK
+          # não batia com o do app. No Android o nome do pacote É a identidade:
+          # renomeá-lo criou um aplicativo diferente, e o registro tinha de
+          # acompanhar. Trocando o `applicationId` de novo, este id muda junto.
           npx firebase-tools appdistribution:distribute \
             build/app/outputs/flutter-apk/app-release.apk \
-            --app 1:1030524586097:android:c613df505800ff5ae7b3d0 \
+            --app 1:1030524586097:android:08848db8cecca878e7b3d0 \
             --groups "testers" \
             --release-notes "Build automático a partir do commit ${{ github.event.workflow_run.head_sha }}"
