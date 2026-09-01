@@ -4,7 +4,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import { generateProvisionalPassword, hashPassword } from '../src/auth/password.util';
 import { passwordProblem } from '../src/auth/password-policy';
-import { ROLE_LABELS, type Role } from '../src/common/roles';
+import { ROLE, ROLE_LABELS, type Role } from '../src/common/roles';
 import { seedDatabase } from '../prisma/seed-data';
 
 /**
@@ -114,6 +114,47 @@ async function pruneMovement(): Promise<void> {
   await prisma.accessToken.deleteMany();
 }
 
+/**
+ * Deixa só o ADMIN e as classes de produto — o ponto de partida de quem vai
+ * montar o sistema pelo próprio app.
+ *
+ * As CLASSES ficam, e isso não é exceção arbitrária: elas são o vocabulário
+ * fixo do domínio, e a API não tem como criá-las. `classes.controller.ts` só
+ * expõe leitura e o ajuste da REGRA, com o motivo escrito lá — "a lista é fixa;
+ * se um dia o negócio ganhar uma classe nova, ela entra por migration". Apagá-
+ * las deixaria o sistema sem categorias e sem caminho de volta.
+ *
+ * A UNIDADE também fica, uma só. É a mesma razão que o `bootstrap-admin.ts` já
+ * documenta: cadastrar usuário exige unidade, então um banco com admin e sem
+ * nenhuma seria um sistema incapaz de cadastrar a segunda pessoa. Da segunda em
+ * diante o admin cria pelo app.
+ *
+ * O resto — produtos, safras, tabela de preços, os outros usuários, produtores
+ * e permutas — sai inteiro, porque tudo isso o admin consegue criar pelas rotas
+ * que já existem.
+ */
+async function keepOnlyAdmin(): Promise<void> {
+  await prisma.barterItem.deleteMany();
+  await prisma.barterEvent.deleteMany();
+  await prisma.barter.deleteMany();
+  await prisma.versionPrice.deleteMany();
+  await prisma.barterVersion.deleteMany();
+  await prisma.season.deleteMany();
+  await prisma.priceHistoryEntry.deleteMany();
+  await prisma.product.deleteMany();
+  await prisma.producer.deleteMany();
+  await prisma.auditLog.deleteMany();
+  await prisma.accessToken.deleteMany();
+  await prisma.user.deleteMany({ where: { role: { not: ROLE.admin } } });
+
+  // Sobra UMA unidade: a do admin, para ele não ficar sem lotação. As demais
+  // saem, e o FK dos usuários para unidade é SetNull, então nada quebra.
+  const admin = await prisma.user.findFirst({ where: { role: ROLE.admin } });
+  if (admin?.unitId) {
+    await prisma.unit.deleteMany({ where: { id: { not: admin.unitId } } });
+  }
+}
+
 /** Sorteia e grava uma senha nova para cada conta, devolvendo o que foi sorteado. */
 async function repassword(): Promise<Credential[]> {
   const users = await prisma.user.findMany({ orderBy: { id: 'asc' } });
@@ -140,14 +181,19 @@ async function repassword(): Promise<Credential[]> {
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const confirmed = argv.includes('--yes');
+  const onlyAdmin = argv.includes('--only-admin');
   const out = argv.find((arg) => arg.startsWith('--out='))?.slice('--out='.length);
 
   console.log(`Banco alvo: ${targetDescription()}`);
 
   if (!confirmed) {
     console.error(
-      '\nEste comando APAGA o banco inteiro e o recria com usuários e catálogo.\n' +
-        'Confirme com --yes:\n\n  npm run provision -- --yes --out=../credenciais.json\n',
+      '\nEste comando APAGA o banco inteiro.\n' +
+        'Confirme com --yes:\n\n' +
+        '  npm run provision -- --yes --out=~/credenciais.json\n' +
+        '      pessoas e catálogo prontos, sem movimento\n\n' +
+        '  npm run provision -- --yes --only-admin --out=~/credenciais.json\n' +
+        '      só o admin e as classes; o resto se cria pelo app\n',
     );
     process.exitCode = 1;
     return;
@@ -156,8 +202,13 @@ async function main(): Promise<void> {
   console.log('Recriando pessoas e catálogo...');
   await seedDatabase(prisma);
 
-  console.log('Removendo produtores, permutas, histórico e auditoria...');
-  await pruneMovement();
+  if (onlyAdmin) {
+    console.log('Removendo tudo que o admin consegue criar pelo app...');
+    await keepOnlyAdmin();
+  } else {
+    console.log('Removendo produtores, permutas, histórico e auditoria...');
+    await pruneMovement();
+  }
 
   console.log('Sorteando as senhas...');
   const credentials = await repassword();
@@ -170,9 +221,11 @@ async function main(): Promise<void> {
   ]);
 
   console.log(
-    `\nPronto: ${credentials.length} contas, ${units} unidades, ${classes} classes, ` +
+    `\nPronto: ${credentials.length} conta(s), ${units} unidade(s), ${classes} classes, ` +
       `${products} produtos e ${prices} preços na tabela vigente.\n` +
-      `Produtores e permutas: 0 — o ambiente começa no zero de movimento.\n`,
+      (onlyAdmin
+        ? 'O admin monta o resto pelo app: unidades, produtos, safra, tabela e usuários.\n'
+        : 'Produtores e permutas: 0 — o ambiente começa no zero de movimento.\n'),
   );
 
   for (const item of credentials) {
