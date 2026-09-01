@@ -54,8 +54,19 @@ cd api
 fly auth login                     # abre o navegador
 fly apps create agrobarter-api     # o nome precisa estar livre no Fly inteiro
 fly secrets set DATABASE_URL="postgresql://...-pooler.../neondb?sslmode=require"
-fly deploy
+fly deploy --ha=false
+
+# O primeiro deploy pode falhar em alocar os IPs públicos. Ver abaixo.
+fly ips list
 ```
+
+O `fly apps create` vem antes do `fly secrets set` porque o segredo é gravado
+NO app: sem ele criado, o `secrets set` responde `Could not find App`.
+
+`--ha=false` porque o padrão cria **duas** máquinas, para deploy sem downtime.
+Num ambiente de teste isso é o dobro do custo sem ganho — e o
+`min_machines_running = 0` do `fly.toml` não desliga esse comportamento, que é
+do comando. Esquecendo o flag, `fly scale count 1` conserta depois.
 
 O `fly secrets set` vem **antes** do deploy porque o `release_command` do
 `fly.toml` roda `prisma migrate deploy` num contêiner à parte, antes de a versão
@@ -86,6 +97,22 @@ curl https://agrobarter-api.fly.dev/health
 que o `fly.toml` usa para decidir se uma máquina pode receber tráfego. Se vier
 erro aí, o problema é a `DATABASE_URL`, e não vale seguir para o passo 3;
 `fly logs` mostra a subida inteira.
+
+### Se o app não responder de fora
+
+O primeiro deploy deste app falhou em alocar os IPs públicos, com
+`error allocating ipv6 after detecting first deploy and presence of services`.
+O resto correu bem — migrations aplicadas, máquinas de pé, health check passando
+por dentro —, e o único sintoma era não existir endereço pelo qual chegar. O
+deploy **não** falha por causa disso: a mensagem passa no meio do log e o
+comando termina dizendo "Visit your newly deployed app".
+
+`fly ips list` vazio é o diagnóstico. A saída:
+
+```bash
+fly ips allocate-v6
+fly ips allocate-v4 --shared
+```
 
 ### A máquina dorme
 
