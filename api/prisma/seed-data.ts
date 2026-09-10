@@ -32,6 +32,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // Ordem respeita os FKs (filhos primeiro).
   await prisma.cprAreaOwner.deleteMany();
   await prisma.cprArea.deleteMany();
+  await prisma.cprGuarantor.deleteMany();
   await prisma.barterCpr.deleteMany();
   await prisma.creditor.deleteMany();
   await prisma.barterItem.deleteMany();
@@ -940,6 +941,161 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       },
     });
   }
+
+  /* ── A cédula pronta ──────────────────────────────────────────────── */
+  //
+  // UMA cédula completa no dataset, na PRM-2026-001 — a única já faturada, e
+  // por isso a que abre direto no botão "Cédula de Produto Rural" sem passar
+  // pelo faturamento. É o documento pronto para ser gerado: abrir a permuta e
+  // exportar o DOCX/PDF, sem digitar nada antes.
+  //
+  // Ela existe porque a tela da cédula tem dois estados muito diferentes — o
+  // formulário vazio (que as outras permutas já mostram) e o documento fechado
+  // — e o segundo não aparecia em demonstração nenhuma: chegar até ele custava
+  // uns quarenta campos digitados à mão, e ninguém faz isso duas vezes.
+  //
+  // TODO CAMPO QUE `cprGaps()` COBRA está preenchido, e é isso que faz
+  // `complete` vir `true` (a credora, que é a outra metade da conta, já está
+  // cadastrada mais acima). O Antônio é CASADO de propósito: é o que aciona o
+  // bloco de anuência do cônjuge, que fica vazio na maioria das cédulas e por
+  // isso é justamente o que ninguém vê antes de precisar dele.
+  const faturada = await prisma.barter.findUniqueOrThrow({
+    where: { code: 'PRM-2026-001' },
+  });
+  await prisma.barterCpr.create({
+    data: {
+      barterId: faturada.id,
+      number: 'CPR-2026-014',
+      // Emitida no dia do faturamento e vencendo na colheita — que é o que a
+      // CPR é: a promessa de entregar o grão que ainda está na lavoura.
+      //
+      // O VENCIMENTO é gravado ao MEIO-DIA UTC, e a hora não é enfeite: ele é
+      // uma data de calendário que sai impressa ("IV – VENCIMENTO: 30/06/2026"),
+      // e o app a lê em hora local. À meia-noite UTC, que é o que `at()` dá por
+      // omissão, o documento saía com 29/06 para quem está no Brasil — um dia a
+      // menos num prazo de entrega, dentro de um título executável. Meio-dia
+      // deixa a data certa de UTC-11 a UTC+11. O app não tem esse problema: ele
+      // grava o que o calendário devolve em hora local; quem precisa da hora é
+      // este dataset, que escreve UTC direto.
+      issuedAt: at(2026, 1, 12, 10, 30),
+      dueDate: at(2026, 6, 30, 12),
+
+      emitterNationality: 'brasileiro',
+      emitterMaritalStatus: 'casado',
+      emitterProfession: 'produtor rural',
+      emitterRg: '5.482.109-3 SSP/PR',
+      emitterAddress: 'Estrada da Boa Vista',
+      emitterAddressNumber: 'km 12',
+      emitterCity: 'Maringá/PR',
+      emitterCoopId: '4471',
+      // Coletados e não impressos: nenhuma cláusula do modelo os usa, e por
+      // isso `cprGaps()` não os cobra. Estão aqui para a tela mostrar o bloco
+      // da proposta preenchido como ele fica na vida real.
+      emitterCnh: '02938475610',
+      emitterFatherName: 'Sebastião Carvalho',
+      emitterMotherName: 'Therezinha Moraes Carvalho',
+      emitterEmail: 'antonio.carvalho@exemplo.com.br',
+
+      // O local da entrega é a unidade de retirada dele — o caso comum, e o
+      // que a tela sugere. Ele SAI no documento (cláusula V, "d").
+      deliveryPlace: 'Filial 02 – Gran. Santa T.',
+      mortgages: 'Hipoteca de 1º grau sobre a matrícula 18.442, junto ao Banco do Brasil S.A.',
+
+      spouseName: 'Marta Regina Carvalho',
+      spouseNationality: 'brasileira',
+      spouseProfession: 'produtora rural',
+      spouseDocument: '321.654.987-00',
+      spouseRg: '6.115.884-0 SSP/PR',
+
+      // O padrão da soja: 60 kg por saca, 14% de umidade, 1% de impurezas e
+      // 18% de teor de óleo. São os números do modelo recebido.
+      sackWeightKg: 60,
+      cultivar: 'BMX Ativa RR',
+      maxMoisture: 14,
+      maxImpurities: 1,
+      oilContent: 18,
+
+      invoiceNumber: '55.318',
+      duplicateNumber: '55.318-A',
+      // Com apólice, para a alínea "j" da cláusula XVIII aparecer no documento:
+      // ela só existe quando há seguro, e uma cédula sem seguro não a imprime.
+      insurancePolicy: 'AP-2026-778.412',
+
+      filledBy: patricia.fullName,
+      filledById: patricia.id,
+
+      // DUAS lavouras, e não uma: a cláusula VI as enumera ("(i)… e (ii)…"), e
+      // com uma só o documento nunca mostra a conjunção nem a segunda
+      // matrícula. A segunda é ARRENDADA — o dono do imóvel não é o emitente,
+      // que é o caso comum e a razão de o modelo nomear os dois separadamente.
+      areas: {
+        create: [
+          {
+            position: 0,
+            locality: 'Gleba Ribeirão Morangueiro',
+            city: 'Maringá/PR',
+            areaHa: 78.5,
+            withinLargerArea: false,
+            registryNumber: '18.442',
+            registryBook: '2-RG',
+            registryDistrict: 'Maringá/PR',
+            owners: {
+              create: [
+                { position: 0, name: 'Antônio Carvalho', document: '123.456.789-00' },
+                { position: 1, name: 'Marta Regina Carvalho', document: '321.654.987-00' },
+              ],
+            },
+          },
+          {
+            position: 1,
+            locality: 'Gleba Patrimônio Ivaí',
+            city: 'Doutor Camargo/PR',
+            // 45,05 ha de propósito: o zero à esquerda do bloco decimal é o
+            // caso em que o extenso e o algarismo já discordaram, e agora ele
+            // sai impresso em toda geração do documento — "quarenta e cinco
+            // vírgula zero cinco hectares". Ver `extensoDecimal`, no app.
+            areaHa: 45.05,
+            withinLargerArea: true,
+            registryNumber: '7.309',
+            registryBook: '2-RG',
+            registryDistrict: 'Floresta/PR',
+            owners: {
+              create: [{ position: 0, name: 'Espólio de Idalina Perotto', document: '456.789.123-00' }],
+            },
+          },
+        ],
+      },
+
+      // Um AVALISTA — coletado pela proposta e ainda não impresso (o modelo não
+      // tem cláusula de aval). Está aqui para o bloco mais longo do formulário
+      // abrir preenchido pelo menos uma vez.
+      guarantors: {
+        create: [
+          {
+            position: 0,
+            name: 'Nelson Carvalho',
+            document: '987.654.321-00',
+            rg: '4.220.876-5 SSP/PR',
+            cnh: '01827364590',
+            nationality: 'brasileiro',
+            profession: 'comerciante',
+            maritalStatus: 'casado',
+            fatherName: 'Sebastião Carvalho',
+            motherName: 'Therezinha Moraes Carvalho',
+            email: 'nelson.carvalho@exemplo.com.br',
+            address: 'Rua Néo Alves Martins',
+            addressNumber: '2887',
+            city: 'Maringá/PR',
+            spouseName: 'Cláudia Bianchi Carvalho',
+            spouseDocument: '654.321.987-00',
+            spouseRg: '7.881.230-4 SSP/PR',
+            spouseNationality: 'brasileira',
+            spouseProfession: 'advogada',
+          },
+        ],
+      },
+    },
+  });
 
   /**
    * A LINHA DO TEMPO de uma permuta do dataset, montada a partir dos marcos que
