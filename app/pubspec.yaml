@@ -39,6 +39,13 @@ dependencies:
   # nativo do arquivo gerado (printing).
   pdf: ^3.11.1
   printing: ^5.13.4
+  # Geração da CÉDULA em .docx. Um .docx é um ZIP de XML — `archive` monta o
+  # pacote e o XML é escrito à mão (ver services/cpr_docx.dart), o que evita uma
+  # dependência pesada de template e deixa o documento sob controle total.
+  # `file_saver` entrega o arquivo ao usuário no navegador e no aparelho com uma
+  # chamada só; `printing` não serve aqui porque ele é específico de PDF.
+  archive: ^4.0.7
+  file_saver: ^0.2.14
   http: ^1.6.0
   flutter_secure_storage: ^10.3.1
   file_picker: ^12.0.0

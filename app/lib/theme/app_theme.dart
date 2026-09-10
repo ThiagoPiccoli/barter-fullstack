@@ -42,7 +42,15 @@ class AppColors {
   /// Esperando o parecer do gerente da unidade — a primeira parada.
   static Color get atManager => brand.palette.atManager;
   static Color get atManagerBg => brand.palette.atManagerBg;
+
+  /// Rascunho do consultor — neutro: ele não é fila de ninguém.
+  static Color get draft => brand.palette.draft;
+  static Color get draftBg => brand.palette.draftBg;
   static Color get approved => brand.palette.approved;
+
+  /// Aprovada COM RESSALVA — liberada, com uma exigência a cumprir.
+  static Color get approvedWithConditions => brand.palette.approvedWithConditions;
+  static Color get approvedWithConditionsBg => brand.palette.approvedWithConditionsBg;
   static Color get pending => brand.palette.pending;
   static Color get denied => brand.palette.denied;
   static Color get approvedBg => brand.palette.approvedBg;

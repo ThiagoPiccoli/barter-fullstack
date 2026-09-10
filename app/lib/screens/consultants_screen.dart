@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
+import 'creditor_screen.dart';
 import 'producer_profile_screen.dart';
 import 'consultant_profile_screen.dart';
 import 'edit_forms.dart';
@@ -13,7 +14,12 @@ import 'edit_forms.dart';
 /// precisa de um consultor, o consultor precisa de uma unidade e de um gerente,
 /// o gerente entrega ao comitê, e o comitê ao faturista. Lida da esquerda para
 /// a direita, a fila de segmentos conta o caminho da permuta.
-enum _Registry { producers, consultants, managers, committee, billers, units }
+///
+/// `creditor` fecha a fila e é de outra natureza: não é gente nem lugar — é a
+/// PRÓPRIA EMPRESA, como ela se identifica nos documentos que emite. Ela vem por
+/// último porque é a única que não participa do caminho de uma permuta; ela é o
+/// timbre do papel em que o caminho termina.
+enum _Registry { producers, consultants, managers, committee, billers, units, creditor }
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
 /// (quem registra permuta), GERENTES (quem dá o parecer), COMITÊ (quem decide),
@@ -61,6 +67,9 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           _Registry.committee => const EditStaffScreen(role: UserRole.committee),
           _Registry.billers => const EditStaffScreen(role: UserRole.biller),
           _Registry.units => const EditUnitScreen(),
+          // A credora não tem "novo": ela é uma só, e o formulário dela é a
+          // própria aba. O FAB some neste segmento — ver `showFab`.
+          _Registry.creditor => const CreditorScreen(),
         },
       ),
     );
@@ -141,11 +150,19 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           '${units.length} unidade(s)',
           'Nova unidade',
         ),
+      // A credora não se busca nem se cria: é a própria empresa, e o cadastro é
+      // um só — aberto desde a instalação, vazio ou preenchido.
+      _Registry.creditor => (
+          'Buscar não se aplica — a credora é a sua empresa',
+          'A empresa como ela aparece nas cédulas emitidas',
+          'Empresa',
+        ),
     };
 
     // O comitê já cadastrado não ganha botão de "novo": ele é único, e um botão
     // que só serve para levar a um 422 é pior do que botão nenhum.
-    final showFab = _tab != _Registry.committee || AppData.committee == null;
+    final showFab =
+        _tab != _Registry.creditor && (_tab != _Registry.committee || AppData.committee == null);
 
     return Scaffold(
       appBar: AppBar(
@@ -172,11 +189,14 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 _Registry.committee: AppData.committee == null ? 0 : 1,
                 _Registry.billers: AppData.billers.length,
                 _Registry.units: AppData.units.length,
+                // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
+                // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
+                _Registry.creditor: 1,
               },
               onChanged: _setTab,
             ),
           ),
-          if (_tab != _Registry.committee)
+          if (_tab != _Registry.committee && _tab != _Registry.creditor)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: SearchField(
@@ -208,6 +228,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
               _Registry.committee => _buildCommittee(),
               _Registry.billers => _buildBillerList(billers),
               _Registry.units => _buildUnitList(units),
+              _Registry.creditor => const CreditorScreen(embedded: true),
             },
           ),
         ],
@@ -496,6 +517,7 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.committee: ('Comitê', Icons.groups_2),
     _Registry.billers: ('Faturistas', Icons.receipt_long),
     _Registry.units: ('Unidades', Icons.store),
+    _Registry.creditor: ('Empresa', Icons.domain),
   };
 
   /// A cor de cada segmento é a da ETAPA dele no fluxo — o mesmo índigo do
@@ -509,6 +531,7 @@ class _SegmentedToggle extends StatelessWidget {
         _Registry.committee => AppColors.pending,
         _Registry.billers => AppColors.invoiced,
         _Registry.units => AppColors.primaryMedium,
+        _Registry.creditor => AppColors.textMedium,
       };
 
   @override

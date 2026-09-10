@@ -115,6 +115,18 @@ describe('Barter — safra e versões (e2e)', () => {
     expect(npk.sacksPerUnit).toBeUndefined();
   });
 
+  /**
+   * ENCAMINHA o rascunho ao gerente. A permuta nasce na mão do consultor, e a
+   * retaguarda — que é quem enxerga R$ — só a alcança depois de encaminhada.
+   * Nada aqui recalcula preço: o valor congelado é o do registro.
+   */
+  const encaminhar = (code: string, auth: string) =>
+    http()
+      .post(`/api/v1/barters/${code}/forward`)
+      .set('Authorization', auth)
+      .send({ note: 'Cliente conhecido, área conferida.' })
+      .expect(200);
+
   it('a permuta nasce amarrada à versão vigente e congela o preço', async () => {
     const response = await http()
       .post('/api/v1/barters')
@@ -132,6 +144,7 @@ describe('Barter — safra e versões (e2e)', () => {
     expect(grainDoConsultor.unitValue).toBeUndefined();
 
     // O valor CONGELADO é o que a retaguarda lê de volta — é ela que vê R$.
+    await encaminhar(response.body.data.code as string, await asUser(JOAO));
     const daRetaguarda = await http()
       .get(`/api/v1/barters/${response.body.data.code}`)
       .set('Authorization', await asUser(ADMIN));
@@ -168,6 +181,7 @@ describe('Barter — safra e versões (e2e)', () => {
       const grain = permutaNova.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
       expect(grain.quantity).toBe(106.84);
       // O valor da saca aplicado sai na leitura da retaguarda.
+      await encaminhar(permutaNova.body.data.code as string, await asUser(JOAO));
       const daRetaguarda = await http()
         .get(`/api/v1/barters/${permutaNova.body.data.code}`)
         .set('Authorization', admin);
@@ -336,6 +350,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
+      await encaminhar(nova.body.data.code as string, await asUser(JOAO));
       const registrada = await http()
         .get(`/api/v1/barters/${nova.body.data.code}`)
         .set('Authorization', admin);

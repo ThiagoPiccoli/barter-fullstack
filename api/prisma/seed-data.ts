@@ -30,6 +30,10 @@ export const SEED_PASSWORD = 'demo-2026-agro';
  */
 export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // Ordem respeita os FKs (filhos primeiro).
+  await prisma.cprAreaOwner.deleteMany();
+  await prisma.cprArea.deleteMany();
+  await prisma.barterCpr.deleteMany();
+  await prisma.creditor.deleteMany();
   await prisma.barterItem.deleteMany();
   await prisma.barterEvent.deleteMany();
   await prisma.barter.deleteMany();
@@ -51,6 +55,26 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     new Date(Date.UTC(year, month - 1, day, hour, minute));
 
   const password = await hashPassword(SEED_PASSWORD);
+
+  /* ── A credora ────────────────────────────────────────────────────── */
+  // A empresa que recebe o grão, como a CPR a nomeia. Ela existe no dataset
+  // porque sem ela a tela da cédula abriria com uma pendência de configuração
+  // em toda demonstração — e a pendência é justamente o que se quer mostrar
+  // resolvido. Em produção, quem a cadastra é o admin ou o faturista.
+  await prisma.creditor.create({
+    data: {
+      id: 1,
+      name: 'agroBarter Cooperativa Agroindustrial Ltda.',
+      cnpj: '12.345.678/0001-90',
+      address: 'Avenida Colombo',
+      addressNumber: '4750',
+      city: 'Maringá/PR',
+      // Foro em branco de propósito: é o caso comum (elege-se a comarca da
+      // sede), e é ele que exercita a regra do `forumOf`.
+      forum: '',
+      updatedBy: 'Dataset de demonstração',
+    },
+  });
 
   /* ── Usuários ─────────────────────────────────────────────────────── */
   const mkUser = (data: {
@@ -637,12 +661,15 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // tela do gerente abriria vazia no dataset de demonstração.
   //
   // O dataset cobre a LINHA INTEIRA pelo mesmo motivo: uma em cada posto, para
-  // nenhuma tela do fluxo abrir vazia — duas no gerente, uma no comitê
-  // (PRM-2026-002), três aprovadas esperando o faturista, uma negada e uma já
-  // faturada.
+  // nenhuma tela do fluxo abrir vazia — um rascunho na mão do João
+  // (PRM-2026-009), duas no gerente, uma no comitê (PRM-2026-002), três
+  // aprovadas esperando o faturista (uma delas COM RESSALVA, a PRM-2026-006),
+  // uma negada e uma já faturada.
   const barters = [
     {
       code: 'PRM-2026-001',
+      consultantNote:
+        'Cliente de cinco safras, nunca atrasou entrega. A área está toda plantada e a lavoura vem bem.',
       version: sojaV2,
       consultant: joao,
       producer: antonio,
@@ -667,6 +694,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-002',
+      consultantNote:
+        'Produtora organizada, entrega sempre no prazo combinado. Pediu a semente com antecedência por causa do plantio cedo.',
       version: sojaV2,
       consultant: ana,
       producer: helena,
@@ -684,6 +713,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-003',
+      consultantNote:
+        'Bom pagador, mas o volume que ele pediu depende de a carga chegar antes da janela dele. Registrei como veio para o gerente avaliar o estoque.',
       version: milhoVersion,
       consultant: roberto,
       producer: joaquim,
@@ -699,6 +730,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-004',
+      consultantNote:
+        'Área pequena e bem cuidada. Ela já permutou nas duas últimas safras e liquidou tudo em grão.',
       version: sojaV2,
       consultant: ana,
       producer: claudia,
@@ -719,6 +752,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-005',
+      consultantNote:
+        'Primeira permuta dele conosco. Área própria, sem arrendamento, e a referência da revenda vizinha é boa.',
       version: sojaV2,
       consultant: joao,
       producer: sebastiao,
@@ -733,17 +768,28 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-006',
+      consultantNote:
+        'Cliente antigo da unidade, retira tudo de uma vez. Sem pendência financeira aberta.',
       version: sojaV2,
       consultant: maria,
       producer: osmar,
-      status: 'approved',
+      // A ÚNICA aprovada COM RESSALVA do dataset, e ela existe para a tela do
+      // comitê e a do faturista mostrarem o terceiro desfecho da decisão. Sem
+      // ela, o selo e a exigência só apareceriam depois de alguém aprovar com
+      // ressalva na demonstração — e o mais provável é que ninguém descobrisse
+      // que dá.
+      status: 'approvedWithConditions',
       createdAt: at(2026, 4, 10, 9, 0),
       managerNote:
         'Retirada do inseticida já separada. Produtor é cliente antigo da unidade e ' +
         'costuma retirar tudo de uma vez — reservei doca para o dia 15.',
       managerReviewedAt: at(2026, 4, 10, 14, 5),
       reviewedAt: at(2026, 4, 11, 11, 0),
-      reviewNote: 'Aprovada com prioridade.',
+      // A RESSALVA é o texto da decisão, e é obrigatória neste desfecho: ela diz
+      // o que precisa ser providenciado antes de a entrega ser cobrada.
+      reviewNote:
+        'Aprovada com ressalva: exigir seguro agrícola da área e aval do cônjuge ' +
+        'antes da retirada. Confirmar a apólice com o produtor.',
       items: [
         grainItem(soja, 134.0068, 148.5),
         inputItem(lambda, 200, 42.0),
@@ -752,6 +798,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-007',
+      consultantNote:
+        'Produtora nova na carteira, área arrendada em três talhões. Sugiro olhar a garantia com cuidado.',
       version: milhoVersion,
       consultant: lucas,
       producer: vanessa,
@@ -766,6 +814,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-008',
+      consultantNote:
+        'Mesmo produtor da PRM-2026-003, agora no trigo. Os dois talhões em pousio explicam o volume de glifosato.',
       version: trigoVersion,
       consultant: roberto,
       producer: joaquim,
@@ -781,6 +831,29 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         grainItem(trigo, 172.9412, 85.0),
         inputItem(glifosato, 500, 18.9),
         inputItem(fungicida, 60, 87.5),
+      ],
+    },
+    {
+      code: 'PRM-2026-009',
+      consultantNote: '',
+      version: sojaV2,
+      consultant: joao,
+      producer: antonio,
+      // O RASCUNHO do dataset: montada e ainda na mão do João, sem parecer
+      // escrito e sem gerente endereçado. Ela existe pelo mesmo motivo das duas
+      // em `sentToManager` — a tela do consultor precisa ter o que mostrar no
+      // estado novo —, e é a única permuta do dataset que NENHUMA tela da
+      // retaguarda enxerga (ver `scopeFor`).
+      status: 'draft',
+      createdAt: at(2026, 5, 14, 8, 40),
+      // 60×115 + 400×18,9 + 18×42 = R$ 15.216,00 → 102,4646 sacas de soja. Os
+      // três insumos com exigência por hectare estão nos mínimos dos 120 ha do
+      // Antônio, como estariam se ela tivesse passado pelo servidor.
+      items: [
+        grainItem(soja, 102.4646, 148.5),
+        inputItem(npk, 60, 115.0),
+        inputItem(glifosato, 400, 18.9),
+        inputItem(lambda, 18, 42.0),
       ],
     },
   ];
@@ -829,17 +902,25 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         consultantBranch: homeUnit.name,
         producerId: entry.producer.id,
         producerName: entry.producer.name,
+        // A ÁREA congelada no registro — o denominador do investimento por
+        // hectare. Sai do cadastro do produtor, que é de onde o service a copia.
+        producerAreaHa: entry.producer.areaHa,
         unitId: unit.id,
         unitName: unit.name,
         status: entry.status,
+        // O PARECER DO CONSULTOR e o encaminhamento. O rascunho é o único sem os
+        // dois: ele ainda não foi escrito nem enviado, que é o que rascunho é.
+        consultantNote: entry.consultantNote || null,
+        consultantSentAt: entry.status === 'draft' ? null : entry.createdAt,
         // A mesma conta do BartersService: a forma escolhida no fechamento e a
         // alíquota que ela produziu para este produtor.
         taxRegime,
         taxRate: taxRateOf(taxRegime, documentDigitsOf(entry.producer.document)),
-        // O destinatário existe desde o envio; o parecer só nas que já passaram
-        // pela etapa. As duas em `sentToManager` estão endereçadas e sem nota.
-        managerId: manager.id,
-        managerName: manager.fullName,
+        // O destinatário existe desde o ENCAMINHAMENTO; o parecer só nas que já
+        // passaram pela etapa. As duas em `sentToManager` estão endereçadas e
+        // sem nota; o rascunho não está endereçado a ninguém.
+        managerId: entry.status === 'draft' ? null : manager.id,
+        managerName: entry.status === 'draft' ? null : manager.fullName,
         managerNote: entry.managerNote ?? null,
         managerReviewedAt: entry.managerReviewedAt ?? null,
         // Quem decide é o COMITÊ. Era o admin quando o dataset foi escrito, e a
@@ -877,13 +958,30 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       {
         action: 'register',
         fromStatus: null,
-        toStatus: 'sentToManager',
+        toStatus: 'draft',
         actorId: entry.consultant.id,
         actorName: entry.consultant.fullName,
         actorRole: ROLE.consultant,
         at: entry.createdAt,
       },
     ];
+
+    // O ENCAMINHAMENTO é o segundo passo, e leva o parecer do consultor junto —
+    // é ele que tira a permuta da mesa dela. Mesma data do registro no dataset:
+    // as permutas de demonstração foram montadas e mandadas no mesmo ato, que é
+    // o caso comum de quem já vem da conversa com o produtor.
+    if (entry.status !== 'draft') {
+      steps.push({
+        action: 'forward',
+        fromStatus: 'draft',
+        toStatus: 'sentToManager',
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        note: entry.consultantNote || null,
+        at: entry.createdAt,
+      });
+    }
 
     if (entry.managerReviewedAt) {
       steps.push({
@@ -902,9 +1000,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       steps.push({
         action: 'review',
         fromStatus: 'pending',
-        // A decisão foi APROVAR ou NEGAR. `invoiced` veio depois, do faturista —
-        // ler o estado atual aqui faria o comitê parecer ter faturado.
-        toStatus: entry.status === 'denied' ? 'denied' : 'approved',
+        // A decisão foi APROVAR, aprovar COM RESSALVA ou NEGAR — e ela é lida do
+        // estado, menos em `invoiced`: esse veio depois, do faturista, e lê-lo
+        // aqui faria o comitê parecer ter faturado.
+        toStatus: entry.status === 'invoiced' ? 'approved' : entry.status,
         actorId: comite.id,
         actorName: comite.fullName,
         actorRole: ROLE.committee,

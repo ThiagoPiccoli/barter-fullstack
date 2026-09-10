@@ -86,19 +86,35 @@ describe('Tabela de capacidades', () => {
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersReview,
         CAPABILITY.pricesRead,
+        CAPABILITY.bartersInvestmentPerHa,
       ].sort(),
     );
     expect(can({ role: ROLE.committee }, CAPABILITY.bartersInvoice)).toBe(false);
 
+    // `creditorManage` é a ÚNICA capacidade que o faturista divide com o admin,
+    // e ela está aqui de propósito: a credora é o timbre dos documentos que ele
+    // emite (razão social, CNPJ, endereço, foro da CPR), não uma decisão de
+    // negócio nem uma concessão de acesso. Quem percebe o CNPJ com um dígito
+    // trocado é quem monta a cédula, e mandá-lo abrir chamado com o admin para
+    // corrigir o próprio timbre trocaria um campo de texto por um processo.
+    //
+    // O que ela NÃO abre continua abaixo: ele não decide permuta.
     expect([...ROLE_CAPABILITIES[ROLE.biller]].sort()).toEqual(
       [
         CAPABILITY.bartersReadInvoicing,
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersInvoice,
+        CAPABILITY.creditorManage,
         CAPABILITY.pricesRead,
+        CAPABILITY.bartersInvestmentPerHa,
       ].sort(),
     );
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersReview)).toBe(false);
+    // E ela não vazou para os outros dois postos: quem não emite documento em
+    // nome da empresa não mexe no timbre dela.
+    expect(can({ role: ROLE.committee }, CAPABILITY.creditorManage)).toBe(false);
+    expect(can({ role: ROLE.manager }, CAPABILITY.creditorManage)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.creditorManage)).toBe(false);
   });
 
   it('o gerente enxerga o TIME dele e escreve UMA coisa: o parecer', () => {
@@ -122,6 +138,22 @@ describe('Tabela de capacidades', () => {
       [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.biller].sort(),
     );
     expect(can({ role: ROLE.consultant }, CAPABILITY.pricesRead)).toBe(false);
+  });
+
+  /**
+   * O INVESTIMENTO POR HECTARE (sc/ha) é de quem COMPARA permutas.
+   *
+   * O recorte não é o mesmo de `pricesRead`, e a diferença é o gerente: ele vê
+   * R$ (avalia a negociação do time dele) e não vê sc/ha — para ele a permuta é
+   * uma, e uma régua de comparação sem com quem comparar é ruído na tela. Quem
+   * a tem são os três que olham a operação de cima: admin, comitê e faturista.
+   */
+  it('o sc/ha é de quem compara permutas — o gerente e o consultor não o veem', () => {
+    expect(rolesWith(CAPABILITY.bartersInvestmentPerHa).sort()).toEqual(
+      [ROLE.admin, ROLE.committee, ROLE.biller].sort(),
+    );
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
   });
 
   /**

@@ -14,6 +14,7 @@ import {
   outcomeLabelOf,
   progressOf,
   refusalFor,
+  stageOf,
   stepAt,
   type BarterAction,
   type BarterStatus,
@@ -35,14 +36,27 @@ describe('Máquina de estados da permuta', () => {
 
   /* ── O desenho da linha ─────────────────────────────────────────────── */
 
-  it('a linha vai do gerente ao faturamento, com a negativa como saída lateral', () => {
-    expect([...BARTER_LINE]).toEqual([
-      BARTER_STATUS.sentToManager,
-      BARTER_STATUS.pending,
-      BARTER_STATUS.approved,
-      BARTER_STATUS.invoiced,
+  it('a linha vai do rascunho ao faturamento, com a negativa como saída lateral', () => {
+    expect(BARTER_LINE.map((degrau) => [...degrau])).toEqual([
+      [BARTER_STATUS.draft],
+      [BARTER_STATUS.sentToManager],
+      [BARTER_STATUS.pending],
+      // O MESMO DEGRAU: as duas aprovações são a mesa do faturista, e a ressalva
+      // é o desfecho, não um ponto adiante na esteira. Pô-la um degrau à frente
+      // faria a permuta aprovada com ressalva ser "tarde demais para faturar".
+      [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions],
+      [BARTER_STATUS.invoiced],
     ]);
-    expect([...BARTER_STATUSES].sort()).toEqual([...BARTER_LINE, BARTER_STATUS.denied].sort());
+    expect([...BARTER_STATUSES].sort()).toEqual(
+      [...BARTER_LINE.flat(), BARTER_STATUS.denied].sort(),
+    );
+  });
+
+  /** O degrau é a POSIÇÃO na esteira, e é ele que responde cedo/tarde. */
+  it('as duas aprovações ocupam o mesmo degrau, e a negativa nenhum', () => {
+    expect(stageOf(BARTER_STATUS.approvedWithConditions)).toBe(stageOf(BARTER_STATUS.approved));
+    expect(stageOf(BARTER_STATUS.draft)).toBe(0);
+    expect(stageOf(BARTER_STATUS.denied)).toBe(-1);
   });
 
   it('todo estado é alcançável a partir do registro', () => {
@@ -54,9 +68,14 @@ describe('Máquina de estados da permuta', () => {
   });
 
   it('cada estado da linha tem UM dono, e o fim de linha não tem nenhum', () => {
+    // O rascunho está com quem o escreveu: é o único estado cujo dono da vez é o
+    // consultor, e dizê-lo é a diferença entre "esperando você" e uma permuta
+    // que parece parada por culpa da retaguarda.
+    expect(BARTER_HOLDER[BARTER_STATUS.draft]).toBe(ROLE.consultant);
     expect(BARTER_HOLDER[BARTER_STATUS.sentToManager]).toBe(ROLE.manager);
     expect(BARTER_HOLDER[BARTER_STATUS.pending]).toBe(ROLE.committee);
     expect(BARTER_HOLDER[BARTER_STATUS.approved]).toBe(ROLE.biller);
+    expect(BARTER_HOLDER[BARTER_STATUS.approvedWithConditions]).toBe(ROLE.biller);
 
     // Fim de linha: ninguém está com ela, e não há próximo ato. É o que o JSON
     // da permuta devolve como `waitingFor: null` / `nextAction: null`.
@@ -82,20 +101,27 @@ describe('Máquina de estados da permuta', () => {
    * alcança permuta negada — ela morre no comitê e nunca chegou ao faturamento.
    */
   it('o alcance de um posto é o trecho da linha a partir dele', () => {
+    // A APROVADA COM RESSALVA entra aqui, e é o ponto: ela é a mesma fila do
+    // faturista. Fora desta lista, a permuta que o comitê aprovou com exigência
+    // sumiria da tela de quem tem de faturá-la.
     expect(lineFrom(BARTER_ACTION.invoice)).toEqual([
       BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
       BARTER_STATUS.invoiced,
     ]);
     expect(lineFrom(BARTER_ACTION.invoice)).not.toContain(BARTER_STATUS.denied);
+    // E o RASCUNHO não: o faturista não alcança o que ainda nem foi proposto.
+    expect(lineFrom(BARTER_ACTION.invoice)).not.toContain(BARTER_STATUS.draft);
 
     expect(lineFrom(BARTER_ACTION.review)).toEqual([
       BARTER_STATUS.pending,
       BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
       BARTER_STATUS.invoiced,
     ]);
 
     // O registro não sai de estado nenhum: quem o faz alcança a linha inteira.
-    expect(lineFrom(BARTER_ACTION.register)).toEqual([...BARTER_LINE]);
+    expect(lineFrom(BARTER_ACTION.register)).toEqual([...BARTER_LINE.flat()]);
   });
 
   /* ── Quem move o quê ────────────────────────────────────────────────── */
@@ -105,44 +131,64 @@ describe('Máquina de estados da permuta', () => {
    * As duas precisam apontar para a mesma pessoa — uma etapa cuja capacidade
    * pertença a dois papéis seria uma etapa sem dono.
    */
-  it('cada etapa é de um papel só, e são papéis diferentes entre si', () => {
+  it('cada etapa é de um papel só, e os postos se sucedem sem se repetir', () => {
     const donos = Object.values(BARTER_STEPS).map((step) => rolesWith(step.capability));
     for (const papéis of donos) expect(papéis).toHaveLength(1);
 
-    expect(donos.flat()).toEqual([ROLE.consultant, ROLE.manager, ROLE.committee, ROLE.biller]);
+    // O consultor aparece DUAS vezes, e é a única repetição: registrar e
+    // encaminhar são o mesmo posto partido em dois para caber o parecer dele.
+    expect(donos.flat()).toEqual([
+      ROLE.consultant,
+      ROLE.consultant,
+      ROLE.manager,
+      ROLE.committee,
+      ROLE.biller,
+    ]);
   });
 
   it('as capacidades das etapas são as do fluxo, nenhuma a mais', () => {
     expect(BARTER_STEPS[BARTER_ACTION.register].capability).toBe(CAPABILITY.bartersRegister);
+    expect(BARTER_STEPS[BARTER_ACTION.forward].capability).toBe(CAPABILITY.bartersRegister);
     expect(BARTER_STEPS[BARTER_ACTION.opinion].capability).toBe(CAPABILITY.bartersOpinion);
     expect(BARTER_STEPS[BARTER_ACTION.review].capability).toBe(CAPABILITY.bartersReview);
     expect(BARTER_STEPS[BARTER_ACTION.invoice].capability).toBe(CAPABILITY.bartersInvoice);
   });
 
   /** A decisão é a única bifurcação: as outras etapas só empurram adiante. */
-  it('só a decisão do comitê tem duas saídas', () => {
+  it('só a decisão do comitê tem mais de uma saída — e são três', () => {
     expect(BARTER_STEPS[BARTER_ACTION.review].to).toEqual([
       BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
       BARTER_STATUS.denied,
     ]);
-    for (const action of [BARTER_ACTION.register, BARTER_ACTION.opinion, BARTER_ACTION.invoice]) {
+    for (const action of [
+      BARTER_ACTION.register,
+      BARTER_ACTION.forward,
+      BARTER_ACTION.opinion,
+      BARTER_ACTION.invoice,
+    ]) {
       expect(BARTER_STEPS[action].to).toHaveLength(1);
     }
   });
 
   /* ── Quem passa e quem não passa ────────────────────────────────────── */
 
-  it('cada ato passa no estado dele, e só nele', () => {
-    const casos: [BarterAction, BarterStatus][] = [
-      [BARTER_ACTION.opinion, BARTER_STATUS.sentToManager],
-      [BARTER_ACTION.review, BARTER_STATUS.pending],
-      [BARTER_ACTION.invoice, BARTER_STATUS.approved],
+  it('cada ato passa nos estados dele, e só neles', () => {
+    const casos: [BarterAction, BarterStatus[]][] = [
+      [BARTER_ACTION.forward, [BARTER_STATUS.draft]],
+      [BARTER_ACTION.opinion, [BARTER_STATUS.sentToManager]],
+      [BARTER_ACTION.review, [BARTER_STATUS.pending]],
+      // O FATURAMENTO é o único ato com dois estados de partida: a ressalva é
+      // condição do negócio, e não um portão deste fluxo.
+      [BARTER_ACTION.invoice, [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions]],
     ];
 
-    for (const [action, permitido] of casos) {
-      expect(refusalFor(action, barterIn(permitido))).toBeNull();
+    for (const [action, permitidos] of casos) {
+      for (const permitido of permitidos) {
+        expect(refusalFor(action, barterIn(permitido))).toBeNull();
+      }
 
-      for (const outro of BARTER_STATUSES.filter((status) => status !== permitido)) {
+      for (const outro of BARTER_STATUSES.filter((status) => !permitidos.includes(status))) {
         expect(refusalFor(action, barterIn(outro))).toBeTruthy();
       }
     }
@@ -167,6 +213,11 @@ describe('Máquina de estados da permuta', () => {
    * pessoa procurar uma decisão que ninguém tomou.
    */
   it('quem chega cedo é informado de onde a permuta parou — com nome e tudo', () => {
+    // O RASCUNHO não é etapa da retaguarda: quem topa com ele ouve que a permuta
+    // ainda nem foi proposta, e não que "aguarda o gerente".
+    expect(refusalFor(BARTER_ACTION.opinion, barterIn(BARTER_STATUS.draft))).toBe(
+      'Esta permuta é um rascunho e ainda não foi encaminhada ao gerente',
+    );
     expect(refusalFor(BARTER_ACTION.review, barterIn(BARTER_STATUS.sentToManager))).toBe(
       'Esta permuta aguarda o parecer do gerente Beatriz Nogueira',
     );
@@ -186,6 +237,9 @@ describe('Máquina de estados da permuta', () => {
   });
 
   it('quem chega tarde ouve que a etapa dele já passou', () => {
+    expect(refusalFor(BARTER_ACTION.forward, barterIn(BARTER_STATUS.pending))).toBe(
+      'Esta permuta já foi encaminhada ao gerente',
+    );
     expect(refusalFor(BARTER_ACTION.opinion, barterIn(BARTER_STATUS.pending))).toBe(
       'Esta permuta já recebeu o parecer do gerente',
     );
@@ -202,7 +256,12 @@ describe('Máquina de estados da permuta', () => {
    * Em especial: negada não fatura, que é a única forma de dinheiro sair daqui.
    */
   it('a permuta negada não recebe mais nenhum ato', () => {
-    for (const action of [BARTER_ACTION.opinion, BARTER_ACTION.review, BARTER_ACTION.invoice]) {
+    for (const action of [
+      BARTER_ACTION.forward,
+      BARTER_ACTION.opinion,
+      BARTER_ACTION.review,
+      BARTER_ACTION.invoice,
+    ]) {
       expect(refusalFor(action, barterIn(BARTER_STATUS.denied))).toBe(
         'Esta permuta foi negada pelo comitê',
       );
@@ -238,16 +297,18 @@ describe('Máquina de estados da permuta', () => {
     it('a esteira aparece inteira desde o primeiro dia da permuta', () => {
       const andamento = progressOf(barterIn(BARTER_STATUS.sentToManager));
 
-      // As quatro etapas, sempre — inclusive as que ainda não aconteceram. É a
+      // As cinco etapas, sempre — inclusive as que ainda não aconteceram. É a
       // diferença entre uma checklist e uma linha do tempo.
       expect(andamento.map((step) => step.action)).toEqual([
         BARTER_ACTION.register,
+        BARTER_ACTION.forward,
         BARTER_ACTION.opinion,
         BARTER_ACTION.review,
         BARTER_ACTION.invoice,
       ]);
       expect(andamento.map((step) => step.label)).toEqual([
         'Registro do consultor',
+        'Parecer do consultor',
         'Parecer do gerente',
         'Decisão do comitê',
         'Faturamento',
@@ -256,6 +317,7 @@ describe('Máquina de estados da permuta', () => {
       // onde não há autor para mostrar.
       expect(andamento.map((step) => step.role)).toEqual([
         ROLE.consultant,
+        ROLE.consultant,
         ROLE.manager,
         ROLE.committee,
         ROLE.biller,
@@ -263,10 +325,20 @@ describe('Máquina de estados da permuta', () => {
     });
 
     it('a permuta anda, e o que ficou para trás vira etapa cumprida', () => {
-      expect(estadosEm(BARTER_STATUS.sentToManager)).toEqual([done, current, ahead, ahead]);
-      expect(estadosEm(BARTER_STATUS.pending)).toEqual([done, done, current, ahead]);
-      expect(estadosEm(BARTER_STATUS.approved)).toEqual([done, done, done, current]);
-      expect(estadosEm(BARTER_STATUS.invoiced)).toEqual([done, done, done, done]);
+      expect(estadosEm(BARTER_STATUS.draft)).toEqual([done, current, ahead, ahead, ahead]);
+      expect(estadosEm(BARTER_STATUS.sentToManager)).toEqual([done, done, current, ahead, ahead]);
+      expect(estadosEm(BARTER_STATUS.pending)).toEqual([done, done, done, current, ahead]);
+      expect(estadosEm(BARTER_STATUS.approved)).toEqual([done, done, done, done, current]);
+      // A aprovada COM RESSALVA está no mesmo ponto da aprovada limpa: decidida,
+      // esperando o faturamento. A exigência é do negócio, não da esteira.
+      expect(estadosEm(BARTER_STATUS.approvedWithConditions)).toEqual([
+        done,
+        done,
+        done,
+        done,
+        current,
+      ]);
+      expect(estadosEm(BARTER_STATUS.invoiced)).toEqual([done, done, done, done, done]);
     });
 
     /**
@@ -275,11 +347,12 @@ describe('Máquina de estados da permuta', () => {
      * um passo que ninguém vai dar, e quem lesse ficaria esperando.
      */
     it('a permuta negada não fica devendo um faturamento que não vem', () => {
-      expect(estadosEm(BARTER_STATUS.denied)).toEqual([done, done, done, halted]);
+      expect(estadosEm(BARTER_STATUS.denied)).toEqual([done, done, done, done, halted]);
 
       // A etapa que não acontece DIZ que não acontece, e por quê. Deixá-la muda
       // seria a mesma coisa que mostrá-la pendente: quem lê fica esperando.
       expect(progressOf(barterIn(BARTER_STATUS.denied)).map((s) => s.stateNote)).toEqual([
+        null,
         null,
         null,
         null,
@@ -290,13 +363,22 @@ describe('Máquina de estados da permuta', () => {
     it('a etapa de agora diz o que espera, com nome e tudo — e só ela', () => {
       const notas = (status: string) => progressOf(barterIn(status)).map((step) => step.stateNote);
 
+      expect(notas(BARTER_STATUS.draft)).toEqual([
+        null,
+        'Esta permuta é um rascunho e ainda não foi encaminhada ao gerente',
+        null,
+        null,
+        null,
+      ]);
       expect(notas(BARTER_STATUS.sentToManager)).toEqual([
+        null,
         null,
         'Esta permuta aguarda o parecer do gerente Beatriz Nogueira',
         null,
         null,
       ]);
       expect(notas(BARTER_STATUS.pending)).toEqual([
+        null,
         null,
         null,
         'Esta permuta aguarda a decisão do comitê',
@@ -311,11 +393,19 @@ describe('Máquina de estados da permuta', () => {
      */
     it('a decisão do comitê diz para que lado foi', () => {
       expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.approved)).toBe('Aprovada');
+      expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.approvedWithConditions)).toBe(
+        'Aprovada com ressalva',
+      );
       expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.denied)).toBe('Negada');
 
       // As outras etapas não têm saída para escolher — "Faturamento: faturada"
       // seria o nome da etapa dito duas vezes.
-      for (const action of [BARTER_ACTION.register, BARTER_ACTION.opinion, BARTER_ACTION.invoice]) {
+      for (const action of [
+        BARTER_ACTION.register,
+        BARTER_ACTION.forward,
+        BARTER_ACTION.opinion,
+        BARTER_ACTION.invoice,
+      ]) {
         for (const status of BARTER_STATUSES) {
           expect(outcomeLabelOf(action, status)).toBeNull();
         }

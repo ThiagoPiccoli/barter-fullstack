@@ -9,12 +9,18 @@ import {
 import { CAPABILITY, can, capabilitiesOf } from './policy';
 import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
+import { creditorGaps, forumOf } from './creditor';
 import type {
   AuditLog,
   Barter,
+  BarterCpr,
   BarterEvent,
   BarterItem,
   BarterVersion,
+  CprArea,
+  CprAreaOwner,
+  CprGuarantor,
+  Creditor,
   ProductClass,
   PriceHistoryEntry,
   Producer,
@@ -519,6 +525,42 @@ function progressStepJson(
   };
 }
 
+/**
+ * O INVESTIMENTO POR HECTARE — quantas sacas do grão esta permuta compromete
+ * por hectare de área cultivável do produtor.
+ *
+ * É a régua que compara duas permutas de tamanhos diferentes: 12 sc/ha numa
+ * fazenda de 300 ha e 12 sc/ha numa de 2.000 ha são o mesmo negócio em escalas
+ * diferentes, e o total sozinho não diz isso. Em SACAS, e não em R$, porque é a
+ * unidade em que a lavoura raciocina — "a soja paga o insumo com doze sacas do
+ * que ela produz" — e porque é o número que sobrevive à cotação mudar.
+ *
+ * Ele vai para QUEM PODE COMPARAR (`barters.investmentPerHa`: admin, comitê e
+ * faturista) e some para os outros — não por sigilo, mas porque uma régua sem
+ * com quem comparar é ruído. Ver a capacidade em policy.ts.
+ *
+ * `null` — e não zero — quando não dá para dizer: permuta anterior ao campo de
+ * área (`producerAreaHa` 0) ou resposta sem os itens (a listagem os traz; um
+ * chamador futuro pode não trazer). Zero seria um investimento por hectare de
+ * zero, que é uma afirmação, e falsa.
+ */
+function investmentPerHa(
+  barter: Barter & { items?: BarterItem[] },
+  viewer: Pick<User, 'role'> | undefined,
+): { producerAreaHa: number; sacksPerHa: number | null } | Record<string, never> {
+  if (!viewer || !can(viewer, CAPABILITY.bartersInvestmentPerHa)) return {};
+
+  const sacks = barter.items
+    ?.filter((item) => item.kind === 'grain')
+    .reduce((total, item) => total + item.quantity, 0);
+
+  return {
+    producerAreaHa: barter.producerAreaHa,
+    sacksPerHa:
+      sacks === undefined || barter.producerAreaHa <= 0 ? null : sacks / barter.producerAreaHa,
+  };
+}
+
 export function toBarterJson(
   barter: Barter & { items?: BarterItem[]; events?: BarterEvent[] },
   viewer?: Pick<User, 'role'>,
@@ -539,6 +581,14 @@ export function toBarterJson(
     unitId: barter.unitId,
     unitName: barter.unitName,
     status: barter.status,
+    // O PARECER DO CONSULTOR e o momento do encaminhamento. Os dois vazios
+    // enquanto ela é rascunho — e é essa diferença que a tela dele lê para saber
+    // se a permuta já saiu da mão dele.
+    consultantNote: barter.consultantNote,
+    consultantSentAt: barter.consultantSentAt,
+    // A ÁREA congelada no registro e o INVESTIMENTO POR HECTARE que ela produz.
+    // Ver `investmentPerHa`: o número só vai para quem pode compará-lo.
+    ...investmentPerHa(barter, viewer),
     // O IMPOSTO DA ENTREGA: a forma de recolhimento escolhida no fechamento e a
     // alíquota que ela produziu, como ficaram no registro.
     //
@@ -587,6 +637,154 @@ export function toBarterJson(
     // fato gravado, na ordem em que aconteceu, e é o que o comprovante e a
     // auditoria do documento leem. `steps` é a LEITURA dele contra a esteira.
     steps: barter.events ? toBarterProgressJson(barter, barter.events) : undefined,
+  };
+}
+
+/**
+ * A CREDORA — o cadastro que dá o timbre aos documentos emitidos.
+ *
+ * `forum` sai RESOLVIDO (o eleito, ou a comarca da sede) pelo mesmo motivo de
+ * `statusLabel`: o cliente não deveria precisar conhecer a regra do vazio para
+ * saber qual foro vai sair impresso. O campo cru continua no formulário, que é
+ * onde a distinção importa.
+ */
+export function toCreditorJson(creditor: Creditor) {
+  return {
+    name: creditor.name,
+    cnpj: creditor.cnpj,
+    address: creditor.address,
+    addressNumber: creditor.addressNumber,
+    city: creditor.city,
+    // O que foi ESCOLHIDO (vazio = "a comarca da sede") e o que VALE.
+    forum: creditor.forum,
+    effectiveForum: forumOf(creditor),
+    updatedBy: creditor.updatedBy,
+    updatedAt: creditor.updatedAt,
+    gaps: creditorGaps(creditor),
+  };
+}
+
+/**
+ * A MESA DA CÉDULA — o contrato da tela do faturista.
+ *
+ * Ela sai em quatro blocos, e a divisão é a informação principal desta resposta:
+ * quem preenche o quê. `known` é o que a permuta já respondeu e ninguém digita;
+ * `creditor` é configuração da instalação; `cpr` é o rascunho do faturista; e
+ * `gaps` é o que falta para o documento poder ser gerado.
+ *
+ * `gaps` e `creditorGaps` são listas separadas porque quem resolve cada uma é
+ * outra pessoa: a primeira é do faturista, ali mesmo; a segunda é de quem
+ * administra o servidor. Somadas, a tela mandaria o faturista procurar um campo
+ * de CNPJ que não existe no formulário dele.
+ *
+ * `suggestion` vem vazio quando já existe rascunho — ver `cprFor`.
+ */
+export function toCprJson(desk: {
+  cpr:
+    | (BarterCpr & {
+        areas: (CprArea & { owners: CprAreaOwner[] })[];
+        guarantors: CprGuarantor[];
+      })
+    | null;
+  known: unknown;
+  creditor: Creditor;
+  gaps: string[];
+  suggestion: unknown;
+}) {
+  const creditor = toCreditorJson(desk.creditor);
+  return {
+    cpr: desk.cpr ? toCprDraftJson(desk.cpr) : null,
+    known: desk.known,
+    creditor,
+    creditorGaps: creditor.gaps,
+    gaps: desk.gaps,
+    // `complete` é derivado de `gaps` e vai junto porque é a pergunta que a
+    // LISTA faz (um selo "CPR pronta" no cartão), enquanto a lista é a pergunta
+    // que o FORMULÁRIO faz. Calculá-lo no cliente seria a mesma regra escrita
+    // duas vezes para dois lugares da mesma tela.
+    complete: desk.gaps.length === 0 && creditor.gaps.length === 0,
+    suggestion: desk.suggestion,
+  };
+}
+
+/** O rascunho gravado, com as lavouras na ordem em que saem no documento. */
+function toCprDraftJson(
+  cpr: BarterCpr & {
+    areas: (CprArea & { owners: CprAreaOwner[] })[];
+    guarantors: CprGuarantor[];
+  },
+) {
+  return {
+    number: cpr.number,
+    issuedAt: cpr.issuedAt,
+    dueDate: cpr.dueDate,
+    emitterNationality: cpr.emitterNationality,
+    emitterMaritalStatus: cpr.emitterMaritalStatus,
+    emitterProfession: cpr.emitterProfession,
+    emitterRg: cpr.emitterRg,
+    emitterAddress: cpr.emitterAddress,
+    emitterAddressNumber: cpr.emitterAddressNumber,
+    emitterCity: cpr.emitterCity,
+    emitterCoopId: cpr.emitterCoopId,
+    // O que a PROPOSTA pede e a cédula não imprime — coletado, não impresso.
+    emitterCnh: cpr.emitterCnh,
+    emitterFatherName: cpr.emitterFatherName,
+    emitterMotherName: cpr.emitterMotherName,
+    emitterEmail: cpr.emitterEmail,
+    // O local da entrega SAI (cláusula V, "d"), e por isso é cobrado em `gaps`.
+    deliveryPlace: cpr.deliveryPlace,
+    mortgages: cpr.mortgages,
+    spouseName: cpr.spouseName,
+    spouseNationality: cpr.spouseNationality,
+    spouseProfession: cpr.spouseProfession,
+    spouseDocument: cpr.spouseDocument,
+    spouseRg: cpr.spouseRg,
+    sackWeightKg: cpr.sackWeightKg,
+    cultivar: cpr.cultivar,
+    maxMoisture: cpr.maxMoisture,
+    maxImpurities: cpr.maxImpurities,
+    oilContent: cpr.oilContent,
+    invoiceNumber: cpr.invoiceNumber,
+    duplicateNumber: cpr.duplicateNumber,
+    insurancePolicy: cpr.insurancePolicy,
+    // Quem mexeu por último e quando. É o par que uma cédula editável precisa
+    // mostrar: dois faturistas dividem a fila, e "isto aqui está como eu deixei?"
+    // é a primeira pergunta de quem reabre um rascunho.
+    filledBy: cpr.filledBy,
+    updatedAt: cpr.updatedAt,
+    areas: cpr.areas.map((area) => ({
+      locality: area.locality,
+      city: area.city,
+      areaHa: area.areaHa,
+      withinLargerArea: area.withinLargerArea,
+      registryNumber: area.registryNumber,
+      registryBook: area.registryBook,
+      registryDistrict: area.registryDistrict,
+      owners: area.owners.map((owner) => ({ name: owner.name, document: owner.document })),
+    })),
+    // Os AVALISTAS vão inteiros. Eles não saem no documento por enquanto (o
+    // modelo não tem cláusula de aval), mas a tela os edita, e o que ela edita
+    // ela precisa receber de volta.
+    guarantors: cpr.guarantors.map((guarantor) => ({
+      name: guarantor.name,
+      document: guarantor.document,
+      rg: guarantor.rg,
+      cnh: guarantor.cnh,
+      nationality: guarantor.nationality,
+      profession: guarantor.profession,
+      maritalStatus: guarantor.maritalStatus,
+      fatherName: guarantor.fatherName,
+      motherName: guarantor.motherName,
+      email: guarantor.email,
+      address: guarantor.address,
+      addressNumber: guarantor.addressNumber,
+      city: guarantor.city,
+      spouseName: guarantor.spouseName,
+      spouseDocument: guarantor.spouseDocument,
+      spouseRg: guarantor.spouseRg,
+      spouseNationality: guarantor.spouseNationality,
+      spouseProfession: guarantor.spouseProfession,
+    })),
   };
 }
 

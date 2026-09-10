@@ -64,6 +64,14 @@ const Brand templateBrand = Brand(
     // com pessoas diferentes, e é na lista misturada que isso importa.
     atManager: Color(0xFF4338CA),
     atManagerBg: Color(0xFFEEF0FF),
+    // Ardósia para o RASCUNHO: sem cor de estado, porque ele não é fila de
+    // ninguém — ver `draft` em BrandPalette.
+    draft: Color(0xFF475569),
+    draftBg: Color(0xFFF1F5F9),
+    // Verde-oliva para a APROVADA COM RESSALVA: da família do aprovado, e
+    // distinguível dele à primeira vista na mesma lista.
+    approvedWithConditions: Color(0xFF4D7C0F),
+    approvedWithConditionsBg: Color(0xFFF4FBE6),
     approved: Color(0xFF15803D),
     pending: Color(0xFFB45309),
     denied: Color(0xFFB91C1C),

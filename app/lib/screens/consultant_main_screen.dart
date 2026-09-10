@@ -108,6 +108,9 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final approved = myBarters.where((b) => b.wasApproved).toList();
     final pending = myBarters.where((b) => b.status == BarterStatus.pending).length;
+    // OS RASCUNHOS dele: registrados, e ainda esperando o parecer que ele tem de
+    // escrever. É a única fila da tela que é DELE.
+    final myDrafts = myBarters.where((b) => b.isDraft).toList();
     final sacksDelivered = approved.fold<double>(0, (s, b) => s + b.totalGrainQty);
 
     return Scaffold(
@@ -198,6 +201,41 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             ),
           ),
           const SizedBox(height: 20),
+
+          // O RASCUNHO esquecido é o irmão da simulação esquecida, e o aviso é
+          // o mesmo: uma permuta que o gerente nunca vai ver. A diferença é
+          // onde ela está — o rascunho já é registro no servidor, com os
+          // valores congelados, e falta só o parecer dele para andar.
+          if (myDrafts.isNotEmpty) ...[
+            InkWell(
+              onTap: () => onNavigate(1),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.draftBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.draft.withValues(alpha: 0.30)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.edit_note_rounded, size: 20, color: AppColors.draft),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${myDrafts.length} permuta(s) em rascunho: escreva o seu parecer '
+                        'e encaminhe ao gerente.',
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.draft),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, size: 20, color: AppColors.draft),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
 
           // Uma simulação esquecida é uma permuta que o gerente nunca vai ver —
           // e que ninguém no sistema tem como cobrar, porque ela só existe neste

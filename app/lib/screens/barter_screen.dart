@@ -393,29 +393,29 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         title: const Text('Simulação guardada'),
         content: Text(
           'A permuta de ${simulation.producerName} está guardada neste aparelho. '
-          'Quer encaminhá-la ao gerente agora? Se preferir, ela espera em Minhas '
-          '${brand.copy.barterPluralTitle} › Simulações.',
+          'Quer registrá-la agora? No passo seguinte você escreve o seu parecer e '
+          'escolhe entre deixá-la como rascunho ou encaminhá-la ao gerente. Se '
+          'preferir, ela espera em Minhas ${brand.copy.barterPluralTitle} › Simulações.',
           style: const TextStyle(fontSize: 14),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Agora não')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Encaminhar'),
+            child: const Text('Registrar'),
           ),
         ],
       ),
     );
     if (agora != true || !mounted) return false;
 
-    // O resumo do envio não é perguntado de novo — ele acabou de dizer que quer
-    // mandar, e a tela que ele está vendo É a permuta. O diálogo volta sozinho
-    // se houver o que dizer (o Barter virou, as sacas mudaram).
+    // O resumo do envio vem em seguida, e não é repetição do que ele acabou de
+    // ver: é lá que ele escreve o PARECER e escolhe entre guardar o rascunho e
+    // encaminhar ao gerente.
     return sendSimulationToManager(
       context,
       simulation: simulation,
       consultant: widget.consultant,
-      alreadyConfirmed: true,
     );
   }
 

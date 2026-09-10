@@ -15,7 +15,7 @@
  * Se um dia a meta precisar travar como a data, o lugar é `isOpenAt`.
  */
 
-import { BARTER_STATUS } from '../barters/barter-workflow';
+import { BARTER_ACTION, lineFrom } from '../barters/barter-workflow';
 
 /** Item já precificado de uma permuta (o snapshot do BarterItem). */
 export interface CountedItem {
@@ -81,11 +81,15 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
  *
  * `invoiced` entra porque ela É uma aprovada — só que já faturada. Enquanto esta
  * conta olhava um estado só, a permuta SUMIA da meta no dia em que o faturista
- * emitia a nota: o negócio mais consolidado que existe zerava a barra. Ver
- * `barters/barter-workflow.ts` — quem passa por `approved` ou fica lá, ou anda
- * para `invoiced`.
+ * emitia a nota: o negócio mais consolidado que existe zerava a barra.
+ *
+ * A lista vem da ESTEIRA, e não escrita à mão: "decidida a favor" é exatamente o
+ * trecho da linha que o faturamento alcança (`lineFrom(invoice)`). Escrita à
+ * mão, ela ficou para trás quando a decisão do comitê ganhou a terceira saída —
+ * a permuta aprovada COM RESSALVA é negócio fechado e sumiria da meta sem que
+ * ninguém percebesse. Ver `barters/barter-workflow.ts`.
  */
-const COUNTS_AS_REALIZED: readonly string[] = [BARTER_STATUS.approved, BARTER_STATUS.invoiced];
+const COUNTS_AS_REALIZED: readonly string[] = lineFrom(BARTER_ACTION.invoice);
 
 export function realizedFrom(barters: CountedBarter[]): Realized {
   const approved = barters.filter((barter) => COUNTS_AS_REALIZED.includes(barter.status));

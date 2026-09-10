@@ -71,10 +71,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 167 testes de unidade (matemática, máquina de estados, senha, sessão, políticas)
-cd api && npm run test:e2e  # 205 testes funcionais da API (auth, escopo, fluxo, contrato de erro)
+cd api && npm test          # 182 testes de unidade (matemática, máquina de estados, senha, sessão, políticas, cédula)
+cd api && npm run test:e2e  # 237 testes funcionais da API (auth, escopo, fluxo, cédula, credora, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura
-cd app && flutter test      # 124 testes (matemática espelhada, parsers, lente de valor, formulários, abertura)
+cd app && flutter test      # 177 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -148,6 +148,18 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   negada marca o faturamento como `halted`, e não como pendente — ela não vai ser
   faturada, e uma tela de acompanhamento não pode prometer um passo que ninguém
   vai dar.
+- **A CPR é montada pelo faturista, e o documento é derivado**: a permuta
+  registra o negócio; a **Cédula de Produto Rural** o formaliza como título. O
+  que a permuta já sabe (emitente, sacas, produto, preço, valor, safra) não é
+  campo de formulário; o que falta — a qualificação civil do emitente, as
+  lavouras em penhor, o padrão do grão, NF e duplicata — é preenchido pelo
+  faturista, aos pedaços, e quem diz o que ainda falta é o servidor. A
+  **credora** é cadastro à parte (`/creditor`), mantido pelo admin *e* pelo
+  faturista: é o timbre do papel, não decisão de negócio. Os **extensos** são
+  gerados a partir dos números, nunca digitados — o modelo que originou tudo
+  trazia "367 (quatrocentos e quarenta) sacas". O documento sai em **.docx**, e
+  não em PDF, porque a cédula ainda passa pelo jurídico e pelo cartório antes de
+  ser assinada. Detalhes em `docs/arquitetura.md` (seção 1.5c).
 - **Servidor é a autoridade**: o payload de criação de permuta leva apenas
   produtos e quantidades; preços saem do banco, mínimos são revalidados e as
   sacas são recalculadas no servidor. Itens guardam *snapshots* de preço/nome

@@ -128,6 +128,69 @@ void main() {
       expect(find.textContaining('Todas ('), findsNothing);
     });
 
+    /// A ABA É UM POSTO DA LINHA, e não um estado cru.
+    ///
+    /// "A faturar" é a mesa do faturista, e as DUAS aprovações estão nela: a
+    /// limpa e a com ressalva. Uma aba por estado lhe daria duas filas para o
+    /// mesmo trabalho, e a permuta com exigência — justamente a que ele precisa
+    /// ler antes de faturar — ficaria escondida na segunda.
+    testWidgets('a aprovada com ressalva está na mesma fila do faturista', (tester) async {
+      AppData.currentUser = staff(UserRole.biller, [
+        Capability.bartersInvoice,
+        Capability.bartersReadInvoicing,
+        Capability.pricesRead,
+      ]);
+      AppData.barters = [
+        barter('PRM-2026-004', 'approved'),
+        barter('PRM-2026-006', 'approvedWithConditions'),
+        barter('PRM-2026-001', 'invoiced'),
+      ];
+
+      await abrir(
+        tester,
+        const BartersScreen(isAdmin: true, consultantId: null),
+      );
+
+      expect(find.textContaining('A faturar (2)'), findsOneWidget);
+      // E não há uma segunda fila com o mesmo trabalho.
+      expect(find.textContaining('Com ressalva ('), findsNothing);
+      // O que distingue as duas é o SELO do cartão, que é onde a exigência
+      // aparece na lista.
+      expect(find.text('Com ressalva'), findsOneWidget);
+    });
+
+    /// O RASCUNHO abre a lista de quem REGISTRA, e só a dele: é o único estado
+    /// em que o consultor tem o que fazer, e a permuta pela metade não é fila de
+    /// mais ninguém.
+    testWidgets('a aba de rascunhos é de quem registra, e não da retaguarda', (tester) async {
+      AppData.currentUser = staff(UserRole.consultant, [Capability.bartersRegister]);
+      AppData.barters = [
+        barter('PRM-2026-009', 'draft'),
+        barter('PRM-2026-005', 'sentToManager'),
+      ];
+
+      await abrir(
+        tester,
+        const BartersScreen(isAdmin: true, consultantId: null),
+      );
+      expect(find.textContaining('Rascunhos (1)'), findsOneWidget);
+
+      // A RETAGUARDA não tem a aba: o servidor não devolveria nada nela.
+      //
+      // A `Key` é o que força uma tela NOVA: as abas são montadas uma vez, no
+      // primeiro build (`late final`), e sem ela o Flutter reaproveitaria o
+      // estado da tela do consultor — o teste passaria sem testar nada.
+      AppData.currentUser = staff(UserRole.committee, [
+        Capability.bartersReview,
+        Capability.pricesRead,
+      ]);
+      await abrir(
+        tester,
+        BartersScreen(key: UniqueKey(), isAdmin: true, consultantId: null),
+      );
+      expect(find.textContaining('Rascunhos ('), findsNothing);
+    });
+
     /// O COMITÊ é o oposto: ele decide, e para decidir precisa ver o que vem
     /// vindo — inclusive o que ainda está na mesa do gerente.
     testWidgets('o comitê acompanha a linha inteira, o gerente inclusive', (tester) async {

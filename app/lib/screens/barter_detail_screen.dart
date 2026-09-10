@@ -3,8 +3,10 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/api/api_client.dart';
 import '../services/barter_pdf.dart';
 import '../widgets/common_widgets.dart';
+import 'cpr_form_screen.dart';
 
 class BarterDetailScreen extends StatefulWidget {
   final BarterModel barter;
@@ -81,6 +83,25 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
     }
   }
 
+  /// Abre o FATURAMENTO desta permuta — que é a tela da cédula.
+  ///
+  /// A mesma tela para os dois estados, e é a decisão de desenho: faturar é
+  /// preencher a cédula e carimbar. Enquanto a permuta espera faturamento, o
+  /// ato principal lá dentro é *Faturar*; depois de faturada, é gerar o
+  /// documento de novo — a cédula continua editável.
+  void _openCpr() => openInvoicing(
+        context,
+        _barter,
+        onInvoiced: (updated) => setState(() => _barter = updated),
+      );
+
+  /// O faturista alcança a CÉDULA daqui?
+  ///
+  /// Nos dois estados do trecho dele: a aprovada (a coleta não espera a nota) e
+  /// a já faturada (a cédula é papel que vem depois do ato).
+  bool get _canOpenCpr =>
+      AppData.can(Capability.bartersInvoice) && _barter.wasApproved;
+
   @override
   Widget build(BuildContext context) {
     final producer = AppData.producerById(_barter.producerId);
@@ -88,9 +109,22 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
       appBar: AppBar(
         title: Text(_barter.id),
         actions: [
+          // A CÉDULA vem PRIMEIRO para quem fatura, e com ícone próprio.
+          //
+          // O comprovante da permuta continua ao lado, mas ele não é o
+          // documento do posto do faturista: o dele é a CPR. Enquanto os dois
+          // dividiam o mesmo ícone de PDF, chegar à cédula exigia rolar a tela
+          // inteira até um botão no fim — procurar, para fazer a coisa que se
+          // veio fazer.
+          if (_canOpenCpr)
+            IconButton(
+              icon: const Icon(Icons.description_outlined),
+              tooltip: 'Cédula de Produto Rural (CPR)',
+              onPressed: _openCpr,
+            ),
           IconButton(
             icon: const Icon(Icons.picture_as_pdf_outlined),
-            tooltip: 'Gerar PDF',
+            tooltip: 'Comprovante da permuta',
             onPressed: () => _sharePdf(producer),
           ),
           Padding(
@@ -108,6 +142,8 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             referenceGrainName: _barter.referenceGrainName,
             inputCount: _barter.inputs.length,
             showValue: widget.isAdmin,
+            sacksPerHa: _barter.sacksPerHa,
+            areaHa: _barter.producerAreaHa,
           ),
           const SizedBox(height: 16),
 
@@ -129,6 +165,21 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                     _InfoRow(label: 'Consultor', value: _barter.consultantName),
                     _InfoRow(label: 'Filial', value: _barter.consultantBranch),
                   ],
+                  // O INVESTIMENTO POR HECTARE — a régua que compara permutas
+                  // de tamanhos diferentes. Ela vem do servidor já dividida, e
+                  // só para quem pode compará-la (admin, comitê e faturista):
+                  // para o consultor e o gerente o campo simplesmente não chega,
+                  // e a linha não aparece. Ver `barters.investmentPerHa`.
+                  //
+                  // `null` com área presente é permuta anterior ao campo de
+                  // área: a linha some em vez de mostrar "0 sc/ha", que seria
+                  // uma afirmação, e falsa.
+                  if (_barter.sacksPerHa != null)
+                    _InfoRow(
+                      label: 'Investimento',
+                      value: '${formatSacksPerHa(_barter.sacksPerHa!)}'
+                          '${_barter.producerAreaHa != null && _barter.producerAreaHa! > 0 ? ' • ${formatQty(_barter.producerAreaHa!)} ha' : ''}',
+                    ),
                   const Divider(height: 16),
                   // Em qual gestão do Barter esta permuta foi fechada: é o que
                   // explica os valores dela, que não mudam quando a versão
@@ -145,7 +196,12 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                     if (_barter.invoicedAt != null)
                       _InfoRow(label: 'Faturada em', value: _formatDate(_barter.invoicedAt!)),
                   ],
-                  if (_barter.reviewNote != null && _barter.reviewNote!.isNotEmpty)
+                  // A RESSALVA não entra aqui: ela tem bloco próprio, acima
+                  // dos itens, porque é a única linha da tela que pede AÇÃO de
+                  // quem lê. Repetida nos dois lugares, ela viraria paisagem.
+                  if (!_barter.hasConditions &&
+                      _barter.reviewNote != null &&
+                      _barter.reviewNote!.isNotEmpty)
                     _NoteBlock(
                       label: 'Observação do comitê',
                       text: _barter.reviewNote!,
@@ -163,9 +219,25 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           ),
           const SizedBox(height: 16),
 
-          // O PARECER vem antes dos itens de propósito: quem abre uma permuta
-          // que já passou pelo gerente quer saber o que ele disse antes de
-          // conferir linha a linha o que ela tem dentro.
+          // A RESSALVA vem PRIMEIRO, e antes até dos pareceres: ela é a única
+          // coisa na tela que alguém precisa fazer. Quem abre uma permuta
+          // aprovada com exigência tem de topar com ela antes de qualquer
+          // leitura.
+          if (_barter.hasConditions) ...[
+            ConditionsCard(barter: _barter),
+            const SizedBox(height: 16),
+          ],
+
+          // OS PARECERES vêm antes dos itens de propósito: quem abre uma permuta
+          // que já passou pelo consultor e pelo gerente quer saber o que eles
+          // disseram antes de conferir linha a linha o que ela tem dentro.
+          //
+          // Na ORDEM em que foram escritos, que é a ordem em que o comitê os lê:
+          // primeiro quem conhece o cliente, depois quem responde pelo time.
+          if (_barter.hasConsultantOpinion) ...[
+            ConsultantOpinionCard(barter: _barter),
+            const SizedBox(height: 16),
+          ],
           if (_barter.hasManagerOpinion) ...[
             ManagerOpinionCard(barter: _barter),
             const SizedBox(height: 16),
@@ -257,6 +329,16 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           ],
           const SizedBox(height: 20),
 
+          // O RASCUNHO — a etapa do consultor, e a única em que ele age depois
+          // de registrar.
+          if (_isMyDraft) ...[
+            _ConsultantDraftCard(
+              barter: _barter,
+              onChanged: (updated) => setState(() => _barter = updated),
+            ),
+            const SizedBox(height: 20),
+          ],
+
           if (_awaitsMyOpinion) ...[
             Text('Ação do Gerente',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
@@ -321,6 +403,26 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            // A TERCEIRA SAÍDA, em linha própria e mais discreta que as duas
+            // acima: ela é uma aprovação, e não uma terceira coisa entre o sim e
+            // o não — mas cobra um texto de quem a escolhe, então não pode ser
+            // tão fácil de clicar quanto as outras duas.
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => reviewBarter(
+                    context, _barter, BarterStatus.approvedWithConditions,
+                    onReviewed: (updated) => setState(() => _barter = updated)),
+                icon: const Icon(Icons.verified_outlined),
+                label: const Text('Aprovar com Ressalva'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.approvedWithConditions,
+                  side: BorderSide(color: AppColors.approvedWithConditions),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
           ],
 
           // O FATURAMENTO — o último posto. Uma ação só, porque a etapa é uma
@@ -337,10 +439,35 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () => invoiceBarter(context, _barter,
-                    onInvoiced: (updated) => setState(() => _barter = updated)),
+                onPressed: _openCpr,
                 icon: const Icon(Icons.receipt_long_outlined),
                 label: const Text('Faturar Permuta'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.invoiced,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+          ],
+
+          // A CÉDULA (CPR) — o documento que o posto do faturamento produz.
+          //
+          // Ela aparece nos DOIS estados do trecho do faturista: na aprovada,
+          // porque a coleta dos dados não precisa esperar a nota sair; e na já
+          // faturada, porque a cédula é papel que vem depois do ato — corrigir
+          // uma matrícula nela não desfatura nada.
+          // Já FATURADA: o caminho para a cédula continua aberto (corrigir uma
+          // matrícula não desfatura nada). Enquanto ela ESPERA faturamento este
+          // botão não aparece — o de "Faturar Permuta" acima leva ao mesmo
+          // lugar, e dois botões para a mesma tela é um a mais.
+          if (_canOpenCpr && !_barter.awaitsInvoice) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _openCpr,
+                icon: const Icon(Icons.description_outlined),
+                label: const Text('Cédula de Produto Rural (CPR)'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.invoiced,
                   padding: const EdgeInsets.symmetric(vertical: 14),
@@ -363,8 +490,214 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
 
   bool get _awaitsMyOpinion => _barter.awaitsOpinionFrom(widget.opinionManagerId);
 
+  /// É um RASCUNHO MEU? Só quem registrou escreve o parecer e encaminha — a
+  /// mesma conferência do servidor, repetida aqui para a tela não oferecer um
+  /// botão que levaria 403.
+  bool get _isMyDraft =>
+      _barter.isDraft &&
+      AppData.can(Capability.bartersRegister) &&
+      _barter.consultantId == AppData.currentUser?.id;
+
   String _formatDate(DateTime d) =>
       '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year} ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+}
+
+/// O RASCUNHO na mão do consultor: o parecer dele, e o botão que encaminha.
+///
+/// Ele é um formulário, e não um diálogo, porque é a etapa que ACONTECE EM DOIS
+/// MOMENTOS — foi para isso que o rascunho existe. O consultor monta a permuta
+/// hoje, conversa com o produtor amanhã e escreve o que sabe dele; um diálogo
+/// que só fecha enviando forçaria os dois momentos a serem um só, que era
+/// exatamente o problema.
+///
+/// Por isso as duas ações são separadas e desiguais: *Salvar* é ordinário
+/// (guarda e não move nada) e *Encaminhar* é o ato — ele tira a permuta da mesa
+/// dele e não tem volta. O segundo só liga quando há parecer suficiente, que é
+/// a mesma regra do servidor.
+class _ConsultantDraftCard extends StatefulWidget {
+  final BarterModel barter;
+  final ValueChanged<BarterModel> onChanged;
+
+  const _ConsultantDraftCard({required this.barter, required this.onChanged});
+
+  @override
+  State<_ConsultantDraftCard> createState() => _ConsultantDraftCardState();
+}
+
+class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
+  late final TextEditingController _note =
+      TextEditingController(text: widget.barter.consultantNote ?? '');
+  bool _saving = false;
+  bool _forwarding = false;
+
+  /// O texto salvo no servidor, para saber se há o que salvar. Ele acompanha as
+  /// respostas: gravou, virou o novo "salvo".
+  late String _saved = widget.barter.consultantNote ?? '';
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
+
+  bool get _busy => _saving || _forwarding;
+  String get _text => _note.text.trim();
+  bool get _enough => _text.length >= minOpinionLength;
+  bool get _dirty => _text != _saved.trim();
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      final updated = await AppData.saveBarterNote(widget.barter.id, _note.text);
+      if (!mounted) return;
+      setState(() {
+        _saved = updated.consultantNote ?? '';
+        _saving = false;
+      });
+      widget.onChanged(updated);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Rascunho salvo. A permuta continua com você.'),
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showErrorSnack(context, e);
+    }
+  }
+
+  Future<void> _forward() async {
+    // O ENCAMINHAMENTO não tem volta: a permuta sai da mesa dele e vai para a
+    // do gerente. Perguntar antes é o que se faz com um ato que não se desfaz.
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Encaminhar ao gerente'),
+        content: Text(
+          'A permuta ${widget.barter.id} vai para o gerente com o seu parecer. '
+          'Depois disso, o parecer não pode mais ser alterado.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Encaminhar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _forwarding = true);
+    try {
+      final updated = await AppData.forwardBarter(widget.barter.id, _note.text);
+      if (!mounted) return;
+      setState(() => _forwarding = false);
+      widget.onChanged(updated);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Permuta encaminhada a ${updated.managerLabel}.'),
+        backgroundColor: AppColors.atManager,
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _forwarding = false);
+      showErrorSnack(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.draftBg,
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.draft.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.edit_note_rounded, size: 18, color: AppColors.draft),
+              const SizedBox(width: 6),
+              Text('Seu parecer',
+                  style: TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // O PORQUÊ, e não a instrução: o consultor sabe escrever um parágrafo.
+          // O que ele não sabe é quem vai ler — e é isso que muda o que ele
+          // escreve.
+          Text(
+            'O gerente e o comitê leem isto antes de opinar e decidir. '
+            'Enquanto você não encaminhar, a permuta é um rascunho e ninguém mais a vê.',
+            style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _note,
+            enabled: !_busy,
+            minLines: 4,
+            maxLines: 8,
+            maxLength: 2000,
+            textCapitalization: TextCapitalization.sentences,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              labelText: 'Parecer do consultor',
+              hintText: 'Safras anteriores, pontualidade, o que está plantado…',
+              alignLabelWithHint: true,
+              filled: true,
+            ),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _busy || !_dirty ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.save_outlined),
+                  label: const Text('Salvar'),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _busy || !_enough ? null : _forward,
+                  icon: _forwarding
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: AppColors.onPrimary))
+                      : const Icon(Icons.send_outlined),
+                  label: const Text('Encaminhar'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.atManager,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (!_enough)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                'Escreva o parecer para poder encaminhar.',
+                style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
 
 /// A permuta está na mesa do gerente e o parecer ainda não veio.

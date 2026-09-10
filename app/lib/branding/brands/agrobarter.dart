@@ -58,6 +58,14 @@ const Brand agroBarterBrand = Brand(
     // Um segundo tom de âmbar teria mantido as duas indistinguíveis.
     atManager: Color(0xFF4338CA),
     atManagerBg: Color(0xFFEEF0FF),
+    // Ardósia para o RASCUNHO: sem cor de estado, porque ele não é fila de
+    // ninguém — ver `draft` em BrandPalette.
+    draft: Color(0xFF475569),
+    draftBg: Color(0xFFF1F5F9),
+    // Verde-oliva para a APROVADA COM RESSALVA: da família do aprovado, e
+    // distinguível dele à primeira vista na mesma lista.
+    approvedWithConditions: Color(0xFF4D7C0F),
+    approvedWithConditionsBg: Color(0xFFF4FBE6),
     approved: Color(0xFF15803D),
     // Âmbar mais claro que `grain` de propósito: os dois aparecem lado a lado
     // no painel, e com o mesmo tom um selo de revisão se confundia com um

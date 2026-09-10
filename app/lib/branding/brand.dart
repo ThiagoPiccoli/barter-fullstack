@@ -75,7 +75,30 @@ class BrandPalette {
   /// do gerente existe para dar.
   final Color atManager;
   final Color atManagerBg;
+
+  /// [draft] é o RASCUNHO do consultor — a permuta que existe e ainda não foi
+  /// proposta a ninguém.
+  ///
+  /// Ela é NEUTRA de propósito, e é a única do caminho que é: as outras cores
+  /// dizem "alguém precisa agir", e uma fila colorida convida a agir. O rascunho
+  /// não é fila — é trabalho em cima da mesa de quem o escreveu, e pintá-lo com
+  /// o âmbar da espera colocaria na lista do consultor uma urgência que ninguém
+  /// tem.
+  final Color draft;
+  final Color draftBg;
   final Color approved;
+
+  /// [approvedWithConditions] é a aprovação COM RESSALVA — liberada, e com uma
+  /// exigência a cumprir (garantia real, seguro, aval).
+  ///
+  /// Cor própria pelo mesmo motivo de [invoiced] e [atManager]: ela é da família
+  /// do aprovado, e por isso um verde; é mais quente que o de [approved] porque
+  /// a permuta chega ao faturista com uma condição pendurada, e o selo é o único
+  /// lugar da LISTA onde isso pode aparecer. Pintada do mesmo verde da aprovação
+  /// limpa, a exigência só existiria para quem abrisse a permuta e lesse até o
+  /// fim.
+  final Color approvedWithConditions;
+  final Color approvedWithConditionsBg;
   final Color pending;
   final Color denied;
   final Color approvedBg;
@@ -141,7 +164,11 @@ class BrandPalette {
     required this.onPrimaryOverlay,
     required this.atManager,
     required this.atManagerBg,
+    required this.draft,
+    required this.draftBg,
     required this.approved,
+    required this.approvedWithConditions,
+    required this.approvedWithConditionsBg,
     required this.pending,
     required this.denied,
     required this.approvedBg,

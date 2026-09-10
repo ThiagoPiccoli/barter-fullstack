@@ -417,17 +417,19 @@ model PriceHistoryEntry {
 /// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
 /// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
 ///
-/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de três postos:
+/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de quatro postos:
 ///
-///     sentToManager → pending → approved → invoiced
-///      (gerente)     (comitê)  (faturista)
-///                        ↘ denied
+///     draft → sentToManager → pending → approved              → invoiced
+///  (consultor)  (gerente)    (comitê)   approvedWithConditions  (faturista)
+///                                ↘ denied
 ///
-/// `sentToManager` é onde ela nasce: o consultor a registrou e ela está na mesa
-/// do GERENTE DELE, esperando o parecer técnico. Escrito o parecer, ela vai ao
-/// COMITÊ (`pending`), que lê o pedido do consultor e o parecer do gerente e
-/// decide — é a única instância que aprova ou nega. Aprovada, ela cai na fila do
-/// FATURISTA, que fatura (`invoiced`) e encerra a linha.
+/// `draft` é onde ela nasce: o consultor a montou, e ela ainda é DELE — não está
+/// na mesa de ninguém e nenhuma fila da retaguarda a enxerga. Escrito o parecer
+/// do consultor, ele a encaminha ao GERENTE (`sentToManager`), que dá o parecer
+/// técnico. Daí ela vai ao COMITÊ (`pending`), que lê o pedido e os dois
+/// pareceres e decide — é a única instância que aprova, aprova com ressalva ou
+/// nega. Aprovada (com ou sem ressalva), ela cai na fila do FATURISTA, que
+/// fatura (`invoiced`) e encerra a linha.
 ///
 /// Quem guarda esse caminho — quem move o quê, de onde para onde, e o que
 /// responder a quem chega fora de hora — é `src/barters/barter-workflow.ts`. O
@@ -462,7 +464,38 @@ model Barter {
   unit     Unit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
   unitName String @default("")
 
-  status String @default("sentToManager")
+  /// A ÁREA CULTIVÁVEL do produtor (ha) no momento do registro.
+  ///
+  /// Snapshot pelo mesmo motivo do preço do item e da alíquota: ela é o
+  /// DENOMINADOR do investimento por hectare (sc/ha), e o produtor arrenda mais
+  /// terra na safra seguinte. Lida do cadastro na hora de mostrar, a mesma
+  /// permuta passaria a exibir um investimento por hectare menor sem que nada
+  /// nela tivesse mudado — e quem aprovou 12 sc/ha veria 9 no dia da auditoria.
+  ///
+  /// 0 nas permutas anteriores a este campo: sem área registrada não há sc/ha, e
+  /// a leitura devolve `null` em vez de dividir por zero e afirmar um número.
+  producerAreaHa Float @default(0)
+
+  status String @default("draft")
+
+  /// O PARECER DO CONSULTOR e o momento em que ele encaminhou a permuta.
+  ///
+  /// É a peça que faltava no começo da linha. O consultor é quem conhece o
+  /// cliente — safras anteriores, pontualidade, o que está plantado —, e nada
+  /// disso chegava escrito: a permuta ia ao gerente como uma lista de insumos, e
+  /// o que o consultor sabia ficava no telefonema que ele dava depois.
+  ///
+  /// Ele é gravado no ENCAMINHAMENTO, mas pode ser escrito antes: enquanto a
+  /// permuta é `draft`, o consultor salva o texto quantas vezes quiser (ver
+  /// `PUT /barters/:code/note`). É o único texto do fluxo que se reescreve — os
+  /// outros são assinaturas de etapas cumpridas. O que não se reescreve, aqui
+  /// como nos outros, é o EVENTO: `consultantSentAt` marca o encaminhamento, e
+  /// o texto que foi junto fica congelado no BarterEvent.
+  ///
+  /// Null nas permutas anteriores a este campo — elas nasceram já na mesa do
+  /// gerente, e inventar um parecer para elas seria assinar em nome de alguém.
+  consultantNote   String?
+  consultantSentAt DateTime?
 
   /// O IMPOSTO DA ENTREGA — a entrega de grão é comercialização de produção
   /// rural, e sobre ela incidem o Funrural e o Senar.
@@ -513,6 +546,13 @@ model Barter {
   ///
   /// `reviewedBy` é snapshot pelo mesmo motivo de `managerName` — a decisão
   /// continua assinada depois que a conta for excluída.
+  ///
+  /// `reviewNote` é OPCIONAL no schema e OBRIGATÓRIO em duas das três saídas: a
+  /// negativa e a aprovação com ressalva não existem sem texto (ver
+  /// `ReviewBarterDto`). Quem valida isso é a entrada, e não o banco, porque a
+  /// obrigatoriedade depende do DESFECHO — uma coluna `NOT NULL` recusaria
+  /// também a aprovação limpa, que não tem o que explicar, e reescreveria as
+  /// decisões já gravadas sem observação.
   reviewNote   String?
   reviewedBy   String?
   reviewedById Int?
@@ -534,6 +574,11 @@ model Barter {
 
   items  BarterItem[]
   events BarterEvent[]
+
+  /// A CÉDULA DE PRODUTO RURAL desta permuta, quando o faturista já começou a
+  /// preenchê-la. Uma só, e opcional: a permuta existe e anda sem CPR — ela é o
+  /// documento que o faturamento produz, não um requisito do fluxo.
+  cpr BarterCpr?
 
   @@index([versionId])
   @@index([unitId])
@@ -604,6 +649,328 @@ model BarterItem {
   unit        String
   quantity    Float
   unitValue   Float
+}
+
+/// A CREDORA — a empresa que recebe o grão, como os documentos a nomeiam.
+///
+/// A CPR nomeia duas partes: o EMITENTE (o produtor, que muda a cada cédula) e a
+/// CREDORA, que é sempre a mesma e aparece em quatro cláusulas do documento — a
+/// qualificação (II), a promessa de entrega, o local de entrega (V-d) e o foro
+/// (XX) —, com a qualificação por inteiro repetida nas três primeiras.
+///
+/// É CADASTRO, e não campo de formulário: pedir a razão social a cada cédula é
+/// pedir que alguém digite o CNPJ do próprio empregador trezentas vezes, e a
+/// trezentésima primeira sai com um dígito trocado num título de crédito.
+///
+/// LINHA ÚNICA, pelo mesmo desenho do comitê (`isSingleAccount` em roles.ts): a
+/// rota é `/creditor`, no singular, sem `:id` e sem exclusão. Uma instalação
+/// serve uma empresa — duas credoras cadastradas fariam a cédula ter de
+/// escolher, e nada no documento diz qual. O dia em que a mesma instalação
+/// servir a mais de uma, isto vira lista e a permuta passa a apontar para uma
+/// delas; até lá, a unicidade é a afirmação certa.
+///
+/// Quem escreve são o ADMIN e o FATURISTA (`creditor.manage`). O segundo está
+/// aí de propósito: quem percebe que o CNPJ saiu errado é quem monta a cédula.
+model Creditor {
+  /// Sempre 1. A linha é única, e o id fixo é o que torna a leitura um
+  /// `findUnique` em vez de um `findFirst` com ordenação — que é a mesma
+  /// diferença entre "a credora" e "alguma credora".
+  id Int @id @default(1)
+
+  name           String @default("")
+  cnpj           String @default("")
+  address        String @default("")
+  addressNumber  String @default("")
+  /// Município/UF da sede, no mesmo formato do produtor ("Maringá/PR").
+  city           String @default("")
+
+  /// O FORO eleito (cláusula XX da CPR). Quase sempre a comarca da sede — e por
+  /// isso o vazio vale como `city` na leitura —, mas é escolha contratual, e há
+  /// credora que elege outra.
+  forum String @default("")
+
+  updatedAt DateTime @updatedAt
+
+  /// Quem mexeu por último, congelado em texto pelo mesmo motivo de
+  /// `Barter.invoicedBy`: a linha precisa continuar legível depois que a conta
+  /// for excluída.
+  updatedBy String @default("")
+}
+
+/// A CÉDULA DE PRODUTO RURAL (CPR) desta permuta — o que a permuta NÃO sabe.
+///
+/// A CPR é o título que formaliza a entrega do grão: o produtor emite, a empresa
+/// é a credora, e o documento é registrado na B3 (ver a cláusula XIII do
+/// modelo). Ela é o desfecho jurídico do que a permuta já acordou — e por isso
+/// quase tudo o que ela precisa JÁ ESTÁ no registro: quem entrega
+/// (`Barter.producerName`), quanto (o item de grão), a que preço
+/// (`BarterItem.unitValue`), de que safra (`Barter.versionCode`).
+///
+/// O QUE FALTA é o que uma cédula exige e uma permuta não: a qualificação civil
+/// do emitente (a lei pede nacionalidade, estado civil, profissão, RG e endereço
+/// completo), as matrículas das lavouras dadas em penhor, os padrões de
+/// qualidade do grão e os números da nota e da duplicata que originaram a
+/// dívida. É ISSO que esta tabela guarda, e é isso que o faturista preenche.
+///
+/// É do FATURISTA porque é o posto que emite documento para fora — o mesmo
+/// motivo pelo qual a nota fiscal é dele. O consultor monta a negociação, o
+/// comitê decide, e quem transforma o acordo em título é quem fatura.
+///
+/// UMA POR PERMUTA (`barterId @unique`): a CPR é o título daquela entrega, e
+/// duas cédulas sobre o mesmo grão seriam duas cobranças do mesmo produto.
+///
+/// Nada aqui é snapshot. Ao contrário do resto da permuta, estes campos são um
+/// RASCUNHO até o documento sair: o faturista digita, confere, corrige o RG que
+/// veio errado. O congelamento acontece no documento emitido, e não na linha —
+/// é a diferença entre o que ainda se está escrevendo e o que já foi assinado.
+///
+/// E porque é rascunho, ele é SALVÁVEL PELA METADE. O vazio (`""`, `0`, `null`)
+/// significa "ainda não preenchido", e quem diz o que falta é `cprGaps()`, em
+/// cpr.ts — não o banco, e não a validação de entrada. Exigir a cédula inteira
+/// numa tacada só obrigaria o faturista a esperar o número da nota para poder
+/// gravar a qualificação que ele tem na mão agora, e o rascunho ficaria num
+/// papel ao lado do computador, que é onde ele estava antes deste formulário.
+model BarterCpr {
+  id       Int    @id @default(autoincrement())
+  barterId Int    @unique
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O número da cédula, como a empresa a numera. É texto, e não sequência
+  /// gerada: a numeração da CPR é da emissão em papel/registro e costuma vir de
+  /// fora deste sistema (cartório, B3, controle interno da credora).
+  number String @default("")
+
+  /// A data da EMISSÃO ("Aos [DIA] dias do mês de [MÊS] de [ANO]") e o
+  /// VENCIMENTO da entrega. São diferentes da data da permuta de propósito: a
+  /// cédula é emitida quando o faturista a monta, e vence na colheita.
+  ///
+  /// O vencimento é nulável porque é DADO DA NEGOCIAÇÃO que pode faltar no
+  /// rascunho; a emissão nasce com o dia em que o rascunho foi aberto, que é a
+  /// resposta certa na esmagadora maioria das vezes e é editável nas outras.
+  issuedAt DateTime  @default(now())
+  dueDate  DateTime?
+
+  /// A QUALIFICAÇÃO CIVIL do emitente. O cadastro de produtor tem nome,
+  /// documento, fazenda, município e área — o suficiente para permutar, e não o
+  /// suficiente para emitir título: a cédula qualifica a pessoa por inteiro.
+  ///
+  /// Fica AQUI, e não no produtor, porque quem preenche é o faturista e o
+  /// cadastro é do admin (`producers.manage`). A repetição a cada CPR é
+  /// resolvida pelo pré-preenchimento a partir da última cédula do mesmo
+  /// produtor — ver `prefillFrom` em barters.service.ts —, não por dar ao
+  /// faturista a caneta do cadastro.
+  emitterNationality   String @default("")
+  emitterMaritalStatus String @default("")
+  emitterProfession    String @default("")
+  emitterRg            String @default("")
+  emitterAddress       String @default("")
+  emitterAddressNumber String @default("")
+  /// Município/UF, no mesmo formato do produtor ("Maringá/PR").
+  emitterCity          String @default("")
+  /// A matrícula do emitente na cooperativa, que fecha o bloco de assinatura.
+  /// Opcional: nem toda credora é cooperativa.
+  emitterCoopId        String?
+
+  /// A QUALIFICAÇÃO QUE A PROPOSTA PEDE E A CÉDULA NÃO IMPRIME.
+  ///
+  /// CNH, filiação e e-mail não aparecem em nenhuma cláusula do modelo — quem
+  /// os pede é a planilha de proposta, e por trás dela o cartório (a filiação é
+  /// o que individualiza um homônimo no registro) e a operação (o e-mail é por
+  /// onde a assinatura eletrônica chega).
+  ///
+  /// Eles são COLETADOS e não SAEM, e essa diferença é deliberada: `cprGaps()`
+  /// não os cobra, porque quem decide o que falta é o documento, e o documento
+  /// não os usa. Se um dia uma cláusula precisar deles, é lá que a mudança
+  /// acontece — aqui o dado já está.
+  emitterCnh        String @default("")
+  emitterFatherName String @default("")
+  emitterMotherName String @default("")
+  emitterEmail      String @default("")
+
+  /// O LOCAL DA ENTREGA do grão (cláusula V, "d").
+  ///
+  /// É campo, e não a unidade de retirada da permuta, porque as duas coisas não
+  /// são a mesma: retirar insumo na Filial 02 não obriga ninguém a entregar o
+  /// grão lá. A unidade entra como SUGESTÃO no formulário (é o caso comum), e
+  /// quem confirma é quem assina embaixo.
+  deliveryPlace String @default("")
+
+  /// HIPOTECAS oferecidas em garantia, como texto livre.
+  ///
+  /// A planilha de proposta as pede num campo só, e é assim que elas chegam.
+  /// Não saem na cédula por enquanto: o modelo não tem cláusula para elas, e
+  /// inventar uma seria escrever garantia nova em título executável.
+  mortgages String @default("")
+
+  /// A ANUÊNCIA DO CÔNJUGE. Nulo quando não há — e "não há" é o caso comum, não
+  /// uma pendência: só o emitente casado assina acompanhado.
+  ///
+  /// O estado civil e o endereço do cônjuge não estão aqui porque não são
+  /// informação nova: o estado civil dele é o do emitente (é o que faz dele
+  /// cônjuge) e o endereço é o mesmo domicílio conjugal. Pedi-los de novo abriria
+  /// a chance de o casal morar em endereços diferentes NO DOCUMENTO.
+  spouseName        String?
+  spouseNationality String?
+  spouseProfession  String?
+  spouseDocument    String?
+  /// O RG do cônjuge é da proposta, não da cédula: o modelo qualifica o cônjuge
+  /// por CPF. Ver o bloco de CNH/filiação acima — mesma natureza.
+  spouseRg          String?
+
+  /// O PADRÃO DO GRÃO recebido (cláusula V, "c"). São exigências comerciais da
+  /// credora, não do cadastro do produto: o mesmo grão é recebido com padrões
+  /// diferentes conforme o ano e o contrato.
+  ///
+  /// `sackWeightKg` é o que converte sacas em quilos ("[QUANTIDADE] kg que
+  /// corresponde a [Nº DE SACAS] sacas de [PESO POR SACA] kg cada"). 60 é o
+  /// padrão do mercado e por isso é o default — mas é um valor da cédula, e não
+  /// uma constante do código, porque semente e milho em big-bag fogem dele.
+  sackWeightKg  Float  @default(60)
+  cultivar      String @default("")
+  /// Percentuais máximos tolerados e o teor de óleo padrão do grão. Zero é
+  /// "ainda não preenchido", e não "sem tolerância": um padrão de umidade 0%
+  /// recusaria a colheita inteira, então o número tem de ser digitado por
+  /// alguém. Ver `cprGaps()`.
+  maxMoisture   Float  @default(0)
+  maxImpurities Float  @default(0)
+  oilContent    Float  @default(0)
+
+  /// A ORIGEM DA DÍVIDA (cláusula VII): a troca de insumos já faturada. A nota e
+  /// a duplicata são o que amarra a cédula ao faturamento que a originou — sem
+  /// elas o título flutua, e é justamente esse vínculo que a cláusula afirma.
+  invoiceNumber   String @default("")
+  duplicateNumber String @default("")
+
+  /// A apólice do seguro agrícola embutido (cláusula XVIII, "j"). Opcional: nem
+  /// toda permuta leva seguro contratado.
+  insurancePolicy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Quem preencheu por último, congelado em texto pelo mesmo motivo de
+  /// `Barter.invoicedBy`: a linha precisa continuar legível depois que a conta
+  /// for excluída.
+  filledBy   String
+  filledById Int?
+
+  areas      CprArea[]
+  guarantors CprGuarantor[]
+}
+
+/// O AVALISTA — quem garante a obrigação do emitente com o próprio patrimônio.
+///
+/// Ele vem da PLANILHA DE PROPOSTA, e não do modelo de cédula: o texto que a
+/// operação usa hoje não tem bloco de assinatura de avalista nem cláusula de
+/// aval. Por isso ele é COLETADO e não IMPRESSO — o dado fica guardado, o
+/// documento continua sendo exatamente o modelo aprovado, e o dia em que a
+/// cláusula existir ela vai encontrar o cadastro pronto.
+///
+/// É LISTA, e não um bloco fixo, pelo mesmo motivo das lavouras: a proposta traz
+/// um avalista porque o exemplo tinha um. Aval de casal são dois, e uma operação
+/// grande pede três.
+///
+/// A FORMA é a mesma da qualificação do emitente, campo por campo, e isso é uma
+/// afirmação sobre o domínio: avalista e emitente são a mesma coisa para o
+/// direito — pessoas que se obrigam —, e o que os separa é o papel, não os
+/// dados.
+model CprGuarantor {
+  id    Int       @id @default(autoincrement())
+  cprId Int
+  cpr   BarterCpr @relation(fields: [cprId], references: [id], onDelete: Cascade)
+
+  /// A ordem em que ele foi acrescentado — a mesma razão de `CprArea.position`.
+  position Int @default(0)
+
+  name          String @default("")
+  document      String @default("")
+  rg            String @default("")
+  cnh           String @default("")
+  nationality   String @default("")
+  profession    String @default("")
+  maritalStatus String @default("")
+  fatherName    String @default("")
+  motherName    String @default("")
+  email         String @default("")
+  address       String @default("")
+  addressNumber String @default("")
+  city          String @default("")
+
+  /// O CÔNJUGE DO AVALISTA. O aval de quem é casado costuma exigir a anuência
+  /// do cônjuge pelo mesmo motivo do emitente — há regime de bens no meio.
+  spouseName        String @default("")
+  spouseDocument    String @default("")
+  spouseRg          String @default("")
+  spouseNationality String @default("")
+  spouseProfession  String @default("")
+
+  @@index([cprId, position])
+}
+
+/// UMA LAVOURA dada em penhor na cédula — o "(i)", o "(ii)" e quantos mais
+/// houver do "Local da Lavoura" (cláusula V, "b", repetido na VI).
+///
+/// É TABELA, e não dois blocos de campos, porque o modelo do documento é uma
+/// enumeração: o produtor planta em quantas áreas plantar, e o texto as lista.
+/// Com campos fixos, a terceira área não teria onde entrar — e a segunda ficaria
+/// vazia na maioria das cédulas, que é o outro lado do mesmo erro.
+model CprArea {
+  id    Int       @id @default(autoincrement())
+  cprId Int
+  cpr   BarterCpr @relation(fields: [cprId], references: [id], onDelete: Cascade)
+
+  /// A ORDEM em que a área aparece no documento. Ela é citada por posição no
+  /// texto ("(i)", "(ii)"), então a ordem é conteúdo, e não apresentação.
+  position Int @default(0)
+
+  /// Onde fica: a localidade (o nome do lugar, "Água Boa", "Linha São João") e o
+  /// município/UF.
+  locality String
+  city     String
+
+  /// A área PLANTADA nesta matrícula, em hectares. Não é a área do imóvel nem a
+  /// área cultivável do produtor (`Producer.areaHa`, que é a soma e serve aos
+  /// mínimos por hectare): é quanto desta matrícula está sob penhor.
+  areaHa Float
+
+  /// Se o plantio ocupa só parte do imóvel — o "dentro de uma área maior" do
+  /// modelo. Muda a frase do documento, e é a diferença entre penhorar a lavoura
+  /// e parecer penhorar a fazenda inteira.
+  withinLargerArea Boolean @default(false)
+
+  /// O REGISTRO DO IMÓVEL: matrícula, livro e a comarca do cartório. É o que
+  /// individualiza a garantia — sem matrícula, o penhor não se registra.
+  registryNumber   String
+  registryBook     String
+  registryDistrict String
+
+  owners CprAreaOwner[]
+
+  @@index([cprId, position])
+}
+
+/// O PROPRIETÁRIO de uma das lavouras, com o CPF/CNPJ dele.
+///
+/// Lista, e não um par de campos, pelo mesmo motivo das áreas: o modelo traz
+/// dois proprietários porque o exemplo tinha dois. Imóvel rural em nome do casal
+/// tem dois; em espólio ou herança, tem seis.
+///
+/// Ele NÃO é o emitente: a lavoura penhorada costuma ser arrendada, e é
+/// exatamente por isso que o documento nomeia o dono do imóvel separadamente de
+/// quem planta.
+model CprAreaOwner {
+  id     Int     @id @default(autoincrement())
+  areaId Int
+  area   CprArea @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  position Int    @default(0)
+  name     String
+  /// CPF ou CNPJ, com a pontuação que o faturista digitar — é o que sai
+  /// impresso. Aqui não há unicidade a defender (o proprietário não é cadastro),
+  /// então não existe a coluna só-dígitos de `Producer`.
+  document String
+
+  @@index([areaId, position])
 }
 
 /// Trilha de AUDITORIA dos atos sensíveis: quem provisionou, redefiniu senha,

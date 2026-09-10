@@ -6,6 +6,7 @@ import '../models/models.dart';
 import '../data/app_data.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
+import 'cpr_form_screen.dart';
 import 'barter_screen.dart';
 import 'send_simulation.dart';
 
@@ -72,12 +73,17 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// desenhar o que ele não vai responder.
   late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadInvoicing)
       ? const [BarterStatus.approved, BarterStatus.invoiced]
-      : const [
+      : [
           null,
-          // Na ordem da LINHA DE PRODUÇÃO: gerente → comitê → faturamento. A
-          // lista lida da esquerda para a direita conta o caminho da permuta, e
-          // é por isso que "Negadas" fica no fim: ela é saída lateral, não um
-          // degrau adiante.
+          // O RASCUNHO abre a lista de quem registra, e só a dele: é o único
+          // estado em que o consultor tem o que fazer, e a permuta pela metade
+          // não é fila de mais ninguém. Para a retaguarda a aba nem existe — o
+          // servidor não devolveria nada nela.
+          if (AppData.can(Capability.bartersRegister)) BarterStatus.draft,
+          // Na ordem da LINHA DE PRODUÇÃO: consultor → gerente → comitê →
+          // faturamento. A lista lida da esquerda para a direita conta o caminho
+          // da permuta, e é por isso que "Negadas" fica no fim: ela é saída
+          // lateral, não um degrau adiante.
           BarterStatus.sentToManager,
           BarterStatus.pending,
           BarterStatus.approved,
@@ -87,9 +93,10 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
 
   String _tabLabel(BarterStatus? status) => switch (status) {
         null => 'Todas',
+        BarterStatus.draft => 'Rascunhos',
         BarterStatus.sentToManager => 'No gerente',
         BarterStatus.pending => 'No comitê',
-        BarterStatus.approved => 'A faturar',
+        BarterStatus.approved || BarterStatus.approvedWithConditions => 'A faturar',
         BarterStatus.invoiced => 'Faturadas',
         BarterStatus.denied => 'Negadas',
       };
@@ -159,11 +166,23 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     widget.onChanged?.call();
   }
 
+  /// A permuta cai NESTA aba?
+  ///
+  /// A aba é um POSTO da linha, e não um estado cru: "A faturar" é a mesa do
+  /// faturista, e as duas aprovações estão nela — a limpa e a com ressalva. Uma
+  /// aba por estado daria ao faturista duas filas para o mesmo trabalho, e a
+  /// ressalva (que ele precisa ver) ficaria escondida na segunda. O que
+  /// distingue as duas é o SELO do cartão, que é onde a exigência aparece.
+  bool _inTab(BarterModel barter, BarterStatus tab) =>
+      tab == BarterStatus.approved
+          ? barter.awaitsInvoice
+          : barter.status == tab;
+
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
         ? List<BarterModel>.from(AppData.barters)
         : AppData.barters.where((b) => b.consultantId == widget.consultantId).toList();
-    if (status != null) list = list.where((b) => b.status == status).toList();
+    if (status != null) list = list.where((b) => _inTab(b, status)).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
       list = list
@@ -387,6 +406,41 @@ class _BarterCard extends StatelessWidget {
                   ),
                 ],
               ),
+              // O INVESTIMENTO POR HECTARE fica AQUI, na lista, porque é aqui
+              // que se compara: as duas pílulas acima dizem o TAMANHO desta
+              // permuta, e o tamanho sozinho não distingue R$ 400 mil numa
+              // fazenda de 2.000 ha de R$ 400 mil numa de 300. No detalhe ele
+              // também está, mas lá há uma permuta só na tela — e uma régua
+              // sem régua ao lado não compara nada.
+              //
+              // Ele só chega a quem pode compará-lo (admin, comitê e faturista):
+              // para os outros o campo nem vem no JSON, e a linha não existe.
+              if (barter.sacksPerHa != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.straighten, size: 13, color: AppColors.textLight),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Investimento ',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
+                    Text(
+                      formatSacksPerHa(barter.sacksPerHa!),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                    if (barter.producerAreaHa != null && barter.producerAreaHa! > 0)
+                      Text(
+                        ' • ${formatQty(barter.producerAreaHa!)} ha',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -479,7 +533,7 @@ class _BarterCard extends StatelessWidget {
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () =>
-                        invoiceBarter(context, barter, onInvoiced: (_) => onChanged()),
+                        openInvoicing(context, barter, onInvoiced: (_) => onChanged()),
                     icon: const Icon(Icons.receipt_long_outlined, size: 16),
                     label: const Text('Faturar', style: TextStyle(fontSize: 13)),
                     style: ElevatedButton.styleFrom(

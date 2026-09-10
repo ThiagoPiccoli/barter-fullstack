@@ -65,8 +65,15 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       .get('/api/v1/barters')
       .set('Authorization', auth);
     expect(barters.status).toBe(200);
-    // As 8 do dataset — o consultor João, por comparação, vê 2.
+    // As 8 propostas do dataset — o consultor João, por comparação, vê 3. A nona
+    // é o RASCUNHO dele, e ela não está aqui: quem enxerga TUDO enxerga tudo o
+    // que foi proposto, não o que ainda está sendo escrito.
     expect(barters.body.data).toHaveLength(8);
+    expect(barters.body.data.map((b: { code: string }) => b.code)).not.toContain('PRM-2026-009');
+    const rascunhoAlheio = await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-009')
+      .set('Authorization', auth);
+    expect(rascunhoAlheio.status).toBe(403);
     expect(
       barters.body.data.filter((b: { status: string }) => b.status === 'sentToManager'),
     ).toHaveLength(2);
@@ -100,7 +107,8 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       .get('/api/v1/barters')
       .set('Authorization', auth);
     expect(barters.status).toBe(200);
-    // As 3 aprovadas e a 1 já faturada. As outras 4 (no gerente, no comitê e a
+    // As 3 aprovadas — uma delas COM RESSALVA, que fatura igual — e a 1 já
+    // faturada. As outras 5 (o rascunho, as duas no gerente, a do comitê e a
     // negada) não são dele.
     expect(barters.body.data.map((b: { code: string }) => b.code).sort()).toEqual([
       'PRM-2026-001',
@@ -115,7 +123,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       .get('/api/v1/barters/PRM-2026-004')
       .set('Authorization', auth)
       .expect(200);
-    for (const fora of ['PRM-2026-002', 'PRM-2026-003', 'PRM-2026-005']) {
+    for (const fora of ['PRM-2026-002', 'PRM-2026-003', 'PRM-2026-005', 'PRM-2026-009']) {
       const resposta = await request(app.getHttpServer())
         .get(`/api/v1/barters/${fora}`)
         .set('Authorization', auth);

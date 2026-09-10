@@ -4,7 +4,18 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import type { Barter, BarterEvent, BarterItem, Prisma, User } from '@prisma/client';
+import type {
+  Barter,
+  BarterCpr,
+  Creditor,
+  BarterEvent,
+  BarterItem,
+  CprArea,
+  CprAreaOwner,
+  CprGuarantor,
+  Prisma,
+  User,
+} from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -22,27 +33,62 @@ import {
   BARTER_STATUS,
   BARTER_STEPS,
   lineFrom,
+  outcomeLabelOf,
   refusalFor,
   type BarterAction,
   type BarterStatus,
 } from './barter-workflow';
 import { TAX_REGIME, taxRateOf } from './tax-regime';
+import { EMPTY_CPR, cprGaps, knownFrom, suggestFrom, type CprKnown } from './cpr';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
 import { ROLE } from '../common/roles';
+import { CreditorService } from '../creditor/creditor.service';
 import { SeasonsService } from '../seasons/seasons.service';
 import {
   BarterOpinionDto,
   CreateBarterDto,
+  ForwardBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
+  MIN_OPINION_LENGTH,
   ReviewBarterDto,
+  SaveBarterNoteDto,
 } from './dto/barter.dto';
+import { SaveCprDto } from './dto/cpr.dto';
 
 type BarterWithItems = Barter & { items: BarterItem[] };
 
 /** A permuta com a LINHA DO TEMPO junto — a forma do detalhe. */
 type BarterDetail = BarterWithItems & { events: BarterEvent[] };
+
+/** A cédula com as lavouras e os donos delas — a forma como ela é lida e salva. */
+type CprWithAreas = BarterCpr & {
+  areas: (CprArea & { owners: CprAreaOwner[] })[];
+  guarantors: CprGuarantor[];
+};
+
+/** O `include` da cédula, escrito uma vez: leitura e sugestão leem o mesmo. */
+const CPR_INCLUDE = {
+  areas: {
+    orderBy: { position: 'asc' },
+    include: { owners: { orderBy: { position: 'asc' } } },
+  },
+  guarantors: { orderBy: { position: 'asc' } },
+} as const;
+
+/**
+ * A MESA DA CÉDULA: o rascunho, o que a permuta já responde, quem é a credora e
+ * o que ainda falta. É o que a tela do faturista precisa para desenhar o
+ * formulário inteiro numa requisição só.
+ */
+interface CprDesk {
+  cpr: CprWithAreas | null;
+  known: CprKnown;
+  creditor: Creditor;
+  gaps: string[];
+  suggestion: ReturnType<typeof suggestFrom>;
+}
 
 /** Quanto de um texto longo cabe numa linha da trilha sem afogá-la. */
 const AUDIT_DETAIL_LIMIT = 180;
@@ -61,6 +107,7 @@ export class BartersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly seasons: SeasonsService,
+    private readonly creditor: CreditorService,
   ) {}
 
   /**
@@ -81,7 +128,15 @@ export class BartersService {
    * maior dos dois alcances em vez de ficar preso ao menor.
    */
   private scopeFor(user: User): Prisma.BarterWhereInput {
-    if (can(user, CAPABILITY.bartersReadAll)) return {};
+    // O RASCUNHO é do dono, e essa é a única exceção ao "tudo": uma permuta que
+    // o consultor ainda está montando não é fila de ninguém, e vê-la na tela do
+    // comitê é pedir decisão sobre um negócio que ainda não foi proposto. Os
+    // outros três escopos já a excluem por construção — o rascunho não tem
+    // gerente endereçado e não chegou ao faturamento —, e o do consultor a
+    // inclui porque ela é dele.
+    if (can(user, CAPABILITY.bartersReadAll)) {
+      return { OR: [{ status: { not: BARTER_STATUS.draft } }, { consultantId: user.id }] };
+    }
     if (can(user, CAPABILITY.bartersReadTeam)) return { managerId: user.id };
     if (can(user, CAPABILITY.bartersReadInvoicing)) {
       return { status: { in: lineFrom(BARTER_ACTION.invoice) } };
@@ -95,14 +150,25 @@ export class BartersService {
    * O `id` desempata a ordenação por data. Sem ele, permutas criadas no mesmo
    * instante sairiam em ordem arbitrária a cada consulta e a paginação
    * repetiria umas e pularia outras entre uma página e a seguinte.
+   *
+   * O ESCOPO E OS FILTROS SE SOMAM, e por isso entram num `AND` em vez de
+   * serem mesclados num objeto só. Enquanto era um spread, o filtro do cliente
+   * SOBRESCREVIA o recorte sempre que os dois falavam do mesmo campo — e dois
+   * dos quatro escopos são exatamente um campo: o do faturista é `status` e o
+   * do gerente é `managerId`. `?status=pending` apagava o recorte do faturista
+   * e lhe devolvia a mesa do comitê; `?managerId=7` devolvia ao gerente o time
+   * do colega, com os pareceres dentro. O filtro é RECORTE, nunca permissão —
+   * ele só pode estreitar o que o escopo já permitiu.
    */
   async listFor(user: User, query: ListBartersQuery): Promise<Paginated<BarterWithItems>> {
     const { take, skip } = windowOf(query);
-    const where = {
-      ...this.scopeFor(user),
-      ...(query.status ? { status: query.status } : {}),
-      ...(query.unitId ? { unitId: query.unitId } : {}),
-      ...(query.managerId ? { managerId: query.managerId } : {}),
+    const where: Prisma.BarterWhereInput = {
+      AND: [
+        this.scopeFor(user),
+        ...(query.status ? [{ status: query.status }] : []),
+        ...(query.unitId ? [{ unitId: query.unitId }] : []),
+        ...(query.managerId ? [{ managerId: query.managerId }] : []),
+      ],
     };
 
     const [items, total] = await this.prisma.$transaction([
@@ -165,9 +231,14 @@ export class BartersService {
    * mais do catálogo — vêm da versão, que é o acordo publicado. Um insumo fora
    * da tabela da versão simplesmente não é permutável naquela gestão.
    *
-   * A permuta nasce em `sentToManager`, e não em `pending`: ela é ENDEREÇADA ao
-   * gerente do consultor, que precisa dar o parecer técnico antes de a
-   * negociação seguir para a revisão.
+   * A permuta nasce em `draft`: ela é do CONSULTOR até ele encaminhá-la. O
+   * registro congela os valores da versão e as contas, mas não põe a permuta na
+   * mesa de ninguém — quem faz isso é `forward`, junto com o parecer dele.
+   *
+   * Por isso o GERENTE não é resolvido aqui: o destinatário é gravado no envio,
+   * e o envio agora é o encaminhamento. Um consultor sem gerente designado
+   * registra e monta o rascunho normalmente; ele só não consegue encaminhar — e
+   * a mensagem que ele lê nesse momento diz exatamente isso.
    */
   async create(consultant: User, dto: CreateBarterDto): Promise<BarterDetail> {
     // A rota já exige a capacidade `barters.register`; aqui a regra é repetida
@@ -176,22 +247,6 @@ export class BartersService {
     // comitê e faturista registrariam permuta sem ninguém ter decidido isso.
     if (consultant.role !== ROLE.consultant) {
       throw new ForbiddenException('Permutas são registradas pelo consultor da carteira');
-    }
-
-    // O DESTINATÁRIO. O cadastro do consultor exige um gerente, então isto só
-    // acontece quando o gerente dele foi excluído depois — e nesse caso a
-    // permuta nasceria endereçada a ninguém: ficaria em `sentToManager` para
-    // sempre, sem erro e sem a quem cobrar. Melhor recusar aqui.
-    if (consultant.managerId === null) {
-      throw new UnprocessableEntityException(
-        'Você está sem gerente designado — fale com o administrador antes de registrar permutas',
-      );
-    }
-    const manager = await this.prisma.user.findUnique({ where: { id: consultant.managerId } });
-    if (!manager) {
-      throw new UnprocessableEntityException(
-        'Você está sem gerente designado — fale com o administrador antes de registrar permutas',
-      );
     }
 
     // 1. O Barter vigente é o primeiro portão: sem lançamento aberto não existe
@@ -342,6 +397,10 @@ export class BartersService {
       consultantBranch: consultant.branch ?? '',
       producerId: producer.id,
       producerName: producer.name,
+      // A ÁREA congelada, pelo mesmo motivo do preço do item: ela é o
+      // denominador do investimento por hectare, e o produtor arrenda mais terra
+      // na safra seguinte. Ver `producerAreaHa` no schema.
+      producerAreaHa: producer.areaHa,
       unitId: unit.id,
       unitName: unit.name,
       // O IMPOSTO DA ENTREGA: a forma escolhida no fechamento, e a alíquota que
@@ -350,19 +409,18 @@ export class BartersService {
       // rural, e o que vale é a tabela do dia. Ver `tax-regime.ts`.
       taxRegime,
       taxRate: taxRateOf(taxRegime, producer.documentDigits),
-      // O destinatário é gravado no ENVIO. Trocar o gerente do consultor depois
-      // vale para as próximas permutas; esta continua na mesa de quem a
-      // recebeu. Ver o comentário de `managerId` no schema.
-      managerId: manager.id,
-      managerName: manager.fullName,
-      status: BARTER_STATUS.sentToManager,
+      // Sem `managerId`: o destinatário é gravado no ENVIO, e o envio é o
+      // encaminhamento (ver `forward`). Trocar o gerente do consultor entre o
+      // registro e o encaminhamento vale para esta permuta; depois dele, não.
+      status: BARTER_STATUS.draft,
+      // O PARECER, quando ele já vem escrito. `null` é rascunho sem parecer, que
+      // é o caso normal de quem acabou de simular.
+      consultantNote: dto.note?.trim() ? dto.note.trim() : null,
       items: { create: items },
       // O PRIMEIRO EVENTO da linha do tempo nasce junto com a permuta, na mesma
       // transação — não existe permuta sem o registro de que ela foi registrada.
       events: {
-        create: [
-          this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.sentToManager),
-        ],
+        create: [this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.draft)],
       },
     });
   }
@@ -437,6 +495,104 @@ export class BartersService {
       }
       throw error;
     }
+  }
+
+  /**
+   * O PARECER DO CONSULTOR gravado no RASCUNHO, sem mover a permuta.
+   *
+   * É o único texto do fluxo que se reescreve, e o único ato que não passa por
+   * `applyStep`: não há transição, não há evento e não há assinatura — é um
+   * rascunho sendo editado pelo próprio autor. O evento vem no encaminhamento,
+   * que é quando o texto deixa de ser dele e passa a ser peça do processo.
+   *
+   * Só o DONO edita, e só enquanto é rascunho. As duas conferências são a mesma
+   * de sempre, feitas pelas mesmas portas: `requireBarter` confere o escopo (o
+   * rascunho de outro consultor nem aparece) e a máquina de estados confere que
+   * a permuta ainda está no ponto do encaminhamento — uma permuta já na mesa do
+   * gerente recusa a edição com a frase da etapa, e não com um "não pode".
+   *
+   * O `status` vai no `where` do update pelo mesmo motivo de `applyStep`, e não
+   * por simetria: a conferência de antes e a gravação são duas idas ao banco, e
+   * entre elas cabe o encaminhamento vindo de outro aparelho do mesmo
+   * consultor. Sem ele, o texto seria reescrito DEPOIS de a permuta sair da
+   * mesa dele — e a permuta seguiria ao gerente com um parecer diferente do que
+   * ficou congelado no evento, que é a única cópia que ninguém pode editar.
+   */
+  async saveNote(consultant: User, code: string, dto: SaveBarterNoteDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(consultant, code, BARTER_ACTION.forward);
+
+    const note = dto.note.trim();
+    try {
+      await this.prisma.barter.update({
+        where: { id: barter.id, status: BARTER_STATUS.draft },
+        data: { consultantNote: note.length > 0 ? note : null },
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new UnprocessableEntityException(BARTER_STEPS[BARTER_ACTION.forward].done);
+      }
+      throw error;
+    }
+    return this.findFor(consultant, code);
+  }
+
+  /**
+   * O ENCAMINHAMENTO AO GERENTE — o ato que tira a permuta da mesa do consultor.
+   *
+   * Ele faz duas coisas que o registro fazia junto e agora estão separadas: grava
+   * o PARECER do consultor e ENDEREÇA a permuta ao gerente dele. O destinatário
+   * é lido aqui, e não no registro, porque é aqui que o envio acontece — é a
+   * leitura literal de "o consultor envia para o gerente" (ver `managerId` no
+   * schema).
+   *
+   * O parecer pode vir no corpo ou já estar salvo no rascunho; o que não pode é
+   * não existir. Quem confere é este método, e não o DTO, porque o texto válido
+   * é o RESULTADO dos dois — exigi-lo no corpo obrigaria a tela a reenviar o que
+   * o servidor já tem.
+   */
+  async forward(consultant: User, code: string, dto: ForwardBarterDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(consultant, code, BARTER_ACTION.forward);
+
+    // O texto do corpo VENCE o gravado: quem escreveu agora escreveu por último.
+    const note = (dto.note ?? barter.consultantNote ?? '').trim();
+    if (note.length < MIN_OPINION_LENGTH) {
+      throw new UnprocessableEntityException(
+        `Escreva o seu parecer sobre esta negociação (mínimo de ${MIN_OPINION_LENGTH} caracteres) antes de encaminhar ao gerente`,
+      );
+    }
+
+    // O DESTINATÁRIO. O cadastro do consultor exige um gerente, então isto só
+    // acontece quando o gerente dele foi excluído depois — e nesse caso a
+    // permuta seguiria endereçada a ninguém: ficaria em `sentToManager` para
+    // sempre, sem erro e sem a quem cobrar. Melhor recusar aqui, com o rascunho
+    // intacto para ser encaminhado quando o admin designar alguém.
+    const manager =
+      consultant.managerId === null
+        ? null
+        : await this.prisma.user.findUnique({ where: { id: consultant.managerId } });
+    if (!manager) {
+      throw new UnprocessableEntityException(
+        'Você está sem gerente designado — fale com o administrador antes de encaminhar permutas',
+      );
+    }
+
+    // Sem trilha de AUDITORIA, como no registro: encaminhar não decide dinheiro,
+    // e a linha do tempo da permuta já guarda quem encaminhou, quando e o quê.
+    // Os três atos que entram na trilha global são os que decidem — ver
+    // AUDIT_ACTION.
+    return this.applyStep(
+      barter,
+      BARTER_ACTION.forward,
+      consultant,
+      BARTER_STATUS.sentToManager,
+      {
+        consultantNote: note,
+        consultantSentAt: new Date(),
+        managerId: manager.id,
+        managerName: manager.fullName,
+      },
+      note,
+    );
   }
 
   /**
@@ -579,7 +735,10 @@ export class BartersService {
       targetType: 'barter',
       targetId: reviewed.id,
       targetLabel: reviewed.code,
-      detail: `${dto.status === BARTER_STATUS.approved ? 'aprovada' : 'negada'}${
+      // O DESFECHO escrito pela máquina de estados, e não por um ternário aqui:
+      // a terceira saída (a ressalva) nasceu justamente onde havia um "aprovada
+      // ou negada" escrito à mão, e ela teria entrado na trilha como "negada".
+      detail: `${(outcomeLabelOf(BARTER_ACTION.review, dto.status) ?? dto.status).toLowerCase()}${
         reviewed.reviewNote ? ` — ${summarize(reviewed.reviewNote)}` : ''
       }`,
     });
@@ -626,6 +785,182 @@ export class BartersService {
       detail: `faturada${invoiced.invoiceNote ? ` — ${summarize(invoiced.invoiceNote)}` : ''}`,
     });
     return invoiced;
+  }
+
+  /**
+   * A MESA DA CÉDULA — tudo o que a tela do faturista precisa, de uma vez: o
+   * rascunho gravado, o que a permuta já responde, quem é a credora, a sugestão
+   * de preenchimento e o que ainda falta.
+   *
+   * Numa requisição só, e de propósito: o formulário da CPR mistura as três
+   * fontes do documento (ver cpr.ts), e montá-lo com uma chamada por fonte
+   * deixaria a tela desenhar campos vazios enquanto a sugestão não chega — que é
+   * exatamente o instante em que alguém começa a digitar o que já existia.
+   *
+   * QUANDO ela pode ser preenchida: a permuta precisa estar dentro do alcance do
+   * faturista, e é `scopeFor` quem responde isso (aprovada ou já faturada, via
+   * `lineFrom(invoice)`). Repare que a cédula continua editável DEPOIS do
+   * faturamento — não é contradição com "não existe desfaturar": a permuta está
+   * fechada e continua fechada; o que se corrige aqui é um documento que ainda
+   * não foi emitido. O faturamento é o ato; a cédula é papel que vem depois.
+   */
+  async cprFor(biller: User, code: string): Promise<CprDesk> {
+    // O MESMO acesso do detalhe, e pela mesma porta: uma permuta que não abre
+    // pelo código não abre a cédula. Duas regras de escopo respondendo à mesma
+    // pergunta é uma a mais do que se mantém em dia — ver `requireBarter`.
+    const barter = await this.findFor(biller, code);
+    const cpr = await this.loadCpr(barter.id);
+
+    const producer = barter.producerId
+      ? await this.prisma.producer.findUnique({ where: { id: barter.producerId } })
+      : null;
+
+    return {
+      cpr,
+      known: this.knownOf(
+        barter,
+        producer?.document ?? '',
+        cpr?.sackWeightKg ?? EMPTY_CPR.sackWeightKg,
+      ),
+      // A credora vem do CADASTRO (ver creditor/), e é o serializer quem calcula
+      // as pendências dela — assim a mesa da cédula e a tela de cadastro dizem
+      // exatamente a mesma coisa sobre o que falta.
+      creditor: await this.creditor.get(),
+      gaps: cprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? []),
+      // A sugestão só faz sentido enquanto NÃO há rascunho: depois que o
+      // faturista escreveu, o que está na tela é dele, e oferecer por cima o
+      // texto de uma cédula antiga é a maneira mais fácil de sobrescrever uma
+      // correção que alguém acabou de fazer.
+      suggestion: cpr ? {} : suggestFrom(producer, await this.previousCpr(barter.producerId)),
+    };
+  }
+
+  /**
+   * GRAVA o preenchimento — inteiro ou pela metade, como ele estiver.
+   *
+   * É um `upsert`: a primeira gravação cria a cédula da permuta, as seguintes
+   * corrigem. Campo ausente no payload fica COMO ESTAVA — o formulário salva o
+   * que a pessoa mexeu, e um "salvar" que apagasse o que não foi enviado
+   * transformaria cada tela parcial numa perda de dados.
+   *
+   * `areas` é a exceção, e é explícita: mandar a lista SUBSTITUI as lavouras.
+   * Ela é uma lista editada como um todo na tela (acrescenta-se a segunda área,
+   * remove-se a que estava errada), e mesclar por posição faria "apaguei a
+   * primeira" virar "editei a primeira e a segunda sumiu".
+   */
+  async saveCpr(biller: User, code: string, dto: SaveCprDto): Promise<CprDesk> {
+    const barter = await this.findFor(biller, code);
+    const { areas, guarantors, issuedAt, dueDate, ...fields } = dto;
+
+    // Datas chegam como texto ISO (é o que o DTO valida) e viram Date aqui. A
+    // ausência do campo e o `null` são coisas DIFERENTES: a primeira mantém o
+    // que está gravado, e a segunda... também — apagar um vencimento já escrito
+    // não é operação que um formulário de rascunho precise oferecer, e a
+    // maneira de corrigi-lo é escrever o certo por cima.
+    const dates = {
+      ...(issuedAt ? { issuedAt: new Date(issuedAt) } : {}),
+      ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+    };
+
+    const written = { ...fields, ...dates, filledBy: biller.fullName, filledById: biller.id };
+
+    await this.prisma.$transaction(async (tx) => {
+      const saved = await tx.barterCpr.upsert({
+        where: { barterId: barter.id },
+        create: { barterId: barter.id, ...written },
+        update: written,
+      });
+
+      // Os AVALISTAS seguem a mesma regra das lavouras — lista inteira
+      // substitui, ausência preserva —, e pelo mesmo motivo: são editados como
+      // um todo na tela e não têm identidade fora da cédula.
+      if (guarantors) {
+        await tx.cprGuarantor.deleteMany({ where: { cprId: saved.id } });
+        for (const [position, guarantor] of guarantors.entries()) {
+          await tx.cprGuarantor.create({ data: { cprId: saved.id, position, ...guarantor } });
+        }
+      }
+
+      if (!areas) return;
+      // Apagar e recriar, e não casar linha a linha: as lavouras não têm
+      // identidade fora da cédula (ninguém aponta para uma matrícula daqui), e
+      // o `Cascade` leva os proprietários junto. A alternativa — diferenciar
+      // por id — pediria que a tela devolvesse ids que ela não tem motivo para
+      // guardar.
+      await tx.cprArea.deleteMany({ where: { cprId: saved.id } });
+      for (const [position, area] of areas.entries()) {
+        await tx.cprArea.create({
+          data: {
+            cprId: saved.id,
+            position,
+            locality: area.locality,
+            city: area.city,
+            areaHa: area.areaHa,
+            withinLargerArea: area.withinLargerArea ?? false,
+            registryNumber: area.registryNumber,
+            registryBook: area.registryBook,
+            registryDistrict: area.registryDistrict,
+            owners: {
+              create: (area.owners ?? []).map((owner, index) => ({
+                position: index,
+                name: owner.name,
+                document: owner.document,
+              })),
+            },
+          },
+        });
+      }
+    });
+
+    const desk = await this.cprFor(biller, code);
+    await this.audit.record({
+      actor: biller,
+      action: AUDIT_ACTION.barterCprSaved,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      // O QUE FALTA no lugar do que foi escrito: a trilha não é o backup do
+      // formulário (o conteúdo está na cédula, que é lida por quem a abre), e
+      // despejar aqui a qualificação civil de um produtor espalharia dado
+      // pessoal por um registro que ninguém apaga. O que ela precisa dizer é
+      // que a cédula foi mexida, por quem, e em que pé ela ficou.
+      detail:
+        `CPR ${desk.cpr?.number || 'sem número'} — ` +
+        (desk.gaps.length === 0 ? 'completa' : `faltam ${desk.gaps.length} campo(s)`),
+    });
+    return desk;
+  }
+
+  /** A cédula da permuta com as lavouras e os donos, na ordem do documento. */
+  private loadCpr(barterId: number): Promise<CprWithAreas | null> {
+    return this.prisma.barterCpr.findUnique({ where: { barterId }, include: CPR_INCLUDE });
+  }
+
+  /**
+   * A ÚLTIMA cédula deste produtor, de qualquer outra permuta — a fonte da
+   * sugestão de preenchimento.
+   *
+   * Ela é buscada pelo PRODUTOR, e não pelo consultor ou pela unidade, porque o
+   * que se repete é a pessoa: nacionalidade, RG, endereço, cônjuge e as
+   * matrículas das lavouras são dele, e não da negociação. Ver `suggestFrom`.
+   */
+  private async previousCpr(producerId: number | null): Promise<CprWithAreas | null> {
+    if (!producerId) return null;
+    return this.prisma.barterCpr.findFirst({
+      where: { barter: { producerId } },
+      orderBy: { updatedAt: 'desc' },
+      include: CPR_INCLUDE,
+    });
+  }
+
+  /** O que a cédula tira da permuta — o item de grão é quem carrega os números. */
+  private knownOf(barter: BarterWithItems, document: string, sackWeightKg: number): CprKnown {
+    return knownFrom(
+      barter,
+      barter.items.find((item) => item.kind === 'grain'),
+      document,
+      sackWeightKg,
+    );
   }
 
   /**

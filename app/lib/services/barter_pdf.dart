@@ -8,7 +8,8 @@ import 'package:printing/printing.dart';
 import '../branding/active_brand.dart';
 import '../models/models.dart';
 import '../theme/app_theme.dart';
-import '../widgets/common_widgets.dart' show formatCurrency, formatDate, formatQty, formatSacks;
+import '../widgets/common_widgets.dart'
+    show formatCurrency, formatDate, formatQty, formatSacks, formatSacksPerHa;
 
 /// Comprovante de permuta em PDF, para controle e assinatura das partes.
 ///
@@ -219,6 +220,12 @@ class BarterPdf {
       case BarterStatus.sentToManager:
         color = _c(AppColors.atManagerBg);
         break;
+      case BarterStatus.approvedWithConditions:
+        color = _c(AppColors.approvedWithConditionsBg);
+        break;
+      case BarterStatus.draft:
+        color = _c(AppColors.draftBg);
+        break;
       case BarterStatus.invoiced:
         color = _c(AppColors.invoicedBg);
         break;
@@ -272,6 +279,24 @@ class BarterPdf {
                       _kv('Propriedade', producer.location),
                       _kv('Área cultivável', producer.areaLabel),
                     ],
+                    // O INVESTIMENTO POR HECTARE fica no lado do PRODUTOR, e
+                    // logo abaixo da área: é ela o denominador, e as duas linhas
+                    // juntas dizem o quanto esta lavoura está comprometendo por
+                    // hectare — que é a leitura que o documento não tinha.
+                    //
+                    // A ÁREA impressa aqui é a da permuta (congelada no
+                    // registro), e não a do cadastro de hoje: um comprovante
+                    // reimpresso depois de o produtor arrendar mais terra não
+                    // pode passar a mostrar outro investimento. É o mesmo motivo
+                    // do preço do item e da alíquota do imposto.
+                    if (barter.sacksPerHa != null)
+                      _kv(
+                        'Investimento',
+                        barter.producerAreaHa != null && barter.producerAreaHa! > 0
+                            ? '${formatSacksPerHa(barter.sacksPerHa!)} '
+                                '(${formatQty(barter.producerAreaHa!)} ha)'
+                            : formatSacksPerHa(barter.sacksPerHa!),
+                      ),
                   ],
                 ),
               ),

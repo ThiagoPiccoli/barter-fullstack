@@ -42,6 +42,29 @@ export const AUDIT_ACTION = {
   barterReviewed: 'barter.reviewed',
   barterInvoiced: 'barter.invoiced',
   /**
+   * O PREENCHIMENTO DA CÉDULA (CPR). Entra aqui pelo mesmo critério dos três
+   * acima, e com folga: a cédula é um título de crédito, e o que ela diz — a
+   * qualificação de quem se obriga, a matrícula do imóvel dado em penhor, o
+   * vencimento — é o que vale contra o produtor num inadimplemento.
+   *
+   * Ela é o único registro do sistema que é RASCUNHO e sério ao mesmo tempo:
+   * pode ser reescrito quantas vezes for preciso (é o que um rascunho é), e
+   * cada reescrita muda o conteúdo de um documento executável. A linha do tempo
+   * da permuta não a alcança — `BarterEvent` guarda mudança de ESTADO, e
+   * preencher cédula não move a permuta de posto —, então sem isto a única
+   * pergunta sem resposta seria a que mais importa: quem trocou a matrícula.
+   */
+  barterCprSaved: 'barter.cpr-saved',
+  /**
+   * O CADASTRO DA CREDORA. É a parte da cédula que identifica QUEM cobra, e um
+   * CNPJ trocado aqui vale para todas as emitidas dali em diante.
+   *
+   * A linha do tempo da permuta não alcança isto — ela é do registro, e a
+   * credora é global —, e o cadastro tem DOIS donos (admin e faturista), o que
+   * torna "quem mudou o CNPJ?" uma pergunta que aparece de verdade.
+   */
+  creditorUpdated: 'creditor.updated',
+  /**
    * ENTRADA no sistema — e as tentativas que não entraram.
    *
    * A trilha registrava muito bem o que se faz DEPOIS de entrar, e nada sobre
@@ -84,7 +107,7 @@ export interface AuditActor {
 export interface AuditEntry {
   actor: User | AuditActor;
   action: AuditAction;
-  targetType: 'user' | 'unit' | 'barter' | 'season' | 'version' | 'session';
+  targetType: 'user' | 'unit' | 'barter' | 'season' | 'version' | 'session' | 'creditor';
   targetId?: number | null;
   targetLabel: string;
   detail?: string;

@@ -34,17 +34,16 @@ import '../widgets/common_widgets.dart';
 ///    decide.
 /// 3. **Envia** — e só depois do sucesso a simulação some.
 ///
-/// [alreadyConfirmed] é para quem chama vindo do construtor: o consultor acabou
-/// de montar a permuta e já disse que quer mandar, então o resumo não é
-/// perguntado de novo. Ele volta a aparecer se houver o que dizer — mudou o
-/// Barter, mudaram as sacas —, que é a única parte do diálogo que ele não
-/// acabou de ver na tela.
+/// O resumo do passo 3 é mostrado SEMPRE, inclusive a quem vem do construtor e
+/// acabou de dizer que quer mandar. Ele deixou de ser uma conferência do que já
+/// está na tela: é lá que se escreve o PARECER do consultor e se escolhe entre
+/// guardar o rascunho e encaminhar, e nenhuma das duas coisas está em outro
+/// lugar do app.
 Future<bool> sendSimulationToManager(
   BuildContext context, {
   required BarterSimulation simulation,
   required UserModel consultant,
   VoidCallback? onChanged,
-  bool alreadyConfirmed = false,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
 
@@ -85,13 +84,19 @@ Future<bool> sendSimulationToManager(
     return false;
   }
 
-  // Quem já confirmou só é interrompido se houver o que dizer.
-  if (!alreadyConfirmed || check.needsReview) {
-    final confirmed = await _confirmSend(context, check, consultant);
-    if (!context.mounted || confirmed != true) return false;
-  }
+  // O RESUMO é SEMPRE mostrado agora, mesmo a quem acabou de confirmar no
+  // construtor: ele deixou de ser só uma conferência do que já está na tela e
+  // passou a pedir uma coisa que não está em lugar nenhum — o parecer do
+  // consultor, e a escolha entre guardar o rascunho e encaminhar. Pular o
+  // diálogo pularia a etapa.
+  final choice = await _confirmSend(context, check, consultant);
+  if (!context.mounted || choice == null) return false;
 
-  final result = await AppData.sendSimulation(check.rebuilt);
+  final result = await AppData.sendSimulation(
+    check.rebuilt,
+    note: choice.note,
+    forward: choice.forward,
+  );
   if (!context.mounted) return false;
 
   if (result.isSent) {
@@ -107,14 +112,33 @@ Future<bool> sendSimulationToManager(
   return false;
 }
 
+/// O QUE O CONSULTOR ESCOLHEU no resumo do envio: o parecer que ele escreveu, e
+/// se a permuta sai da mesa dele agora.
+///
+/// São duas saídas, e não um "ok": registrar e encaminhar viraram dois atos, e é
+/// aqui que a diferença aparece para quem usa. Quem já conversou com o produtor
+/// escreve o parecer e manda; quem ainda não, guarda o registro — com os valores
+/// do Barter de hoje congelados nele — e escreve depois.
+class _SendChoice {
+  final String note;
+  final bool forward;
+  const _SendChoice({required this.note, required this.forward});
+}
+
 /// O RESUMO antes de encaminhar — o momento em que a permuta deixa de ser
-/// simulação. Mostra o que vai ser registrado, e o que mudou desde que foi
-/// montada.
-Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserModel consultant) {
+/// simulação. Mostra o que vai ser registrado, o que mudou desde que foi
+/// montada, e pede o parecer de quem conhece o cliente.
+Future<_SendChoice?> _confirmSend(
+    BuildContext context, SimulationCheck check, UserModel consultant) {
   final sim = check.rebuilt;
-  return showDialog<bool>(
+  final noteCtrl = TextEditingController();
+  return showDialog<_SendChoice>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    // StatefulBuilder porque o botão de encaminhar LIGA com o que está sendo
+    // digitado: sem redesenhar o diálogo a cada letra, ele só acordaria quando
+    // alguém tocasse fora do campo.
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) => AlertDialog(
       icon: Icon(Icons.send_outlined, color: AppColors.primary, size: 40),
       title: const Text('Encaminhar ao gerente?'),
       content: SizedBox(
@@ -227,7 +251,28 @@ Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserMode
                   bold: true,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
+              // O PARECER DO CONSULTOR — a peça que abre o processo, escrita por
+              // quem conhece o cliente. Ela é pedida AQUI, e não numa tela
+              // depois, porque é aqui que ele está pensando nesta permuta.
+              //
+              // O campo é opcional NA TELA e obrigatório NO ENVIO: sem texto o
+              // botão de encaminhar não liga, e o de guardar continua ligado —
+              // que é a saída de quem ainda vai conversar com o produtor.
+              TextField(
+                controller: noteCtrl,
+                minLines: 2,
+                maxLines: 5,
+                maxLength: 2000,
+                textCapitalization: TextCapitalization.sentences,
+                onChanged: (_) => setLocal(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Seu parecer',
+                  hintText: 'Safras anteriores, pontualidade, o que está plantado…',
+                  alignLabelWithHint: true,
+                  isDense: true,
+                ),
+              ),
               // O que ACONTECE COM ELE, e não como o sistema funciona por
               // dentro: "o servidor recalcula tudo ao registrar" era o app
               // contando a própria arquitetura a quem só quer encaminhar.
@@ -240,9 +285,23 @@ Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserMode
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Encaminhar')),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Revisar')),
+        // GUARDAR não é cancelar: a permuta é registrada, com os valores de
+        // hoje congelados, e fica como rascunho na lista dele. É o caminho de
+        // quem montou a conta antes de ter a conversa.
+        TextButton(
+          onPressed: () =>
+              Navigator.pop(ctx, _SendChoice(note: noteCtrl.text, forward: false)),
+          child: const Text('Guardar rascunho'),
+        ),
+        ElevatedButton(
+          onPressed: noteCtrl.text.trim().length < minOpinionLength
+              ? null
+              : () => Navigator.pop(ctx, _SendChoice(note: noteCtrl.text, forward: true)),
+          child: const Text('Encaminhar'),
+        ),
       ],
+      ),
     ),
   );
 }
@@ -254,8 +313,13 @@ Future<void> _showSent(BuildContext context, SendResult result) {
     context: context,
     barrierDismissible: false,
     builder: (ctx) => AlertDialog(
-      icon: Icon(Icons.swap_horiz, color: AppColors.approved, size: 48),
-      title: Text('${brand.copy.barterTitle} Enviada!'),
+      icon: Icon(
+        barter.isDraft ? Icons.edit_note_rounded : Icons.swap_horiz,
+        color: barter.isDraft ? AppColors.draft : AppColors.approved,
+        size: 48,
+      ),
+      title: Text(
+          barter.isDraft ? '${brand.copy.barterTitle} Guardada' : '${brand.copy.barterTitle} Enviada!'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -279,9 +343,14 @@ Future<void> _showSent(BuildContext context, SendResult result) {
           ),
           const SizedBox(height: 8),
           // COM QUEM ela está agora — a única pergunta que o consultor faz
-          // depois de enviar.
+          // depois de enviar. No rascunho a resposta é "com você", e ela vem
+          // com o que falta fazer: sem isso, uma permuta guardada some da
+          // cabeça de quem a guardou.
           Text(
-            'Está com ${barter.managerLabel}, esperando o parecer técnico.',
+            barter.isDraft
+                ? 'Está com você, como rascunho. Escreva o parecer e encaminhe '
+                    'ao gerente quando estiver pronto.'
+                : 'Está com ${barter.managerLabel}, esperando o parecer técnico.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.textMedium),
           ),

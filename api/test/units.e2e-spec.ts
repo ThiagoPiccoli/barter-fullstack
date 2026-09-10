@@ -218,9 +218,18 @@ describe('Unidades (e2e)', () => {
       });
     expect(criada.status).toBe(201);
     expect(criada.body.data.unitName).toBe('Filial 34 – Gran. Jari');
-    expect(criada.body.data.managerName).toBe('Beatriz Nogueira');
+    // Ela nasce RASCUNHO, e sem destinatário: quem endereça é o
+    // encaminhamento, que é onde o envio de fato acontece.
+    expect(criada.body.data.status).toBe('draft');
+    expect(criada.body.data.managerName).toBeNull();
 
     const code = criada.body.data.code as string;
+    const encaminhada = await request(app.getHttpServer())
+      .post(`/api/v1/barters/${code}/forward`)
+      .set('Authorization', await asUser(JOAO))
+      .send({ note: 'Cliente antigo, pagou as três últimas safras em dia.' });
+    expect(encaminhada.status).toBe(200);
+    expect(encaminhada.body.data.managerName).toBe('Beatriz Nogueira');
     await request(app.getHttpServer())
       .post(`/api/v1/barters/${code}/opinion`)
       .set('Authorization', await asUser(GERENTE_SUL))

@@ -112,6 +112,22 @@ export const CAPABILITY = {
    * trabalho, e é por isso que ele não precisa de nenhuma capacidade de decisão.
    */
   bartersInvoice: 'barters.invoice',
+  /**
+   * Ler e editar o CADASTRO DA CREDORA — a identidade da empresa nos documentos
+   * que ela emite (razão social, CNPJ, endereço da sede e foro eleito).
+   *
+   * É a única capacidade que o admin DIVIDE com um posto da linha: ela é do
+   * admin **e** do faturista, e de propósito. Ela não decide permuta nem
+   * concede acesso — é o cabeçalho do papel timbrado. Quem percebe que o CNPJ
+   * saiu com um dígito trocado é quem monta a cédula, e mandá-lo abrir chamado
+   * com o admin para corrigir o próprio timbre trocaria um campo de texto por
+   * um processo.
+   *
+   * Ela é SEPARADA de `usersManage` pelo mesmo motivo de `unitsManage`: um dia
+   * alguém vai poder corrigir o endereço da sede sem poder criar contas, e é
+   * esta linha que responde por isso.
+   */
+  creditorManage: 'creditor.manage',
   /** Ler a trilha de auditoria. */
   auditRead: 'audit.read',
   /**
@@ -129,6 +145,22 @@ export const CAPABILITY = {
    * um gerente comercial) — e é esta linha que responde por isso.
    */
   pricesRead: 'prices.read',
+  /**
+   * Ver o INVESTIMENTO POR HECTARE da permuta — quantas sacas do grão a lavoura
+   * está comprometendo por hectare de área cultivável (sc/ha).
+   *
+   * É a única medida que compara duas permutas de tamanhos diferentes: R$ 400
+   * mil numa fazenda de 2.000 ha e R$ 400 mil numa de 300 ha são negócios
+   * distintos, e o total sozinho não diz qual é qual. Quem decide, quem
+   * administra e quem fatura leem esse número; o consultor e o gerente não —
+   * não por sigilo, mas porque para eles a permuta é UMA, e uma régua de
+   * comparação sem com quem comparar é ruído na tela.
+   *
+   * Ela é SEPARADA de `pricesRead` de propósito: sc/ha não é R$, e o dia em que
+   * o gerente precisar comparar as permutas do time dele é esta linha que muda —
+   * sem lhe dar de carona a tabela de valores do fornecedor.
+   */
+  bartersInvestmentPerHa: 'barters.investmentPerHa',
 } as const;
 
 export type Capability = (typeof CAPABILITY)[keyof typeof CAPABILITY];
@@ -158,8 +190,10 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.barterManage,
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadAll,
+    CAPABILITY.creditorManage,
     CAPABILITY.auditRead,
     CAPABILITY.pricesRead,
+    CAPABILITY.bartersInvestmentPerHa,
   ],
   // O gerente é o único com escopo de TIME: ele enxerga as permutas
   // endereçadas a ele, e não a operação inteira. Repare que `bartersReadAll`
@@ -183,17 +217,24 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersReadAll,
     CAPABILITY.bartersReview,
     CAPABILITY.pricesRead,
+    CAPABILITY.bartersInvestmentPerHa,
   ],
   // O FATURISTA fatura, e é só isso — inclusive no que enxerga. Ele alcança o
   // que CHEGOU ao faturamento e nada antes disso: o parecer que o gerente ainda
   // não deu e a permuta que o comitê ainda não decidiu não são trabalho dele, e
   // uma negociação em aberto não precisa passar pela tela de quem emite a nota.
   // Ver `bartersReadInvoicing`.
+  // `creditorManage` é a exceção ao parágrafo acima, e a única: o faturista
+  // mantém o cadastro da CREDORA junto com o admin. Não é decisão de negócio
+  // nem concessão de acesso — é o timbre dos documentos que ele emite, e quem
+  // vê o CNPJ errado é quem monta a cédula.
   [ROLE.biller]: [
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadInvoicing,
     CAPABILITY.bartersInvoice,
+    CAPABILITY.creditorManage,
     CAPABILITY.pricesRead,
+    CAPABILITY.bartersInvestmentPerHa,
   ],
   [ROLE.consultant]: [CAPABILITY.bartersRegister],
 };

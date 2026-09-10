@@ -10,6 +10,7 @@ import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
 import '../repositories/committee_repository.dart';
+import '../repositories/creditor_repository.dart';
 import '../repositories/staff_repository.dart';
 import '../repositories/unit_repository.dart';
 
@@ -39,6 +40,10 @@ class AppData {
   /// O COMITÊ — cadastro único, e por isso um repositório de outra forma: sem
   /// lista, sem id e sem exclusão.
   static final CommitteeRepository _committee = CommitteeRepository();
+
+  /// A CREDORA — a empresa nos documentos que ela emite. Cadastro único, como o
+  /// comitê, e mantido pelo admin OU pelo faturista.
+  static final CreditorRepository _creditor = CreditorRepository();
 
   /// Usuário logado (admin ou consultor).
   static UserModel? currentUser;
@@ -482,20 +487,39 @@ class AppData {
 
   /* ── Mutações (API primeiro, cache depois) ──────────────────────────── */
 
+  /// Registra a permuta. Ela nasce RASCUNHO — ver [BarterRepository.create]. O
+  /// parecer é opcional aqui e obrigatório no encaminhamento.
   static Future<BarterModel> createBarter({
     required String producerId,
     required String unitId,
     required Map<String, double> inputQuantities,
     TaxRegime taxRegime = TaxRegime.comercializacao,
+    String note = '',
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
       unitId: unitId,
       inputQuantities: inputQuantities,
       taxRegime: taxRegime,
+      note: note,
     );
     barters.insert(0, barter);
     return barter;
+  }
+
+  /// O PARECER DO CONSULTOR salvo no rascunho, sem encaminhar. O cache guarda a
+  /// resposta do servidor, nunca uma versão montada aqui.
+  static Future<BarterModel> saveBarterNote(String code, String note) async {
+    final updated = await _barters.saveNote(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O ENCAMINHAMENTO ao gerente, com o parecer do consultor junto.
+  static Future<BarterModel> forwardBarter(String code, String note) async {
+    final updated = await _barters.forward(code, note);
+    _replaceBarter(updated);
+    return updated;
   }
 
   /* ── Simulações (o aparelho é a autoridade; só o envio fala com a API) ─ */
@@ -600,7 +624,21 @@ class AppData {
   /// natureza. A correção definitiva é uma chave de idempotência no `POST`, que
   /// deixaria o servidor reconhecer o reenvio — e que exige uma coluna nova.
   /// Enquanto ela não existe, é melhor perguntar do que duplicar em silêncio.
-  static Future<SendResult> sendSimulation(BarterSimulation simulation) async {
+  /// [note] é o parecer do consultor e [forward] diz se a permuta sai da mesa
+  /// dele agora. Os dois andam juntos e são o mesmo desenho do rascunho: quem já
+  /// conversou com o produtor manda de uma vez; quem ainda não, guarda o
+  /// registro e escreve depois.
+  ///
+  /// O ENCAMINHAMENTO é um segundo ato, e por isso pode falhar sozinho — a
+  /// permuta já está registrada quando ele acontece. Falhando, o método devolve
+  /// a permuta como ela ficou (rascunho), e é a tela que diz isso a quem enviou:
+  /// perder o registro para relatar um erro seria trocar um aviso por um
+  /// prejuízo.
+  static Future<SendResult> sendSimulation(
+    BarterSimulation simulation, {
+    String note = '',
+    bool forward = true,
+  }) async {
     final startedAt = DateTime.now();
     try {
       final barter = await createBarter(
@@ -608,9 +646,15 @@ class AppData {
         unitId: simulation.unitId,
         inputQuantities: simulation.inputQuantities,
         taxRegime: simulation.taxRegime,
+        note: note,
       );
       await deleteSimulation(simulation.id);
-      return SendResult.sent(barter);
+      if (!forward) return SendResult.sent(barter);
+      try {
+        return SendResult.sent(await forwardBarter(barter.id, note));
+      } on ApiException {
+        return SendResult.sent(barter);
+      }
     } on ApiException catch (error) {
       if (error.statusCode != 0) return SendResult.refused(error.message);
 
@@ -753,8 +797,8 @@ class AppData {
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
-  /// A DECISÃO DO COMITÊ (aprovar/negar). O cache guarda a resposta do
-  /// servidor, nunca uma versão montada aqui.
+  /// A DECISÃO DO COMITÊ: aprovar, aprovar com RESSALVA ou negar. O cache
+  /// guarda a resposta do servidor, nunca uma versão montada aqui.
   static Future<BarterModel> reviewBarter(
     String code,
     BarterStatus status,
@@ -778,6 +822,24 @@ class AppData {
   /// histórico — guardar o detalhe ali faria a mesma permuta ter ou não ter
   /// linha do tempo conforme a tela por onde se passou.
   static Future<BarterModel> barterDetail(String code) => _barters.find(code);
+
+  /// A CÉDULA (CPR) desta permuta, e a gravação dela.
+  ///
+  /// Fora do cache pelo mesmo motivo do detalhe, e com um a mais: a cédula é
+  /// editável por mais de um faturista, e um rascunho guardado em memória
+  /// mostraria a versão de quem abriu a tela primeiro. Ela é sempre lida do
+  /// servidor e a gravação devolve a mesa recalculada — inclusive o que falta.
+  static Future<CprDesk> barterCpr(String code) => _barters.cpr(code);
+
+  static Future<CprDesk> saveBarterCpr(String code, CprDraft draft) =>
+      _barters.saveCpr(code, draft);
+
+  /// O CADASTRO DA CREDORA. Fora do cache pelo mesmo motivo da cédula: ele tem
+  /// dois donos (admin e faturista), e uma cópia em memória mostraria a versão
+  /// de quem abriu a tela primeiro.
+  static Future<CprCreditor> creditor() => _creditor.get();
+
+  static Future<CprCreditor> saveCreditor(CprCreditor creditor) => _creditor.save(creditor);
 
   /// Troca uma permuta do cache pela versão que o servidor devolveu.
   static void _replaceBarter(BarterModel updated) {

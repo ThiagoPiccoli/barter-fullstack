@@ -11,12 +11,25 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { PaginationQuery } from '../../common/pagination';
 import { BARTER_STATUS, BARTER_STATUSES, type BarterStatus } from '../barter-workflow';
 import { TAX_REGIMES, TAX_REGIME_MESSAGE } from '../tax-regime';
 import type { TaxRegime } from '../tax-regime';
+
+/**
+ * O TAMANHO MÍNIMO de um parecer — do consultor ou do gerente, e o mesmo para os
+ * dois de propósito: a exigência não é sobre quem escreve, é sobre o que um
+ * parecer é. Abaixo disto o campo vira um "ok" que serve só para liberar o
+ * botão, que é exatamente o que a obrigatoriedade existe para impedir.
+ *
+ * Ele é conferido em dois lugares e por dois motivos: aqui, no parecer do
+ * gerente, porque o texto vem no corpo; e no service, no encaminhamento, porque
+ * lá o texto válido pode ser o que já estava salvo no rascunho.
+ */
+export const MIN_OPINION_LENGTH = 10;
 
 export class BarterInputDto {
   @IsInt()
@@ -86,20 +99,101 @@ export class CreateBarterDto {
   @IsOptional()
   @IsIn(TAX_REGIMES, { message: TAX_REGIME_MESSAGE })
   taxRegime?: TaxRegime;
+
+  /**
+   * O PARECER DO CONSULTOR, quando ele já o tem na hora de registrar.
+   *
+   * Opcional AQUI e obrigatório no encaminhamento (ver `ForwardBarterDto`), e a
+   * diferença é o desenho todo do rascunho: montar os insumos e conhecer a
+   * resposta do produtor são dois momentos, e exigir o texto no registro
+   * obrigaria o consultor a inventar um parágrafo para poder salvar a permuta
+   * que ele acabou de simular. Sem ele, a permuta nasce em `draft` do mesmo
+   * jeito — só não anda.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  note?: string;
 }
 
 /**
- * A DECISÃO DO COMITÊ. Duas saídas, e só elas: quem lê o pedido e o parecer ou
- * aprova ou nega. Não há "devolver para o gerente" — o parecer já foi dado, e
- * uma permuta que anda para trás perde o dono da etapa.
+ * O PARECER DO CONSULTOR gravado no rascunho, sem encaminhar nada.
+ *
+ * É o único texto do fluxo que se REESCREVE, e é por isso que ele tem rota
+ * própria (`PUT /barters/:code/note`) em vez de caber no encaminhamento: o
+ * consultor salva o que tem hoje, conversa com o produtor amanhã e completa. Os
+ * outros textos do fluxo são assinaturas de etapas cumpridas e não se editam.
+ *
+ * Não há mínimo aqui, e há no encaminhamento: um rascunho pela metade é a razão
+ * de ser deste campo. Quem confere se há parecer suficiente é o ato que faz a
+ * permuta sair da mesa do consultor.
  */
-export class ReviewBarterDto {
-  @IsIn([BARTER_STATUS.approved, BARTER_STATUS.denied])
-  status!: Extract<BarterStatus, 'approved' | 'denied'>;
+export class SaveBarterNoteDto {
+  @IsString()
+  @MaxLength(2000)
+  note!: string;
+}
 
+/**
+ * O ENCAMINHAMENTO ao gerente — o ato que tira a permuta da mesa do consultor.
+ *
+ * O parecer é OBRIGATÓRIO, pelo mesmo motivo do parecer do gerente: sem texto,
+ * o botão vira um "seguir" disfarçado, e a peça que o comitê mais precisa ler
+ * (o que quem conhece o cliente tem a dizer sobre ele) volta a viver no
+ * telefonema.
+ *
+ * O campo é opcional no PAYLOAD e obrigatório no ATO: quem já salvou o parecer
+ * no rascunho encaminha sem reenviá-lo, e é o service que confere o texto
+ * gravado antes de deixar a permuta andar. Exigi-lo aqui obrigaria a tela a
+ * reenviar o que o servidor já tem — e a divergência entre os dois textos
+ * viraria uma pergunta sem dono.
+ */
+export class ForwardBarterDto {
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(2000)
+  note?: string;
+}
+
+/**
+ * A frase que o comitê lê quando decide sem escrever. Uma só para os dois
+ * desfechos: as duas exigências têm o mesmo motivo, e dizê-lo de dois jeitos
+ * faria parecer que são regras diferentes.
+ */
+const REVIEW_NOTE_MESSAGE =
+  'Escreva o motivo da decisão (mínimo de 10 caracteres): a ressalva exigida, ou a razão da negativa';
+
+/**
+ * A DECISÃO DO COMITÊ. TRÊS saídas, e só elas: aprovar, aprovar COM RESSALVA ou
+ * negar. Não há "devolver para o gerente" — o parecer já foi dado, e uma permuta
+ * que anda para trás perde o dono da etapa.
+ *
+ * O TEXTO é obrigatório em duas delas, e a regra é a mesma nas duas: a decisão
+ * que cria trabalho para outra pessoa precisa dizer qual. A ressalva é uma
+ * exigência a cumprir (garantia real, seguro, aval) e alguém vai ter de
+ * providenciá-la; a negativa é uma resposta que o consultor vai levar ao
+ * produtor. Nos dois casos, "porque sim" manda a pessoa perguntar por telefone —
+ * e a resposta não fica no registro.
+ *
+ * A aprovação limpa segue com texto OPCIONAL: ela não tem o que explicar, e
+ * exigi-lo produziria quinhentos "ok" no histórico.
+ */
+export class ReviewBarterDto {
+  @IsIn([BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions, BARTER_STATUS.denied])
+  status!: Extract<BarterStatus, 'approved' | 'approvedWithConditions' | 'denied'>;
+
+  /**
+   * `ValidateIf` em vez de `IsOptional`: a obrigatoriedade depende do DESFECHO,
+   * e é aqui que ela cabe — no banco, uma coluna `NOT NULL` recusaria também a
+   * aprovação limpa (ver `reviewNote` no schema).
+   */
+  @ValidateIf((dto: ReviewBarterDto) => dto.status !== BARTER_STATUS.approved)
+  @IsString({ message: REVIEW_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: REVIEW_NOTE_MESSAGE })
+  // A mensagem do teto também fala do MOTIVO, e não só do tamanho: com o campo
+  // ausente as três conferências falham juntas, e quem lê a recusa precisa
+  // entender o que falta seja qual for a que chegar até a tela.
+  @MaxLength(1000, { message: 'Escreva o motivo da decisão em até 1000 caracteres' })
   note?: string;
 }
 
@@ -136,7 +230,9 @@ export class InvoiceBarterDto {
  */
 export class BarterOpinionDto {
   @IsString()
-  @MinLength(10, { message: 'Escreva o parecer técnico (mínimo de 10 caracteres)' })
+  @MinLength(MIN_OPINION_LENGTH, {
+    message: `Escreva o parecer técnico (mínimo de ${MIN_OPINION_LENGTH} caracteres)`,
+  })
   @MaxLength(2000)
   note!: string;
 }

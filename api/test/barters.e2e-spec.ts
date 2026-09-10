@@ -8,12 +8,14 @@ import {
   GERENTE,
   GERENTE_SUL,
   JOAO,
+  MANAGER,
   ROBERTO,
   UNIT,
   createTestApp,
   loginAs,
   resetDb,
 } from './utils';
+import { PrismaService } from '../src/prisma/prisma.service';
 
 /**
  * Payload válido para o Antônio Carvalho (120 ha, carteira do João).
@@ -45,6 +47,35 @@ describe('Barters (e2e)', () => {
 
   const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
 
+  /** O parecer do consultor usado por quem só precisa que a permuta ande. */
+  const PARECER_DO_CONSULTOR = 'Cliente antigo, pagou as três últimas safras em dia.';
+
+  /**
+   * ENCAMINHA um rascunho ao gerente — a segunda metade do que o registro fazia
+   * sozinho antes de o parecer do consultor existir.
+   *
+   * Ela aparece em quase todo caso daqui para baixo, e é exatamente esse o
+   * ponto: uma permuta recém-registrada agora é RASCUNHO, e não está na mesa de
+   * ninguém. Os casos que falam do gerente para a frente precisam dizer, em
+   * algum lugar, que alguém a mandou — e este helper é esse lugar.
+   */
+  const encaminhar = (code: string, auth: string, note = PARECER_DO_CONSULTOR) =>
+    request(app.getHttpServer())
+      .post(`/api/v1/barters/${code}/forward`)
+      .set('Authorization', auth)
+      .send({ note });
+
+  /** Registra e encaminha numa tacada — o fluxo completo do consultor. */
+  const registrarEEncaminhar = async (email: string, payload: object = validPayload) => {
+    const auth = await asUser(email);
+    const criada = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', auth)
+      .send(payload);
+    expect(criada.status).toBe(201);
+    return encaminhar(criada.body.data.code as string, auth);
+  };
+
   it('listagem é escopada: consultor vê as suas, admin vê todas', async () => {
     const asJoao = await request(app.getHttpServer())
       .get('/api/v1/barters')
@@ -53,13 +84,18 @@ describe('Barters (e2e)', () => {
     expect(asJoao.body.data.map((b: { code: string }) => b.code).sort()).toEqual([
       'PRM-2026-001',
       'PRM-2026-005',
+      // O RASCUNHO dele. Ele aparece só aqui: nem o admin o enxerga.
+      'PRM-2026-009',
     ]);
 
     const admin = await asUser(ADMIN);
     const asAdmin = await request(app.getHttpServer())
       .get('/api/v1/barters')
       .set('Authorization', admin);
+    // Oito das nove: o rascunho do João não é fila de ninguém, e quem enxerga
+    // TUDO enxerga tudo o que foi proposto — não o que ainda está sendo escrito.
     expect(asAdmin.body.data).toHaveLength(8);
+    expect(asAdmin.body.data.map((b: { code: string }) => b.code)).not.toContain('PRM-2026-009');
 
     const pending = await request(app.getHttpServer())
       .get('/api/v1/barters?status=pending')
@@ -83,9 +119,13 @@ describe('Barters (e2e)', () => {
 
     expect(response.status).toBe(201);
     const barter = response.body.data;
-    expect(barter.code).toBe('PRM-2026-009');
-    // Ela NASCE na mesa do gerente da unidade de retirada, não em análise.
-    expect(barter.status).toBe('sentToManager');
+    expect(barter.code).toBe('PRM-2026-010');
+    // Ela NASCE RASCUNHO: registrada, com as contas congeladas, e ainda na mão
+    // do consultor. Quem a põe na mesa do gerente é o encaminhamento — e é por
+    // isso que ela ainda não tem destinatário.
+    expect(barter.status).toBe('draft');
+    expect(barter.waitingFor).toBe('consultant');
+    expect(barter.managerName).toBeNull();
     expect(barter.unitName).toBe('Filial 02 – Gran. Santa T.');
     expect(barter.producerName).toBe('Antônio Carvalho');
 
@@ -98,6 +138,10 @@ describe('Barters (e2e)', () => {
     // valor congelado é a retaguarda, abaixo.
     expect(grains[0].unitValue).toBeUndefined();
 
+    // A retaguarda só a alcança depois de encaminhada: rascunho é do dono (ver
+    // `scopeFor`). Encaminhar não recalcula nada — o valor congelado no registro
+    // é o que ela lê.
+    await encaminhar(barter.code as string, await asUser(JOAO)).expect(200);
     const daRetaguarda = await request(app.getHttpServer())
       .get(`/api/v1/barters/${barter.code}`)
       .set('Authorization', await asUser(ADMIN));
@@ -234,6 +278,7 @@ describe('Barters (e2e)', () => {
     expect(response.status).toBe(201);
     // O preço GRAVADO é o do banco, e é a retaguarda que o lê de volta — para o
     // consultor a permuta continua sem R$ nenhum.
+    await encaminhar(response.body.data.code as string, await asUser(JOAO)).expect(200);
     const registrada = await request(app.getHttpServer())
       .get(`/api/v1/barters/${response.body.data.code}`)
       .set('Authorization', await asUser(ADMIN));
@@ -344,11 +389,13 @@ describe('Barters (e2e)', () => {
   });
 
   it('permuta já decidida não é decidida de novo', async () => {
-    // PRM-2026-004 já está aprovada no dataset.
+    // PRM-2026-004 já está aprovada no dataset. O motivo vai junto porque a
+    // negativa não existe sem texto — e o que este caso prende é a ETAPA, que é
+    // conferida depois de o corpo ser válido.
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-004/review')
       .set('Authorization', await asUser(COMITE))
-      .send({ status: 'denied' });
+      .send({ status: 'denied', note: 'Mudamos de ideia depois de aprovada.' });
     expect(response.status).toBe(422);
     expect(response.body.message).toContain('já foi decidida');
   });
@@ -372,19 +419,27 @@ describe('Barters (e2e)', () => {
   describe('parecer técnico do gerente', () => {
     const opinion = 'Volume compatível com a área e com o histórico do produtor.';
 
-    it('a permuta nasce endereçada ao gerente do consultor, esperando o parecer', async () => {
+    it('a permuta encaminhada vai ao gerente do consultor, esperando o parecer', async () => {
       const created = await request(app.getHttpServer())
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(validPayload);
 
       expect(created.status).toBe(201);
+      const code = created.body.data.code as string;
+
+      // O DESTINATÁRIO é gravado no ENVIO, e o envio é o encaminhamento: no
+      // rascunho ela ainda não é de gerente nenhum.
+      expect(created.body.data.managerName).toBeNull();
+
+      const enviada = await encaminhar(code, await asUser(JOAO));
+      expect(enviada.status).toBe(200);
       // João é do time da Beatriz — e é para ela que a permuta vai, esteja a
       // retirada onde estiver.
-      expect(created.body.data.managerName).toBe('Beatriz Nogueira');
-      expect(created.body.data.managerNote).toBeNull();
-
-      const code = created.body.data.code as string;
+      expect(enviada.body.data.managerName).toBe('Beatriz Nogueira');
+      expect(enviada.body.data.managerNote).toBeNull();
+      expect(enviada.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+      expect(enviada.body.data.consultantSentAt).toBeTruthy();
       const cedoDemais = await request(app.getHttpServer())
         .post(`/api/v1/barters/${code}/review`)
         .set('Authorization', await asUser(COMITE))
@@ -514,20 +569,22 @@ describe('Barters (e2e)', () => {
         .send({ note: opinion })
         .expect(200);
 
-      // A PRÓXIMA já nasce para o gerente novo.
-      const nova = await request(app.getHttpServer())
-        .post('/api/v1/barters')
-        .set('Authorization', await asUser(JOAO))
-        .send(validPayload);
-      expect(nova.status).toBe(201);
+      // A PRÓXIMA vai para o gerente novo — quem decide é o vínculo do momento
+      // do ENCAMINHAMENTO, que é quando o envio acontece.
+      const nova = await registrarEEncaminhar(JOAO);
+      expect(nova.status).toBe(200);
       expect(nova.body.data.managerName).toBe('Gustavo Ramires');
     });
 
     /**
-     * O cadastro exige gerente, então só se chega aqui quando o gerente é
-     * excluído depois. A permuta nasceria endereçada a ninguém.
+     * O cadastro exige gerente, e o gerente com time não é excluído: é assim
+     * que nenhum consultor fica sem a quem encaminhar.
+     *
+     * A recusa é o que sustenta a única guarda do encaminhamento — sem ela, o
+     * consultor mandaria uma permuta para ninguém, e ela ficaria em
+     * `sentToManager` para sempre, sem erro e sem a quem cobrar.
      */
-    it('consultor sem gerente não registra permuta', async () => {
+    it('gerente com time não é excluído: os consultores dele ficariam sem a quem encaminhar', async () => {
       const admin = await asUser(ADMIN);
       // Esvazia o time da Beatriz e a fila dela, para poder excluí-la.
       for (const [id, nome, email] of [
@@ -553,6 +610,266 @@ describe('Barters (e2e)', () => {
   });
 
   /**
+   * O RASCUNHO E O PARECER DO CONSULTOR — o começo da linha, que antes não
+   * existia.
+   *
+   * O que estes casos prendem é a diferença entre REGISTRAR e ENCAMINHAR. Ela é
+   * a razão de ser da etapa: montar a permuta e ter a conversa com o produtor
+   * são dois momentos, e enquanto os dois eram um ato só, o que o consultor
+   * sabia do cliente não chegava escrito a lugar nenhum.
+   */
+  describe('parecer do consultor e rascunho', () => {
+    /** Registra e devolve o código do rascunho recém-criado. */
+    const rascunho = async (email = JOAO) => {
+      const criada = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(email))
+        .send(validPayload);
+      expect(criada.status).toBe(201);
+      return criada.body.data.code as string;
+    };
+
+    it('o parecer pode vir no registro, e a permuta ainda assim é rascunho', async () => {
+      const criada = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(JOAO))
+        .send({ ...validPayload, note: PARECER_DO_CONSULTOR });
+
+      expect(criada.status).toBe(201);
+      expect(criada.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+      // Escrever o parecer NÃO encaminha: são dois atos, e o segundo é do
+      // consultor também. Quem tem o texto na mão no dia do registro só precisa
+      // dar mais um clique.
+      expect(criada.body.data.status).toBe('draft');
+      expect(criada.body.data.consultantSentAt).toBeNull();
+    });
+
+    it('o rascunho é salvo em partes, e o último texto é o que vale', async () => {
+      const code = await rascunho();
+      const joao = await asUser(JOAO);
+      const salvar = (note: string) =>
+        request(app.getHttpServer())
+          .put(`/api/v1/barters/${code}/note`)
+          .set('Authorization', joao)
+          .send({ note });
+
+      const meio = await salvar('Conversei com o produtor ontem,');
+      expect(meio.status).toBe(200);
+      expect(meio.body.data.consultantNote).toBe('Conversei com o produtor ontem,');
+      // Salvar não move a permuta nem gera passo: é rascunho sendo editado pelo
+      // próprio autor, e não um ato do fluxo.
+      expect(meio.body.data.status).toBe('draft');
+      expect(meio.body.data.events).toHaveLength(1);
+
+      const inteiro = await salvar(PARECER_DO_CONSULTOR);
+      expect(inteiro.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+
+      // E encaminhar sem repetir o texto usa o que está salvo.
+      const enviada = await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/forward`)
+        .set('Authorization', joao)
+        .send({});
+      expect(enviada.status).toBe(200);
+      expect(enviada.body.data.status).toBe('sentToManager');
+      expect(enviada.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+    });
+
+    /**
+     * ENCAMINHAR SEM PARECER não existe — é o mesmo motivo do parecer do
+     * gerente: sem texto, o botão vira um "seguir" disfarçado e a peça que o
+     * comitê mais precisa ler volta a viver no telefonema.
+     */
+    it('rascunho sem parecer não é encaminhado', async () => {
+      const code = await rascunho();
+      const joao = await asUser(JOAO);
+
+      const vazio = await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/forward`)
+        .set('Authorization', joao)
+        .send({});
+      expect(vazio.status).toBe(422);
+      expect(vazio.body.message).toContain('parecer');
+
+      const curto = await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/forward`)
+        .set('Authorization', joao)
+        .send({ note: 'ok' });
+      expect(curto.status).toBe(422);
+
+      // E ela continua rascunho, com o texto insuficiente NÃO gravado: o ato não
+      // aconteceu, então não deixou rastro.
+      const depois = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}`)
+        .set('Authorization', joao);
+      expect(depois.body.data.status).toBe('draft');
+      expect(depois.body.data.consultantNote).toBeNull();
+    });
+
+    it('rascunho é do dono: nem a retaguarda nem outro consultor o alcançam', async () => {
+      const code = await rascunho();
+
+      for (const quem of [ADMIN, COMITE, GERENTE, FATURISTA, ANA]) {
+        const resposta = await request(app.getHttpServer())
+          .get(`/api/v1/barters/${code}`)
+          .set('Authorization', await asUser(quem));
+        expect(resposta.status).toBe(403);
+      }
+
+      // E ninguém escreve o parecer de outro: a rota é do consultor, e o escopo
+      // decide de qual permuta.
+      await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/note`)
+        .set('Authorization', await asUser(ANA))
+        .send({ note: 'Parecer escrito por quem não registrou.' })
+        .expect(403);
+    });
+
+    /** Encaminhada uma vez, não se reescreve o parecer nem se reencaminha. */
+    it('depois de encaminhada, o parecer do consultor fecha', async () => {
+      const code = await rascunho();
+      const joao = await asUser(JOAO);
+      await encaminhar(code, joao).expect(200);
+
+      const reescrita = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/note`)
+        .set('Authorization', joao)
+        .send({ note: 'Pensando melhor, o produtor tem uma pendência.' });
+      expect(reescrita.status).toBe(422);
+      expect(reescrita.body.message).toContain('já foi encaminhada');
+
+      const denovo = await encaminhar(code, joao);
+      expect(denovo.status).toBe(422);
+      expect(denovo.body.message).toContain('já foi encaminhada');
+    });
+
+    /**
+     * O GERENTE lê o parecer do consultor antes de escrever o dele — é a peça
+     * que a etapa nova põe na mesa dele, e ela chega junto com a permuta.
+     */
+    it('o parecer do consultor chega inteiro ao gerente e ao comitê', async () => {
+      const enviada = await registrarEEncaminhar(JOAO);
+      const code = enviada.body.data.code as string;
+
+      const noGerente = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}`)
+        .set('Authorization', await asUser(GERENTE));
+      expect(noGerente.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+
+      await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/opinion`)
+        .set('Authorization', await asUser(GERENTE))
+        .send({ note: 'De acordo com o consultor: cliente sem pendência.' })
+        .expect(200);
+
+      // O parecer do consultor NÃO é sobrescrito pelo do gerente: são dois
+      // textos, de duas pessoas, e o comitê lê os dois.
+      const noComitê = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}`)
+        .set('Authorization', await asUser(COMITE));
+      expect(noComitê.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+      expect(noComitê.body.data.managerNote).toContain('De acordo com o consultor');
+    });
+  });
+
+  /**
+   * O INVESTIMENTO POR HECTARE (sc/ha) — a régua que compara permutas de
+   * tamanhos diferentes.
+   */
+  describe('investimento por hectare', () => {
+    const permutaDe = async (code: string, email: string) => {
+      const response = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}`)
+        .set('Authorization', await asUser(email));
+      expect(response.status).toBe(200);
+      return response.body.data as {
+        sacksPerHa?: number | null;
+        producerAreaHa?: number;
+        items: { kind: string; quantity: number }[];
+      };
+    };
+
+    it('o número é as sacas da permuta divididas pela área congelada', async () => {
+      // PRM-2026-001: 251,4142 sacas para os 120 ha do Antônio.
+      const barter = await permutaDe('PRM-2026-001', COMITE);
+      expect(barter.producerAreaHa).toBe(120);
+      expect(barter.sacksPerHa).toBeCloseTo(251.4142 / 120, 6);
+    });
+
+    /**
+     * A ÁREA é SNAPSHOT: mudar o cadastro do produtor não mexe no que já foi
+     * decidido. Sem isso, quem aprovou 2,1 sc/ha veria 1,4 no dia da auditoria,
+     * sem ninguém ter tocado na permuta.
+     */
+    it('mudar a área do produtor não reescreve o investimento das permutas dele', async () => {
+      const antes = await permutaDe('PRM-2026-001', COMITE);
+
+      await request(app.getHttpServer())
+        .put('/api/v1/producers/1')
+        .set('Authorization', await asUser(ADMIN))
+        .send({
+          name: 'Antônio Carvalho',
+          document: 'CPF 123.456.789-00',
+          farmName: 'Fazenda Boa Vista',
+          city: 'Maringá/PR',
+          // Área MENOR, e de propósito: os mínimos por hectare caem junto, e o
+          // mesmo payload continua válido para a permuta seguinte.
+          areaHa: 60,
+          consultantIds: [2],
+        })
+        .expect(200);
+
+      const depois = await permutaDe('PRM-2026-001', COMITE);
+      expect(depois.producerAreaHa).toBe(120);
+      expect(depois.sacksPerHa).toBe(antes.sacksPerHa);
+
+      // A PRÓXIMA permuta é que nasce com a área nova.
+      const nova = await registrarEEncaminhar(JOAO);
+      expect(nova.status).toBe(200);
+      const doAdmin = await permutaDe(nova.body.data.code as string, ADMIN);
+      expect(doAdmin.producerAreaHa).toBe(60);
+    });
+
+    /**
+     * Ele vai para QUEM COMPARA, e some para os outros dois. Não é sigilo: para
+     * o consultor e para o gerente a permuta é UMA, e uma régua de comparação
+     * sem com quem comparar é ruído na tela. Ver `barters.investmentPerHa`.
+     */
+    it('some para o consultor e para o gerente, e aparece para os três que comparam', async () => {
+      for (const quem of [ADMIN, COMITE, FATURISTA]) {
+        const barter = await permutaDe('PRM-2026-001', quem);
+        expect(barter.sacksPerHa).toBeGreaterThan(0);
+      }
+
+      for (const quem of [JOAO, GERENTE]) {
+        const barter = await permutaDe('PRM-2026-001', quem);
+        expect(barter.sacksPerHa).toBeUndefined();
+        expect(barter.producerAreaHa).toBeUndefined();
+      }
+    });
+
+    /**
+     * Permuta anterior ao campo de área devolve `null` — e não zero. Zero seria
+     * um investimento por hectare de zero, que é uma afirmação, e falsa.
+     */
+    it('sem área registrada, o número não é inventado', async () => {
+      // Área zerada não se cria pelo cadastro (o admin não consegue salvar
+      // uma), e é justamente por isso que ela existe só no HISTÓRICO: as
+      // permutas anteriores ao campo, que a migration não teve de onde
+      // preencher. Aqui ela é escrita direto no banco, que é como elas estão.
+      await app.get(PrismaService).barter.update({
+        where: { code: 'PRM-2026-001' },
+        data: { producerAreaHa: 0 },
+      });
+
+      const antiga = await permutaDe('PRM-2026-001', COMITE);
+      expect(antiga.producerAreaHa).toBe(0);
+      // `null`, e não zero: zero seria um investimento por hectare de zero, que
+      // é uma afirmação, e falsa.
+      expect(antiga.sacksPerHa).toBeNull();
+    });
+  });
+
+  /**
    * OS DOIS ÚLTIMOS POSTOS DA LINHA — a decisão do comitê e o faturamento.
    *
    * O que estes casos prendem é a separação: quem decide não fatura, quem fatura
@@ -561,6 +878,88 @@ describe('Barters (e2e)', () => {
    * da tabela de capacidades — passaria em silêncio.
    */
   describe('a decisão do comitê e o faturamento', () => {
+    /**
+     * A TERCEIRA SAÍDA: aprovar COM RESSALVA.
+     *
+     * Ela é um estado próprio, e não uma observação dentro da aprovação, porque
+     * a ressalva é uma CONDIÇÃO do negócio — garantia real, seguro, aval — e
+     * quem a cumpre não é quem a escreveu. Escondida dentro de `approved`, a
+     * lista e o cartão diriam "Aprovada — a faturar" sobre uma permuta que
+     * depende de alguém providenciar um aval.
+     */
+    it('aprovar com ressalva é um desfecho próprio, e ele exige o texto da exigência', async () => {
+      const comitê = await asUser(COMITE);
+      const ressalva =
+        'Exigir garantia real sobre a matrícula 12.345 e seguro agrícola da área antes da retirada.';
+
+      // Sem o texto, a decisão não passa: a exigência é o conteúdo do ato.
+      const muda = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', comitê)
+        .send({ status: 'approvedWithConditions' });
+      expect(muda.status).toBe(422);
+      expect(JSON.stringify(muda.body.message)).toContain('motivo da decisão');
+
+      const decisão = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', comitê)
+        .send({ status: 'approvedWithConditions', note: ressalva });
+      expect(decisão.status).toBe(200);
+      expect(decisão.body.data.status).toBe('approvedWithConditions');
+      expect(decisão.body.data.statusLabel).toBe('Aprovada com ressalva — a faturar');
+      expect(decisão.body.data.reviewNote).toBe(ressalva);
+      // Ela é a fila do FATURISTA, como a aprovação limpa: a ressalva é
+      // condição do negócio, não um portão deste fluxo.
+      expect(decisão.body.data.waitingFor).toBe('biller');
+      expect(decisão.body.data.nextAction).toBe('invoice');
+
+      // E o andamento diz COMO a etapa terminou, com as três palavras
+      // distinguíveis entre si.
+      const passoDaDecisão = (decisão.body.data.steps as { action: string; outcomeLabel: string }[])
+        .find((step) => step.action === 'review');
+      expect(passoDaDecisão?.outcomeLabel).toBe('Aprovada com ressalva');
+
+      // O faturista a alcança e a fatura.
+      const faturada = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/invoice')
+        .set('Authorization', await asUser(FATURISTA))
+        .send({});
+      expect(faturada.status).toBe(200);
+      expect(faturada.body.data.status).toBe('invoiced');
+      // A ressalva continua legível depois de faturada: ela é a condição que
+      // alguém precisa ter cumprido.
+      expect(faturada.body.data.reviewNote).toBe(ressalva);
+    });
+
+    /**
+     * NEGAR também exige texto, e pelo mesmo motivo: é a resposta que o
+     * consultor vai levar ao produtor. "Porque sim" manda a pessoa perguntar por
+     * telefone — e a resposta não fica no registro.
+     */
+    it('negar sem dizer por quê não é decidir', async () => {
+      const comitê = await asUser(COMITE);
+      const muda = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', comitê)
+        .send({ status: 'denied' });
+      expect(muda.status).toBe(422);
+
+      const curta = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', comitê)
+        .send({ status: 'denied', note: 'não' });
+      expect(curta.status).toBe(422);
+
+      // A APROVAÇÃO LIMPA, essa segue sem texto: ela não tem o que explicar, e
+      // exigi-lo produziria quinhentos "ok" no histórico.
+      const aprovada = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/review')
+        .set('Authorization', comitê)
+        .send({ status: 'approved' });
+      expect(aprovada.status).toBe(200);
+      expect(aprovada.body.data.reviewNote).toBeNull();
+    });
+
     /**
      * O ADMIN NÃO DECIDE MAIS. Este é o caso que a mudança inteira existe para
      * produzir: ele continua enxergando tudo e administrando tudo, e a única
@@ -725,9 +1124,16 @@ describe('Barters (e2e)', () => {
     /** A fila de cada posto é um filtro de estado — nenhuma delas tem dono. */
     it('cada posto tem a própria fila, e ela é o estado da permuta', async () => {
       const filas: [string, string, number][] = [
-        [FATURISTA, 'approved', 3],
+        // Duas aprovadas limpas e uma COM RESSALVA: são estados diferentes, e é
+        // por isso que a ressalva não se esconde dentro de "approved". A fila de
+        // trabalho do faturista é a soma das duas — ver `lineFrom(invoice)`.
+        [FATURISTA, 'approved', 2],
+        [FATURISTA, 'approvedWithConditions', 1],
         [COMITE, 'pending', 1],
         [FATURISTA, 'invoiced', 1],
+        // O RASCUNHO só aparece para quem o escreveu.
+        [JOAO, 'draft', 1],
+        [COMITE, 'draft', 0],
       ];
 
       for (const [email, status, quantas] of filas) {
@@ -737,6 +1143,67 @@ describe('Barters (e2e)', () => {
         expect(response.status).toBe(200);
         expect(response.body.data).toHaveLength(quantas);
       }
+    });
+
+    /**
+     * O FILTRO É RECORTE, NUNCA PERMISSÃO — e o caso do faturista é o que prova.
+     *
+     * O escopo dele é UM campo (`status`), e o filtro da listagem fala do mesmo
+     * campo. Enquanto os dois eram mesclados num objeto só, o segundo apagava o
+     * primeiro: `?status=pending` devolvia a mesa do comitê a quem só emite a
+     * nota, e `?status=draft` devolvia o rascunho de um consultor — a permuta
+     * que ainda não foi proposta a ninguém. Não era a fila errada na tela; era o
+     * JSON inteiro, com valores e pareceres, para quem o recorte existe para
+     * proteger.
+     *
+     * A pergunta do teste é a que importa: pedir um estado FORA do escopo
+     * devolve vazio, e não o estado.
+     */
+    it('o filtro de status não abre o escopo de quem só enxerga um trecho', async () => {
+      const faturista = await asUser(FATURISTA);
+
+      for (const status of ['sentToManager', 'pending', 'denied', 'draft']) {
+        const response = await request(app.getHttpServer())
+          .get(`/api/v1/barters?status=${status}`)
+          .set('Authorization', faturista);
+        expect([status, response.status]).toEqual([status, 200]);
+        expect([status, response.body.data]).toEqual([status, []]);
+      }
+
+      // E o recorte dele continua inteiro: o filtro estreita o que o escopo já
+      // permitia, que é para o que ele serve.
+      const dele = await request(app.getHttpServer())
+        .get('/api/v1/barters?status=approved')
+        .set('Authorization', faturista);
+      expect(dele.body.data).toHaveLength(2);
+    });
+
+    /**
+     * O MESMO, pelo outro campo: o escopo do gerente é `managerId`, e a
+     * listagem tem um filtro com esse nome.
+     *
+     * `?managerId=` existe para o comitê e o admin recortarem a operação por
+     * time. Na mão do gerente ele apagava o recorte dele: bastava o id do
+     * colega para ler o time inteiro do outro, pareceres técnicos inclusive.
+     */
+    it('o filtro de gerente não dá a um gerente o time do outro', async () => {
+      const gustavo = await asUser(GERENTE_SUL);
+
+      const doColega = await request(app.getHttpServer())
+        .get(`/api/v1/barters?managerId=${MANAGER.beatriz}`)
+        .set('Authorization', gustavo);
+      expect(doColega.status).toBe(200);
+      expect(doColega.body.data).toEqual([]);
+
+      // O dele continua respondendo — inclusive pedindo o próprio id.
+      const dele = await request(app.getHttpServer())
+        .get(`/api/v1/barters?managerId=${MANAGER.gustavo}`)
+        .set('Authorization', gustavo);
+      const semFiltro = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', gustavo);
+      expect(dele.body.data).toHaveLength(semFiltro.body.data.length);
+      expect(dele.body.data.length).toBeGreaterThan(0);
     });
   });
 
@@ -766,12 +1233,16 @@ describe('Barters (e2e)', () => {
       }[];
 
       expect(events.map((e) => [e.action, e.fromStatus, e.toStatus])).toEqual([
-        ['register', null, 'sentToManager'],
+        ['register', null, 'draft'],
+        ['forward', 'draft', 'sentToManager'],
         ['opinion', 'sentToManager', 'pending'],
         ['review', 'pending', 'approved'],
         ['invoice', 'approved', 'invoiced'],
       ]);
       expect(events.map((e) => e.actorRole)).toEqual([
+        'consultant',
+        // O ENCAMINHAMENTO é do mesmo consultor: os dois primeiros passos são
+        // dele, e é isso que a etapa nova acrescentou ao começo da linha.
         'consultant',
         'manager',
         'committee',
@@ -779,14 +1250,16 @@ describe('Barters (e2e)', () => {
       ]);
       expect(events.map((e) => e.actorName)).toEqual([
         'João Silva',
+        'João Silva',
         'Beatriz Nogueira',
         'Comitê de Permutas',
         'Patrícia Lemos',
       ]);
       // O texto de cada etapa fica no evento, e não só no campo da permuta —
       // que é sobrescrito.
-      expect(events[1].note).toContain('Volume compatível');
-      expect(events[3].note).toContain('nota única');
+      expect(events[1].note).toContain('Cliente de cinco safras');
+      expect(events[2].note).toContain('Volume compatível');
+      expect(events[4].note).toContain('nota única');
       expect(events[0].actorRoleLabel).toBe('Consultor');
     });
 
@@ -794,7 +1267,9 @@ describe('Barters (e2e)', () => {
       const antes = await request(app.getHttpServer())
         .get('/api/v1/barters/PRM-2026-002')
         .set('Authorization', await asUser(COMITE));
-      expect(antes.body.data.events).toHaveLength(2);
+      // Registro, encaminhamento e parecer do gerente: três passos antes da
+      // decisão.
+      expect(antes.body.data.events).toHaveLength(3);
 
       const decisão = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-002/review')
@@ -805,14 +1280,14 @@ describe('Barters (e2e)', () => {
       // A RESPOSTA DO ATO já traz o passo que ele acabou de criar. Sem isso, a
       // tela que agiu ficaria com uma permuta sem histórico na mão, e a linha do
       // tempo sumiria no instante seguinte ao clique.
-      expect(decisão.body.data.events).toHaveLength(3);
+      expect(decisão.body.data.events).toHaveLength(4);
 
       const depois = await request(app.getHttpServer())
         .get('/api/v1/barters/PRM-2026-002')
         .set('Authorization', await asUser(COMITE));
       const events = depois.body.data.events;
-      expect(events).toHaveLength(3);
-      expect(events[2]).toMatchObject({
+      expect(events).toHaveLength(4);
+      expect(events[3]).toMatchObject({
         action: 'review',
         fromStatus: 'pending',
         toStatus: 'denied',
@@ -820,7 +1295,7 @@ describe('Barters (e2e)', () => {
         note: 'Fora da política de risco desta safra.',
       });
       // O parecer do gerente continua lá, intacto.
-      expect(events[1].action).toBe('opinion');
+      expect(events[2].action).toBe('opinion');
     });
 
     /**
@@ -851,8 +1326,21 @@ describe('Barters (e2e)', () => {
       expect(created.body.data.events[0]).toMatchObject({
         action: 'register',
         fromStatus: null,
+        toStatus: 'draft',
+        actorName: 'João Silva',
+      });
+
+      // O ENCAMINHAMENTO é o segundo passo, e leva o parecer do consultor junto:
+      // o texto fica no evento, congelado, mesmo que o campo da permuta venha a
+      // ser reescrito.
+      const enviada = await encaminhar(created.body.data.code as string, await asUser(JOAO));
+      expect(enviada.body.data.events).toHaveLength(2);
+      expect(enviada.body.data.events[1]).toMatchObject({
+        action: 'forward',
+        fromStatus: 'draft',
         toStatus: 'sentToManager',
         actorName: 'João Silva',
+        note: PARECER_DO_CONSULTOR,
       });
     });
 
@@ -862,7 +1350,11 @@ describe('Barters (e2e)', () => {
         .get('/api/v1/barters/PRM-2026-005')
         .set('Authorization', await asUser(JOAO));
       expect(response.status).toBe(200);
-      expect(response.body.data.events).toHaveLength(1);
+      // Os dois passos dele: registrou e encaminhou.
+      expect(response.body.data.events.map((e: { action: string }) => e.action)).toEqual([
+        'register',
+        'forward',
+      ]);
       expect(response.body.data.waitingFor).toBe('manager');
     });
   });
@@ -904,12 +1396,14 @@ describe('Barters (e2e)', () => {
 
       expect(steps.map((s) => [s.action, s.state])).toEqual([
         ['register', 'done'],
+        ['forward', 'done'],
         ['opinion', 'current'],
         ['review', 'ahead'],
         ['invoice', 'ahead'],
       ]);
       expect(steps.map((s) => s.label)).toEqual([
         'Registro do consultor',
+        'Parecer do consultor',
         'Parecer do gerente',
         'Decisão do comitê',
         'Faturamento',
@@ -919,27 +1413,29 @@ describe('Barters (e2e)', () => {
       // autor — têm o papel de quem vai cumpri-las, que é o que a tela mostra.
       expect(steps[0].actorName).toBe('João Silva');
       expect(steps[0].at).not.toBeNull();
-      expect(steps[2].actorName).toBeNull();
-      expect(steps[2].roleLabel).toBe('Comitê');
-      expect(steps[3].roleLabel).toBe('Faturista');
+      expect(steps[1].actorName).toBe('João Silva');
+      expect(steps[3].actorName).toBeNull();
+      expect(steps[3].roleLabel).toBe('Comitê');
+      expect(steps[4].roleLabel).toBe('Faturista');
 
       // E a etapa de agora diz o que espera, com o nome de quem está com ela.
-      expect(steps[1].stateNote).toBe('Esta permuta aguarda o parecer do gerente Beatriz Nogueira');
+      expect(steps[2].stateNote).toBe('Esta permuta aguarda o parecer do gerente Beatriz Nogueira');
       expect(steps.filter((s) => s.stateNote !== null)).toHaveLength(1);
     });
 
     it('a permuta faturada tem a esteira inteira cumprida, e a decisão assinada', async () => {
       const steps = await stepsOf('PRM-2026-001', FATURISTA);
 
-      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done']);
+      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done', 'done']);
       expect(steps.every((s) => s.actorName !== null)).toBe(true);
       // O texto de cada etapa vem do EVENTO, que não é sobrescrito pela etapa
       // seguinte — é o que o faturista lê das etapas anteriores.
-      expect(steps[1].note).toContain('Volume compatível');
+      expect(steps[1].note).toContain('Cliente de cinco safras');
+      expect(steps[2].note).toContain('Volume compatível');
       // A decisão diz para que lado foi, e continua dizendo depois do
       // faturamento: a permuta está em `invoiced`, e a decisão foi "Aprovada".
-      expect(steps[2].outcomeLabel).toBe('Aprovada');
-      expect(steps[3].outcomeLabel).toBeNull();
+      expect(steps[3].outcomeLabel).toBe('Aprovada');
+      expect(steps[4].outcomeLabel).toBeNull();
     });
 
     /**
@@ -957,13 +1453,13 @@ describe('Barters (e2e)', () => {
       // A RESPOSTA DO ATO já traz o andamento novo — a tela que acabou de negar
       // não pode continuar mostrando a permuta esperando decisão.
       const steps = decisão.body.data.steps as Step[];
-      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'halted']);
-      expect(steps[2].outcomeLabel).toBe('Negada');
-      expect(steps[2].note).toBe('Fora da política de risco desta safra.');
+      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done', 'halted']);
+      expect(steps[3].outcomeLabel).toBe('Negada');
+      expect(steps[3].note).toBe('Fora da política de risco desta safra.');
       // E a etapa que não vem DIZ que não vem, em vez de ficar muda — muda, ela
       // se leria como "ainda falta faturar".
-      expect(steps[3].stateNote).toBe('Não acontece: a permuta foi negada');
-      expect(steps[3].actorName).toBeNull();
+      expect(steps[4].stateNote).toBe('Não acontece: a permuta foi negada');
+      expect(steps[4].actorName).toBeNull();
     });
 
     /** Mesma regra dos eventos, pela mesma razão: listagem mostra estado. */
@@ -1000,11 +1496,11 @@ describe('Barters (e2e)', () => {
      * continua sendo do gerente do consultor — a unidade não roteia nada.
      */
     it('qualquer unidade serve, e ela não muda de quem é o parecer', async () => {
-      const response = await request(app.getHttpServer())
-        .post('/api/v1/barters')
-        .set('Authorization', await asUser(JOAO))
-        .send({ ...validPayload, unitId: UNIT.filial34 });
-      expect(response.status).toBe(201);
+      const response = await registrarEEncaminhar(JOAO, {
+        ...validPayload,
+        unitId: UNIT.filial34,
+      });
+      expect(response.status).toBe(200);
       expect(response.body.data.unitName).toBe('Filial 34 – Gran. Jari');
       expect(response.body.data.managerName).toBe('Beatriz Nogueira');
     });

@@ -207,6 +207,87 @@ void main() {
       expect(faturada.wasApproved, isTrue);
     });
 
+    /// O RASCUNHO — o começo da linha, e o único estado que é do consultor.
+    ///
+    /// O que este teste prende é a diferença entre ESCRITO e ENVIADO: os dois
+    /// campos do parecer são independentes, e é dessa diferença que a tela dele
+    /// tira o "está com você" em vez de "esperando o gerente".
+    test('rascunho: parecer escrito não é permuta encaminhada', () {
+      final vazio = BarterModel.fromJson(barterJson(status: 'draft')
+        ..['waitingFor'] = 'consultant'
+        ..['statusLabel'] = 'Rascunho'
+        ..['managerId'] = null
+        ..['managerName'] = null);
+      expect(vazio.isDraft, isTrue);
+      expect(vazio.statusLabel, 'Rascunho');
+      expect(vazio.waitingFor, UserRole.consultant);
+      expect(vazio.hasConsultantOpinion, isFalse);
+      // Sem destinatário: ele é gravado no encaminhamento, não no registro.
+      expect(vazio.managerLabel, '—');
+
+      final escrito = BarterModel.fromJson(barterJson(status: 'draft')
+        ..['consultantNote'] = 'Cliente de cinco safras, sem atraso.');
+      expect(escrito.hasConsultantOpinion, isTrue);
+      // ESCRITO, e não enviado: a data do encaminhamento é o que separa os dois,
+      // e ela não é inventada a partir do texto.
+      expect(escrito.consultantSentAt, isNull);
+      expect(escrito.isDraft, isTrue);
+
+      final enviado = BarterModel.fromJson(barterJson(status: 'sentToManager')
+        ..['consultantNote'] = 'Cliente de cinco safras, sem atraso.'
+        ..['consultantSentAt'] = '2026-05-08T14:20:00.000Z');
+      expect(enviado.isDraft, isFalse);
+      expect(enviado.consultantSentAt, isNotNull);
+    });
+
+    /// A APROVAÇÃO COM RESSALVA é a mesma FILA da aprovação limpa, e um estado
+    /// diferente dela. Ler só `approved` faria a permuta com exigência sumir da
+    /// tela de quem tem de faturá-la — e é [awaitsInvoice] que as telas usam.
+    test('aprovada com ressalva: mesma fila do faturista, exigência à mostra', () {
+      final comRessalva = BarterModel.fromJson(barterJson(status: 'approvedWithConditions')
+        ..['waitingFor'] = 'biller'
+        ..['statusLabel'] = 'Aprovada com ressalva — a faturar'
+        ..['reviewedBy'] = 'Comitê de Permutas'
+        ..['reviewNote'] = 'Exigir seguro agrícola e aval do cônjuge.');
+
+      expect(comRessalva.status, BarterStatus.approvedWithConditions);
+      expect(comRessalva.hasConditions, isTrue);
+      // A FILA: ela conta como aprovada em todo painel, e é trabalho do
+      // faturista como qualquer outra aprovação.
+      expect(comRessalva.awaitsInvoice, isTrue);
+      expect(comRessalva.wasApproved, isTrue);
+      expect(comRessalva.waitingFor, UserRole.biller);
+      expect(comRessalva.reviewNote, contains('seguro agrícola'));
+
+      // E a aprovação LIMPA não vira ressalva por ter observação.
+      final limpa = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['reviewNote'] = 'Ata: reunião de 12/05.');
+      expect(limpa.hasConditions, isFalse);
+    });
+
+    /// O INVESTIMENTO POR HECTARE só chega a quem pode compará-lo, então o app
+    /// precisa distinguir "não veio" de "é zero". Zero seria uma afirmação — e
+    /// falsa.
+    test('sc/ha ausente é null, e não zero', () {
+      final semMetrica = BarterModel.fromJson(barterJson(status: 'approved'));
+      expect(semMetrica.sacksPerHa, isNull);
+      expect(semMetrica.producerAreaHa, isNull);
+
+      final comMetrica = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['producerAreaHa'] = 120
+        ..['sacksPerHa'] = 0.67037);
+      expect(comMetrica.producerAreaHa, 120);
+      expect(comMetrica.sacksPerHa, closeTo(0.67037, 0.00001));
+
+      // Permuta anterior ao campo de área: o servidor manda a área que tem (0) e
+      // `null` no lugar da divisão que não dá para fazer.
+      final semArea = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['producerAreaHa'] = 0
+        ..['sacksPerHa'] = null);
+      expect(semArea.producerAreaHa, 0);
+      expect(semArea.sacksPerHa, isNull);
+    });
+
     /// A LINHA DO TEMPO só vem no detalhe. Na listagem ela não vem, e a tela
     /// precisa distinguir "não veio nesta resposta" de "não tem passos".
     test('a linha do tempo vem do detalhe, com o autor de cada passo', () {

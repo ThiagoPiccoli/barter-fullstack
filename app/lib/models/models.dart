@@ -2,6 +2,12 @@ import '../services/tax_regime.dart';
 
 export '../services/tax_regime.dart' show TaxRegime, TaxRegimeApi;
 
+/// A CÉDULA DE PRODUTO RURAL vive em arquivo próprio (`cpr.dart`) e é
+/// reexportada aqui: ela é um DOCUMENTO montado a partir da permuta, com uma
+/// dúzia de campos que só o faturista preenche, e misturá-la ao modelo da
+/// permuta confundiria "o que foi acordado" com "o que vai impresso no título".
+export 'cpr.dart';
+
 /// Papéis do sistema. Os nomes técnicos são os MESMOS que a API grava em
 /// `user.role` (ver api/src/common/roles.ts) — este enum é a tradução deles
 /// para o app, e não uma segunda lista para manter em dia de cabeça.
@@ -72,12 +78,27 @@ class Capability {
   /// Ver valores em R$ — todo mundo menos o consultor.
   static const pricesRead = 'prices.read';
 
+  /// Manter o cadastro da CREDORA — a razão social, o CNPJ, o endereço e o foro
+  /// que saem nos documentos que a empresa emite.
+  ///
+  /// É do admin **e do faturista**, e é a única que os dois dividem: a credora
+  /// não decide permuta nem concede acesso — é o timbre do papel, e quem
+  /// percebe o CNPJ errado é quem monta a cédula.
+  static const creditorManage = 'creditor.manage';
+
   const Capability._();
 }
 
 /// Conversões defensivas do JSON da API: números podem chegar como int/double
 /// e ids são expostos como String para o restante do app.
 double _asDouble(dynamic v) => v == null ? 0 : (v as num).toDouble();
+
+/// Número que pode legitimamente NÃO VIR, e cujo ausente não é zero.
+///
+/// É o caso do investimento por hectare: ele some para quem não pode compará-lo
+/// e vem `null` quando não há área para dividir. Lê-lo com [_asDouble] faria os
+/// dois casos virarem "0 sc/ha", que é uma afirmação — e falsa.
+double? _asDoubleOrNull(dynamic v) => v == null ? null : (v as num).toDouble();
 String _asId(dynamic v) => v == null ? '' : v.toString();
 DateTime _asDate(dynamic v) => DateTime.parse(v as String).toLocal();
 DateTime? _asDateOrNull(dynamic v) => v == null ? null : _asDate(v);
@@ -334,14 +355,26 @@ enum ProductType { grain, input }
 /// api/src/barters/barter-workflow.ts) — é o que [_asStatus] compara.
 /// Os estados de uma permuta, na ordem da LINHA DE PRODUÇÃO:
 ///
-///     sentToManager → pending → approved → invoiced
-///      (gerente)     (comitê)  (faturista)
-///                        ↘ denied
+///     draft → sentToManager → pending → approved             → invoiced
+///  (consultor) (gerente)     (comitê)   approvedWithConditions (faturista)
+///                                ↘ denied
 ///
 /// Espelham `api/src/barters/barter-workflow.ts`, que é quem decide o caminho.
+/// `draft` é o RASCUNHO do consultor: ela existe, os valores já estão
+/// congelados nela, e ninguém da retaguarda a enxerga até ele encaminhar.
 /// `pending` é a permuta na mesa do COMITÊ — o nome ficou de quando a decisão
 /// era do admin, e ficou porque descreve o estado, não o cargo de quem decide.
-enum BarterStatus { sentToManager, pending, approved, denied, invoiced }
+/// `approvedWithConditions` é a aprovação COM RESSALVA: mesma fila do faturista,
+/// e uma exigência escrita junto (ver [BarterModel.reviewNote]).
+enum BarterStatus {
+  draft,
+  sentToManager,
+  pending,
+  approved,
+  approvedWithConditions,
+  denied,
+  invoiced,
+}
 
 /// Status vindo do servidor, tolerante ao desconhecido.
 ///
@@ -675,6 +708,28 @@ class BarterModel {
   final String? managerNote;
   final DateTime? managerReviewedAt;
 
+  /// O PARECER DO CONSULTOR e o momento em que ele encaminhou a permuta.
+  ///
+  /// É a peça que abre o processo: quem conhece o cliente dizendo o que pensa do
+  /// negócio, para o gerente e o comitê lerem antes de opinar e decidir.
+  ///
+  /// Os dois são independentes de propósito, e a tela lê a diferença: o texto
+  /// existe assim que ele salva o rascunho; [consultantSentAt] só quando a
+  /// permuta é encaminhada. Um rascunho com parecer escrito e não encaminhado é
+  /// exatamente o caso para o qual o rascunho existe.
+  final String? consultantNote;
+  final DateTime? consultantSentAt;
+
+  /// A ÁREA cultivável (ha) congelada no registro e o INVESTIMENTO POR HECTARE
+  /// que ela produz — quantas sacas do grão a lavoura compromete por hectare.
+  ///
+  /// Os dois vêm null para quem não tem `barters.investmentPerHa` (consultor e
+  /// gerente): o servidor simplesmente não os manda. [sacksPerHa] também é null
+  /// nas permutas anteriores ao campo de área — sem área não há divisão, e zero
+  /// seria afirmar um investimento por hectare que ninguém fez.
+  final double? producerAreaHa;
+  final double? sacksPerHa;
+
   /// A DECISÃO DO COMITÊ: a observação e quem assinou.
   ///
   /// [reviewNote] se chamava `adminNote` — o nome saiu junto com o poder, porque
@@ -733,6 +788,10 @@ class BarterModel {
     this.managerName,
     this.managerNote,
     this.managerReviewedAt,
+    this.consultantNote,
+    this.consultantSentAt,
+    this.producerAreaHa,
+    this.sacksPerHa,
     this.reviewNote,
     this.reviewedBy,
     this.invoicedBy,
@@ -776,6 +835,10 @@ class BarterModel {
       managerName: json['managerName'] as String?,
       managerNote: json['managerNote'] as String?,
       managerReviewedAt: _asDateOrNull(json['managerReviewedAt']),
+      consultantNote: json['consultantNote'] as String?,
+      consultantSentAt: _asDateOrNull(json['consultantSentAt']),
+      producerAreaHa: _asDoubleOrNull(json['producerAreaHa']),
+      sacksPerHa: _asDoubleOrNull(json['sacksPerHa']),
       reviewNote: json['reviewNote'] as String?,
       reviewedBy: json['reviewedBy'] as String?,
       invoicedBy: json['invoicedBy'] as String?,
@@ -910,6 +973,14 @@ class BarterModel {
   /// comitê — e o que decide se o detalhe mostra o bloco do parecer.
   bool get hasManagerOpinion => (managerNote ?? '').trim().isNotEmpty;
 
+  /// O PARECER DO CONSULTOR já está escrito? Vale no rascunho (ele salvou e
+  /// ainda não mandou) e depois dele — o texto segue com a permuta.
+  bool get hasConsultantOpinion => (consultantNote ?? '').trim().isNotEmpty;
+
+  /// É RASCUNHO: registrada, com as contas congeladas, e ainda na mão do
+  /// consultor. É o único estado em que ele tem o que fazer.
+  bool get isDraft => status == BarterStatus.draft;
+
   /// Está esperando o parecer do gerente a quem foi enviada.
   bool get awaitsManager => status == BarterStatus.sentToManager;
 
@@ -917,7 +988,16 @@ class BarterModel {
   bool get awaitsCommittee => status == BarterStatus.pending;
 
   /// Foi aprovada e espera o FATURAMENTO — a fila do faturista.
-  bool get awaitsInvoice => status == BarterStatus.approved;
+  ///
+  /// As DUAS aprovações contam: a ressalva é uma condição do negócio (garantia,
+  /// seguro, aval), não um portão do fluxo, e a permuta com ressalva está na
+  /// mesma fila. Ler só `approved` faria ela sumir da tela de quem tem de
+  /// faturá-la.
+  bool get awaitsInvoice =>
+      status == BarterStatus.approved || status == BarterStatus.approvedWithConditions;
+
+  /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote].
+  bool get hasConditions => status == BarterStatus.approvedWithConditions;
 
   /// Já foi faturada: fim da linha.
   bool get isInvoiced => status == BarterStatus.invoiced;
@@ -966,12 +1046,16 @@ class BarterModel {
     final fromServer = serverStatusLabel;
     if (fromServer != null && fromServer.isNotEmpty) return fromServer;
     switch (status) {
+      case BarterStatus.draft:
+        return 'Rascunho';
       case BarterStatus.sentToManager:
         return 'No gerente';
       case BarterStatus.pending:
         return 'No comitê';
       case BarterStatus.approved:
         return 'Aprovada — a faturar';
+      case BarterStatus.approvedWithConditions:
+        return 'Aprovada com ressalva — a faturar';
       case BarterStatus.denied:
         return 'Negada';
       case BarterStatus.invoiced:

@@ -118,6 +118,15 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // Trilha de auditoria.
         { route: 'GET /audit-logs', policy: 'capability:audit.read' },
 
+        // A CREDORA — cadastro ÚNICO, no singular, sem `:id` e sem DELETE (o
+        // mesmo desenho do comitê). É a única capacidade que o admin divide com
+        // um posto da linha: `creditor.manage` é dele E do faturista, porque a
+        // credora é o timbre dos documentos que o faturista emite. Ela não
+        // decide permuta nem concede acesso — e é isso que este inventário
+        // trava, para a divisão não virar precedente sem alguém escrever a linha.
+        { route: 'GET /creditor', policy: 'capability:creditor.manage' },
+        { route: 'PUT /creditor', policy: 'capability:creditor.manage' },
+
         // Permutas — leitura escopada pelo service; escrita por capacidade.
         { route: 'GET /barters', policy: 'any-authenticated' },
         { route: 'GET /barters/:code', policy: 'any-authenticated' },
@@ -125,9 +134,25 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // A etapa do gerente. A capacidade abre a porta ao PAPEL; que a permuta
         // seja de uma unidade dele é conferido no service, e por isso não
         // aparece aqui.
+        // O PARECER DO CONSULTOR e o encaminhamento vivem sob a capacidade do
+        // REGISTRO, sem uma própria: encaminhar é a segunda metade do ato de
+        // registrar, partido em dois para caber o parecer de quem conhece o
+        // cliente. Quem registra manda adiante o que registrou — e só o próprio
+        // rascunho, o que é escopo, e disso cuida o service.
+        { route: 'POST /barters/:code/forward', policy: 'capability:barters.register' },
         { route: 'POST /barters/:code/opinion', policy: 'capability:barters.opinion' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
         { route: 'POST /barters/:code/invoice', policy: 'capability:barters.invoice' },
+        // A CÉDULA (CPR) é o documento que o posto do faturamento produz, e por
+        // isso vive sob a MESMA capacidade do faturamento, sem uma própria: quem
+        // fatura preenche a cédula do que faturou. Ela fica editável depois de a
+        // permuta ser faturada — o que o estado fecha é o ato, não o papel.
+        { route: 'GET /barters/:code/cpr', policy: 'capability:barters.invoice' },
+        { route: 'PUT /barters/:code/cpr', policy: 'capability:barters.invoice' },
+        // O único texto do fluxo que se REESCREVE: o parecer do consultor
+        // enquanto a permuta é rascunho. Daí o PUT, e daí a capacidade do
+        // registro — ver `POST /barters/:code/forward`.
+        { route: 'PUT /barters/:code/note', policy: 'capability:barters.register' },
 
         // Lançamento do Barter — safra e versões são do admin. A exceção é a
         // versão VIGENTE: o consultor precisa dela para saber se há Barter

@@ -7,7 +7,9 @@ import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
+import 'cpr_form_screen.dart';
 import 'barters_screen.dart';
+import 'creditor_screen.dart';
 
 /// Casa dos papéis de RETAGUARDA — gerente, comitê e faturista.
 ///
@@ -82,6 +84,82 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
             label: brand.copy.barterPluralTitle,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// O atalho para o cadastro da EMPRESA (a credora), no painel de quem o mantém.
+///
+/// Ele carrega o cadastro ao aparecer, e não usa cache, porque o dono é
+/// compartilhado: admin e faturista escrevem a mesma linha, e uma cópia em
+/// memória mostraria a versão de quem abriu o app primeiro.
+///
+/// Quando falta alguma coisa, o cartão DIZ o quê. É a mesma lista que a tela da
+/// cédula mostra, do mesmo lugar — o faturista não deveria descobrir que o CNPJ
+/// está faltando só ao montar a décima cédula do dia.
+class _CreditorTile extends StatefulWidget {
+  const _CreditorTile();
+
+  @override
+  State<_CreditorTile> createState() => _CreditorTileState();
+}
+
+class _CreditorTileState extends State<_CreditorTile> {
+  CprCreditor? _creditor;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final creditor = await AppData.creditor();
+      if (mounted) setState(() => _creditor = creditor);
+    } on ApiException {
+      // Silêncio de propósito: este é um atalho, não o conteúdo da tela. Um erro
+      // aqui não pode encher de vermelho o painel de quem veio ver a própria
+      // fila — o cartão simplesmente fica sem o resumo, e a tela de dentro
+      // mostra a falha com o "tentar novamente" dela.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final creditor = _creditor;
+    final pending = creditor != null && !creditor.isComplete;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          pending ? Icons.domain_disabled_outlined : Icons.domain,
+          color: pending ? AppColors.pending : AppColors.primary,
+        ),
+        title: const Text('Empresa (credora)',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle: Text(
+          creditor == null
+              ? 'Os dados que saem nas cédulas emitidas'
+              : pending
+                  ? 'Falta: ${creditor.gaps.join(', ')}'
+                  : creditor.name,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12,
+            color: pending ? AppColors.pending : AppColors.textMedium,
+          ),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          await Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const CreditorScreen()),
+          );
+          await _load();
+        },
       ),
     );
   }
@@ -257,7 +335,7 @@ class _Post {
         actionLabel: 'Faturar',
         actionIcon: Icons.receipt_long_outlined,
         onAction: (context, barter, onChanged) =>
-            invoiceBarter(context, barter, onInvoiced: (_) => onChanged()),
+            openInvoicing(context, barter, onInvoiced: (_) => onChanged()),
         emptyTitle: 'Nada a faturar',
         emptyText: 'Nenhuma permuta aprovada esperando faturamento. Puxe para atualizar.',
       );
@@ -382,6 +460,14 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
                 _EmptyQueueCard(post: post)
               else
                 _WorkQueueCard(post: post, onChanged: _onQueueChanged),
+              const SizedBox(height: 20),
+            ],
+            // A EMPRESA — só para quem mantém o timbre dos documentos, que na
+            // retaguarda é o faturista. Fica depois da fila pelo mesmo critério
+            // do painel abaixo: não pede ação, é cadastro que se visita quando
+            // algo está errado nele. Aparece antes só quando ESTÁ errado.
+            if (user.can(Capability.creditorManage)) ...[
+              const _CreditorTile(),
               const SizedBox(height: 20),
             ],
             // O QUE VEM VINDO — só para quem decide. Depois da fila porque não
