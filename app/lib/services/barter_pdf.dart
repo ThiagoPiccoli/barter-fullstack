@@ -389,7 +389,11 @@ class BarterPdf {
     final rows = barter.inputs
         .map((i) => [
               _s(AppData.skuOf(i) ?? '-'),
-              _s(i.productName),
+              // O item de FORA DO BARTER sai MARCADO no comprovante: ele não
+              // está na tabela de valores da gestão, e quem for conferir o
+              // preço não vai encontrá-lo lá. A marca é a única coisa que
+              // explica isso a quem lê o papel meses depois.
+              _s(i.offBarter ? '${i.productName} (fora do Barter)' : i.productName),
               formatQty(i.quantity),
               _s(i.unit),
               if (hasRef) formatSacks(i.total / barter.referenceValue),

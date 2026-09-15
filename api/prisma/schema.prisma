@@ -647,6 +647,16 @@ model Barter {
   items  BarterItem[]
   events BarterEvent[]
 
+  /// OS PEDIDOS DE FORA DO BARTER feitos nesta permuta — o consultor pedindo um
+  /// produto que a tabela da versão não tem. Ver BarterProductRequest.
+  ///
+  /// Lista, e não um campo de estado como o pedido de alteração, porque a
+  /// pergunta é outra: ali interessa se ESTA permuta tem um pedido em aberto
+  /// agora (um de cada vez, e o anterior some quando o seguinte nasce); aqui
+  /// cada pedido é um item que entra — ou não — na permuta, e dois pedidos
+  /// diferentes convivem sem nenhuma relação entre si.
+  productRequests BarterProductRequest[]
+
   /// A CÉDULA DE PRODUTO RURAL desta permuta, quando o faturista já começou a
   /// preenchê-la. Uma só, e opcional: a permuta existe e anda sem CPR — ela é o
   /// documento que o faturamento produz, não um requisito do fluxo.
@@ -735,6 +745,126 @@ model BarterItem {
   unit        String
   quantity    Float
   unitValue   Float
+
+  /// Este item veio de FORA DO BARTER — de um pedido do consultor que o admin
+  /// atendeu (ver BarterProductRequest), e não da tabela de valores da versão.
+  ///
+  /// É o fato, gravado como fato: `requestId` ao lado é a PISTA de qual pedido o
+  /// trouxe, e vira null se o pedido sumir. A marca não pode sumir junto — ela é
+  /// o que explica, no comprovante e na conferência do balcão, um item que não
+  /// está na lista de preços da praça e cujo valor ninguém encontra na tabela.
+  ///
+  /// `productId` é null nestes itens: eles não entram no catálogo. O catálogo é
+  /// a lista do FORNECEDOR, carregada da planilha dele; um item pedido para uma
+  /// permuta só não é um produto da praça, e cadastrá-lo faria o relatório de
+  /// preço e a carga seguinte tropeçarem num produto que ninguém vende.
+  offBarter   Boolean  @default(false)
+  requestId   Int?
+  request     BarterProductRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  /// O VALOR DE TABELA deste item, quando o admin escreveu outro por cima.
+  ///
+  /// Null é o caso normal: o item vale o que a versão do Barter diz, e
+  /// `unitValue` é a única verdade. Preenchido, ele guarda o que a tabela dizia
+  /// ANTES de o admin atender um pedido de alteração mexendo no valor (ver
+  /// `POST /barters/:code/change-request/prices`) — e é o que permite à tela
+  /// mostrar "R$ 110,00 (tabela: R$ 120,00)" em vez de um número sem história.
+  ///
+  /// Guardado só na PRIMEIRA sobrescrita: o que interessa é de onde o valor
+  /// saiu, e não a lista de tentativas. Uma segunda correção do mesmo item
+  /// continua tendo partido da tabela.
+  listValue   Float?
+
+  @@index([requestId])
+}
+
+/// O PEDIDO DE FORA DO BARTER — o consultor pede um produto que a tabela da
+/// versão não tem, e o admin o adiciona ÀQUELA permuta, com o valor que acertou.
+///
+/// Ele existe porque a tabela do Barter é uma lista fechada e a lavoura não é: o
+/// produtor precisa de um adjuvante específico, de um serviço que não foi
+/// lançado, de uma semente que o fornecedor só cota sob encomenda. Sem este
+/// caminho, as saídas eram duas e as duas ruins — deixar o item fora da permuta
+/// (e o produtor compra à vista em outro lugar, que é a venda que o Barter
+/// existe para trazer) ou lançar o produto na versão vigente para todo mundo,
+/// transformando uma negociação pontual em preço de praça.
+///
+/// ELE É DA PERMUTA, e não do produtor nem do catálogo. O valor acertado aqui
+/// vale para ESTA permuta e morre com ela: foi cotado para esta quantidade,
+/// nesta data, neste negócio. Outra permuta do mesmo produtor pede de novo — e
+/// é assim que se percebe que o item passou a ser rotina e merece entrar na
+/// próxima versão do Barter.
+///
+/// Quem pede é o CONSULTOR que registrou; quem decide é o ADMIN, e o que ele
+/// decide é um VALOR — diferente do pedido de alteração, em que ele decide se o
+/// trabalho dos outros postos será refeito. Aqui ele não desfaz nada: o item
+/// entra na permuta onde ela está.
+model BarterProductRequest {
+  id       Int    @id @default(autoincrement())
+  barterId Int
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O QUE o consultor pediu, escrito por ele: o nome do produto, a unidade em
+  /// que ele o conhece e quanto o produtor quer. Texto livre de propósito — ele
+  /// está pedindo justamente o que não existe em lista nenhuma para escolher.
+  ///
+  /// O admin pode corrigir os três ao atender (a descrição do fornecedor é outra,
+  /// a embalagem é em 20 l e não em litro), e o que fica gravado é o que ELE
+  /// escreveu: é esse o item que entra na permuta e é por ele que o produtor vai
+  /// perguntar no balcão.
+  productName String
+  unit        String
+  quantity    Float
+
+  /// O CÓDIGO do fornecedor, quando o admin o tem na hora de atender. É a mesma
+  /// chave de `BarterItem.productSku`, e serve à mesma pessoa: quem separa o
+  /// item no depósito e o bate contra a nota.
+  sku String?
+
+  /// O que o consultor tem a dizer sobre o pedido, quando tem.
+  ///
+  /// OPCIONAL, ao contrário do pedido de alteração: ali o texto é o pedido
+  /// inteiro (sem ele o admin não sabe sequer do que se trata); aqui o pedido é
+  /// o produto e a quantidade, e eles falam por si. Exigir um parágrafo para
+  /// pedir 20 t de ureia produziria quinhentos "o produtor quer" no histórico.
+  note String?
+
+  /// `open` (na mesa do admin), `added` (atendido: o item está na permuta) ou
+  /// `denied` (recusado, com o motivo em `reply`).
+  ///
+  /// As duas decisões SOBREVIVEM, e aqui isso é diferente do pedido de
+  /// alteração — onde o aceite some porque o efeito dele (a permuta virou
+  /// rascunho) conta a história sozinho. O atendido precisa continuar existindo
+  /// porque ele é a ORIGEM de um item da permuta: é ele que diz de onde veio um
+  /// insumo que não está na tabela do Barter, e é dele que a remontagem do
+  /// rascunho tira o item de volta (ver `replaceInputs`).
+  status String @default("open")
+
+  requestedBy   String
+  requestedById Int?
+  requestedAt   DateTime @default(now())
+
+  /// A RESPOSTA DO ADMIN: quem, quando, e o motivo — obrigatório na recusa, como
+  /// em toda resposta que fecha a porta de alguém.
+  decidedBy   String?
+  decidedById Int?
+  decidedAt   DateTime?
+  reply       String?
+
+  /// O VALOR (R$ por unidade) que o admin acertou para este item nesta permuta.
+  /// Null enquanto o pedido não foi atendido — e um valor "provisório" antes
+  /// disso seria um preço que ninguém combinou.
+  unitValue Float?
+
+  /// O item que este pedido virou. Lista, e não um só, pelo que o schema
+  /// permite: na prática é um item — e é `replaceInputs` que o recria quando o
+  /// consultor remonta o rascunho, sempre um por pedido atendido.
+  items BarterItem[]
+
+  // A fila do admin: os pedidos de produto em aberto, varridos sobre a tabela
+  // inteira toda vez que ele abre a tela.
+  @@index([status, requestedAt])
+  @@index([barterId])
 }
 
 /// A CREDORA — a empresa que recebe o grão, como os documentos a nomeiam.

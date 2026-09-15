@@ -111,6 +111,76 @@ em [change-request.ts](../api/src/barters/change-request.ts), FORA de
 `BARTER_STEPS`: um desvio que quase nenhuma permuta toma não é um degrau da
 esteira, e como etapa ele apareceria como pendência em toda permuta do sistema.
 
+**O admin atende sem devolver, quando o que mudou é um número.** A maior parte
+dos pedidos que chegam é de uma linha de R$ — o valor da semente saiu diferente
+do que foi combinado com o produtor, o fornecedor cotou outro preço para aquela
+quantidade. Devolver a permuta ao rascunho por causa disso joga fora dois
+pareceres e uma decisão para corrigir o que o admin já tem na mão, e ainda
+obriga o consultor a remontá-la e reencaminhá-la. Então há uma **terceira
+saída**: `POST /barters/:code/change-request/prices` escreve o valor novo nos
+itens, o servidor **recalcula as sacas** e a permuta continua exatamente onde
+estava, com quem estava.
+
+Ela só existe **dentro de um pedido em aberto**: sem pedido não há o que
+atender, e um admin reprecificando permuta por iniciativa própria estaria
+decidindo o negócio — que é justamente o que ele não faz. O item guarda o valor
+de TABELA de onde saiu (`BarterItem.listValue`), para a tela poder mostrar
+"R$ 110,00 (tabela: R$ 120,00)" em vez de um número sem história, e o evento da
+linha do tempo diz o que mudou, de quanto para quanto: é o que o gerente e o
+comitê leem para saber que a permuta que eles analisaram não é mais a mesma. O
+**grão** fica fora: as sacas são o resultado do custo, e não um campo.
+
+**E há o que a tabela não tem.** A tabela do Barter é uma lista fechada,
+publicada de uma vez para a praça inteira; a lavoura não é. O produtor quer o
+adjuvante da marca dele, um serviço que ninguém lançou, uma semente sob
+encomenda. O consultor **pede um produto de fora do Barter** (`POST
+/barters/:code/product-requests` — produto, unidade e quantidade, sem preço: ele
+não vê R$, e é justamente o item que ninguém precificou) e o admin **atende com
+um valor** (`.../product-requests/:id/decision`), que é a única coisa que ele
+decide aqui.
+
+```
+                     ┌─ incluído ─▶ entra NESTA permuta, com valor; as sacas são recalculadas
+pedido de produto ───┤
+                     └─ recusado ─▶ nada entra, com o motivo escrito
+```
+
+O item fica amarrado **à permuta**, e a nada mais: ele foi cotado para aquela
+quantidade, naquela data, naquele negócio. Ele **não entra no catálogo** — o
+catálogo é a lista do fornecedor, e um produto criado a partir de um pedido
+apareceria no relatório de preços e na carga seguinte como se fosse da praça.
+Outra permuta do mesmo produtor pede de novo, e é assim que se percebe que o
+item deixou de ser exceção: quando o mesmo pedido chega pela quinta vez, ele não
+é mais um pedido — é uma linha que falta na próxima versão do Barter.
+
+Duas consequências que merecem nome. A primeira: o item de fora **paga em sacas
+como qualquer outro** (ele foi retirado) e **não entra em régua nenhuma** — nem
+no mínimo por hectare, nem no de classe, nem como denominador deles. Sem classe,
+ele nunca somaria no numerador de uma pasta e engordaria o denominador de todas:
+um pedido atendido derrubaria, na remontagem, a permuta que ele veio ajudar. A
+segunda: a janela vai **do rascunho até a decisão do comitê**, e o rascunho
+dentro dela é o oposto do pedido de alteração — é ali que o consultor monta a
+permuta e topa com o que falta. Depois da decisão, um insumo a mais mudaria o
+que foi aprovado, e o caminho volta a ser o pedido de alteração. Por causa disso
+o admin enxerga o rascunho que **pediu alguma coisa a ele**, e só esse: um
+rascunho não é fila de ninguém, menos quando ele próprio bate na porta.
+
+A regra mora em [product-request.ts](../api/src/barters/product-request.ts),
+FORA de `BARTER_STEPS` pelo mesmo motivo do desvio.
+
+**Onde o pedido é feito, no app.** Ele tem dois pontos de partida, e o segundo
+existe porque a falta aparece antes da permuta: no **detalhe** de uma permuta
+registrada (o botão ao lado de "Solicitar Alteração") e no **construtor**, que é
+onde o consultor procura o adjuvante na lista e não acha. Lá o que existe é uma
+*simulação* — ela mora no aparelho, e o servidor não a conhece —, então o botão
+faz as duas coisas num ato só: **registra a permuta como rascunho e manda o
+pedido** (`registerToRequestProduct`, em
+[send_simulation.dart](../app/lib/screens/send_simulation.dart)). Rascunho, e
+nunca encaminhada: registrar para pedir não é mandar a permuta ao gerente. O
+diálogo diz isso antes de qualquer campo, porque o rodapé daquela tela promete
+que nada é enviado agora — e em duas etapas (registrar, pedir depois) o pedido
+cancelado deixaria uma permuta registrada que ninguém pediu para registrar.
+
 O caminho inteiro mora em [barter-workflow.ts](../api/src/barters/barter-workflow.ts) —
 os estados, quem move o quê e **o que responder a quem chega fora de hora**. Essa
 última parte não é enfeite: dizer "já foi decidida" a quem espera o gerente manda
@@ -236,8 +306,9 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | `barters.investmentPerHa` | admin, comitê, faturista — o sc/ha, a régua que compara permutas |
 | `barters.invoice` | **faturista** |
 | `creditor.manage` | admin **e** faturista (a única dividida — é o timbre, não decisão) |
-| `barters.changeReview` | **admin** — decide o pedido de alteração (processo, não negócio) |
-| `barters.register` · `barters.changeRequest` | consultor |
+| `barters.changeReview` | **admin** — decide o pedido de alteração (processo, não negócio) e atende no valor |
+| `barters.productReview` | **admin** — atende o pedido de fora do Barter: inclui o item com o valor acertado |
+| `barters.register` · `barters.changeRequest` · `barters.productRequest` | consultor |
 
 `barter.manage` (lançar safra e versões) é separada de `catalog.manage`
 (cadastro do produto e regra das classes) de propósito: uma decide **por
@@ -1068,6 +1139,9 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | PUT | `/barters/:code/inputs` | consultor | remonta os insumos; lista inteira, só no rascunho e só na mesma cultura |
 | POST | `/barters/:code/change-request` | consultor | pede alteração (justificativa obrigatória); vale até o faturamento |
 | POST | `/barters/:code/change-request/decision` | **admin** | libera (volta a rascunho) ou recusa (motivo obrigatório) |
+| POST | `/barters/:code/change-request/prices` | **admin** | atende o pedido no VALOR: reescreve o de itens, recalcula as sacas e a permuta não sai do lugar; exige pedido em aberto |
+| POST | `/barters/:code/product-requests` | consultor | pede um produto que a tabela não tem (sem preço); do rascunho até a decisão do comitê |
+| POST | `/barters/:code/product-requests/:id/decision` | **admin** | inclui o item na permuta com o valor acertado, ou recusa (motivo obrigatório) |
 | POST | `/barters/:code/forward` | consultor | encaminha ao gerente, com o parecer junto (obrigatório) |
 | POST | `/barters/:code/opinion` | gerente | parecer técnico; só na permuta endereçada a ele |
 | POST | `/barters/:code/review` | comitê | decide: aprova, aprova com ressalva (texto obrigatório) ou nega (idem) |
@@ -1678,6 +1752,8 @@ Estes pares andam juntos. Mudou de um lado, procure o outro:
 | `BARTER_STATUSES` em [barter.dto.ts](../api/src/barters/dto/barter.dto.ts) | `enum BarterStatus` em [models.dart](../app/lib/models/models.dart) — os nomes precisam bater, é `status.name` que compara |
 | `POST /barters/:code/opinion` | `giveBarterOpinion` em [common_widgets.dart](../app/lib/widgets/common_widgets.dart) |
 | [change-request.ts](../api/src/barters/change-request.ts) (quem pede, até quando, o que o aceite apaga) | `canBeChangedBy` / `hasOpenChangeRequest` em [models.dart](../app/lib/models/models.dart) + `ChangeRequestCard` em [common_widgets.dart](../app/lib/widgets/common_widgets.dart) |
+| [product-request.ts](../api/src/barters/product-request.ts) (até quando se pede, o que o item de fora acrescenta) | `canRequestProductBy` / `BarterProductRequest` em [models.dart](../app/lib/models/models.dart) + `ProductRequestsCard` em [common_widgets.dart](../app/lib/widgets/common_widgets.dart) |
+| `offBarterCost` somando nas sacas e em régua nenhuma (`pricedItemsFor`) | `_offBarterCost` em [barter_screen.dart](../app/lib/screens/barter_screen.dart) — a prévia precisa dar o mesmo número que o servidor grava |
 | `PUT /barters/:code/inputs` | `NewBarterScreen.draft` em [barter_screen.dart](../app/lib/screens/barter_screen.dart) — a mesma tela do registro, com produtor e unidade congelados |
 | upload multipart de `/versions/import` | `ApiClient.upload` + `file_picker` em [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) |
 

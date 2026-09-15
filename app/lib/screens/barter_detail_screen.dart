@@ -294,6 +294,41 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                   onDecided: (updated) => setState(() => _barter = updated),
                 )
               : null,
+          // A TERCEIRA saída, e a mais usada: a maior parte dos pedidos é de um
+          // número. Ela fica ao lado das outras duas porque é a mesma decisão —
+          // o que muda é o preço dela: aqui nada é refeito.
+          onChangePrices: _canDecideChange && _barter.inputs.isNotEmpty
+              ? () => changeBarterPrices(
+                  context,
+                  _barter,
+                  onChanged: (updated) => setState(() => _barter = updated),
+                )
+              : null,
+        ),
+      ),
+
+    // OS PEDIDOS DE FORA DO BARTER. Vêm logo depois do pedido de alteração,
+    // e pelo mesmo motivo dele: enquanto um está em aberto, a lista de
+    // insumos desta permuta está para crescer — e dar parecer, decidir ou
+    // faturar sobre ela é trabalho que pode mudar de tamanho no minuto
+    // seguinte.
+    //
+    // Os já decididos continuam na tela: o incluído é a ORIGEM de um item
+    // que não está na tabela do Barter, e é a única coisa que explica o
+    // valor dele.
+    if (_barter.productRequests.isNotEmpty)
+      DetailBlock.side(
+        ProductRequestsCard(
+          barter: _barter,
+          onDecide: _canDecideProduct
+              ? (request, {required accept}) => decideBarterProduct(
+                  context,
+                  _barter,
+                  request,
+                  accept: accept,
+                  onDecided: (updated) => setState(() => _barter = updated),
+                )
+              : null,
         ),
       ),
 
@@ -655,6 +690,41 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
         ),
       ),
 
+    // O PEDIDO DE FORA DO BARTER — a outra coisa que o consultor pede ao
+    // admin, e a única que ele pode pedir JÁ NO RASCUNHO.
+    //
+    // Ela fica ao lado do pedido de alteração, e não dentro da tela de
+    // montagem da permuta, porque é sobre ESTA permuta: o item vai entrar
+    // nela, com um valor acertado para ela.
+    if (_canRequestProduct)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            OutlinedButton.icon(
+              onPressed: () => requestBarterProduct(
+                context,
+                _barter,
+                onRequested: (updated) => setState(() => _barter = updated),
+              ),
+              icon: const Icon(Icons.add_shopping_cart_outlined),
+              label: const Text('Pedir Produto de Fora'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.input,
+                side: BorderSide(color: AppColors.input),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Para o que a tabela desta gestão não tem. O administrador acerta o '
+              'valor e inclui o item nesta permuta.',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ],
+        ),
+      ),
+
     // O ANDAMENTO fecha a lista — e fica na coluna do ESTADO, não na do
     // corpo.
     //
@@ -683,6 +753,16 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
   bool get _canRequestChange =>
       AppData.can(Capability.bartersChangeRequest) &&
       _barter.canBeChangedBy(AppData.currentUser?.id);
+
+  /// Este usuário ATENDE o pedido de fora do Barter? É o admin — quem publica a
+  /// tabela de valores é quem diz por quanto entra o que ficou fora dela.
+  bool get _canDecideProduct => AppData.can(Capability.bartersProductReview);
+
+  /// Este usuário PEDE um produto de fora para esta permuta? Só quem a
+  /// registrou, e só até o comitê decidir — a mesma janela do servidor.
+  bool get _canRequestProduct =>
+      AppData.can(Capability.bartersProductRequest) &&
+      _barter.canRequestProductBy(AppData.currentUser?.id);
 
   /// Este usuário tem o que fazer com a RECUSA de um pedido já decidido? Quem
   /// pediu e quem decide. Para os demais ela é ruído: um assunto encerrado

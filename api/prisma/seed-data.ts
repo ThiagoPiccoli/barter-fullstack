@@ -4,6 +4,7 @@ import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
 import { TAX_REGIME, taxRateOf, type TaxRegime } from '../src/barters/tax-regime';
 import { CHANGE_REQUEST_ACTION, CHANGE_REQUEST_STATUS } from '../src/barters/change-request';
+import { PRODUCT_REQUEST_ACTION, PRODUCT_REQUEST_STATUS } from '../src/barters/product-request';
 import { normalizeName } from '../src/seasons/product-name';
 
 /**
@@ -38,6 +39,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.creditor.deleteMany();
   await prisma.barterItem.deleteMany();
   await prisma.barterEvent.deleteMany();
+  // O pedido de fora do Barter vem DEPOIS do item, e não antes: o item aponta
+  // para ele (`BarterItem.requestId`), e apagar o pedido primeiro esvaziaria
+  // essa pista em vez de apagar a linha inteira.
+  await prisma.barterProductRequest.deleteMany();
   await prisma.barter.deleteMany();
   await prisma.versionPrice.deleteMany();
   await prisma.barterVersion.deleteMany();
@@ -836,6 +841,29 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       // Na mesa do Gustavo, esperando o parecer da Filial 18.
       status: 'sentToManager',
       createdAt: at(2026, 5, 11, 16, 0),
+      // O ÚNICO PEDIDO DE FORA DO BARTER em aberto do dataset, e ele existe
+      // pelo mesmo motivo do pedido de alteração: sem ele, a mesa do admin abre
+      // sem esse assunto, e o caminho só apareceria na demonstração depois de
+      // alguém pedir um produto — o mais provável é que ninguém descobrisse que
+      // dá.
+      //
+      // Ele está numa permuta JÁ ENCAMINHADA, e não no rascunho, apesar de o
+      // rascunho ser o momento mais natural do pedido: é aqui que ele mostra as
+      // DUAS pontas de uma vez — a mesa do admin, que precisa acertar o valor, e
+      // a do gerente, que precisa saber que a lista de insumos sobre a qual ele
+      // vai opinar ainda pode crescer.
+      //
+      // Sem valor e sem item na permuta: as 245,2649 sacas abaixo são as dos
+      // insumos de tabela, e é o atendimento do admin que muda esse número.
+      productRequest: {
+        at: at(2026, 5, 20, 16, 10),
+        productName: 'Semeadura de capim por drone',
+        unit: 'ha',
+        quantity: 40,
+        note:
+          'A produtora quer consorciar braquiária no milho, nos 40 ha do talhão 2. ' +
+          'Não está na tabela desta gestão; ela aceita pagar em sacas.',
+      },
       items: [
         grainItem(milho, 245.2649, 62.3),
         inputItem(npk, 100, 115.0),
@@ -968,6 +996,23 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         changeRequestById: entry.changeRequest ? entry.consultant.id : null,
         changeRequestAt: entry.changeRequest?.at ?? null,
         changeRequestFrom: entry.changeRequest ? entry.status : null,
+        // O PEDIDO DE FORA DO BARTER em aberto, quando há. Como o de alteração,
+        // ele não move a permuta: ela continua onde estava, e o que ele faz é
+        // pôr uma linha na mesa do admin (ver `barters/product-request.ts`).
+        productRequests: entry.productRequest
+          ? {
+              create: {
+                productName: entry.productRequest.productName,
+                unit: entry.productRequest.unit,
+                quantity: entry.productRequest.quantity,
+                note: entry.productRequest.note,
+                status: PRODUCT_REQUEST_STATUS.open,
+                requestedBy: entry.consultant.fullName,
+                requestedById: entry.consultant.id,
+                requestedAt: entry.productRequest.at,
+              },
+            }
+          : undefined,
         createdAt: entry.createdAt,
         items: { create: entry.items },
         events: { create: timelineOf(entry) },
@@ -1216,6 +1261,23 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         actorRole: ROLE.consultant,
         note: entry.changeRequest.note,
         at: entry.changeRequest.at,
+      });
+    }
+
+    // O PEDIDO DE FORA DO BARTER, pelo mesmo critério: ele aconteceu com a
+    // permuta onde ela estava, e por isso `fromStatus` e `toStatus` são iguais.
+    if (entry.productRequest) {
+      steps.push({
+        action: PRODUCT_REQUEST_ACTION.productRequested,
+        fromStatus: entry.status,
+        toStatus: entry.status,
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        note:
+          `${entry.productRequest.productName} — ${entry.productRequest.quantity} ` +
+          `${entry.productRequest.unit}: ${entry.productRequest.note}`,
+        at: entry.productRequest.at,
       });
     }
 

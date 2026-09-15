@@ -348,6 +348,11 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | POST | `/barters/:code/opinion` | gerente | Parecer técnico (move para o comitê) |
 | POST | `/barters/:code/review` | comitê | Aprova/nega, com observação |
 | POST | `/barters/:code/invoice` | faturista | Fatura a aprovada — fim da linha |
+| POST | `/barters/:code/change-request` | consultor | Pede alteração da permuta que já saiu da mão dele |
+| POST | `/barters/:code/change-request/decision` | admin | Libera (volta a rascunho) ou recusa o pedido |
+| POST | `/barters/:code/change-request/prices` | admin | Atende o pedido no VALOR: corrige os itens, recalcula as sacas, a permuta fica onde está |
+| POST | `/barters/:code/product-requests` | consultor | Pede um produto que a tabela do Barter não tem |
+| POST | `/barters/:code/product-requests/:id/decision` | admin | Inclui o item na permuta com o valor acertado, ou recusa |
 
 Documentação navegável em **`/api/v1/docs`** (Swagger). Fica aberta fora de
 produção; em produção, só com `SWAGGER=on`.

@@ -122,6 +122,84 @@ class BarterRepository {
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 
+  /// O ATENDIMENTO DO PEDIDO NO VALOR — a terceira saída do desvio.
+  ///
+  /// Em vez de devolver a permuta ao rascunho (e jogar fora o parecer do
+  /// gerente e a decisão do comitê) para corrigir uma linha de R$, o admin
+  /// corrige a linha: o servidor recalcula as sacas e a permuta continua
+  /// exatamente onde estava.
+  ///
+  /// Só vale ATENDENDO a um pedido do consultor — sem pedido em aberto o
+  /// servidor recusa (422). O admin não reprecifica permuta por conta própria.
+  ///
+  /// A lista leva só o que MUDA (o id do ITEM, não o do produto): a permuta
+  /// está sendo corrigida linha a linha, e não remontada.
+  Future<BarterModel> changePrices(
+    String code,
+    Map<String, double> valueByItemId, {
+    String note = '',
+  }) async {
+    final data = await api.post('/barters/$code/change-request/prices', body: {
+      'prices': [
+        for (final entry in valueByItemId.entries)
+          {'itemId': int.parse(entry.key), 'unitValue': entry.value},
+      ],
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O PEDIDO DE FORA DO BARTER — o consultor pede um produto que a tabela da
+  /// versão não tem, para ESTA permuta.
+  ///
+  /// Sem valor no corpo, pela regra de sempre: preço nunca veio do cliente — e
+  /// é justamente o item que ninguém precificou ainda. Vale do rascunho até a
+  /// mesa do comitê; depois da decisão, o caminho é o pedido de alteração.
+  Future<BarterModel> requestProduct(
+    String code, {
+    required String productName,
+    required String unit,
+    required double quantity,
+    String note = '',
+  }) async {
+    final data = await api.post('/barters/$code/product-requests', body: {
+      'productName': productName.trim(),
+      'unit': unit.trim(),
+      'quantity': quantity,
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A DECISÃO DO ADMIN sobre o pedido de produto: incluir na permuta com o
+  /// valor acertado, ou recusar — e aí o motivo é obrigatório.
+  ///
+  /// [productName], [unit], [quantity] e [sku] são CORREÇÕES do que o consultor
+  /// escreveu: a descrição do fornecedor é outra, a embalagem é em 20 l e não em
+  /// litro. Ausentes, valem os do pedido.
+  Future<BarterModel> decideProduct(
+    String code,
+    String requestId, {
+    required bool accept,
+    double? unitValue,
+    String? productName,
+    String? unit,
+    double? quantity,
+    String? sku,
+    String note = '',
+  }) async {
+    final data = await api.post('/barters/$code/product-requests/$requestId/decision', body: {
+      'accept': accept,
+      if (accept && unitValue != null) 'unitValue': unitValue,
+      if (productName != null && productName.trim().isNotEmpty) 'productName': productName.trim(),
+      if (unit != null && unit.trim().isNotEmpty) 'unit': unit.trim(),
+      'quantity': ?quantity,
+      if (sku != null && sku.trim().isNotEmpty) 'sku': sku.trim(),
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
   /// PARECER TÉCNICO do gerente da unidade — a etapa que move a permuta de
   /// "no gerente" para "no comitê".
   ///

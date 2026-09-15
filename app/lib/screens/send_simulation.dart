@@ -112,6 +112,45 @@ Future<bool> sendSimulationToManager(
   return false;
 }
 
+/// REGISTRAR PARA PEDIR — o segundo ponto em que uma simulação fala com o
+/// servidor, e ele existe por causa do PEDIDO DE FORA DO BARTER.
+///
+/// A falta de um item aparece enquanto o consultor monta a permuta: ele procura
+/// o adjuvante na lista e ele não está lá. Só que o pedido é amarrado a uma
+/// PERMUTA (ver `product-request.ts`, na API), e a simulação não é uma — ela
+/// mora no aparelho e o servidor não a conhece. Então pedir dali exige
+/// registrar a permuta como RASCUNHO antes, e é isso que esta função faz.
+///
+/// Rascunho, e nunca encaminhada: registrar para pedir não é mandar a permuta
+/// ao gerente. Ela continua na mão do consultor, que vai completá-la quando o
+/// item pedido entrar — e é por isso que `forward` é `false` e não é parâmetro.
+///
+/// Ela NÃO passa pelo resumo de `sendSimulationToManager`, e isso é escolha: o
+/// resumo existe para o consultor conferir a conta que combinou com o produtor
+/// antes de a permuta sair da mesa dele. Aqui ela não sai, e a conta ainda vai
+/// mudar de novo — o item pedido entra com um valor que ninguém acertou ainda.
+/// O que ele precisa saber antes de clicar (que a permuta será registrada) está
+/// escrito no próprio diálogo do pedido.
+///
+/// Devolve a permuta registrada e converte a recusa em [ApiException]: quem
+/// chama é o formulário do pedido, e é ele que já sabe mostrar erro sem fechar
+/// o que foi digitado.
+Future<BarterModel> registerToRequestProduct(BarterSimulation simulation) async {
+  final result = await AppData.sendSimulation(simulation, forward: false);
+  if (result.isSent) return result.barter!;
+
+  // `statusCode: 0` é o que o ApiClient usa para "não deu para falar com o
+  // servidor", e é a leitura certa das duas saídas que sobram: a incerta é
+  // literalmente isso, e a recusa chega aqui já em pt-BR, pronta para a tela.
+  throw ApiException(
+    0,
+    result.isUncertain
+        ? '${result.uncertainReason!} Confira em Minhas ${brand.copy.barterPluralTitle} '
+              'antes de pedir de novo.'
+        : '${result.refusal!} Sua simulação continua guardada.',
+  );
+}
+
 /// O QUE O CONSULTOR ESCOLHEU no resumo do envio: o parecer que ele escreveu, e
 /// se a permuta sai da mesa dele agora.
 ///

@@ -55,6 +55,28 @@ export const AUDIT_ACTION = {
   barterChangeRequested: 'barter.change-requested',
   barterChangeDecided: 'barter.change-decided',
   /**
+   * O VALOR DE UMA PERMUTA REESCRITO pelo admin ao atender o pedido (ver
+   * `priceChangeRefusal` em `barters/change-request.ts`).
+   *
+   * É o ato de maior alcance financeiro que o admin pratica sobre um registro
+   * já feito: ele muda o custo dos insumos e, com ele, as sacas que o produtor
+   * entrega — dentro de uma permuta que já passou pelo gerente, e pode já ter
+   * sido decidida pelo comitê. Se algum ato deste sistema precisa ser lido por
+   * alguém de fora dele um dia, é este.
+   */
+  barterPricesChanged: 'barter.prices-changed',
+  /**
+   * O PEDIDO DE FORA DO BARTER: o consultor pedindo um produto que a tabela não
+   * tem, e o admin atendendo com um valor (ver `barters/product-request.ts`).
+   *
+   * Entram pelo mesmo critério do desvio. O que a decisão do admin faz aqui é
+   * pôr na permuta um item CUJO VALOR NÃO ESTÁ EM TABELA NENHUMA — ele não é
+   * conferível contra a versão publicada, e a única maneira de saber de onde
+   * ele veio é este par de linhas.
+   */
+  barterProductRequested: 'barter.product-requested',
+  barterProductDecided: 'barter.product-decided',
+  /**
    * O PREENCHIMENTO DA CÉDULA (CPR). Entra aqui pelo mesmo critério dos três
    * acima, e com folga: a cédula é um título de crédito, e o que ela diz — a
    * qualificação de quem se obriga, a matrícula do imóvel dado em penhor, o

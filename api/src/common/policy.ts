@@ -100,6 +100,34 @@ export const CAPABILITY = {
    */
   bartersChangeReview: 'barters.changeReview',
   /**
+   * PEDIR um produto que a tabela do Barter não tem — o pedido de fora do
+   * Barter (ver `barters/product-request.ts`).
+   *
+   * É do consultor, e é capacidade PRÓPRIA pelo mesmo motivo de
+   * `bartersChangeRequest`: ela responde a outra pergunta. Registrar é montar a
+   * permuta com o que está na tabela; isto é dizer que falta alguma coisa na
+   * tabela para o cliente fechar. O dia em que o gerente puder pedir pelo time
+   * dele é esta linha que muda — sem lhe dar de carona o registro de permutas
+   * em carteira que não é dele.
+   */
+  bartersProductRequest: 'barters.productRequest',
+  /**
+   * ATENDER o pedido de fora do Barter: incluir o produto na permuta com o
+   * valor acertado, ou recusá-lo com o motivo.
+   *
+   * É do ADMIN, e não do comitê, pela mesma divisão de `bartersChangeReview`:
+   * o comitê julga o NEGÓCIO ("esta permuta se aprova?") e o admin responde
+   * pelo CATÁLOGO e pelos VALORES — é ele que publica a tabela do Barter
+   * (`barterManage`), e um item fora da tabela é a mesma decisão feita para uma
+   * permuta só.
+   *
+   * Ela é separada de `barterManage` de propósito: publicar uma versão é
+   * decidir o preço da praça inteira; atender um pedido é acertar um valor
+   * dentro de uma permuta. O dia em que um gerente comercial puder fazer a
+   * segunda coisa sem poder fazer a primeira, é esta linha que responde.
+   */
+  bartersProductReview: 'barters.productReview',
+  /**
    * Dar o PARECER TÉCNICO sobre uma permuta enviada pelo consultor.
    *
    * A capacidade é o portão ("este papel participa da etapa do gerente"); ela
@@ -241,6 +269,9 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     // dizendo se o trabalho já feito pelos outros postos vai ser refeito. Ver
     // `bartersChangeReview`, e repare que `bartersReview` continua fora daqui.
     CAPABILITY.bartersChangeReview,
+    // O PEDIDO DE FORA DO BARTER, do outro lado: quem publica a tabela de
+    // valores é quem diz por quanto entra o que ficou fora dela.
+    CAPABILITY.bartersProductReview,
   ],
   // O gerente é o único com escopo de TIME: ele enxerga as permutas
   // endereçadas a ele, e não a operação inteira. Repare que `bartersReadAll`
@@ -286,7 +317,11 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.pricesRead,
     CAPABILITY.bartersInvestmentPerHa,
   ],
-  [ROLE.consultant]: [CAPABILITY.bartersRegister, CAPABILITY.bartersChangeRequest],
+  [ROLE.consultant]: [
+    CAPABILITY.bartersRegister,
+    CAPABILITY.bartersChangeRequest,
+    CAPABILITY.bartersProductRequest,
+  ],
 };
 
 /** O usuário tem a capacidade? É a única pergunta de autorização do sistema. */

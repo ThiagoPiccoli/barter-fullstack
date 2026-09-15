@@ -70,6 +70,11 @@ export const CHANGE_REQUEST_ACTION = {
   changeRequested: 'changeRequested',
   changeAccepted: 'changeAccepted',
   changeDenied: 'changeDenied',
+  /**
+   * ATENDIDO NO VALOR: o admin não devolveu a permuta — ele mesmo corrigiu o
+   * que o consultor pediu. Ver `priceChangeRefusal`.
+   */
+  changeApplied: 'changeApplied',
 } as const;
 
 export type ChangeRequestAction =
@@ -80,6 +85,7 @@ export const CHANGE_REQUEST_LABELS: Record<ChangeRequestAction, string> = {
   [CHANGE_REQUEST_ACTION.changeRequested]: 'Alteração solicitada',
   [CHANGE_REQUEST_ACTION.changeAccepted]: 'Alteração liberada',
   [CHANGE_REQUEST_ACTION.changeDenied]: 'Alteração recusada',
+  [CHANGE_REQUEST_ACTION.changeApplied]: 'Valores alterados pelo administrador',
 };
 
 /** O bastante de uma permuta para saber se ela aceita um pedido, e por quê. */
@@ -123,6 +129,73 @@ export function changeDecisionRefusal(barter: BarterAtRequest): string | null {
   return barter.changeRequestStatus
     ? 'Este pedido de alteração já foi decidido'
     : 'Esta permuta não tem pedido de alteração em aberto';
+}
+
+/* ── A TERCEIRA SAÍDA: o admin atende mexendo no valor ─────────────────── */
+
+/**
+ * POR QUE o admin não pode alterar os valores desta permuta agora — ou `null`,
+ * quando pode.
+ *
+ * ## Por que existe uma terceira saída
+ *
+ * As duas primeiras respondem ao pedido com o mesmo grosso calibre: liberar
+ * (a permuta volta ao rascunho, e o parecer do gerente e a decisão do comitê são
+ * apagados) ou recusar. Mas a maior parte dos pedidos que chegam é de UM número:
+ * o valor de um insumo saiu diferente do que foi combinado com o produtor, o
+ * fornecedor deu outro preço para aquela quantidade, a tabela subiu entre a
+ * conversa e o registro. Devolver a permuta inteira ao começo da linha por causa
+ * de uma linha de R$ é jogar fora dois pareceres e uma decisão para corrigir o
+ * que o admin já tem na mão — e o consultor ainda teria de remontá-la e
+ * reencaminhá-la, para ela voltar a percorrer os mesmos três postos.
+ *
+ * Então o admin ATENDE: escreve o valor, o servidor recalcula as sacas, e a
+ * permuta continua exatamente onde estava, com quem estava.
+ *
+ * ## Só DENTRO do pedido
+ *
+ * Isto não é um poder de reprecificar permutas — é uma resposta. Sem pedido em
+ * aberto não há o que atender, e o admin que quisesse mexer no valor de uma
+ * permuta por conta própria estaria decidindo o negócio, que é justamente o que
+ * ele não faz (ver `CAPABILITY.bartersReview`). A conferência é a mesma da
+ * decisão, e é por isso que ela é `changeDecisionRefusal`: quem responde já
+ * sabia distinguir "nunca houve pedido" de "este pedido já foi decidido".
+ *
+ * ## O que continua valendo
+ *
+ * O GRÃO não se altera por aqui: a saca tem a cotação da versão, e mudá-la para
+ * uma permuta só seria abrir um Barter particular para um produtor. A linha do
+ * grão é o RESULTADO — ela é recalculada a partir do custo novo, como em todo o
+ * resto do sistema (ver `sacksToCover`).
+ *
+ * E o item guarda de onde o valor saiu (`BarterItem.listValue`): quem abrir a
+ * permuta depois precisa poder ver que aquele número não é o da tabela, e qual
+ * era o da tabela.
+ */
+export function priceChangeRefusal(barter: BarterAtRequest): string | null {
+  const refusal = changeDecisionRefusal(barter);
+  if (!refusal) return null;
+  return barter.changeRequestStatus
+    ? refusal
+    : 'O valor de uma permuta se altera ATENDENDO a um pedido do consultor, e não há pedido em aberto nesta';
+}
+
+/** O bastante de um item para saber se o valor dele pode ser reescrito. */
+export interface ItemAtPriceChange {
+  kind: string;
+  productName: string;
+}
+
+/**
+ * POR QUE o valor DESTE item não se altera — ou `null`, quando se altera.
+ *
+ * Um só motivo, e é o do grão: ele não é um item comprado, é a conta do
+ * pagamento. Ver `priceChangeRefusal`.
+ */
+export function itemPriceRefusal(item: ItemAtPriceChange): string | null {
+  return item.kind === 'grain'
+    ? `${item.productName} é o pagamento da permuta: as sacas saem do custo dos insumos e da cotação da versão, e não se digitam`
+    : null;
 }
 
 /** O bastante de uma gestão do Barter para saber de que CULTURA ela é. */
@@ -206,6 +279,30 @@ export const CLEARED_BY_CHANGE = {
   reviewedBy: null,
   reviewedById: null,
   reviewedAt: null,
+} as const;
+
+/**
+ * O PEDIDO RESOLVIDO — os campos do desvio zerados na permuta.
+ *
+ * Vale para as duas saídas que ATENDEM o consultor: a liberação (a permuta
+ * voltou a ser rascunho) e o valor alterado pelo admin. Nas duas, quem conta a
+ * história a partir de agora é o efeito — o estado da permuta, ou os valores
+ * dela — mais o evento gravado na linha do tempo. Um pedido "atendido"
+ * pendurado ao lado seria um segundo lugar dizendo a mesma coisa, e os dois
+ * poderiam divergir.
+ *
+ * A RECUSA é a exceção, e por isso não usa isto: ela precisa continuar visível,
+ * porque sem ela o consultor veria apenas a permuta parada onde estava, sem
+ * nada dizendo que ele já pediu e ouviu não.
+ */
+export const RESOLVED_REQUEST = {
+  changeRequestStatus: null,
+  changeRequestNote: null,
+  changeRequestBy: null,
+  changeRequestById: null,
+  changeRequestAt: null,
+  changeRequestFrom: null,
+  changeRequestReply: null,
 } as const;
 
 /** O estado em que o pedido foi feito, para a linha do tempo poder dizê-lo. */

@@ -84,6 +84,18 @@ class Capability {
   /// feito pelos outros postos vai ser jogado fora.
   static const bartersChangeReview = 'barters.changeReview';
 
+  /// PEDIR um produto que a tabela do Barter não tem — o pedido de fora do
+  /// Barter (consultor). Ver [BarterProductRequest].
+  static const bartersProductRequest = 'barters.productRequest';
+
+  /// ATENDER o pedido de fora do Barter: incluir o produto na permuta com o
+  /// valor acertado, ou recusá-lo com o motivo (admin).
+  ///
+  /// É de quem publica a tabela de valores, e não do comitê: acertar um valor
+  /// dentro de uma permuta é a mesma decisão de sempre, feita para uma permuta
+  /// só.
+  static const bartersProductReview = 'barters.productReview';
+
   /// Enxergar as permutas do PRÓPRIO TIME — o escopo do gerente, entre "só as
   /// minhas" e "todas". É por ela que as telas dizem "do seu time".
   static const bartersReadTeam = 'barters.readTeam';
@@ -537,6 +549,19 @@ class BarterEventModel {
         return 'Alteração liberada: voltou a rascunho';
       case 'changeDenied':
         return 'Pedido de alteração recusado';
+      // A TERCEIRA saída do pedido: o admin atendeu mexendo no valor, e a
+      // permuta não saiu do lugar. O texto do evento diz o que mudou, de quanto
+      // para quanto — ver `priceChangeRefusal` na API.
+      case 'changeApplied':
+        return 'Valores alterados pelo administrador';
+      // O PEDIDO DE FORA DO BARTER: o produto que a tabela não tem. Ver
+      // `api/src/barters/product-request.ts`.
+      case 'productRequested':
+        return 'Produto de fora do Barter solicitado';
+      case 'productAdded':
+        return 'Produto incluído na permuta';
+      case 'productDenied':
+        return 'Pedido de produto recusado';
       default:
         // Ato de um servidor mais novo que este app: mostra o passo em vez de
         // esconder um pedaço da história por não saber nomeá-lo.
@@ -668,6 +693,14 @@ class BarterStepModel {
 /// insumo retirado. [unitValue] é o valor de referência (R$) por unidade no
 /// momento da permuta — é o que permite converter grão em insumo.
 class BarterItem {
+  /// O ID DA LINHA na permuta — não do produto.
+  ///
+  /// Ele existe porque o admin altera o valor de UM item ao atender o pedido do
+  /// consultor, e o produto não serve de endereço: os itens de fora do Barter
+  /// (ver [offBarter]) não têm produto no catálogo, e são justamente os que
+  /// mais mudam de valor. Vazio nas respostas anteriores ao campo.
+  final String id;
+
   final String productId;
   final String productName;
 
@@ -696,7 +729,24 @@ class BarterItem {
   /// TOTAL A ENTREGAR.
   final bool hasUnitValue;
 
+  /// Este item veio de FORA DO BARTER: de um pedido do consultor que o admin
+  /// atendeu, e não da tabela de valores da versão.
+  ///
+  /// A marca é sobre a PROCEDÊNCIA, e não sobre o valor — por isso ela chega a
+  /// todo mundo, inclusive a quem não vê R$. Quem confere a retirada no balcão
+  /// precisa saber que aquele item não está na lista da praça.
+  final bool offBarter;
+
+  /// O VALOR DE TABELA deste item, quando o admin escreveu outro por cima ao
+  /// atender um pedido de alteração.
+  ///
+  /// Null é o caso normal: o item vale o que a versão do Barter diz. Preenchido,
+  /// é o que permite à tela mostrar "R$ 110,00 (tabela: R$ 120,00)" em vez de um
+  /// número sem história. Só chega a quem vê R$, como [unitValue].
+  final double? listValue;
+
   const BarterItem({
+    this.id = '',
     required this.productId,
     required this.productName,
     this.sku,
@@ -704,9 +754,12 @@ class BarterItem {
     required this.quantity,
     required this.unitValue,
     this.hasUnitValue = true,
+    this.offBarter = false,
+    this.listValue,
   });
 
   factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
+        id: _asId(json['id']),
         productId: _asId(json['productId']),
         productName: json['productName'] as String,
         sku: json['sku'] as String?,
@@ -714,11 +767,115 @@ class BarterItem {
         quantity: _asDouble(json['quantity']),
         unitValue: _asDouble(json['unitValue']),
         hasUnitValue: json['unitValue'] != null,
+        offBarter: json['offBarter'] == true,
+        listValue: _asDoubleOrNull(json['listValue']),
       );
+
+  /// O valor deste item foi REESCRITO pelo admin — e [listValue] diz de quanto.
+  bool get hasChangedValue => listValue != null && hasUnitValue;
 
   /// Valor total de troca deste item (R$). Zero para quem não vê R$ — ver
   /// [hasUnitValue].
   double get total => quantity * unitValue;
+}
+
+/// O PEDIDO DE FORA DO BARTER: o consultor pede um produto que a tabela da
+/// versão não tem, e o admin o inclui NAQUELA permuta com o valor que acertou.
+///
+/// A tabela do Barter é uma lista fechada e a lavoura não é — o produtor quer o
+/// adjuvante da marca dele, um serviço que ninguém lançou, uma semente sob
+/// encomenda. Sem este caminho, ou o item fica fora da permuta (e o produtor
+/// compra à vista em outro lugar) ou vira preço de praça para todo mundo por
+/// causa de um cliente.
+///
+/// O valor acertado vale para ESTA permuta e morre com ela: foi cotado para
+/// esta quantidade, nesta data, neste negócio.
+class BarterProductRequest {
+  final String id;
+
+  /// O que vai entrar na permuta: nome, unidade e quantidade. Depois de
+  /// atendido, é o que o ADMIN escreveu — ele corrige a descrição do
+  /// fornecedor, e é o item dele que vai ser separado no balcão.
+  final String productName;
+  final String unit;
+  final double quantity;
+
+  /// O código do fornecedor, quando o admin o tem. Ver [BarterItem.sku].
+  final String? sku;
+
+  /// O que o consultor tem a dizer sobre o pedido. Opcional, ao contrário do
+  /// pedido de alteração: aqui o pedido é o produto e a quantidade.
+  final String? note;
+
+  /// `open` (na mesa do admin), `added` (atendido: o item está na permuta) ou
+  /// `denied` (recusado, e o motivo está em [reply]).
+  final String status;
+
+  final String requestedBy;
+  final DateTime? requestedAt;
+  final String? decidedBy;
+  final DateTime? decidedAt;
+  final String? reply;
+
+  /// O VALOR acertado (R$ por unidade) — só para quem vê R$. Null enquanto o
+  /// pedido não foi atendido: não há preço nenhum, e um zero seria um item de
+  /// graça.
+  final double? unitValue;
+
+  /// O mesmo valor na moeda de quem NÃO vê R$: sacas do grão por unidade. É o
+  /// que o consultor — que fez o pedido — lê no lugar do preço.
+  final double? sacksPerUnit;
+
+  const BarterProductRequest({
+    required this.id,
+    required this.productName,
+    required this.unit,
+    required this.quantity,
+    this.sku,
+    this.note,
+    required this.status,
+    required this.requestedBy,
+    this.requestedAt,
+    this.decidedBy,
+    this.decidedAt,
+    this.reply,
+    this.unitValue,
+    this.sacksPerUnit,
+  });
+
+  factory BarterProductRequest.fromJson(Map<String, dynamic> json) =>
+      BarterProductRequest(
+        id: _asId(json['id']),
+        productName: (json['productName'] ?? '') as String,
+        unit: (json['unit'] ?? '') as String,
+        quantity: _asDouble(json['quantity']),
+        sku: json['sku'] as String?,
+        note: json['note'] as String?,
+        status: (json['status'] ?? 'open') as String,
+        requestedBy: (json['requestedBy'] ?? '') as String,
+        requestedAt: _asDateOrNull(json['requestedAt']),
+        decidedBy: json['decidedBy'] as String?,
+        decidedAt: _asDateOrNull(json['decidedAt']),
+        reply: json['reply'] as String?,
+        unitValue: _asDoubleOrNull(json['unitValue']),
+        sacksPerUnit: _asDoubleOrNull(json['sacksPerUnit']),
+      );
+
+  /// Está na mesa do admin, esperando um valor.
+  bool get isOpen => status == 'open';
+
+  /// Foi atendido: o item está na permuta.
+  bool get isAdded => status == 'added';
+
+  /// Foi recusado, e [reply] diz por quê.
+  bool get isDenied => status == 'denied';
+
+  /// Quanto este item custa na permuta inteira — na moeda de quem está
+  /// olhando. Null quando não há valor acertado (ou quando ele não veio).
+  double? get total {
+    final perUnit = unitValue ?? sacksPerUnit;
+    return perUnit == null ? null : perUnit * quantity;
+  }
 }
 
 /// Uma permuta: o produtor RETIRA os insumos de que precisa e os PAGA com um
@@ -864,6 +1021,14 @@ class BarterModel {
   /// gravado — ver [hasProgress].
   final List<BarterStepModel> steps;
 
+  /// OS PEDIDOS DE FORA DO BARTER desta permuta — os que esperam o admin, os
+  /// que ele atendeu e os que recusou. Ver [BarterProductRequest].
+  ///
+  /// Vêm na listagem também, e não só no detalhe como [events]: um pedido em
+  /// aberto é ESTADO ("esta permuta espera alguém"), e é isso que a fila do
+  /// admin lista.
+  final List<BarterProductRequest> productRequests;
+
   const BarterModel({
     required this.id,
     this.versionCode = '',
@@ -904,6 +1069,7 @@ class BarterModel {
     this.serverStatusLabel,
     this.events = const [],
     this.steps = const [],
+    this.productRequests = const [],
   });
 
   /// O `id` exibido no app é o código público da permuta (ex.: PRM-2026-001);
@@ -962,6 +1128,10 @@ class BarterModel {
       steps: ((json['steps'] as List?) ?? const [])
           .cast<Map<String, dynamic>>()
           .map(BarterStepModel.fromJson)
+          .toList(),
+      productRequests: ((json['productRequests'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(BarterProductRequest.fromJson)
           .toList(),
     );
   }
@@ -1162,6 +1332,32 @@ class BarterModel {
       !isDraft &&
       !isInvoiced &&
       !hasOpenChangeRequest;
+
+  /* ── O pedido de fora do Barter ───────────────────────────────────── */
+
+  /// Os pedidos que ESPERAM o admin — os que acendem a bandeira na permuta.
+  List<BarterProductRequest> get openProductRequests =>
+      productRequests.where((r) => r.isOpen).toList();
+
+  /// Os itens que entraram por pedido: o que está na permuta e não estava na
+  /// tabela do Barter.
+  List<BarterProductRequest> get addedProductRequests =>
+      productRequests.where((r) => r.isAdded).toList();
+
+  /// Há pedido de produto esperando resposta?
+  bool get hasOpenProductRequest => productRequests.any((r) => r.isOpen);
+
+  /// ESTE usuário pode pedir um produto de fora do Barter para esta permuta?
+  ///
+  /// Mesma janela do servidor (`api/src/barters/product-request.ts`), repetida
+  /// aqui pela razão de sempre — a tela não oferece um botão que levaria 422.
+  /// Ela vai do RASCUNHO até a mesa do comitê: depois da decisão, um insumo a
+  /// mais mudaria o que foi aprovado, e o caminho passa a ser o pedido de
+  /// alteração.
+  bool canRequestProductBy(String? userId) =>
+      userId != null &&
+      consultantId == userId &&
+      (isDraft || status == BarterStatus.sentToManager || status == BarterStatus.pending);
 
   /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
   /// — repetida aqui só para a tela não oferecer um botão que levaria 403.

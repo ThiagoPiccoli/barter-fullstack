@@ -211,11 +211,24 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// A unidade de retirada escolhida (ou null).
   UnitModel? get _unit => AppData.unitById(_unitId);
 
+  /// O que veio de FORA DO BARTER nesta permuta — os pedidos que o admin
+  /// atendeu, na moeda da lente (ver [BarterProductRequest.total]).
+  ///
+  /// Ele não aparece na lista de insumos desta tela porque não está no
+  /// catálogo: é um item cotado para ESTA permuta. Mas ele foi retirado, e as
+  /// sacas o pagam — então entra na conta do total, como entra no servidor.
+  ///
+  /// E entra SÓ ali: as réguas das pastas e do mínimo por hectare não o
+  /// enxergam, pelo mesmo motivo do servidor — ele não tem classe, e engordaria
+  /// o denominador de todas elas. Ver `pricedItemsFor`, na API.
+  double get _offBarterCost => (_draft?.addedProductRequests ?? const <BarterProductRequest>[])
+      .fold(0.0, (sum, request) => sum + (request.total ?? 0));
+
   /// Sacas do grão da safra necessárias para cobrir o custo dos insumos.
   /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
   double get _sacksNeeded {
     final version = _version;
-    return version == null ? 0 : sacksToCover(_inputCost, version.costPerSack);
+    return version == null ? 0 : sacksToCover(_inputCost + _offBarterCost, version.costPerSack);
   }
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
@@ -363,22 +376,21 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// então dizer "agora não" — ou ficar sem sinal no meio do envio — não custa
   /// nada. Era um botão de enviar NO RODAPÉ, concorrendo com o de guardar, que
   /// fazia a permuta depender de rede para não se perder.
-  Future<void> _save() async {
-    final producer = _producer;
-    final unit = _unit;
-    final chosen = _inputQty.entries.where((entry) => entry.value > 0).toList();
-    if (producer == null || unit == null || chosen.isEmpty) {
-      _toast('Escolha o produtor, a unidade de retirada e ao menos um insumo.');
-      return;
-    }
-
-    // A REMONTAGEM não passa por aqui: ela grava no servidor, não no aparelho.
-    if (_draft != null) return _saveDraft();
-
-    setState(() => _saving = true);
+  /// A SIMULAÇÃO como ela está na tela, pronta para ser guardada ou registrada.
+  ///
+  /// Ela foi extraída de [_save] quando o PEDIDO DE FORA DO BARTER ganhou um
+  /// botão nesta tela: os dois caminhos precisam do mesmo objeto — um para
+  /// guardá-lo no aparelho, o outro para registrá-lo no servidor —, e duas
+  /// cópias desta montagem seriam duas chances de a permuta registrada não ser
+  /// a que está na tela.
+  BarterSimulation _simulationOf(
+    ProducerModel producer,
+    UnitModel unit,
+    List<MapEntry<String, double>> chosen,
+  ) {
     final now = DateTime.now();
     final version = _version;
-    final simulation = BarterSimulation(
+    return BarterSimulation(
       id: _simulationId ?? BarterSimulation.newId(),
       consultantId: widget.consultant.id,
       producerId: producer.id,
@@ -408,6 +420,22 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       createdAt: widget.simulation?.createdAt ?? now,
       updatedAt: now,
     );
+  }
+
+  Future<void> _save() async {
+    final producer = _producer;
+    final unit = _unit;
+    final chosen = _inputQty.entries.where((entry) => entry.value > 0).toList();
+    if (producer == null || unit == null || chosen.isEmpty) {
+      _toast('Escolha o produtor, a unidade de retirada e ao menos um insumo.');
+      return;
+    }
+
+    // A REMONTAGEM não passa por aqui: ela grava no servidor, não no aparelho.
+    if (_draft != null) return _saveDraft();
+
+    setState(() => _saving = true);
+    final simulation = _simulationOf(producer, unit, chosen);
 
     final persisted = await AppData.saveSimulation(simulation);
     if (!mounted) return;
@@ -477,6 +505,93 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       setState(() => _saving = false);
       showErrorSnack(context, e);
     }
+  }
+
+  /// O PEDIDO DE FORA DO BARTER, feito de onde a falta aparece.
+  ///
+  /// É aqui que o consultor descobre que falta um item: ele procura o adjuvante
+  /// na lista e ele não está lá. Só que o pedido é amarrado a uma PERMUTA, e o
+  /// que existe nesta tela é uma SIMULAÇÃO — ela mora no aparelho, e o servidor
+  /// não a conhece.
+  ///
+  /// Então o botão faz as duas coisas num ato só: REGISTRA a permuta como
+  /// rascunho e manda o pedido. Não é atalho escondido — o diálogo diz isso
+  /// antes de qualquer campo, e o rótulo do botão repete. A alternativa era
+  /// mandar o consultor guardar, registrar, achar a permuta em Minhas Permutas e
+  /// só então pedir: quatro telas para uma frase.
+  ///
+  /// Registrar em DUAS etapas (registrar aqui, pedir depois) foi descartado pelo
+  /// motivo oposto ao de sempre: o pedido cancelado deixaria uma permuta
+  /// registrada que ninguém pediu para registrar.
+  ///
+  /// Depois do pedido a tela SAI, e tem de sair: a simulação deixou de existir
+  /// (virou permuta), e continuar aqui com o botão "Guardar simulação" ligado
+  /// registraria a mesma permuta uma segunda vez.
+  Future<void> _requestProduct() async {
+    final producer = _producer;
+    final unit = _unit;
+    final chosen = _inputQty.entries.where((entry) => entry.value > 0).toList();
+    if (producer == null || unit == null || chosen.isEmpty) {
+      _toast('Escolha o produtor, a unidade de retirada e ao menos um insumo antes de pedir.');
+      return;
+    }
+
+    final simulation = _simulationOf(producer, unit, chosen);
+    // GUARDADA ANTES de falar com o servidor, como no envio e pelo mesmo
+    // motivo: se a rede cair no meio, o trabalho já está no aparelho — e é a
+    // simulação guardada que a reconciliação procura quando a resposta se perde.
+    await AppData.saveSimulation(simulation);
+    if (!mounted) return;
+    // O id fica: quem desiste do pedido e tenta de novo REESCREVE a simulação
+    // que acabou de ser guardada. Sem isto, cada abertura do diálogo deixaria
+    // mais uma cópia da mesma permuta na lista de simulações.
+    setState(() => _simulationId = simulation.id);
+
+    showProductRequestDialog(
+      context,
+      headline: 'Simulação • ${producer.name}',
+      subline: 'Retirada em ${unit.name}',
+      notice:
+          'Para o que o Barter não tem na tabela. Ao enviar, esta permuta é '
+          'REGISTRADA como rascunho seu — ela não vai ao gerente agora — e o '
+          'administrador acerta o valor do item pedido.',
+      submitLabel: 'Registrar e Pedir',
+      onSubmit: (draft) async {
+        final barter = await registerToRequestProduct(simulation);
+        return AppData.requestBarterProduct(
+          barter.id,
+          productName: draft.productName,
+          unit: draft.unit,
+          quantity: draft.quantity,
+          note: draft.note,
+        );
+      },
+      successMessage: (barter) =>
+          'Pedido enviado. A permuta ${barter.id} ficou como rascunho seu até o '
+          'administrador responder.',
+      onDone: (barter) {
+        if (!mounted) return;
+        // DE ONDE ela veio decide para onde ela vai, e são dois lugares
+        // diferentes: retomada da lista de simulações, esta tela é uma rota
+        // empilhada e volta para a lista (que recarrega sem a simulação que
+        // acabou de virar permuta); na aba "Nova Permuta" ela não é rota
+        // nenhuma, e um `pop` aqui derrubaria o painel inteiro do consultor.
+        if (widget.simulation != null) {
+          Navigator.pop(context, true);
+          return;
+        }
+        // A aba volta a ficar em branco, como depois de guardar: a simulação
+        // deixou de existir, e um formulário preenchido sugeriria que ainda há
+        // algo pendente ali — o consultor montaria a próxima por cima dela.
+        setState(() {
+          _simulationId = null;
+          _inputQty.clear();
+          _producerId = null;
+          _unitId = null;
+          _searchQuery = '';
+        });
+      },
+    );
   }
 
   /// "Encaminhar agora?" — a pergunta que vem logo depois de guardar.
@@ -1218,12 +1333,19 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       ],
     ];
 
+    // O PEDIDO DE FORA DO BARTER fecha a lista, e só na SIMULAÇÃO: quem está
+    // remontando um rascunho chegou aqui pelo detalhe da permuta, que já tem o
+    // botão — e lá ele não precisa registrar nada antes.
+    final canRequest = _draft == null;
+
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
-      itemCount: header.length + (inputs.isEmpty ? 1 : inputs.length),
+      itemCount:
+          header.length + (inputs.isEmpty ? 1 : inputs.length) + (canRequest ? 1 : 0),
       itemBuilder: (context, index) {
         if (index < header.length) return header[index];
-        if (inputs.isEmpty) return _emptySearchHint();
+        if (inputs.isEmpty) return index == header.length ? _emptySearchHint() : _requestTile();
+        if (index == header.length + inputs.length) return _requestTile();
         final input = inputs[index - header.length];
         return _InputTile(
           // A chave amarra o estado do tile ao PRODUTO, não à posição: sem
@@ -1238,6 +1360,41 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       },
     );
   }
+
+  /// A PORTA DO PEDIDO, no fim da lista de insumos.
+  ///
+  /// Fim da lista, e não no rodapé: o rodapé é do ato principal desta tela
+  /// (guardar), e o pedido é o que se faz quando a lista ACABOU e o item não
+  /// estava nela. Quem rolou até aqui é exatamente quem procurou e não achou.
+  ///
+  /// Discreto de propósito — contorno e uma linha de explicação. Pedir um item
+  /// de fora não é o caminho normal da permuta: o normal é montá-la com a
+  /// tabela, e o pedido custa uma resposta do administrador.
+  Widget _requestTile() => Padding(
+    padding: const EdgeInsets.only(top: 12, bottom: 4),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        OutlinedButton.icon(
+          onPressed: _saving ? null : _requestProduct,
+          icon: const Icon(Icons.add_shopping_cart_outlined, size: 18),
+          label: const Text('Falta um insumo na lista?'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.input,
+            side: BorderSide(color: AppColors.input),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Peça ao administrador o que este Barter não tem. A permuta é '
+          'registrada como rascunho seu para o pedido poder ser respondido.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 11, color: AppColors.textLight),
+        ),
+      ],
+    ),
+  );
 
   /// Nada encontrado — dizendo POR QUE, que é o que permite desfazer. Com três
   /// recortes possíveis (busca, classe, escolhidos), "nenhum item encontrado"
@@ -1359,6 +1516,12 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                   child: Text(
                     inputCount > 0
                         ? 'Entregar: ${formatSacks(sacks)} ${version.grainName.toLowerCase()} • $inputCount insumo(s)'
+                              // O item de FORA DO BARTER está no total e não
+                              // está na lista desta tela (ele não é do
+                              // catálogo). Dizê-lo aqui é a diferença entre um
+                              // número que fecha e um número que parece errado
+                              // para quem confere insumo por insumo.
+                              '${_offBarterCost > 0 ? ' + ${_draft!.addedProductRequests.length} de fora do Barter' : ''}'
                         : 'Escolha os insumos para ver quantas sacas serão necessárias',
                     style: TextStyle(
                       fontSize: 12,

@@ -1839,5 +1839,481 @@ describe('Barters (e2e)', () => {
       expect(response.status).toBe(422);
       expect(response.body.message).toContain('no mínimo');
     });
+
+    /**
+     * A TERCEIRA SAÍDA: o admin atende o pedido mexendo no VALOR, e a permuta
+     * não sai do lugar.
+     *
+     * A maior parte dos pedidos é de um número — o valor de um insumo saiu
+     * diferente do que foi combinado com o produtor. Devolver a permuta ao
+     * rascunho por causa disso joga fora dois pareceres e uma decisão para
+     * corrigir o que o admin já tem na mão. Ver `priceChangeRefusal`.
+     */
+    describe('atendido no valor', () => {
+      const alterar = async (code: string, email: string, body: object) =>
+        request(app.getHttpServer())
+          .post(`/api/v1/barters/${code}/change-request/prices`)
+          .set('Authorization', await asUser(email))
+          .send(body);
+
+      /** O item de insumo desta permuta, pelo nome — como a tela o escolhe. */
+      const itemDe = async (code: string, productName: string) => {
+        const detalhe = await request(app.getHttpServer())
+          .get(`/api/v1/barters/${code}`)
+          .set('Authorization', await asUser(ADMIN));
+        return detalhe.body.data.items.find(
+          (item: { productName: string }) => item.productName === productName,
+        ) as { id: number; unitValue: number };
+      };
+
+      /**
+       * PRM-2026-005: semente a R$ 320 (50) + fungicida a R$ 87,50 (100) =
+       * R$ 24.750, que a 148,50 a saca dão as 166,6667 do dataset. Com a
+       * semente a R$ 300, o custo cai para R$ 23.750 — e as sacas TÊM de cair
+       * junto, porque elas são o pagamento desse custo.
+       */
+      it('o valor muda, as sacas acompanham e a permuta fica onde estava', async () => {
+        await pedir(
+          'PRM-2026-005',
+          JOAO,
+          'O fornecedor fechou a semente a 300; corrija por favor.',
+        );
+        const semente = await itemDe('PRM-2026-005', 'Semente Soja RR TMG 7062');
+
+        const response = await alterar('PRM-2026-005', ADMIN, {
+          prices: [{ itemId: semente.id, unitValue: 300 }],
+          note: 'Cotação do fornecedor confirmada por e-mail.',
+        });
+
+        expect(response.status).toBe(200);
+        // A permuta NÃO voltou a rascunho: ela continua na mesa da Beatriz.
+        expect(response.body.data.status).toBe('sentToManager');
+        // E o pedido foi atendido — some, como na liberação.
+        expect(response.body.data.changeRequestStatus).toBeNull();
+
+        const alterado = response.body.data.items.find(
+          (item: { id: number }) => item.id === semente.id,
+        );
+        expect(alterado.unitValue).toBe(300);
+        // De onde o valor saiu, para a tela poder dizê-lo.
+        expect(alterado.listValue).toBe(320);
+
+        // 50×300 + 100×87,50 = R$ 23.750 → 159,9327 sacas.
+        const grao = response.body.data.items.find(
+          (item: { kind: string }) => item.kind === 'grain',
+        );
+        expect(grao.quantity).toBeCloseTo(159.9327, 3);
+
+        // E a linha do tempo conta O QUE mudou, de quanto para quanto — é o que
+        // o gerente vai ler para saber que a permuta não é mais a mesma.
+        const evento = response.body.data.events.find(
+          (e: { action: string }) => e.action === 'changeApplied',
+        );
+        expect(evento.note).toContain('R$ 320,00');
+        expect(evento.note).toContain('R$ 300,00');
+        expect(evento.note).toContain('Cotação do fornecedor');
+      });
+
+      /**
+       * Alterar valor é ATENDER um pedido, e não um poder solto: sem pedido em
+       * aberto, o admin estaria reprecificando permuta por conta própria — que
+       * é decidir o negócio, o que ele não faz.
+       */
+      it('sem pedido em aberto, o valor não se altera', async () => {
+        const semente = await itemDe('PRM-2026-005', 'Semente Soja RR TMG 7062');
+        const response = await alterar('PRM-2026-005', ADMIN, {
+          prices: [{ itemId: semente.id, unitValue: 300 }],
+        });
+
+        expect(response.status).toBe(422);
+        expect(response.body.message).toContain('ATENDENDO a um pedido');
+      });
+
+      /** As sacas são o RESULTADO do custo: elas não se digitam. */
+      it('o valor do grão não se altera por aqui', async () => {
+        await pedir('PRM-2026-005', JOAO);
+        const detalhe = await request(app.getHttpServer())
+          .get('/api/v1/barters/PRM-2026-005')
+          .set('Authorization', await asUser(ADMIN));
+        const grao = detalhe.body.data.items.find(
+          (item: { kind: string }) => item.kind === 'grain',
+        );
+
+        const response = await alterar('PRM-2026-005', ADMIN, {
+          prices: [{ itemId: grao.id, unitValue: 160 }],
+        });
+
+        expect(response.status).toBe(422);
+        expect(response.body.message).toContain('pagamento da permuta');
+      });
+
+      /** Reenviar o que já está gravado não é alteração — e não vira evento. */
+      it('o valor igual ao gravado não vira alteração', async () => {
+        await pedir('PRM-2026-005', JOAO);
+        const semente = await itemDe('PRM-2026-005', 'Semente Soja RR TMG 7062');
+
+        const response = await alterar('PRM-2026-005', ADMIN, {
+          prices: [{ itemId: semente.id, unitValue: semente.unitValue }],
+        });
+
+        expect(response.status).toBe(422);
+        expect(response.body.message).toContain('nada mudou');
+      });
+
+      /**
+       * A SEGUNDA correção do mesmo item continua tendo partido da TABELA: o
+       * que `listValue` guarda é de onde o valor saiu, não a lista de
+       * tentativas.
+       */
+      it('a segunda correção não reescreve o valor de tabela', async () => {
+        await pedir('PRM-2026-005', JOAO);
+        const semente = await itemDe('PRM-2026-005', 'Semente Soja RR TMG 7062');
+        await alterar('PRM-2026-005', ADMIN, {
+          prices: [{ itemId: semente.id, unitValue: 300 }],
+        });
+
+        await pedir('PRM-2026-005', JOAO, 'O fornecedor corrigiu de novo: 290 a unidade.');
+        const response = await alterar('PRM-2026-005', ADMIN, {
+          prices: [{ itemId: semente.id, unitValue: 290 }],
+        });
+
+        const alterado = response.body.data.items.find(
+          (item: { id: number }) => item.id === semente.id,
+        );
+        expect(alterado.unitValue).toBe(290);
+        expect(alterado.listValue).toBe(320);
+      });
+
+      /** É do ADMIN, como a decisão do pedido: ninguém mais mexe em valor. */
+      it('só o admin altera o valor', async () => {
+        await pedir('PRM-2026-005', JOAO);
+        const semente = await itemDe('PRM-2026-005', 'Semente Soja RR TMG 7062');
+
+        for (const quem of [COMITE, GERENTE, FATURISTA, JOAO]) {
+          const response = await alterar('PRM-2026-005', quem, {
+            prices: [{ itemId: semente.id, unitValue: 300 }],
+          });
+          expect(response.status).toBe(403);
+        }
+      });
+    });
+  });
+
+  /**
+   * O PEDIDO DE FORA DO BARTER: o consultor pede um produto que a tabela da
+   * versão não tem, e o admin o inclui naquela permuta com o valor que acertou.
+   *
+   * O que estes casos protegem é a JANELA (até a decisão do comitê, e o
+   * rascunho dentro dela) e o EFEITO do item incluído: ele paga em sacas como
+   * qualquer outro, não entra em régua nenhuma e sobrevive à remontagem do
+   * rascunho. Ver `barters/product-request.ts`.
+   */
+  describe('pedido de fora do Barter', () => {
+    const DRONE = {
+      productName: 'Semeadura por drone',
+      unit: 'ha',
+      quantity: 40,
+      note: 'O produtor quer a sobressemeadura de capim na área de soja.',
+    };
+
+    const pedirProduto = async (code: string, email: string, body: object = DRONE) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/product-requests`)
+        .set('Authorization', await asUser(email))
+        .send(body);
+
+    const decidirProduto = async (code: string, id: number, email: string, body: object) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/product-requests/${id}/decision`)
+        .set('Authorization', await asUser(email))
+        .send(body);
+
+    /** Pede, o admin atende, e devolve o id do pedido e a permuta resultante. */
+    const pedirEAtender = async (code: string, email: string, unitValue = 250) => {
+      const pedido = await pedirProduto(code, email);
+      expect(pedido.status).toBe(200);
+      const id = pedido.body.data.productRequests[0].id as number;
+      const atendida = await decidirProduto(code, id, ADMIN, { accept: true, unitValue });
+      expect(atendida.status).toBe(200);
+      return { id, atendida };
+    };
+
+    /**
+     * O pedido não move a permuta e não a tira da fila — como o de alteração,
+     * ele pendura uma linha na mesa do admin. A diferença é que este vale já no
+     * RASCUNHO: é ali que o consultor monta a permuta e topa com o que falta.
+     */
+    it('o consultor pede no próprio rascunho', async () => {
+      const response = await pedirProduto('PRM-2026-009', JOAO);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('draft');
+      const [pedido] = response.body.data.productRequests;
+      expect(pedido.productName).toBe('Semeadura por drone');
+      expect(pedido.quantity).toBe(40);
+      expect(pedido.status).toBe('open');
+      expect(pedido.requestedBy).toBe('João Silva');
+      // Sem valor: ninguém precificou nada ainda.
+      expect(pedido.sacksPerUnit).toBeNull();
+      // E o consultor não recebe R$ — nem aqui, que é onde o valor vai nascer.
+      expect(pedido.unitValue).toBeUndefined();
+    });
+
+    /**
+     * ATENDER põe o item na permuta e recalcula as sacas: ele é custo retirado
+     * como qualquer outro. O item entra MARCADO, sem produto no catálogo — é a
+     * única maneira de explicar depois um valor que não está em tabela nenhuma.
+     */
+    it('o admin inclui o item com o valor acertado, e as sacas acompanham', async () => {
+      const { atendida } = await pedirEAtender('PRM-2026-009', JOAO);
+
+      const item = atendida.body.data.items.find(
+        (i: { offBarter: boolean }) => i.offBarter === true,
+      );
+      expect(item.productName).toBe('Semeadura por drone');
+      expect(item.quantity).toBe(40);
+      expect(item.unitValue).toBe(250);
+      expect(item.productId).toBeNull();
+
+      // O rascunho custava R$ 15.216; com 40 ha a R$ 250 são R$ 25.216, que a
+      // 148,50 a saca dão 169,8047.
+      const grao = atendida.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
+      expect(grao.quantity).toBeCloseTo(169.8047, 3);
+
+      // O pedido atendido CONTINUA existindo: é ele que diz de onde o item veio.
+      const [pedido] = atendida.body.data.productRequests;
+      expect(pedido.status).toBe('added');
+      expect(pedido.unitValue).toBe(250);
+      expect(pedido.decidedBy).toBe('Carlos Mendes');
+
+      const evento = atendida.body.data.events.find(
+        (e: { action: string }) => e.action === 'productAdded',
+      );
+      expect(evento.note).toContain('Semeadura por drone');
+      expect(evento.note).toContain('R$ 250,00');
+    });
+
+    /** Quem pediu não vê R$: o valor chega a ele na moeda dele, em sacas. */
+    it('o consultor lê o valor atendido em sacas', async () => {
+      await pedirEAtender('PRM-2026-009', JOAO);
+
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-009')
+        .set('Authorization', await asUser(JOAO));
+
+      const [pedido] = response.body.data.productRequests;
+      expect(pedido.unitValue).toBeUndefined();
+      // 250 / 148,50 = 1,6835 sacas por hectare de serviço.
+      expect(pedido.sacksPerUnit).toBeCloseTo(1.6835, 3);
+    });
+
+    /**
+     * O ITEM SOBREVIVE À REMONTAGEM — e é por isso que o pedido atendido não
+     * some. Ele não vem no payload do consultor (não tem produto no catálogo
+     * para apontar), então sem esta regra o primeiro ajuste de quantidade
+     * apagaria o que o admin acabou de incluir.
+     *
+     * E ele não entra em RÉGUA nenhuma: R$ 10.000 de drone sobre R$ 15.216 de
+     * insumos derrubariam o mínimo de 30% dos fertilizantes (o NPK é 45% do
+     * catálogo e cairia para 27% do total) se o item contasse no denominador —
+     * um pedido atendido derrubaria a permuta que ele veio ajudar.
+     */
+    it('o item incluído sobrevive à remontagem do rascunho, e não mede pasta', async () => {
+      await pedirEAtender('PRM-2026-009', JOAO);
+
+      const response = await request(app.getHttpServer())
+        .put('/api/v1/barters/PRM-2026-009/inputs')
+        .set('Authorization', await asUser(JOAO))
+        .send({
+          inputs: [
+            { productId: 5, quantity: 60 },
+            { productId: 6, quantity: 400 },
+            { productId: 7, quantity: 18 },
+          ],
+        });
+
+      expect(response.status).toBe(200);
+      const fora = response.body.data.items.filter(
+        (i: { offBarter: boolean }) => i.offBarter === true,
+      );
+      expect(fora).toHaveLength(1);
+      expect(fora[0].quantity).toBe(40);
+      const grao = response.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
+      expect(grao.quantity).toBeCloseTo(169.8047, 3);
+    });
+
+    /** Recusar não mexe na permuta — e o motivo é obrigatório, como sempre. */
+    it('a recusa fecha o pedido com o motivo, e nada entra na permuta', async () => {
+      const pedido = await pedirProduto('PRM-2026-009', JOAO);
+      const id = pedido.body.data.productRequests[0].id as number;
+
+      const semMotivo = await decidirProduto('PRM-2026-009', id, ADMIN, { accept: false });
+      expect(semMotivo.status).toBe(422);
+
+      const response = await decidirProduto('PRM-2026-009', id, ADMIN, {
+        accept: false,
+        note: 'Não temos fornecedor de drone com nota para a praça nesta safra.',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.productRequests[0].status).toBe('denied');
+      expect(response.body.data.productRequests[0].reply).toContain('fornecedor');
+      expect(
+        response.body.data.items.filter((i: { offBarter: boolean }) => i.offBarter === true),
+      ).toHaveLength(0);
+      // O rascunho continua com as 102,4646 sacas do dataset.
+      const grao = response.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
+      expect(grao.quantity).toBeCloseTo(102.4646, 3);
+    });
+
+    /** Atender é precificar: sem valor não há o que incluir. */
+    it('não se inclui item sem valor', async () => {
+      const pedido = await pedirProduto('PRM-2026-009', JOAO);
+      const id = pedido.body.data.productRequests[0].id as number;
+
+      const response = await decidirProduto('PRM-2026-009', id, ADMIN, { accept: true });
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('valor');
+    });
+
+    /** Um pedido se decide uma vez só: dois admins não incluem o item em dobro. */
+    it('o pedido decidido não se decide de novo', async () => {
+      const { id } = await pedirEAtender('PRM-2026-009', JOAO);
+
+      const segunda = await decidirProduto('PRM-2026-009', id, ADMIN, {
+        accept: true,
+        unitValue: 300,
+      });
+      expect(segunda.status).toBe(422);
+      expect(segunda.body.message).toContain('já foi incluído');
+    });
+
+    /**
+     * Depois da DECISÃO DO COMITÊ, não: um insumo a mais mudaria o que foi
+     * aprovado. A recusa manda a pessoa para o outro caminho — o pedido de
+     * alteração, que devolve a permuta ao consultor.
+     */
+    it('a permuta já decidida não recebe mais item', async () => {
+      // PRM-2026-004 é da Ana, já aprovada pelo comitê.
+      const response = await pedirProduto('PRM-2026-004', ANA);
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Peça a alteração da permuta');
+    });
+
+    /**
+     * Mas o pedido que ficou para trás ainda se RECUSA: limpar a mesa não
+     * altera permuta nenhuma, e deixá-lo pendurado seria uma fila que não anda.
+     */
+    it('o pedido esquecido se recusa mesmo depois de a permuta ser decidida', async () => {
+      // O rascunho do João, com um pedido aberto, percorre a linha inteira.
+      const pedido = await pedirProduto('PRM-2026-009', JOAO);
+      const id = pedido.body.data.productRequests[0].id as number;
+
+      const asJoao = await asUser(JOAO);
+      await encaminhar('PRM-2026-009', asJoao);
+      await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-009/opinion')
+        .set('Authorization', await asUser(GERENTE))
+        .send({ note: 'Volume compatível com a área declarada pelo produtor.' });
+      await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-009/review')
+        .set('Authorization', await asUser(COMITE))
+        .send({ status: 'approved' });
+
+      const recusa = await decidirProduto('PRM-2026-009', id, ADMIN, {
+        accept: false,
+        note: 'A permuta já foi aprovada sem este item; entra na próxima.',
+      });
+      expect(recusa.status).toBe(200);
+      expect(recusa.body.data.productRequests[0].status).toBe('denied');
+
+      const inclusao = await decidirProduto('PRM-2026-009', id, ADMIN, {
+        accept: true,
+        unitValue: 250,
+      });
+      expect(inclusao.status).toBe(422);
+    });
+
+    /** O pedido é de quem registrou, como o de alteração. */
+    it('outro consultor não pede na permuta alheia', async () => {
+      const response = await pedirProduto('PRM-2026-005', ANA);
+      expect(response.status).toBe(403);
+    });
+
+    /** E quem atende é o ADMIN: nenhum posto da linha precifica item. */
+    it('nem o comitê nem o gerente atendem o pedido', async () => {
+      const pedido = await pedirProduto('PRM-2026-009', JOAO);
+      const id = pedido.body.data.productRequests[0].id as number;
+
+      for (const quem of [COMITE, GERENTE, FATURISTA, JOAO]) {
+        const response = await decidirProduto('PRM-2026-009', id, quem, {
+          accept: true,
+          unitValue: 250,
+        });
+        expect(response.status).toBe(403);
+      }
+    });
+
+    /**
+     * O pedido é lido DENTRO da permuta: um id de pedido de outra permuta não
+     * atravessa a porta de uma permuta que o admin enxerga.
+     */
+    it('o pedido de uma permuta não se decide pela porta de outra', async () => {
+      const pedido = await pedirProduto('PRM-2026-009', JOAO);
+      const id = pedido.body.data.productRequests[0].id as number;
+
+      const response = await decidirProduto('PRM-2026-005', id, ADMIN, {
+        accept: true,
+        unitValue: 250,
+      });
+      expect(response.status).toBe(404);
+    });
+
+    /**
+     * O que o ADMIN escreve vence o que o consultor pediu: a descrição do
+     * fornecedor é outra, e é o item dele que vai ser separado no balcão.
+     */
+    it('o admin corrige a descrição, a unidade e o código ao atender', async () => {
+      const pedido = await pedirProduto('PRM-2026-009', JOAO);
+      const id = pedido.body.data.productRequests[0].id as number;
+
+      const response = await decidirProduto('PRM-2026-009', id, ADMIN, {
+        accept: true,
+        unitValue: 250,
+        productName: 'Sobressemeadura aérea (drone) — serviço',
+        unit: 'ha',
+        sku: 'SRV-DRONE-01',
+      });
+
+      const item = response.body.data.items.find(
+        (i: { offBarter: boolean }) => i.offBarter === true,
+      );
+      expect(item.productName).toBe('Sobressemeadura aérea (drone) — serviço');
+      expect(item.sku).toBe('SRV-DRONE-01');
+      expect(response.body.data.productRequests[0].productName).toBe(
+        'Sobressemeadura aérea (drone) — serviço',
+      );
+    });
+
+    /**
+     * O item de fora do Barter NÃO entra no catálogo: ele é a lista do
+     * fornecedor, e um produto criado a partir de um pedido apareceria no
+     * relatório de preços e na carga seguinte como se fosse da praça.
+     */
+    it('o item incluído não vira produto do catálogo', async () => {
+      const antes = await request(app.getHttpServer())
+        .get('/api/v1/products')
+        .set('Authorization', await asUser(ADMIN));
+
+      await pedirEAtender('PRM-2026-009', JOAO);
+
+      const depois = await request(app.getHttpServer())
+        .get('/api/v1/products')
+        .set('Authorization', await asUser(ADMIN));
+
+      expect(depois.body.data).toHaveLength(antes.body.data.length);
+      expect(depois.body.data.some((p: { name: string }) => p.name.includes('drone'))).toBe(false);
+    });
   });
 });

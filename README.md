@@ -71,10 +71,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 182 testes de unidade (matemática, máquina de estados, senha, sessão, políticas, cédula)
-cd api && npm run test:e2e  # 237 testes funcionais da API (auth, escopo, fluxo, cédula, credora, contrato de erro)
+cd api && npm test          # 221 testes de unidade (matemática, máquina de estados, desvio e pedido de fora do Barter, senha, sessão, políticas, cédula)
+cd api && npm run test:e2e  # 300 testes funcionais da API (auth, escopo, fluxo, cédula, credora, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura
-cd app && flutter test      # 177 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
+cd app && flutter test      # 221 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -137,6 +137,22 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   e cada permuta guarda a própria linha do tempo, gravada na mesma transação da
   mudança de estado. O app pergunta ao servidor o que cada pessoa pode fazer
   (`capabilities`) em vez de manter uma segunda cópia das regras em Dart.
+- **Há um caminho de volta, e ele tem dono nas duas pontas**: a esteira só anda
+  para a frente, mas a permuta erra depois de sair da mão de quem a montou. O
+  consultor **pede alteração** e o admin decide — liberar (ela volta a rascunho,
+  e o parecer do gerente e a decisão do comitê são apagados), recusar, ou
+  **atender no valor**: corrigir a linha de R$ que motivou o pedido, com as
+  sacas recalculadas e a permuta parada onde estava. A terceira saída existe
+  porque devolver a permuta inteira por causa de um número joga fora dois
+  pareceres e uma decisão. O admin só altera valor ATENDENDO a um pedido — sem
+  pedido em aberto, ele estaria decidindo o negócio.
+- **O que a tabela não tem entra por pedido, e fica preso à permuta**: a tabela
+  do Barter é uma lista fechada e a lavoura não é. O consultor **pede um produto
+  de fora** (do rascunho até a decisão do comitê) e o admin o inclui com o valor
+  que acertou — naquela permuta, e em nenhuma outra. O item não entra no
+  catálogo (o catálogo é a lista do fornecedor), paga em sacas como qualquer
+  insumo retirado e **não entra em régua nenhuma**: sem classe, ele engordaria o
+  denominador de todas as pastas e derrubaria a permuta que veio ajudar.
 - **A permuta mostra o caminho inteiro, e não só o já andado**: o detalhe traz
   um `steps` com as quatro etapas sempre — a cumprida com quem a assinou e o que
   escreveu, a de agora com o que ela espera ("aguarda o parecer do gerente

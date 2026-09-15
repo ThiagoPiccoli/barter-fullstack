@@ -878,6 +878,65 @@ class AppData {
     return updated;
   }
 
+  /// O ATENDIMENTO DO PEDIDO NO VALOR: o admin corrige a linha de R$ e a
+  /// permuta continua onde estava, com as sacas recalculadas pelo servidor.
+  static Future<BarterModel> changeBarterPrices(
+    String code,
+    Map<String, double> valueByItemId, {
+    String note = '',
+  }) async {
+    final updated = await _barters.changePrices(code, valueByItemId, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O PEDIDO DE FORA DO BARTER: o consultor pede o produto que falta na tabela.
+  static Future<BarterModel> requestBarterProduct(
+    String code, {
+    required String productName,
+    required String unit,
+    required double quantity,
+    String note = '',
+  }) async {
+    final updated = await _barters.requestProduct(
+      code,
+      productName: productName,
+      unit: unit,
+      quantity: quantity,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A DECISÃO DO ADMIN sobre o pedido de produto: incluir com o valor
+  /// acertado, ou recusar com o motivo.
+  static Future<BarterModel> decideBarterProduct(
+    String code,
+    String requestId, {
+    required bool accept,
+    double? unitValue,
+    String? productName,
+    String? unit,
+    double? quantity,
+    String? sku,
+    String note = '',
+  }) async {
+    final updated = await _barters.decideProduct(
+      code,
+      requestId,
+      accept: accept,
+      unitValue: unitValue,
+      productName: productName,
+      unit: unit,
+      quantity: quantity,
+      sku: sku,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
   /// A TABELA com que uma permuta foi fechada — a gestão DELA, não a vigente.
   ///
   /// Fora do cache, como o detalhe: o cache guarda a versão VIGENTE, que é a que

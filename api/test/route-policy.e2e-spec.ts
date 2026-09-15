@@ -162,6 +162,29 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
           route: 'POST /barters/:code/change-request/decision',
           policy: 'capability:barters.changeReview',
         },
+        // A TERCEIRA saída do mesmo pedido: em vez de devolver a permuta ao
+        // rascunho para corrigir uma linha de R$, o admin corrige a linha. Ela
+        // divide a capacidade da decisão de propósito — é a mesma mesa e o
+        // mesmo ato, com um desfecho a mais —, e o service ainda exige o pedido
+        // em aberto: alterar valor é ATENDER, nunca uma iniciativa do admin.
+        {
+          route: 'POST /barters/:code/change-request/prices',
+          policy: 'capability:barters.changeReview',
+        },
+        // O PEDIDO DE FORA DO BARTER: o consultor pede o que a tabela não tem e
+        // o admin o inclui com o valor acertado. Duas capacidades novas, e
+        // separadas pelo mesmo desenho do desvio — pedir é de quem montou a
+        // permuta, precificar é de quem publica a tabela. Repare que a segunda
+        // NÃO é `barter.manage`: acertar um valor dentro de uma permuta não é
+        // publicar preço para a praça inteira.
+        {
+          route: 'POST /barters/:code/product-requests',
+          policy: 'capability:barters.productRequest',
+        },
+        {
+          route: 'POST /barters/:code/product-requests/:id/decision',
+          policy: 'capability:barters.productReview',
+        },
         // A TABELA da permuta: quem alcança a permuta alcança os valores com que
         // ela foi fechada — é deles que a remontagem precisa quando a gestão
         // vigente já é outra. Escopo no service, como o detalhe.

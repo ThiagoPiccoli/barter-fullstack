@@ -274,6 +274,155 @@ export class DecideBarterChangeDto {
 }
 
 /**
+ * O VALOR NOVO DE UM ITEM da permuta, escrito pelo admin ao atender o pedido do
+ * consultor (ver `priceChangeRefusal` em `barters/change-request.ts`).
+ *
+ * O item vai por `id`, e não por `productId`: o que se está corrigindo é UMA
+ * LINHA daquela permuta, e os itens de fora do Barter — que são justamente os
+ * que mais mudam de valor — não têm produto nenhum no catálogo para apontar.
+ */
+export class BarterItemPriceDto {
+  @IsInt()
+  @IsPositive()
+  itemId!: number;
+
+  /**
+   * O valor em R$ por unidade. POSITIVO: um item a zero não é um desconto, é um
+   * item fora da permuta — e tirá-lo é remontar a permuta, que é o outro
+   * caminho (liberar o pedido e devolvê-la ao consultor).
+   */
+  @IsNumber()
+  @IsPositive({ message: 'O valor do item precisa ser maior que zero' })
+  unitValue!: number;
+}
+
+/**
+ * O ATENDIMENTO DO PEDIDO NO VALOR — a terceira saída do desvio.
+ *
+ * Em vez de devolver a permuta ao rascunho (e jogar fora o parecer do gerente e
+ * a decisão do comitê) para corrigir uma linha de R$, o admin corrige a linha e
+ * a permuta continua onde está. Ver `priceChangeRefusal`.
+ *
+ * A LISTA é só do que MUDA, e aqui isso é o oposto de `ReplaceBarterInputsDto`,
+ * que vai inteira — e a diferença é de natureza: ali a permuta está sendo
+ * REMONTADA, e ela passa pelas regras de mínimo como um conjunto; aqui ela está
+ * sendo CORRIGIDA, item a item, e mandar a lista inteira faria o admin
+ * reafirmar, a cada correção, o valor de tudo o que ele não quis tocar.
+ *
+ * A observação é OPCIONAL porque os FATOS já ficam gravados sem ela: o evento da
+ * linha do tempo diz qual item mudou, de quanto para quanto, e o item guarda o
+ * valor de tabela (`listValue`). O texto é para o que os números não dizem — a
+ * cotação que o fornecedor deu, a conversa com o produtor.
+ */
+export class ChangeBarterPricesDto {
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Diga qual item muda de valor' })
+  @ArrayMaxSize(200, { message: 'Uma permuta não pode ter mais de 200 insumos' })
+  @ValidateNested({ each: true })
+  @Type(() => BarterItemPriceDto)
+  prices!: BarterItemPriceDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/**
+ * O PEDIDO DE FORA DO BARTER — o consultor pedindo um produto que a tabela da
+ * versão não tem (ver `barters/product-request.ts`).
+ *
+ * O pedido é o PRODUTO e a QUANTIDADE, e é por isso que os dois são
+ * obrigatórios e o texto não: aqui, ao contrário do pedido de alteração, o
+ * essencial já está dito pelo próprio item. Exigir um parágrafo para pedir 20 t
+ * de ureia produziria quinhentos "o produtor quer" no histórico.
+ *
+ * Não há VALOR no payload, pela regra de sempre: preço nunca veio do cliente. O
+ * consultor não vê R$ (ver `CAPABILITY.pricesRead`) e o que ele está pedindo é
+ * justamente o item que ninguém precificou ainda.
+ */
+export class RequestBarterProductDto {
+  @IsString()
+  @MinLength(2, { message: 'Escreva o nome do produto que falta' })
+  @MaxLength(120)
+  productName!: string;
+
+  /**
+   * A unidade em que o consultor conhece o item (l, kg, sc, ha, un…). O admin
+   * corrige ao atender, se a embalagem do fornecedor for outra.
+   */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  unit!: string;
+
+  @IsNumber()
+  @IsPositive({ message: 'A quantidade pedida precisa ser maior que zero' })
+  quantity!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/** A frase que o admin lê quando atende um pedido sem dizer por quanto. */
+const PRODUCT_VALUE_MESSAGE = 'Escreva o valor (R$ por unidade) com que este item entra na permuta';
+
+/**
+ * A DECISÃO DO ADMIN sobre o pedido de produto: incluir com um valor, ou
+ * recusar com o motivo.
+ *
+ * `accept` é booleano, como na decisão do desvio, porque as saídas são mesmo
+ * duas. O que ele carrega junto, e a outra não, é um NÚMERO: atender é
+ * precificar, e é o único ato deste sistema em que um valor entra numa permuta
+ * sem estar em tabela nenhuma.
+ *
+ * Nome, unidade e quantidade são CORREÇÕES opcionais do que o consultor
+ * escreveu, e o que fica gravado é o que o admin escreveu: a descrição do
+ * fornecedor é outra, a embalagem é em 20 l e não em litro, e é o item dele que
+ * vai ser separado no balcão. Ausentes, valem os do pedido.
+ */
+export class DecideBarterProductDto {
+  @IsBoolean({ message: 'Diga se o produto entra na permuta (accept: true/false)' })
+  accept!: boolean;
+
+  @ValidateIf((dto: DecideBarterProductDto) => dto.accept)
+  @IsNumber({}, { message: PRODUCT_VALUE_MESSAGE })
+  @IsPositive({ message: PRODUCT_VALUE_MESSAGE })
+  unitValue?: number;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  productName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  unit?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @IsPositive({ message: 'A quantidade precisa ser maior que zero' })
+  quantity?: number;
+
+  /** O código do fornecedor, quando o admin o tem. Ver `BarterItem.productSku`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  sku?: string;
+
+  @ValidateIf((dto: DecideBarterProductDto) => !dto.accept)
+  @IsString({ message: DENY_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: DENY_NOTE_MESSAGE })
+  @MaxLength(1000, { message: 'Escreva o motivo da recusa em até 1000 caracteres' })
+  note?: string;
+}
+
+/**
  * A REESCRITA DOS INSUMOS de um rascunho — o que o consultor faz depois de o
  * admin liberar a alteração (ou antes de encaminhar pela primeira vez).
  *

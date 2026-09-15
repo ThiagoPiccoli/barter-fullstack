@@ -11,6 +11,7 @@ import type {
   Creditor,
   BarterEvent,
   BarterItem,
+  BarterProductRequest,
   CprArea,
   CprAreaOwner,
   CprGuarantor,
@@ -45,11 +46,23 @@ import {
   CHANGE_REQUEST_ACTION,
   CHANGE_REQUEST_STATUS,
   CLEARED_BY_CHANGE,
+  RESOLVED_REQUEST,
   changeDecisionRefusal,
   changeRequestRefusal,
   cultureRefusal,
+  itemPriceRefusal,
+  priceChangeRefusal,
   type ChangeRequestAction,
 } from './change-request';
+import {
+  PRODUCT_REQUEST_ACTION,
+  PRODUCT_REQUEST_STATUS,
+  offBarterCost,
+  productDecisionRefusal,
+  productRequestRefusal,
+  type GrantedRequest,
+  type ProductRequestAction,
+} from './product-request';
 import { EMPTY_CPR, cprGaps, knownFrom, suggestFrom, type CprKnown } from './cpr';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
@@ -60,23 +73,54 @@ import { countsAsRealized } from '../seasons/version-progress';
 import {
   BarterInputDto,
   BarterOpinionDto,
+  ChangeBarterPricesDto,
   CreateBarterDto,
   DecideBarterChangeDto,
+  DecideBarterProductDto,
   ForwardBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
   MIN_OPINION_LENGTH,
   ReplaceBarterInputsDto,
   RequestBarterChangeDto,
+  RequestBarterProductDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
 import { SaveCprDto } from './dto/cpr.dto';
 
-type BarterWithItems = Barter & { items: BarterItem[] };
+type BarterWithItems = Barter & {
+  items: BarterItem[];
+  productRequests: BarterProductRequest[];
+};
 
 /** A permuta com a LINHA DO TEMPO junto — a forma do detalhe. */
 type BarterDetail = BarterWithItems & { events: BarterEvent[] };
+
+/**
+ * O `include` da LISTAGEM: os itens e os pedidos de fora do Barter.
+ *
+ * Os pedidos vão junto na lista, e não só no detalhe como a linha do tempo,
+ * porque eles são ESTADO e não trajetória: uma permuta com pedido em aberto
+ * espera alguém, e a fila do admin é uma lista — descobrir isso abrindo permuta
+ * por permuta é a tela que este pedido existe para não precisar.
+ */
+const BARTER_INCLUDE = {
+  items: true,
+  productRequests: { orderBy: { id: 'asc' } },
+} as const satisfies Prisma.BarterInclude;
+
+/**
+ * O `include` do DETALHE — o da listagem mais a linha do tempo.
+ *
+ * Ele é a forma de toda resposta que não é lista: o detalhe e o resultado de
+ * cada ato. Escrito uma vez pelo motivo de sempre — enquanto foram seis cópias,
+ * uma inclusão nova entrava em cinco.
+ */
+const BARTER_DETAIL_INCLUDE = {
+  ...BARTER_INCLUDE,
+  events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] },
+} as const satisfies Prisma.BarterInclude;
 
 /** A cédula com as lavouras e os donos delas — a forma como ela é lida e salva. */
 type CprWithAreas = BarterCpr & {
@@ -108,6 +152,47 @@ interface CprDesk {
 
 /** Quanto de um texto longo cabe numa linha da trilha sem afogá-la. */
 const AUDIT_DETAIL_LIMIT = 180;
+
+/**
+ * O ITEM que um pedido atendido vira dentro da permuta.
+ *
+ * Em um lugar só porque ele nasce em DOIS momentos: quando o admin atende o
+ * pedido (`decideProduct`) e de novo a cada remontagem do rascunho
+ * (`replaceInputs`), que apaga os itens e recria a lista inteira. Os dois
+ * precisam produzir o mesmo item — inclusive a marca de fora do Barter, que é
+ * o que explica, no comprovante, um valor que não está em tabela nenhuma.
+ *
+ * `productId` null e `offBarter` true: ver o campo no schema.
+ */
+function offBarterItemOf(
+  request: GrantedRequest,
+): Prisma.BarterItemUncheckedCreateWithoutBarterInput {
+  return {
+    productId: null,
+    kind: 'input',
+    productName: request.productName,
+    productSku: request.sku,
+    unit: request.unit,
+    quantity: request.quantity,
+    unitValue: request.unitValue ?? 0,
+    offBarter: true,
+    requestId: request.id,
+  };
+}
+
+/**
+ * Um valor em R$ e uma quantidade como a LINHA DO TEMPO os escreve.
+ *
+ * Em pt-BR, e não em `toFixed`, porque estes dois textos são lidos pelo
+ * gerente, pelo comitê e pelo consultor dentro do registro da permuta — ao
+ * contrário dos detalhes da trilha de auditoria, que são resumo técnico. "R$
+ * 1.200,00" e "R$ 1200.00" dizem a mesma coisa; só uma delas é a língua de quem
+ * lê.
+ */
+const money = (value: number): string =>
+  `R$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const quantityText = (value: number): string => value.toLocaleString('pt-BR');
 
 const summarize = (text: string): string =>
   text.length <= AUDIT_DETAIL_LIMIT ? text : `${text.slice(0, AUDIT_DETAIL_LIMIT)}…`;
@@ -153,7 +238,33 @@ export class BartersService {
     // gerente endereçado e não chegou ao faturamento —, e o do consultor a
     // inclui porque ela é dele.
     if (can(user, CAPABILITY.bartersReadAll)) {
-      return { OR: [{ status: { not: BARTER_STATUS.draft } }, { consultantId: user.id }] };
+      return {
+        OR: [
+          { status: { not: BARTER_STATUS.draft } },
+          { consultantId: user.id },
+          // O RASCUNHO QUE PEDIU ALGUMA COISA — a exceção da exceção, e só para
+          // quem tem o pedido na mesa.
+          //
+          // Um rascunho não é fila de ninguém, MENOS quando ele próprio bateu na
+          // porta: o consultor está montando a permuta, falta um item que a
+          // tabela não tem, e quem pode incluí-lo é o admin (ver
+          // `product-request.ts`). Sem isto o pedido nasceria invisível para o
+          // único que pode atendê-lo — e o consultor ficaria esperando resposta
+          // de alguém que nunca viu a pergunta.
+          //
+          // Qualquer pedido, e não só o em aberto: a permuta continua visível
+          // DEPOIS de decidida, porque foi este admin que escreveu o valor de um
+          // item dela. Limitado ao `open`, ele perderia de vista, no instante
+          // seguinte ao clique, a permuta que acabou de precificar.
+          //
+          // O comitê NÃO entra por aqui: ele também tem `bartersReadAll`, e o
+          // rascunho continua sendo o que sempre foi para ele — um negócio que
+          // ainda não foi proposto.
+          ...(can(user, CAPABILITY.bartersProductReview)
+            ? [{ productRequests: { some: {} } }]
+            : []),
+        ],
+      };
     }
     if (can(user, CAPABILITY.bartersReadTeam)) return { managerId: user.id };
     if (can(user, CAPABILITY.bartersReadInvoicing)) {
@@ -192,7 +303,7 @@ export class BartersService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.barter.findMany({
         where,
-        include: { items: true },
+        include: BARTER_INCLUDE,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take,
         skip,
@@ -221,7 +332,7 @@ export class BartersService {
       //
       // Quem precisa da trajetória inteira é quem abre a permuta — em especial o
       // faturista, que fatura lendo o que as etapas anteriores produziram.
-      include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
+      include: BARTER_DETAIL_INCLUDE,
     });
     if (barter) return barter;
 
@@ -366,11 +477,19 @@ export class BartersService {
    * quem chama: o registro usa a VIGENTE (é ela que diz por quanto se permuta
    * hoje); a alteração usa a DA PERMUTA (o acordo foi fechado nela, e a gestão
    * seguinte não reescreve o que já foi combinado).
+   *
+   * OS ITENS DE FORA DO BARTER entram por `granted`, e entram por um caminho
+   * separado de propósito (ver `product-request.ts`): eles somam CUSTO — foram
+   * retirados, e as sacas os pagam — e não passam por régua nenhuma. Não têm
+   * classe, então nunca somariam no numerador de uma pasta; contá-los no
+   * denominador faria um pedido atendido derrubar, na remontagem, uma permuta
+   * que cumpria os mínimos antes dele.
    */
   private async pricedItemsFor(
     version: VersionWithPrices,
     producer: { areaHa: number },
     inputs: BarterInputDto[],
+    granted: GrantedRequest[] = [],
   ): Promise<Prisma.BarterItemUncheckedCreateWithoutBarterInput[]> {
     // Consolida quantidades por produto (payload pode repetir ids) e as leva à
     // precisão em que serão GRAVADAS. Arredondar aqui, e não só no app, é o que
@@ -451,8 +570,10 @@ export class BartersService {
       );
     }
 
-    // 6. Converte o custo em sacas do grão da safra — o coração do escambo.
-    const sacks = sacksToCover(totalCost, version.grainPrice);
+    // 6. Converte o custo em sacas do grão da safra — o coração do escambo. O
+    //    que veio de fora do Barter entra AQUI, e só aqui: ele é custo retirado
+    //    como qualquer outro, e as sacas pagam a permuta inteira.
+    const sacks = sacksToCover(totalCost + offBarterCost(granted), version.grainPrice);
 
     return [
       {
@@ -478,6 +599,7 @@ export class BartersService {
         quantity: quantities.get(product.id)!,
         unitValue: valueOf.get(product.id)!.price,
       })),
+      ...granted.map(offBarterItemOf),
     ];
   }
 
@@ -490,10 +612,11 @@ export class BartersService {
    */
   private eventOf(
     actor: User,
-    // Os atos do DESVIO entram aqui junto com os da esteira, e é a linha do
-    // tempo que os une: ela conta o que aconteceu com esta permuta, e um pedido
-    // de alteração aconteceu tanto quanto um parecer. Ver `change-request.ts`.
-    action: BarterAction | ChangeRequestAction,
+    // Os atos do DESVIO e os do PEDIDO DE FORA DO BARTER entram aqui junto com
+    // os da esteira, e é a linha do tempo que os une: ela conta o que aconteceu
+    // com esta permuta, e um pedido de alteração aconteceu tanto quanto um
+    // parecer. Ver `change-request.ts` e `product-request.ts`.
+    action: BarterAction | ChangeRequestAction | ProductRequestAction,
     from: BarterStatus | null,
     to: BarterStatus,
     note?: string | null,
@@ -546,7 +669,7 @@ export class BartersService {
         // com uma permuta SEM histórico na mão — e a linha do tempo que estava
         // ali sumia no instante seguinte ao clique, até alguém reabrir o
         // registro. Quem não carrega eventos é só a LISTAGEM.
-        include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
+        include: BARTER_DETAIL_INCLUDE,
       });
     } catch (error) {
       if ((error as { code?: string })?.code === 'P2025') {
@@ -732,7 +855,7 @@ export class BartersService {
         return await this.prisma.$transaction(async (tx) =>
           tx.barter.create({
             data: { ...data, code: await this.nextCode(tx) },
-            include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
+            include: BARTER_DETAIL_INCLUDE,
           }),
         );
       } catch (error) {
@@ -990,14 +1113,9 @@ export class BartersService {
             // O pedido ATENDIDO some por inteiro: quem conta essa história a
             // partir de agora é o `status` da permuta, que voltou a ser
             // rascunho, e o evento gravado aqui. Um pedido "aceito" pendurado
-            // seria um segundo lugar dizendo a mesma coisa.
-            changeRequestStatus: null,
-            changeRequestNote: null,
-            changeRequestBy: null,
-            changeRequestById: null,
-            changeRequestAt: null,
-            changeRequestFrom: null,
-            changeRequestReply: null,
+            // seria um segundo lugar dizendo a mesma coisa. Ver
+            // `RESOLVED_REQUEST` — a outra saída que atende usa o mesmo zerar.
+            ...RESOLVED_REQUEST,
           },
           note,
         )
@@ -1026,6 +1144,440 @@ export class BartersService {
         : `alteração recusada${note ? `: ${summarize(note)}` : ''}`,
     });
     return decided;
+  }
+
+  /**
+   * A TERCEIRA SAÍDA DO PEDIDO: o admin ATENDE mexendo no valor, e a permuta
+   * não sai do lugar.
+   *
+   * A maior parte dos pedidos que chegam é de um número — o valor de um insumo
+   * saiu diferente do que foi combinado com o produtor. Devolver a permuta ao
+   * rascunho por causa disso joga fora dois pareceres e uma decisão para
+   * corrigir o que o admin já tem na mão. Aqui ele corrige, o servidor
+   * recalcula as sacas, e a permuta continua com quem estava. Ver
+   * `priceChangeRefusal` em `change-request.ts`, onde a regra mora.
+   *
+   * Três coisas acontecem na MESMA transação, e as três precisam andar juntas:
+   * os valores mudam, a linha do grão é recalculada a partir deles e o pedido
+   * se fecha. Uma permuta gravada com o valor novo e as sacas velhas é uma
+   * permuta que promete ao produtor uma entrega que não paga o que ele retirou.
+   */
+  async changePrices(admin: User, code: string, dto: ChangeBarterPricesDto): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(admin, code);
+
+    const refusal = priceChangeRefusal(barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    const items = await this.prisma.barterItem.findMany({ where: { barterId: barter.id } });
+    const byId = new Map(items.map((item) => [item.id, item]));
+
+    // O payload é consolidado por item (último vence), como as quantidades no
+    // registro: dois valores para a mesma linha não são um erro que valha uma
+    // recusa — é a tela mandando o que o admin digitou por último.
+    const wanted = new Map(dto.prices.map((price) => [price.itemId, price.unitValue]));
+
+    const changes: { item: BarterItem; unitValue: number }[] = [];
+    for (const [itemId, unitValue] of wanted) {
+      const item = byId.get(itemId);
+      // Item de outra permuta, ou de uma lista que mudou enquanto a tela estava
+      // aberta (o consultor remontou o rascunho). A frase manda reabrir, que é
+      // o que resolve — e não acusa quem digitou.
+      if (!item) {
+        throw new UnprocessableEntityException(
+          'Esta permuta não tem mais o item que você está alterando. Abra-a de novo para ver como ela está',
+        );
+      }
+      const itemRefusal = itemPriceRefusal(item);
+      if (itemRefusal) throw new UnprocessableEntityException(itemRefusal);
+
+      // O que não muda não vira alteração: um valor reenviado igual ao gravado
+      // é a tela devolvendo o formulário inteiro, e gravá-lo produziria um
+      // evento dizendo "de R$ 120,00 para R$ 120,00".
+      if (Math.abs(unitValue - item.unitValue) >= MONEY_EPSILON) {
+        changes.push({ item, unitValue });
+      }
+    }
+    if (changes.length === 0) {
+      throw new UnprocessableEntityException(
+        'Os valores enviados são os que esta permuta já tem — nada mudou',
+      );
+    }
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    // O QUE MUDOU, escrito por extenso na linha do tempo. É a peça que o
+    // gerente e o comitê vão ler para saber que a permuta que eles analisaram
+    // não é mais a mesma — e "valores alterados" sozinho os obrigaria a
+    // comparar de cabeça com o que leram ontem.
+    const summary = changes
+      .map(
+        (change) =>
+          `${change.item.productName}: ${money(change.item.unitValue)} → ${money(change.unitValue)}`,
+      )
+      .join('; ');
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        for (const change of changes) {
+          await tx.barterItem.update({
+            where: { id: change.item.id },
+            data: {
+              unitValue: change.unitValue,
+              // De onde o valor saiu, guardado na PRIMEIRA sobrescrita: uma
+              // segunda correção do mesmo item continua tendo partido da
+              // tabela, e é a tabela que a tela mostra ao lado do valor de
+              // hoje. Ver `listValue` no schema.
+              listValue: change.item.listValue ?? change.item.unitValue,
+            },
+          });
+        }
+
+        await this.repriceGrain(tx, barter.id);
+
+        // O `changeRequestStatus` no `where` é a mesma trava de `applyChange`:
+        // entre a leitura e a gravação cabe o outro admin decidindo o mesmo
+        // pedido, e sem ela os dois atenderiam o mesmo pedido de dois jeitos.
+        await tx.barter.update({
+          where: {
+            id: barter.id,
+            status: barter.status,
+            changeRequestStatus: CHANGE_REQUEST_STATUS.open,
+          },
+          data: {
+            ...RESOLVED_REQUEST,
+            events: {
+              create: [
+                this.eventOf(
+                  admin,
+                  CHANGE_REQUEST_ACTION.changeApplied,
+                  barter.status as BarterStatus,
+                  barter.status as BarterStatus,
+                  note ? `${summary} — ${note}` : summary,
+                ),
+              ],
+            },
+          },
+        });
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new UnprocessableEntityException(
+          'Esta permuta mudou enquanto você alterava os valores. Abra de novo para ver como ela está',
+        );
+      }
+      throw error;
+    }
+
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.barterPricesChanged,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `valor alterado no pedido de ${barter.changeRequestBy ?? barter.consultantName}: ${summarize(summary)}`,
+    });
+
+    return this.findFor(admin, code);
+  }
+
+  /* ── O PEDIDO DE FORA DO BARTER ────────────────────────────────────────── */
+
+  /**
+   * O PEDIDO DE PRODUTO do consultor: falta um item que a tabela da versão não
+   * tem, e é o admin quem pode pô-lo na permuta com um valor.
+   *
+   * Ele NÃO move a permuta e não a tira da fila de ninguém — como o pedido de
+   * alteração, ele pendura uma linha na mesa do admin. Diferente dele, vale
+   * também no RASCUNHO: é ali que o consultor está montando a permuta e topa
+   * com o que falta, e o item que ele quer não existe em lista nenhuma para ele
+   * mesmo acrescentar. Ver `product-request.ts`.
+   */
+  async requestProduct(
+    consultant: User,
+    code: string,
+    dto: RequestBarterProductDto,
+  ): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(consultant, code);
+    // A mesma regra do pedido de alteração, e pelo mesmo motivo: a permuta é de
+    // quem a registrou, e quem falou com o produtor é quem sabe o que falta.
+    if (barter.consultantId !== consultant.id) {
+      throw new ForbiddenException('Só quem registrou a permuta pode pedir um produto para ela');
+    }
+
+    const refusal = productRequestRefusal(barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    const productName = dto.productName.trim();
+    const unit = dto.unit.trim();
+    const quantity = roundQuantity(dto.quantity);
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const asked = `${productName} — ${quantityText(quantity)} ${unit}`;
+
+    try {
+      await this.prisma.barter.update({
+        // O `status` no `where` pelo motivo de sempre: entre a conferência e a
+        // gravação cabe o encaminhamento (ou a decisão do comitê) vindo de
+        // outra tela, e um pedido gravado depois dele entraria numa permuta que
+        // já não pode recebê-lo.
+        where: { id: barter.id, status: barter.status },
+        data: {
+          productRequests: {
+            create: {
+              productName,
+              unit,
+              quantity,
+              note,
+              requestedBy: consultant.fullName,
+              requestedById: consultant.id,
+            },
+          },
+          // O evento na MESMA transação do pedido, como toda mudança de estado
+          // desta permuta: sem o evento não há pedido. Ele não muda o `status`
+          // — o ato aconteceu com a permuta onde ela estava, e é isso que
+          // `fromStatus` igual a `toStatus` diz.
+          events: {
+            create: [
+              this.eventOf(
+                consultant,
+                PRODUCT_REQUEST_ACTION.productRequested,
+                barter.status as BarterStatus,
+                barter.status as BarterStatus,
+                note ? `${asked}: ${note}` : asked,
+              ),
+            ],
+          },
+        },
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new UnprocessableEntityException(
+          'Esta permuta mudou enquanto você escrevia o pedido. Abra de novo para ver como ela está',
+        );
+      }
+      throw error;
+    }
+
+    await this.audit.record({
+      actor: consultant,
+      action: AUDIT_ACTION.barterProductRequested,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `produto de fora do Barter pedido: ${summarize(asked)}`,
+    });
+
+    return this.findFor(consultant, code);
+  }
+
+  /**
+   * A DECISÃO DO ADMIN sobre o pedido de produto: incluir com o valor acertado,
+   * ou recusar com o motivo.
+   *
+   * INCLUIR põe o item na permuta onde ela está e recalcula as sacas — o item
+   * é custo retirado como qualquer outro. Ele entra marcado (`offBarter`), sem
+   * produto no catálogo e com o valor que o admin escreveu: é o único valor
+   * deste sistema que não sai de uma tabela publicada, e é por isso que o
+   * pedido atendido continua existindo ao lado dele, dizendo de onde veio.
+   *
+   * RECUSAR não mexe na permuta. E continua valendo depois de o comitê decidir,
+   * ao contrário de incluir: limpar a mesa de um pedido que ficou para trás não
+   * altera permuta nenhuma, e deixá-lo pendurado para sempre seria uma fila que
+   * não anda.
+   */
+  async decideProduct(
+    admin: User,
+    code: string,
+    requestId: number,
+    dto: DecideBarterProductDto,
+  ): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(admin, code);
+
+    const request = await this.prisma.barterProductRequest.findFirst({
+      where: { id: requestId, barterId: barter.id },
+    });
+    // O pedido é lido DENTRO da permuta (`barterId`): um id de pedido de outra
+    // permuta não é "não encontrado por engano" — é a única maneira de alguém
+    // atender, pela porta de uma permuta que enxerga, o pedido de outra.
+    if (!request) throw new NotFoundException('Registro não encontrado.');
+
+    const decided = productDecisionRefusal(request);
+    if (decided) throw new UnprocessableEntityException(decided);
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+
+    if (!dto.accept) {
+      await this.prisma.$transaction([
+        this.prisma.barterProductRequest.update({
+          where: { id: request.id, status: PRODUCT_REQUEST_STATUS.open },
+          data: {
+            status: PRODUCT_REQUEST_STATUS.denied,
+            decidedBy: admin.fullName,
+            decidedById: admin.id,
+            decidedAt: new Date(),
+            reply: note,
+          },
+        }),
+        this.prisma.barter.update({
+          where: { id: barter.id },
+          data: {
+            events: {
+              create: [
+                this.eventOf(
+                  admin,
+                  PRODUCT_REQUEST_ACTION.productDenied,
+                  barter.status as BarterStatus,
+                  barter.status as BarterStatus,
+                  note ? `${request.productName}: ${note}` : request.productName,
+                ),
+              ],
+            },
+          },
+        }),
+      ]);
+    } else {
+      // A JANELA vale para o atendimento, e não só para o pedido: entre um e
+      // outro o comitê pode ter decidido a permuta, e incluir um insumo nela
+      // depois disso alteraria o que foi aprovado sem passar por quem aprovou.
+      // A recusa não passa por aqui de propósito — ver o comentário do método.
+      const refusal = productRequestRefusal(barter);
+      if (refusal) throw new UnprocessableEntityException(refusal);
+
+      // O que o ADMIN escreveu vence o que o consultor pediu: a descrição do
+      // fornecedor é outra, a embalagem é em 20 l e não em litro, e é o item
+      // dele que vai ser separado no balcão. Ausente, vale o do pedido.
+      const granted: GrantedRequest = {
+        id: request.id,
+        productName: dto.productName?.trim() || request.productName,
+        unit: dto.unit?.trim() || request.unit,
+        quantity: roundQuantity(dto.quantity ?? request.quantity),
+        sku: dto.sku?.trim() || request.sku,
+        unitValue: dto.unitValue!,
+      };
+      const included =
+        `${granted.productName} — ${quantityText(granted.quantity)} ${granted.unit} ` +
+        `a ${money(granted.unitValue!)}`;
+
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.barterProductRequest.update({
+            // `status` no `where`: dois admins na mesma tela atenderiam o mesmo
+            // pedido duas vezes, e a permuta ficaria com o item em dobro.
+            where: { id: request.id, status: PRODUCT_REQUEST_STATUS.open },
+            data: {
+              status: PRODUCT_REQUEST_STATUS.added,
+              productName: granted.productName,
+              unit: granted.unit,
+              quantity: granted.quantity,
+              sku: granted.sku,
+              unitValue: granted.unitValue,
+              decidedBy: admin.fullName,
+              decidedById: admin.id,
+              decidedAt: new Date(),
+              reply: note,
+            },
+          });
+
+          await tx.barterItem.create({
+            data: { ...offBarterItemOf(granted), barterId: barter.id },
+          });
+
+          // As SACAS mudam junto, na mesma transação: o item é custo retirado, e
+          // uma permuta com o insumo dentro e as sacas de antes promete ao
+          // produtor uma entrega que não paga o que ele levou.
+          await this.repriceGrain(tx, barter.id);
+
+          await tx.barter.update({
+            where: { id: barter.id, status: barter.status },
+            data: {
+              events: {
+                create: [
+                  this.eventOf(
+                    admin,
+                    PRODUCT_REQUEST_ACTION.productAdded,
+                    barter.status as BarterStatus,
+                    barter.status as BarterStatus,
+                    note ? `${included} — ${note}` : included,
+                  ),
+                ],
+              },
+            },
+          });
+        });
+      } catch (error) {
+        if ((error as { code?: string })?.code === 'P2025') {
+          throw new UnprocessableEntityException(
+            'Este pedido mudou enquanto você o atendia. Abra a permuta de novo para ver como ela está',
+          );
+        }
+        throw error;
+      }
+    }
+
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.barterProductDecided,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: dto.accept
+        ? `produto de fora do Barter incluído: ${summarize(
+            `${dto.productName?.trim() || request.productName} a ${money(dto.unitValue!)}`,
+          )}`
+        : `produto de fora do Barter recusado: ${summarize(
+            `${request.productName}${note ? ` — ${note}` : ''}`,
+          )}`,
+    });
+
+    return this.findFor(admin, code);
+  }
+
+  /**
+   * OS PEDIDOS ATENDIDOS desta permuta, do tamanho que o item precisa deles.
+   *
+   * É daqui que a remontagem do rascunho tira de volta os itens de fora do
+   * Barter: eles não vêm no payload do consultor (não têm produto no catálogo
+   * para ele apontar) e sumiriam no primeiro `PUT /inputs`.
+   */
+  private async grantedRequestsOf(barterId: number): Promise<GrantedRequest[]> {
+    return this.prisma.barterProductRequest.findMany({
+      where: { barterId, status: PRODUCT_REQUEST_STATUS.added },
+      select: {
+        id: true,
+        productName: true,
+        unit: true,
+        quantity: true,
+        sku: true,
+        unitValue: true,
+      },
+      orderBy: { id: 'asc' },
+    });
+  }
+
+  /**
+   * RECALCULA A LINHA DO GRÃO a partir do custo dos insumos que a permuta tem
+   * AGORA — o mesmo cálculo do registro, feito sobre o que está gravado.
+   *
+   * A cotação é a da PRÓPRIA permuta (o `unitValue` do item de grão, congelado
+   * no registro), e não a da versão vigente: o que muda aqui é o custo, nunca o
+   * preço da saca. Ler a cotação de hoje faria uma correção de R$ 10 num insumo
+   * reprecificar a permuta inteira pela tabela nova.
+   *
+   * Permuta sem linha de grão — as anteriores ao item de pagamento — sai
+   * intacta: não há cotação pela qual converter, e inventar uma seria afirmar
+   * uma entrega que ninguém acordou.
+   */
+  private async repriceGrain(tx: Prisma.TransactionClient, barterId: number): Promise<void> {
+    const items = await tx.barterItem.findMany({ where: { barterId } });
+    const grain = items.find((item) => item.kind === 'grain');
+    if (!grain || grain.unitValue <= 0) return;
+
+    const cost = items
+      .filter((item) => item.kind === 'input')
+      .reduce((sum, item) => sum + item.quantity * item.unitValue, 0);
+
+    await tx.barterItem.update({
+      where: { id: grain.id },
+      data: { quantity: sacksToCover(cost, grain.unitValue) },
+    });
   }
 
   /**
@@ -1061,7 +1613,20 @@ export class BartersService {
 
     const version = await this.requireSameCulture(barter);
 
-    const items = await this.pricedItemsFor(version, { areaHa: barter.producerAreaHa }, dto.inputs);
+    // OS ITENS DE FORA DO BARTER voltam para a lista, porque eles não estão na
+    // lista que o consultor manda: ele escolhe do catálogo, e um item que não é
+    // do catálogo não tem `productId` para ele apontar. Quem os guarda é o
+    // pedido atendido (ver `PRODUCT_REQUEST_STATUS.added`) — sem isto, a
+    // primeira correção de quantidade apagaria da permuta o item que o admin
+    // acabou de incluir, sem ninguém ter pedido isso.
+    const granted = await this.grantedRequestsOf(barter.id);
+
+    const items = await this.pricedItemsFor(
+      version,
+      { areaHa: barter.producerAreaHa },
+      dto.inputs,
+      granted,
+    );
 
     // Os itens antigos SAEM e os novos entram, na mesma transação: a permuta é
     // um conjunto, e um instante em que ela esteja sem insumos (ou com os dois
@@ -1172,7 +1737,7 @@ export class BartersService {
             create: [this.eventOf(actor, action, barter.status as BarterStatus, to, note)],
           },
         },
-        include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
+        include: BARTER_DETAIL_INCLUDE,
       });
     } catch (error) {
       if ((error as { code?: string })?.code === 'P2025') {

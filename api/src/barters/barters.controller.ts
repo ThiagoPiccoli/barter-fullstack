@@ -1,4 +1,14 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import type { User } from '@prisma/client';
 import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
@@ -6,13 +16,16 @@ import { toBarterJson, toBarterVersionJson, toCprJson } from '../common/serializ
 import { BartersService } from './barters.service';
 import {
   BarterOpinionDto,
+  ChangeBarterPricesDto,
   CreateBarterDto,
   DecideBarterChangeDto,
+  DecideBarterProductDto,
   ForwardBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
   ReplaceBarterInputsDto,
   RequestBarterChangeDto,
+  RequestBarterProductDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
@@ -168,6 +181,72 @@ export class BartersController {
     @Body() dto: DecideBarterChangeDto,
   ) {
     return toBarterJson(await this.bartersService.decideChange(admin, code, dto), admin);
+  }
+
+  /**
+   * O ATENDIMENTO DO PEDIDO NO VALOR — a terceira saída do desvio: em vez de
+   * devolver a permuta ao rascunho para corrigir uma linha de R$, o admin
+   * corrige a linha e a permuta continua onde está.
+   *
+   * Ela mora DENTRO de `change-request` no caminho, e isso é a regra: só se
+   * altera valor ATENDENDO a um pedido do consultor. Sem pedido em aberto o
+   * service recusa — o admin não reprecifica permuta por conta própria, que
+   * seria decidir o negócio (ver `CAPABILITY.bartersReview`).
+   *
+   * A capacidade é a da decisão do pedido, e não uma nova: é a mesma mesa e o
+   * mesmo ato, com um desfecho a mais.
+   */
+  @Post(':code/change-request/prices')
+  @RequireCapability(CAPABILITY.bartersChangeReview)
+  @HttpCode(200)
+  async changePrices(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Body() dto: ChangeBarterPricesDto,
+  ) {
+    return toBarterJson(await this.bartersService.changePrices(admin, code, dto), admin);
+  }
+
+  /**
+   * O PEDIDO DE FORA DO BARTER — o consultor pede um produto que a tabela da
+   * versão não tem (ver `barters/product-request.ts`).
+   *
+   * `POST` numa COLEÇÃO, ao contrário do pedido de alteração: uma permuta tem
+   * vários pedidos de produto, cada um com a própria decisão, e eles convivem
+   * sem relação entre si. O de alteração é um de cada vez, e por isso é campo
+   * da permuta.
+   */
+  @Post(':code/product-requests')
+  @RequireCapability(CAPABILITY.bartersProductRequest)
+  @HttpCode(200)
+  async requestProduct(
+    @CurrentUser() consultant: User,
+    @Param('code') code: string,
+    @Body() dto: RequestBarterProductDto,
+  ) {
+    return toBarterJson(
+      await this.bartersService.requestProduct(consultant, code, dto),
+      consultant,
+    );
+  }
+
+  /**
+   * A DECISÃO DO ADMIN sobre o pedido de produto: incluir na permuta com o
+   * valor acertado, ou recusar com o motivo.
+   *
+   * O pedido vai pelo id DENTRO da permuta, e o service o lê assim: um id de
+   * pedido de outra permuta não encontra nada por aqui.
+   */
+  @Post(':code/product-requests/:id/decision')
+  @RequireCapability(CAPABILITY.bartersProductReview)
+  @HttpCode(200)
+  async decideProduct(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: DecideBarterProductDto,
+  ) {
+    return toBarterJson(await this.bartersService.decideProduct(admin, code, id, dto), admin);
   }
 
   /**

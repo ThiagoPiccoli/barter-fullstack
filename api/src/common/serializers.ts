@@ -16,6 +16,7 @@ import type {
   BarterCpr,
   BarterEvent,
   BarterItem,
+  BarterProductRequest,
   BarterVersion,
   CprArea,
   CprAreaOwner,
@@ -443,6 +444,11 @@ export function toBarterVersionJson(
  */
 export function toBarterItemJson(item: BarterItem, lens: ValueLens = CURRENCY_LENS) {
   return {
+    // O ID DA LINHA. Ele existe no contrato porque o admin altera o valor de UM
+    // item ao atender um pedido do consultor (`POST /change-request/prices`), e
+    // o produto não serve de endereço: os itens de fora do Barter não têm
+    // produto no catálogo, e são justamente os que mais mudam de valor.
+    id: item.id,
     kind: item.kind,
     productId: item.productId,
     productName: item.productName,
@@ -454,7 +460,56 @@ export function toBarterItemJson(item: BarterItem, lens: ValueLens = CURRENCY_LE
     sku: item.productSku,
     unit: item.unit,
     quantity: item.quantity,
-    ...(lens.showsCurrency ? { unitValue: item.unitValue } : {}),
+    // ESTE ITEM VEIO DE FORA DO BARTER — de um pedido que o admin atendeu, e
+    // não da tabela de valores da versão (ver `barters/product-request.ts`).
+    //
+    // Vai para TODO MUNDO, inclusive para quem não vê R$: a marca não é sobre o
+    // valor, é sobre a PROCEDÊNCIA. Quem confere a retirada no balcão precisa
+    // saber que aquele item não está na lista da praça, e o consultor precisa
+    // saber que ele está ali porque foi pedido — é dele o pedido.
+    offBarter: item.offBarter,
+    // O VALOR DE TABELA, quando o admin escreveu outro por cima. Só para quem vê
+    // R$, pelo mesmo motivo de `unitValue`: é dinheiro, e o consultor lê a
+    // permuta em sacas. Null (ou ausente) é o caso normal — o item vale o que a
+    // versão do Barter diz.
+    ...(lens.showsCurrency ? { unitValue: item.unitValue, listValue: item.listValue } : {}),
+  };
+}
+
+/**
+ * UM PEDIDO DE FORA DO BARTER — o produto que o consultor pediu e o que o admin
+ * respondeu (ver `barters/product-request.ts`).
+ *
+ * O VALOR sai pela lente, como tudo o mais: o admin lê "R$ 120,00 por litro"; o
+ * consultor, que pediu o item, lê o que ele custa na moeda dele — sacas por
+ * unidade. É o mesmo desenho de `toBarterVersionJson`, e existe pela mesma
+ * razão: esconder R$ na tela deixaria o número viajando no JSON de quem não
+ * pode lê-lo.
+ *
+ * `null` no valor enquanto o pedido não foi atendido — não há preço nenhum, e
+ * um zero ali seria um item de graça.
+ */
+export function toBarterProductRequestJson(
+  request: BarterProductRequest,
+  lens: ValueLens = CURRENCY_LENS,
+) {
+  const value = request.unitValue;
+  return {
+    id: request.id,
+    productName: request.productName,
+    unit: request.unit,
+    quantity: request.quantity,
+    sku: request.sku,
+    note: request.note,
+    status: request.status,
+    requestedBy: request.requestedBy,
+    requestedAt: request.requestedAt,
+    decidedBy: request.decidedBy,
+    decidedAt: request.decidedAt,
+    reply: request.reply,
+    ...(lens.showsCurrency
+      ? { unitValue: value }
+      : { sacksPerUnit: value === null ? null : inSacks(value, lens.grainPrice) }),
   };
 }
 
@@ -576,11 +631,31 @@ function investmentPerHa(
   };
 }
 
+/**
+ * A COTAÇÃO DA SACA com que esta permuta foi fechada, lida do item de grão dela.
+ *
+ * É o que permite converter em sacas, para quem não vê R$, os valores que a
+ * permuta carrega (hoje: o do pedido de fora do Barter). Sai daqui, e não da
+ * versão vigente, pelo motivo de sempre — a permuta foi fechada naquela cotação,
+ * e publicar a versão seguinte não reescreve o que já foi combinado.
+ *
+ * Zero quando não há item de grão (permutas anteriores a ele, ou uma resposta
+ * sem os itens): a lente então não converte nada, e o campo some em vez de
+ * afirmar um número.
+ */
+function grainPriceOf(barter: { items?: BarterItem[] }): number {
+  return barter.items?.find((item) => item.kind === 'grain')?.unitValue ?? 0;
+}
+
 export function toBarterJson(
-  barter: Barter & { items?: BarterItem[]; events?: BarterEvent[] },
+  barter: Barter & {
+    items?: BarterItem[];
+    events?: BarterEvent[];
+    productRequests?: BarterProductRequest[];
+  },
   viewer?: Pick<User, 'role'>,
 ) {
-  const lens = lensFor(viewer);
+  const lens = lensFor(viewer, grainPriceOf(barter));
   return {
     id: barter.id,
     code: barter.code,
@@ -645,6 +720,16 @@ export function toBarterJson(
     changeRequestAt: barter.changeRequestAt,
     changeRequestFrom: barter.changeRequestFrom,
     changeRequestReply: barter.changeRequestReply,
+    // OS PEDIDOS DE FORA DO BARTER desta permuta — os que esperam o admin, os
+    // que ele atendeu e os que recusou (ver `barters/product-request.ts`).
+    //
+    // Vão na LISTAGEM também, e não só no detalhe como a linha do tempo: o
+    // pedido em aberto é ESTADO ("esta permuta espera alguém"), e é isso que a
+    // fila do admin lista. `undefined` quando a resposta não os carrega — o app
+    // distingue "não veio" de "não tem", que seriam a mesma coisa com `[]`.
+    productRequests: barter.productRequests?.map((request) =>
+      toBarterProductRequestJson(request, lens),
+    ),
     // COM QUEM ela está parada e QUAL é o próximo ato, resolvidos pela máquina de
     // estados do servidor. Vão no JSON para o app não ter uma segunda cópia do
     // fluxo em Dart: uma etapa nova aparece nas telas já instaladas em vez de

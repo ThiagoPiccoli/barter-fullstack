@@ -6,9 +6,12 @@ import {
   CHANGE_REQUEST_LABELS,
   CHANGE_REQUEST_STATUS,
   CLEARED_BY_CHANGE,
+  RESOLVED_REQUEST,
   changeDecisionRefusal,
   changeRequestRefusal,
   cultureRefusal,
+  itemPriceRefusal,
+  priceChangeRefusal,
   requestedFrom,
 } from './change-request';
 
@@ -108,6 +111,57 @@ describe('Pedido de alteração da permuta', () => {
     expect(
       changeDecisionRefusal(barterIn(BARTER_STATUS.approved, CHANGE_REQUEST_STATUS.denied)),
     ).toContain('já foi decidido');
+  });
+
+  /* ── A terceira saída: o admin atende mexendo no valor ──────────────── */
+
+  /**
+   * Alterar valor é ATENDER um pedido, e não um poder solto do admin. Sem
+   * pedido em aberto ele estaria reprecificando permuta por conta própria — que
+   * é decidir o negócio, o que ele não faz.
+   */
+  it('o valor só se altera dentro de um pedido em aberto', () => {
+    expect(
+      priceChangeRefusal(barterIn(BARTER_STATUS.pending, CHANGE_REQUEST_STATUS.open)),
+    ).toBeNull();
+
+    const semPedido = priceChangeRefusal(barterIn(BARTER_STATUS.pending));
+    expect(semPedido).toContain('ATENDENDO a um pedido');
+  });
+
+  /** Pedido já decidido: a frase é a mesma da decisão, e pelo mesmo motivo. */
+  it('pedido já decidido não se atende de novo', () => {
+    expect(
+      priceChangeRefusal(barterIn(BARTER_STATUS.approved, CHANGE_REQUEST_STATUS.denied)),
+    ).toContain('já foi decidido');
+  });
+
+  /**
+   * O GRÃO não se digita: as sacas são o RESULTADO do custo dos insumos e da
+   * cotação da versão. Escrever nelas seria abrir um Barter particular para um
+   * produtor, e ainda por cima por um caminho que existe para corrigir insumo.
+   */
+  it('o valor do grão não é campo de formulário', () => {
+    expect(itemPriceRefusal({ kind: 'input', productName: 'Ureia 45%' })).toBeNull();
+    expect(itemPriceRefusal({ kind: 'grain', productName: 'Soja' })).toContain('pagamento');
+  });
+
+  /**
+   * As duas saídas que ATENDEM zeram o pedido; a que recusa não. O "atendido"
+   * pendurado seria um segundo lugar contando a mesma história que o efeito já
+   * conta — e a recusa, sem o campo, viraria uma permuta parada sem nada
+   * dizendo que alguém já pediu e ouviu não.
+   */
+  it('o pedido atendido some, e o recusado fica', () => {
+    expect(RESOLVED_REQUEST).toEqual({
+      changeRequestStatus: null,
+      changeRequestNote: null,
+      changeRequestBy: null,
+      changeRequestById: null,
+      changeRequestAt: null,
+      changeRequestFrom: null,
+      changeRequestReply: null,
+    });
   });
 
   /* ── O que o aceite desfaz ──────────────────────────────────────────── */

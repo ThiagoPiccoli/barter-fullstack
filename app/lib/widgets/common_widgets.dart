@@ -1463,11 +1463,16 @@ class ChangeRequestCard extends StatelessWidget {
   final VoidCallback? onAccept;
   final VoidCallback? onDeny;
 
+  /// A TERCEIRA saída: atender mexendo no VALOR, sem devolver a permuta ao
+  /// rascunho. Nula onde ela não cabe (uma permuta sem insumos para corrigir).
+  final VoidCallback? onChangePrices;
+
   const ChangeRequestCard({
     super.key,
     required this.barter,
     this.onAccept,
     this.onDeny,
+    this.onChangePrices,
   });
 
   @override
@@ -1549,6 +1554,817 @@ class ChangeRequestCard extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.approved,
                       padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            // ALTERAR O VALOR vem ABAIXO das outras duas, em linha própria e
+            // com contorno: ela não é uma terceira opção do mesmo peso, é o
+            // atalho — atende o pedido sem desfazer o trabalho de ninguém, e
+            // por isso é a primeira coisa que o admin deveria tentar antes de
+            // liberar. Ela ocupa a largura toda porque o rótulo precisa dizer o
+            // que ela faz de diferente, e "Alterar" sozinho não diz.
+            if (onChangePrices != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: onChangePrices,
+                icon: const Icon(Icons.price_change_outlined, size: 18),
+                label: const Text('Alterar valores sem devolver'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  side: BorderSide(color: AppColors.primary),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  minimumSize: const Size.fromHeight(0),
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// O ATENDIMENTO DO PEDIDO NO VALOR — a terceira saída do admin.
+///
+/// Em vez de devolver a permuta ao rascunho (e apagar o parecer do gerente e a
+/// decisão do comitê) para corrigir uma linha de R$, ele corrige a linha: o
+/// servidor recalcula as sacas e a permuta continua onde estava, com quem
+/// estava. É o desfecho da maior parte dos pedidos que chegam — "o valor da
+/// semente saiu diferente do que combinei com o produtor".
+///
+/// A tela mostra os insumos com o valor atual e deixa escrever por cima. O
+/// GRÃO não está na lista: as sacas são o resultado do custo, e não um campo.
+void changeBarterPrices(
+  BuildContext context,
+  BarterModel barter, {
+  required ValueChanged<BarterModel> onChanged,
+}) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      // O valor DIGITADO de cada item, começando pelo que está gravado. Só o
+      // que mudar vai no corpo — a permuta está sendo corrigida linha a linha,
+      // e não remontada.
+      final controllers = {
+        for (final item in barter.inputs)
+          item.id: TextEditingController(text: item.unitValue.toStringAsFixed(2).replaceAll('.', ',')),
+      };
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+
+      double? typed(String id) =>
+          double.tryParse((controllers[id]?.text ?? '').trim().replaceAll(',', '.'));
+
+      Map<String, double> changes() => {
+            for (final item in barter.inputs)
+              if (typed(item.id) != null && (typed(item.id)! - item.unitValue).abs() >= 0.01)
+                item.id: typed(item.id)!,
+          };
+
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final alterados = changes();
+          return AlertDialog(
+            title: const Text('Alterar Valores'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Permuta: ${barter.id}',
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 2),
+                    Text('${barter.changeRequestBy ?? barter.consultantName} pediu a alteração',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                    const SizedBox(height: 12),
+                    Text(
+                      // O que ela NÃO faz, dito antes do clique: é a diferença
+                      // entre esta saída e a liberação, e é ela que o admin
+                      // está escolhendo aqui.
+                      'A permuta continua exatamente onde está — nada é refeito. As sacas a '
+                      'entregar são recalculadas pelo servidor a partir dos valores novos.',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
+                    const SizedBox(height: 12),
+                    for (final item in barter.inputs) ...[
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(item.productName,
+                                      style: const TextStyle(fontSize: 13),
+                                      overflow: TextOverflow.ellipsis),
+                                  Text(
+                                    [
+                                      '${formatQty(item.quantity)} ${item.unit}',
+                                      if (item.offBarter) 'fora do Barter',
+                                      if (item.hasChangedValue)
+                                        'tabela: ${formatCurrency(item.listValue!)}',
+                                    ].join(' • '),
+                                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            SizedBox(
+                              width: 110,
+                              child: TextField(
+                                controller: controllers[item.id],
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(decimal: true),
+                                textAlign: TextAlign.end,
+                                onChanged: (_) => setLocal(() {}),
+                                decoration: const InputDecoration(
+                                  prefixText: 'R\$ ',
+                                  isDense: true,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: noteCtrl,
+                      minLines: 2,
+                      maxLines: 4,
+                      maxLength: 1000,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Observação (opcional)',
+                        hintText: 'Cotação do fornecedor confirmada por e-mail…',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                // Sem nada alterado não há o que enviar: o servidor recusaria,
+                // e a recusa dele diria a mesma coisa que o botão apagado.
+                onPressed: submitting || alterados.isEmpty
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated = await AppData.changeBarterPrices(
+                            barter.id,
+                            alterados,
+                            note: noteCtrl.text,
+                          );
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onChanged(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(
+                                'Valores alterados. A permuta segue em "${updated.statusLabel}".'),
+                            backgroundColor: AppColors.approved,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.approved),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                    : Text(alterados.isEmpty
+                        ? 'Alterar'
+                        : 'Alterar ${alterados.length} item(ns)'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+/// O PEDIDO DE FORA DO BARTER, escrito pelo consultor.
+///
+/// A tabela do Barter é uma lista fechada e a lavoura não é: o produtor quer o
+/// adjuvante da marca dele, um serviço que ninguém lançou. Aqui ele pede — o
+/// produto, a unidade e a quantidade —, e quem responde com um VALOR é o admin.
+///
+/// Não há campo de preço, e não é esquecimento: o consultor não vê R$ em lugar
+/// nenhum do app, e o que ele está pedindo é justamente o item que ninguém
+/// precificou ainda.
+/// O QUE O CONSULTOR ESCREVEU no pedido de fora do Barter.
+///
+/// Ele existe porque o mesmo formulário tem DOIS desfechos — pedir dentro de uma
+/// permuta que já existe, e registrar a permuta para poder pedir —, e o que
+/// muda entre eles é só o que acontece depois do botão. Sem um tipo para o que
+/// foi escrito, cada caminho releria os quatro campos por conta própria.
+class ProductRequestDraft {
+  final String productName;
+  final String unit;
+  final double quantity;
+  final String note;
+
+  const ProductRequestDraft({
+    required this.productName,
+    required this.unit,
+    required this.quantity,
+    required this.note,
+  });
+}
+
+/// O PEDIDO DE FORA DO BARTER, escrito pelo consultor — numa permuta que já
+/// existe no servidor.
+///
+/// A tabela do Barter é uma lista fechada e a lavoura não é: o produtor quer o
+/// adjuvante da marca dele, um serviço que ninguém lançou. Aqui ele pede — o
+/// produto, a unidade e a quantidade —, e quem responde com um VALOR é o admin.
+///
+/// Não há campo de preço, e não é esquecimento: o consultor não vê R$ em lugar
+/// nenhum do app, e o que ele está pedindo é justamente o item que ninguém
+/// precificou ainda.
+void requestBarterProduct(
+  BuildContext context,
+  BarterModel barter, {
+  required ValueChanged<BarterModel> onRequested,
+}) {
+  showProductRequestDialog(
+    context,
+    headline: 'Permuta: ${barter.id}',
+    subline: '${barter.producerName} • ${barter.statusLabel}',
+    notice:
+        'Para o que o Barter não tem na tabela. O administrador acerta o valor '
+        'e inclui o item NESTA permuta — as sacas a entregar são recalculadas.',
+    submitLabel: 'Enviar Pedido',
+    onSubmit: (draft) => AppData.requestBarterProduct(
+      barter.id,
+      productName: draft.productName,
+      unit: draft.unit,
+      quantity: draft.quantity,
+      note: draft.note,
+    ),
+    successMessage: (_) =>
+        'Pedido enviado ao administrador. A permuta segue onde está.',
+    onDone: onRequested,
+  );
+}
+
+/// O MESMO FORMULÁRIO, aberto de onde o pedido nasce.
+///
+/// Ele é público porque o pedido tem DOIS pontos de partida, e o segundo não
+/// tem permuta para passar: a tela que monta a permuta, onde o consultor
+/// descobre que falta um item — que é o momento em que a falta aparece de
+/// verdade. Lá o botão registra a permuta antes de pedir (ver
+/// `registerToRequestProduct`, em send_simulation.dart), e é isso que [notice] e
+/// [submitLabel] dizem a quem vai clicar.
+///
+/// O que NÃO é parâmetro: os campos. Eles são os mesmos nos dois caminhos
+/// porque o pedido é o mesmo — o que muda é o que acontece depois do botão.
+void showProductRequestDialog(
+  BuildContext context, {
+  required String headline,
+  required String subline,
+  required String notice,
+  required String submitLabel,
+  required Future<BarterModel> Function(ProductRequestDraft draft) onSubmit,
+  required String Function(BarterModel barter) successMessage,
+  required ValueChanged<BarterModel> onDone,
+}) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final nameCtrl = TextEditingController();
+      final unitCtrl = TextEditingController(text: 'un');
+      final qtyCtrl = TextEditingController();
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final quantity =
+              double.tryParse(qtyCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+          final enough = nameCtrl.text.trim().length >= 2 &&
+              unitCtrl.text.trim().isNotEmpty &&
+              quantity > 0;
+          return AlertDialog(
+            title: const Text('Pedir Produto de Fora'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(headline,
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 2),
+                    Text(subline,
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                    const SizedBox(height: 12),
+                    Text(
+                      notice,
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: nameCtrl,
+                      autofocus: true,
+                      maxLength: 120,
+                      textCapitalization: TextCapitalization.sentences,
+                      onChanged: (_) => setLocal(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Produto ou serviço',
+                        hintText: 'Adjuvante Prime, semeadura por drone…',
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: qtyCtrl,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            onChanged: (_) => setLocal(() {}),
+                            decoration: const InputDecoration(labelText: 'Quantidade'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        SizedBox(
+                          width: 110,
+                          child: TextField(
+                            controller: unitCtrl,
+                            maxLength: 20,
+                            onChanged: (_) => setLocal(() {}),
+                            decoration: const InputDecoration(
+                              labelText: 'Unidade',
+                              hintText: 'l, kg, ha…',
+                              counterText: '',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: noteCtrl,
+                      minLines: 2,
+                      maxLines: 5,
+                      maxLength: 1000,
+                      textCapitalization: TextCapitalization.sentences,
+                      decoration: const InputDecoration(
+                        labelText: 'Observação (opcional)',
+                        hintText: 'A marca que o produtor usa; o fornecedor que cotou…',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: submitting || !enough
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated = await onSubmit(ProductRequestDraft(
+                            productName: nameCtrl.text,
+                            unit: unitCtrl.text,
+                            quantity: quantity,
+                            note: noteCtrl.text,
+                          ));
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onDone(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(successMessage(updated)),
+                            backgroundColor: AppColors.pending,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.pending),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                    : Text(submitLabel),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+/// A DECISÃO DO ADMIN sobre o pedido de fora do Barter: incluir com o valor
+/// acertado, ou recusar com o motivo.
+///
+/// Incluir é PRECIFICAR, e é o único ato deste sistema em que um valor entra
+/// numa permuta sem estar em tabela nenhuma — daí o campo de R$ ser obrigatório
+/// e os outros três (descrição, unidade, quantidade) virem preenchidos com o
+/// que o consultor pediu, para o admin corrigir: a descrição do fornecedor é
+/// outra, e é o item dele que vai ser separado no balcão.
+void decideBarterProduct(
+  BuildContext context,
+  BarterModel barter,
+  BarterProductRequest request, {
+  required bool accept,
+  required ValueChanged<BarterModel> onDecided,
+}) {
+  final color = accept ? AppColors.approved : AppColors.denied;
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final nameCtrl = TextEditingController(text: request.productName);
+      final unitCtrl = TextEditingController(text: request.unit);
+      final qtyCtrl = TextEditingController(text: formatQty(request.quantity));
+      final skuCtrl = TextEditingController(text: request.sku ?? '');
+      final valueCtrl = TextEditingController();
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final value = double.tryParse(valueCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+          final quantity = double.tryParse(qtyCtrl.text.trim().replaceAll(',', '.')) ?? 0;
+          final enough = accept
+              ? value > 0 && quantity > 0 && nameCtrl.text.trim().length >= 2
+              : noteCtrl.text.trim().length >= minOpinionLength;
+          return AlertDialog(
+            title: Text(accept ? 'Incluir na Permuta' : 'Recusar Pedido'),
+            content: SizedBox(
+              width: 420,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Permuta: ${barter.id}',
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 2),
+                    Text('${request.requestedBy} pediu ${request.productName}',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                    if ((request.note ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(request.note!,
+                          style: TextStyle(fontSize: 12, color: AppColors.textDark, height: 1.35)),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      accept
+                          ? 'O item entra NESTA permuta com o valor abaixo, e as sacas a '
+                              'entregar são recalculadas. Ele não entra no catálogo: o valor '
+                              'vale para esta permuta e morre com ela.'
+                          : 'A permuta continua exatamente como está. O motivo aparece para o '
+                              'consultor, que pode pedir de novo depois de resolvê-lo.',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
+                    const SizedBox(height: 12),
+                    if (accept) ...[
+                      TextField(
+                        controller: valueCtrl,
+                        autofocus: true,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        onChanged: (_) => setLocal(() {}),
+                        decoration: const InputDecoration(
+                          labelText: 'Valor por unidade',
+                          prefixText: 'R\$ ',
+                        ),
+                      ),
+                      TextField(
+                        controller: nameCtrl,
+                        maxLength: 120,
+                        onChanged: (_) => setLocal(() {}),
+                        decoration: const InputDecoration(
+                          labelText: 'Descrição (como vai na permuta)',
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: qtyCtrl,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              onChanged: (_) => setLocal(() {}),
+                              decoration: const InputDecoration(labelText: 'Quantidade'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          SizedBox(
+                            width: 100,
+                            child: TextField(
+                              controller: unitCtrl,
+                              maxLength: 20,
+                              onChanged: (_) => setLocal(() {}),
+                              decoration:
+                                  const InputDecoration(labelText: 'Unidade', counterText: ''),
+                            ),
+                          ),
+                        ],
+                      ),
+                      TextField(
+                        controller: skuCtrl,
+                        maxLength: 60,
+                        decoration: const InputDecoration(
+                          labelText: 'Código do fornecedor (opcional)',
+                          counterText: '',
+                        ),
+                      ),
+                      if (value > 0 && quantity > 0) ...[
+                        const SizedBox(height: 8),
+                        Text('Entra na permuta por ${formatCurrency(value * quantity)}',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textDark)),
+                      ],
+                    ],
+                    const SizedBox(height: 4),
+                    TextField(
+                      controller: noteCtrl,
+                      autofocus: !accept,
+                      minLines: 2,
+                      maxLines: 5,
+                      maxLength: 1000,
+                      textCapitalization: TextCapitalization.sentences,
+                      onChanged: (_) => setLocal(() {}),
+                      decoration: InputDecoration(
+                        labelText: accept ? 'Observação (opcional)' : 'Motivo da recusa',
+                        hintText: accept
+                            ? 'Cotação do fornecedor, prazo de entrega…'
+                            : 'Não temos fornecedor com nota para a praça nesta safra…',
+                        alignLabelWithHint: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: submitting || !enough
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated = await AppData.decideBarterProduct(
+                            barter.id,
+                            request.id,
+                            accept: accept,
+                            unitValue: accept ? value : null,
+                            productName: accept ? nameCtrl.text : null,
+                            unit: accept ? unitCtrl.text : null,
+                            quantity: accept ? quantity : null,
+                            sku: accept ? skuCtrl.text : null,
+                            note: noteCtrl.text,
+                          );
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onDecided(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(accept
+                                ? 'Item incluído na permuta. As sacas foram recalculadas.'
+                                : 'Pedido recusado. A permuta segue como estava.'),
+                            backgroundColor: color,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: color),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                    : Text(accept ? 'Incluir' : 'Recusar'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+/// OS PEDIDOS DE FORA DO BARTER como bloco de leitura — a bandeira pendurada na
+/// permuta enquanto o admin não responde, e o que ele respondeu depois.
+///
+/// Ele aparece para TODO MUNDO que enxerga a permuta, e não só para quem pediu
+/// e quem atende: quem a tem na mesa precisa saber que falta um item nela — dar
+/// parecer sobre uma lista que está para crescer é trabalho pela metade.
+///
+/// O VALOR aparece na moeda de quem está lendo: R$ para a retaguarda, sacas por
+/// unidade para o consultor — é o servidor que converte (ver
+/// `toBarterProductRequestJson`).
+class ProductRequestsCard extends StatelessWidget {
+  final BarterModel barter;
+
+  /// As ações do admin sobre um pedido em aberto. Nulas para quem só lê — a
+  /// bandeira é a mesma; o que muda é poder resolvê-la.
+  final void Function(BarterProductRequest request, {required bool accept})? onDecide;
+
+  const ProductRequestsCard({super.key, required this.barter, this.onDecide});
+
+  @override
+  Widget build(BuildContext context) {
+    final requests = barter.productRequests;
+    if (requests.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.input.withValues(alpha: 0.06),
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.input.withValues(alpha: 0.30)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.add_shopping_cart_outlined, size: 16, color: AppColors.input),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Pedidos de fora do Barter',
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.input),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'O que o produtor pediu e a tabela desta gestão não tem',
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+          ),
+          for (final request in requests)
+            _ProductRequestRow(request: request, onDecide: onDecide),
+        ],
+      ),
+    );
+  }
+}
+
+/// Uma linha do bloco: o item pedido, em que pé está e o que se pode fazer.
+class _ProductRequestRow extends StatelessWidget {
+  final BarterProductRequest request;
+  final void Function(BarterProductRequest request, {required bool accept})? onDecide;
+
+  const _ProductRequestRow({required this.request, this.onDecide});
+
+  /// A cor do estado, com o mesmo vocabulário do resto do app: amarelo espera,
+  /// verde entrou, vermelho não entrou.
+  Color get _color => request.isOpen
+      ? AppColors.pending
+      : request.isAdded
+          ? AppColors.approved
+          : AppColors.denied;
+
+  String get _stateLabel => request.isOpen
+      ? 'Aguarda o administrador'
+      : request.isAdded
+          ? 'Incluído na permuta'
+          : 'Recusado';
+
+  /// O valor acertado, na moeda de quem está lendo. Null enquanto ninguém
+  /// precificou nada — e aí a linha não mostra número nenhum, em vez de
+  /// mostrar zero.
+  String? get _valueLabel {
+    if (request.unitValue != null) {
+      return '${formatCurrency(request.unitValue!)}/${request.unit} • '
+          '${formatCurrency(request.unitValue! * request.quantity)}';
+    }
+    if (request.sacksPerUnit != null) {
+      return '${formatSacks(request.sacksPerUnit!)}/${request.unit} • '
+          '${formatSacks(request.sacksPerUnit! * request.quantity)}';
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = _valueLabel;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${request.productName} — ${formatQty(request.quantity)} ${request.unit}',
+                  style: TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // O ESTADO do pedido, em pílula. Ela é local, e não o
+              // [StatusBadge]: aquele fala do estado da PERMUTA, e as duas
+              // coisas juntas na mesma tela precisam se distinguir à primeira
+              // vista — um pedido recusado não é uma permuta negada.
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: _color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  _stateLabel,
+                  style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _color),
+                ),
+              ),
+            ],
+          ),
+          Text(
+            [
+              request.requestedBy,
+              if (request.requestedAt != null) formatDate(request.requestedAt!),
+              ?value,
+            ].join(' • '),
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+          ),
+          if ((request.note ?? '').isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(request.note!,
+                  style: TextStyle(fontSize: 12, color: AppColors.textDark, height: 1.35)),
+            ),
+          if ((request.reply ?? '').isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                'Administrador: ${request.reply!}',
+                style: TextStyle(fontSize: 12, color: AppColors.textDark, height: 1.35),
+              ),
+            ),
+          if (request.isOpen && onDecide != null) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => onDecide!(request, accept: false),
+                    icon: const Icon(Icons.close, size: 18),
+                    label: const Text('Recusar'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.denied,
+                      side: BorderSide(color: AppColors.denied),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () => onDecide!(request, accept: true),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Incluir'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.approved,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
                     ),
                   ),
                 ),
