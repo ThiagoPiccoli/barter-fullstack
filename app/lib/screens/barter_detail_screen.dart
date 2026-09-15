@@ -5,7 +5,9 @@ import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../services/barter_pdf.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import 'barter_screen.dart';
 import 'cpr_form_screen.dart';
 
 class BarterDetailScreen extends StatefulWidget {
@@ -77,9 +79,9 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
       await BarterPdf.share(_barter, producer: producer, showValues: widget.isAdmin);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Não foi possível gerar o PDF: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Não foi possível gerar o PDF: $e')));
     }
   }
 
@@ -89,18 +91,24 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
   /// preencher a cédula e carimbar. Enquanto a permuta espera faturamento, o
   /// ato principal lá dentro é *Faturar*; depois de faturada, é gerar o
   /// documento de novo — a cédula continua editável.
-  void _openCpr() => openInvoicing(
-        context,
-        _barter,
-        onInvoiced: (updated) => setState(() => _barter = updated),
-      );
+  void _openCpr() =>
+      openInvoicing(context, _barter, onInvoiced: (updated) => setState(() => _barter = updated));
 
-  /// O faturista alcança a CÉDULA daqui?
+  /// O faturista alcança a MESA da cédula daqui?
   ///
   /// Nos dois estados do trecho dele: a aprovada (a coleta não espera a nota) e
   /// a já faturada (a cédula é papel que vem depois do ato).
-  bool get _canOpenCpr =>
-      AppData.can(Capability.bartersInvoice) && _barter.wasApproved;
+  bool get _canOpenCpr => AppData.can(Capability.bartersInvoice) && _barter.wasApproved;
+
+  /// E quem só LÊ a cédula — o admin — alcança o DOCUMENTO?
+  ///
+  /// A pergunta é outra, e por isso a capacidade é outra: [_canOpenCpr] abre a
+  /// mesa de trabalho (com rascunho, matrícula e o ato de faturar); esta entrega
+  /// o arquivo do que já está preenchido. Quem tem as duas usa a primeira — a
+  /// mesa também gera o documento, e dois caminhos para o mesmo .docx na mesma
+  /// tela seria um a mais.
+  bool get _canGenerateCpr =>
+      !_canOpenCpr && AppData.can(Capability.bartersCprRead) && _barter.wasApproved;
 
   @override
   Widget build(BuildContext context) {
@@ -122,6 +130,15 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               tooltip: 'Cédula de Produto Rural (CPR)',
               onPressed: _openCpr,
             ),
+          // A SEGUNDA VIA, para quem lê a cédula sem preenchê-la. Mesmo lugar
+          // na barra, porque é o mesmo documento — o que muda é o que se pode
+          // fazer com ele depois de aberto.
+          if (_canGenerateCpr)
+            IconButton(
+              icon: const Icon(Icons.description_outlined),
+              tooltip: 'Gerar cédula (CPR) em Word',
+              onPressed: () => generateCprDocument(context, _barter),
+            ),
           IconButton(
             icon: const Icon(Icons.picture_as_pdf_outlined),
             tooltip: 'Comprovante da permuta',
@@ -133,252 +150,351 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          BarterBalanceBar(
-            inputCost: _barter.inputCost,
-            referenceValue: _barter.referenceValue,
-            referenceGrainName: _barter.referenceGrainName,
-            inputCount: _barter.inputs.length,
-            showValue: widget.isAdmin,
-            sacksPerHa: _barter.sacksPerHa,
-            areaHa: _barter.producerAreaHa,
-          ),
-          const SizedBox(height: 16),
-
-          // Meta info
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _InfoRow(label: 'Produtor', value: _barter.producerName),
-                  if (producer != null)
-                    _InfoRow(label: 'Propriedade', value: producer.location),
-                  // A RETIRADA vale para todo mundo, inclusive o consultor: é
-                  // onde o produtor dele vai buscar os insumos, e a primeira
-                  // pergunta que ele recebe de volta.
-                  _InfoRow(label: 'Retirada em', value: _barter.unitLabel),
-                  if (widget.isAdmin) ...[
-                    _InfoRow(label: 'Consultor', value: _barter.consultantName),
-                    _InfoRow(label: 'Filial', value: _barter.consultantBranch),
-                  ],
-                  // O INVESTIMENTO POR HECTARE — a régua que compara permutas
-                  // de tamanhos diferentes. Ela vem do servidor já dividida, e
-                  // só para quem pode compará-la (admin, comitê e faturista):
-                  // para o consultor e o gerente o campo simplesmente não chega,
-                  // e a linha não aparece. Ver `barters.investmentPerHa`.
-                  //
-                  // `null` com área presente é permuta anterior ao campo de
-                  // área: a linha some em vez de mostrar "0 sc/ha", que seria
-                  // uma afirmação, e falsa.
-                  if (_barter.sacksPerHa != null)
-                    _InfoRow(
-                      label: 'Investimento',
-                      value: '${formatSacksPerHa(_barter.sacksPerHa!)}'
-                          '${_barter.producerAreaHa != null && _barter.producerAreaHa! > 0 ? ' • ${formatQty(_barter.producerAreaHa!)} ha' : ''}',
-                    ),
-                  const Divider(height: 16),
-                  // Em qual gestão do Barter esta permuta foi fechada: é o que
-                  // explica os valores dela, que não mudam quando a versão
-                  // seguinte é publicada.
-                  if (_barter.versionCode.isNotEmpty)
-                    _InfoRow(label: 'Barter', value: _barter.versionCode),
-                  _InfoRow(label: 'Criada em', value: _formatDate(_barter.createdAt)),
-                  if (_barter.updatedAt != null)
-                    _InfoRow(label: 'Atualizada em', value: _formatDate(_barter.updatedAt!)),
-                  if (_barter.hasDecision)
-                    _InfoRow(label: 'Decidida por', value: _barter.reviewedBy!),
-                  if (_barter.invoicedBy != null) ...[
-                    _InfoRow(label: 'Faturada por', value: _barter.invoicedBy!),
-                    if (_barter.invoicedAt != null)
-                      _InfoRow(label: 'Faturada em', value: _formatDate(_barter.invoicedAt!)),
-                  ],
-                  // A RESSALVA não entra aqui: ela tem bloco próprio, acima
-                  // dos itens, porque é a única linha da tela que pede AÇÃO de
-                  // quem lê. Repetida nos dois lugares, ela viraria paisagem.
-                  if (!_barter.hasConditions &&
-                      _barter.reviewNote != null &&
-                      _barter.reviewNote!.isNotEmpty)
-                    _NoteBlock(
-                      label: 'Observação do comitê',
-                      text: _barter.reviewNote!,
-                      icon: Icons.gavel_outlined,
-                    ),
-                  if (_barter.invoiceNote != null && _barter.invoiceNote!.isNotEmpty)
-                    _NoteBlock(
-                      label: 'Observação do faturamento',
-                      text: _barter.invoiceNote!,
-                      icon: Icons.receipt_long_outlined,
-                    ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // A RESSALVA vem PRIMEIRO, e antes até dos pareceres: ela é a única
-          // coisa na tela que alguém precisa fazer. Quem abre uma permuta
-          // aprovada com exigência tem de topar com ela antes de qualquer
-          // leitura.
-          if (_barter.hasConditions) ...[
-            ConditionsCard(barter: _barter),
+      body: BoundedContent(
+        maxWidth: 1400,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            AdaptiveDetailLayout(blocks: _blocks(producer)),
             const SizedBox(height: 16),
           ],
+        ),
+      ),
+    );
+  }
 
-          // OS PARECERES vêm antes dos itens de propósito: quem abre uma permuta
-          // que já passou pelo consultor e pelo gerente quer saber o que eles
-          // disseram antes de conferir linha a linha o que ela tem dentro.
-          //
-          // Na ORDEM em que foram escritos, que é a ordem em que o comitê os lê:
-          // primeiro quem conhece o cliente, depois quem responde pelo time.
-          if (_barter.hasConsultantOpinion) ...[
-            ConsultantOpinionCard(barter: _barter),
-            const SizedBox(height: 16),
-          ],
-          if (_barter.hasManagerOpinion) ...[
-            ManagerOpinionCard(barter: _barter),
-            const SizedBox(height: 16),
-          ] else if (_barter.awaitsManager) ...[
-            _AwaitingOpinionCard(managerLabel: _barter.managerLabel),
-            const SizedBox(height: 16),
-          ],
+  /// Os blocos da tela, e a coluna de cada um quando há monitor.
+  ///
+  /// A ORDEM desta lista é a ordem do CELULAR, e é ela que carrega a prioridade
+  /// pensada aqui: a ressalva antes dos pareceres, os pareceres antes dos itens.
+  /// No largo, [AdaptiveDetailLayout] separa `main` de `side` preservando a
+  /// ordem relativa dentro de cada coluna — o que a permuta É de um lado, o que
+  /// se sabe sobre ela e o que se pode fazer do outro.
+  ///
+  /// O critério da coluna é a PERGUNTA que cada bloco responde, e não o tamanho
+  /// dele: quem abre uma permuta no computador está decidindo, e os pareceres
+  /// que justificam a decisão não podem estar a quatro rolagens do botão que a
+  /// executa.
+  List<DetailBlock> _blocks(ProducerModel? producer) => [
+    // O SALDO abre a coluna do corpo: é o número que responde "quanto isto
+    // custa em saca". Ele é o primeiro bloco do `main` e o cadastro é o
+    // primeiro do `side`, então no monitor os dois nascem lado a lado — o
+    // número à esquerda, de quem ele é à direita. No celular, o saldo
+    // continua abrindo a tela, com o cadastro logo abaixo.
+    DetailBlock.main(
+      BarterBalanceBar(
+        inputCost: _barter.inputCost,
+        referenceValue: _barter.referenceValue,
+        referenceGrainName: _barter.referenceGrainName,
+        inputCount: _barter.inputs.length,
+        showValue: widget.isAdmin,
+        sacksPerHa: _barter.sacksPerHa,
+        areaHa: _barter.producerAreaHa,
+      ),
+    ),
 
-          _ItemsSection(
-            title: 'Insumos Retirados',
-            subtitle: 'O que o produtor retira na unidade',
-            icon: Icons.science_outlined,
-            accent: AppColors.input,
-            items: _barter.inputs,
-            totalLabel: widget.isAdmin ? 'Custo total' : 'Total retirado',
-            total: _barter.inputCost,
-            referenceValue: _barter.referenceValue,
-            referenceGrainName: _barter.referenceGrainName,
-            showValue: widget.isAdmin,
-            // O equivalente em sacas de UM insumo exige o valor unitário dele,
-            // que só chega a quem vê R$. O total da seção, não: ele é a permuta
-            // inteira, e o servidor já o gravou na linha do grão.
-            sacksOf: (item) => _barter.showsCurrency && _barter.referenceValue > 0
-                ? item.total / _barter.referenceValue
-                : null,
-            totalSacks: _barter.hasSacks ? _barter.sacksToDeliver : null,
+    // O CADASTRO: quem, onde, quando, sob qual Barter.
+    DetailBlock.side(
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _InfoRow(label: 'Produtor', value: _barter.producerName),
+              if (producer != null) _InfoRow(label: 'Propriedade', value: producer.location),
+              // A RETIRADA vale para todo mundo, inclusive o consultor: é
+              // onde o produtor dele vai buscar os insumos, e a primeira
+              // pergunta que ele recebe de volta.
+              _InfoRow(label: 'Retirada em', value: _barter.unitLabel),
+              if (widget.isAdmin) ...[
+                _InfoRow(label: 'Consultor', value: _barter.consultantName),
+                _InfoRow(label: 'Filial', value: _barter.consultantBranch),
+              ],
+              // O INVESTIMENTO POR HECTARE — a régua que compara permutas
+              // de tamanhos diferentes. Ela vem do servidor já dividida, e
+              // só para quem pode compará-la (admin, comitê e faturista):
+              // para o consultor e o gerente o campo simplesmente não chega,
+              // e a linha não aparece. Ver `barters.investmentPerHa`.
+              //
+              // `null` com área presente é permuta anterior ao campo de
+              // área: a linha some em vez de mostrar "0 sc/ha", que seria
+              // uma afirmação, e falsa.
+              if (_barter.sacksPerHa != null)
+                _InfoRow(
+                  label: 'Investimento',
+                  value:
+                      '${formatSacksPerHa(_barter.sacksPerHa!)}'
+                      '${_barter.producerAreaHa != null && _barter.producerAreaHa! > 0 ? ' • ${formatQty(_barter.producerAreaHa!)} ha' : ''}',
+                ),
+              const Divider(height: 16),
+              // Em qual gestão do Barter esta permuta foi fechada: é o que
+              // explica os valores dela, que não mudam quando a versão
+              // seguinte é publicada.
+              if (_barter.versionCode.isNotEmpty)
+                _InfoRow(label: 'Barter', value: _barter.versionCode),
+              _InfoRow(label: 'Criada em', value: _formatDate(_barter.createdAt)),
+              if (_barter.updatedAt != null)
+                _InfoRow(label: 'Atualizada em', value: _formatDate(_barter.updatedAt!)),
+              if (_barter.hasDecision) _InfoRow(label: 'Decidida por', value: _barter.reviewedBy!),
+              if (_barter.invoicedBy != null) ...[
+                _InfoRow(label: 'Faturada por', value: _barter.invoicedBy!),
+                if (_barter.invoicedAt != null)
+                  _InfoRow(label: 'Faturada em', value: _formatDate(_barter.invoicedAt!)),
+              ],
+              // A RESSALVA não entra aqui: ela tem bloco próprio, acima
+              // dos itens, porque é a única linha da tela que pede AÇÃO de
+              // quem lê. Repetida nos dois lugares, ela viraria paisagem.
+              if (!_barter.hasConditions &&
+                  _barter.reviewNote != null &&
+                  _barter.reviewNote!.isNotEmpty)
+                _NoteBlock(
+                  label: 'Observação do comitê',
+                  text: _barter.reviewNote!,
+                  icon: Icons.gavel_outlined,
+                ),
+              if (_barter.invoiceNote != null && _barter.invoiceNote!.isNotEmpty)
+                _NoteBlock(
+                  label: 'Observação do faturamento',
+                  text: _barter.invoiceNote!,
+                  icon: Icons.receipt_long_outlined,
+                ),
+            ],
           ),
-          const SizedBox(height: 16),
+        ),
+      ),
+    ),
 
-          _ItemsSection(
-            title: 'Pagamento em ${brand.copy.grainPluralTitle}',
-            subtitle: 'Sacas a entregar para cobrir os insumos',
-            icon: Icons.grass,
-            accent: AppColors.grain,
-            items: _barter.grains,
-            totalLabel: 'Total a entregar',
-            total: _barter.grainCredit,
-            referenceValue: _barter.referenceValue,
-            referenceGrainName: _barter.referenceGrainName,
-            showValue: widget.isAdmin,
-            // Aqui a conversão não existe: a linha do grão JÁ é medida em sacas,
-            // nas duas lentes. É por isso que a API não converte estes itens.
-            sacksOf: (item) => item.quantity,
-            totalSacks: _barter.totalGrainQty,
-          ),
-          const SizedBox(height: 16),
+    // O PEDIDO DE ALTERAÇÃO vem antes de tudo o que se lê sobre a permuta,
+    // e antes até da ressalva: enquanto ele está aberto, os insumos podem
+    // mudar — e dar parecer, decidir ou faturar sobre eles é trabalho que
+    // pode ser jogado fora no minuto seguinte. Quem abre a permuta precisa
+    // topar com isso antes de agir sobre ela.
+    //
+    // A RECUSA continua aparecendo depois de decidida, e só para quem tem o
+    // que fazer com ela: quem pediu (para saber que ouviu não, e por quê) e
+    // quem decide (para não decidir duas vezes o mesmo caso).
+    if (_barter.hasOpenChangeRequest || (_barter.changeRequestDenied && _seesChangeReply))
+      DetailBlock.side(
+        ChangeRequestCard(
+          barter: _barter,
+          onAccept: _canDecideChange
+              ? () => decideBarterChange(
+                  context,
+                  _barter,
+                  accept: true,
+                  onDecided: (updated) => setState(() => _barter = updated),
+                )
+              : null,
+          onDeny: _canDecideChange
+              ? () => decideBarterChange(
+                  context,
+                  _barter,
+                  accept: false,
+                  onDecided: (updated) => setState(() => _barter = updated),
+                )
+              : null,
+        ),
+      ),
 
-          // Resumo do pagamento: quantas sacas o produtor entrega para pagar tudo
-          Card(
-            color: AppColors.primarySurface,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('TOTAL A ENTREGAR',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textDark)),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        _barter.hasSacks
-                            ? '${formatSacks(_barter.sacksToDeliver)} ${_barter.referenceGrainName.toLowerCase()}'
-                            : '0 sc',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.primary),
-                      ),
-                      Text(
-                          widget.isAdmin
-                              ? '≈ ${formatCurrency(_barter.inputCost)} em insumos'
-                              : 'para ${_barter.inputs.length} insumo(s) retirado(s)',
-                          style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
-                    ],
+    // A RESSALVA vem PRIMEIRO, e antes até dos pareceres: ela é a única
+    // coisa na tela que alguém precisa fazer. Quem abre uma permuta
+    // aprovada com exigência tem de topar com ela antes de qualquer
+    // leitura.
+    if (_barter.hasConditions) DetailBlock.side(ConditionsCard(barter: _barter)),
+
+    // OS PARECERES vêm antes dos itens de propósito: quem abre uma permuta
+    // que já passou pelo consultor e pelo gerente quer saber o que eles
+    // disseram antes de conferir linha a linha o que ela tem dentro.
+    //
+    // Na ORDEM em que foram escritos, que é a ordem em que o comitê os lê:
+    // primeiro quem conhece o cliente, depois quem responde pelo time.
+    if (_barter.hasConsultantOpinion) DetailBlock.side(ConsultantOpinionCard(barter: _barter)),
+    if (_barter.hasManagerOpinion)
+      DetailBlock.side(ManagerOpinionCard(barter: _barter))
+    else if (_barter.awaitsManager)
+      DetailBlock.side(_AwaitingOpinionCard(managerLabel: _barter.managerLabel)),
+
+    DetailBlock.main(
+      _ItemsSection(
+        title: 'Insumos Retirados',
+        subtitle: 'O que o produtor retira na unidade',
+        icon: Icons.science_outlined,
+        accent: AppColors.input,
+        items: _barter.inputs,
+        totalLabel: widget.isAdmin ? 'Custo total' : 'Total retirado',
+        total: _barter.inputCost,
+        referenceValue: _barter.referenceValue,
+        referenceGrainName: _barter.referenceGrainName,
+        showValue: widget.isAdmin,
+        // O equivalente em sacas de UM insumo exige o valor unitário dele,
+        // que só chega a quem vê R$. O total da seção, não: ele é a permuta
+        // inteira, e o servidor já o gravou na linha do grão.
+        sacksOf: (item) => _barter.showsCurrency && _barter.referenceValue > 0
+            ? item.total / _barter.referenceValue
+            : null,
+        totalSacks: _barter.hasSacks ? _barter.sacksToDeliver : null,
+      ),
+    ),
+
+    DetailBlock.main(
+      _ItemsSection(
+        title: 'Pagamento em ${brand.copy.grainPluralTitle}',
+        subtitle: 'Sacas a entregar para cobrir os insumos',
+        icon: Icons.grass,
+        accent: AppColors.grain,
+        items: _barter.grains,
+        totalLabel: 'Total a entregar',
+        total: _barter.grainCredit,
+        referenceValue: _barter.referenceValue,
+        referenceGrainName: _barter.referenceGrainName,
+        showValue: widget.isAdmin,
+        // Aqui a conversão não existe: a linha do grão JÁ é medida em sacas,
+        // nas duas lentes. É por isso que a API não converte estes itens.
+        sacksOf: (item) => item.quantity,
+        totalSacks: _barter.totalGrainQty,
+      ),
+    ),
+
+    // Resumo do pagamento: quantas sacas o produtor entrega para pagar tudo
+    DetailBlock.main(
+      Card(
+        color: AppColors.primarySurface,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Expanded pelo mesmo motivo de sempre nesta tela: numa `Row`
+              // o texto solto não tem largura máxima, e a linha estoura
+              // quando o outro lado cresce ("para 3 insumo(s) retirado(s)").
+              Expanded(
+                child: Text(
+                  'TOTAL A ENTREGAR',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textDark,
                   ),
-                ],
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      _barter.hasSacks
+                          ? '${formatSacks(_barter.sacksToDeliver)} ${_barter.referenceGrainName.toLowerCase()}'
+                          : '0 sc',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    Text(
+                      widget.isAdmin
+                          ? '≈ ${formatCurrency(_barter.inputCost)} em insumos'
+                          : 'para ${_barter.inputs.length} insumo(s) retirado(s)',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      textAlign: TextAlign.end,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+
+    // O IMPOSTO da entrega. Fica depois do total porque é consequência
+    // dele: a entrega de grão é comercialização de produção rural, e sobre
+    // ela incidem Funrural e Senar.
+    //
+    // Só aparece quando a permuta tem alíquota registrada — as fechadas
+    // antes deste campo não têm, e mostrar a de hoje nelas seria afirmar
+    // um imposto que ninguém aplicou.
+    if (_barter.hasTax) DetailBlock.main(_TaxCard(barter: _barter, showsCurrency: widget.isAdmin)),
+
+    // O RASCUNHO — a etapa do consultor, e a única em que ele age depois
+    // de registrar.
+    if (_isMyDraft)
+      DetailBlock.side(
+        _ConsultantDraftCard(
+          barter: _barter,
+          onChanged: (updated) => setState(() => _barter = updated),
+        ),
+      ),
+
+    if (_awaitsMyOpinion)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Ação do Gerente',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
               ),
             ),
-          ),
-
-          // O IMPOSTO da entrega. Fica depois do total porque é consequência
-          // dele: a entrega de grão é comercialização de produção rural, e sobre
-          // ela incidem Funrural e Senar.
-          //
-          // Só aparece quando a permuta tem alíquota registrada — as fechadas
-          // antes deste campo não têm, e mostrar a de hoje nelas seria afirmar
-          // um imposto que ninguém aplicou.
-          if (_barter.hasTax) ...[
-            const SizedBox(height: 12),
-            _TaxCard(barter: _barter, showsCurrency: widget.isAdmin),
-          ],
-          const SizedBox(height: 20),
-
-          // O RASCUNHO — a etapa do consultor, e a única em que ele age depois
-          // de registrar.
-          if (_isMyDraft) ...[
-            _ConsultantDraftCard(
-              barter: _barter,
-              onChanged: (updated) => setState(() => _barter = updated),
-            ),
-            const SizedBox(height: 20),
-          ],
-
-          if (_awaitsMyOpinion) ...[
-            Text('Ação do Gerente',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 4),
-            // O FATO, e não a explicação da etapa: quem enviou e quando. O que
-            // o parecer é, e para onde a permuta vai depois dele, o gerente já
-            // sabe — é o trabalho dele.
+            // O FATO, e não a explicação da etapa: quem enviou e quando. O
+            // que o parecer é, e para onde a permuta vai depois dele, o
+            // gerente já sabe — é o trabalho dele.
             Text(
               '${_barter.consultantName} enviou esta permuta a você.',
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
             const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => giveBarterOpinion(context, _barter,
-                    onGiven: (updated) => setState(() => _barter = updated)),
-                icon: const Icon(Icons.rate_review_outlined),
-                label: const Text('Dar Parecer Técnico'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.atManager,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
+            ElevatedButton.icon(
+              onPressed: () => giveBarterOpinion(
+                context,
+                _barter,
+                onGiven: (updated) => setState(() => _barter = updated),
+              ),
+              icon: const Icon(Icons.rate_review_outlined),
+              label: const Text('Dar Parecer Técnico'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.atManager,
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
           ],
+        ),
+      ),
 
-          // A DECISÃO — do comitê, e de mais ninguém. A pergunta é sobre a
-          // capacidade que o servidor concedeu, não sobre o papel: mover a etapa
-          // de um papel para outro é uma linha no servidor, e esta tela segue.
-          if (AppData.can(Capability.bartersReview) && _barter.awaitsCommittee) ...[
-            Text('Decisão do Comitê',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+    // A DECISÃO — do comitê, e de mais ninguém. A pergunta é sobre a
+    // capacidade que o servidor concedeu, não sobre o papel: mover a etapa
+    // de um papel para outro é uma linha no servidor, e esta tela segue.
+    if (AppData.can(Capability.bartersReview) && _barter.awaitsCommittee)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Decisão do Comitê',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
+            ),
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () => reviewBarter(context, _barter, BarterStatus.denied,
-                        onReviewed: (updated) => setState(() => _barter = updated)),
+                    onPressed: () => reviewBarter(
+                      context,
+                      _barter,
+                      BarterStatus.denied,
+                      onReviewed: (updated) => setState(() => _barter = updated),
+                    ),
                     icon: const Icon(Icons.close),
                     label: const Text('Negar'),
                     style: OutlinedButton.styleFrom(
@@ -391,8 +507,12 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: () => reviewBarter(context, _barter, BarterStatus.approved,
-                        onReviewed: (updated) => setState(() => _barter = updated)),
+                    onPressed: () => reviewBarter(
+                      context,
+                      _barter,
+                      BarterStatus.approved,
+                      onReviewed: (updated) => setState(() => _barter = updated),
+                    ),
                     icon: const Icon(Icons.check),
                     label: const Text('Aprovar'),
                     style: ElevatedButton.styleFrom(
@@ -405,90 +525,169 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             ),
             const SizedBox(height: 12),
             // A TERCEIRA SAÍDA, em linha própria e mais discreta que as duas
-            // acima: ela é uma aprovação, e não uma terceira coisa entre o sim e
-            // o não — mas cobra um texto de quem a escolhe, então não pode ser
-            // tão fácil de clicar quanto as outras duas.
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () => reviewBarter(
-                    context, _barter, BarterStatus.approvedWithConditions,
-                    onReviewed: (updated) => setState(() => _barter = updated)),
-                icon: const Icon(Icons.verified_outlined),
-                label: const Text('Aprovar com Ressalva'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.approvedWithConditions,
-                  side: BorderSide(color: AppColors.approvedWithConditions),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
+            // acima: ela é uma aprovação, e não uma terceira coisa entre o
+            // sim e o não — mas cobra um texto de quem a escolhe, então não
+            // pode ser tão fácil de clicar quanto as outras duas.
+            OutlinedButton.icon(
+              onPressed: () => reviewBarter(
+                context,
+                _barter,
+                BarterStatus.approvedWithConditions,
+                onReviewed: (updated) => setState(() => _barter = updated),
+              ),
+              icon: const Icon(Icons.verified_outlined),
+              label: const Text('Aprovar com Ressalva'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.approvedWithConditions,
+                side: BorderSide(color: AppColors.approvedWithConditions),
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
           ],
+        ),
+      ),
 
-          // O FATURAMENTO — o último posto. Uma ação só, porque a etapa é uma
-          // só: o faturista não decide nada, ele fatura o que foi aprovado.
-          if (AppData.can(Capability.bartersInvoice) && _barter.awaitsInvoice) ...[
-            Text('Faturamento',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+    // O FATURAMENTO — o último posto. Uma ação só, porque a etapa é uma
+    // só: o faturista não decide nada, ele fatura o que foi aprovado.
+    if (AppData.can(Capability.bartersInvoice) && _barter.awaitsInvoice)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Faturamento',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               'Aprovada pelo comitê${_barter.hasDecision ? ' por ${_barter.reviewedBy}' : ''}.',
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
             const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _openCpr,
-                icon: const Icon(Icons.receipt_long_outlined),
-                label: const Text('Faturar Permuta'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.invoiced,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
+            ElevatedButton.icon(
+              onPressed: _openCpr,
+              icon: const Icon(Icons.receipt_long_outlined),
+              label: const Text('Faturar Permuta'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.invoiced,
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
           ],
-
-          // A CÉDULA (CPR) — o documento que o posto do faturamento produz.
-          //
-          // Ela aparece nos DOIS estados do trecho do faturista: na aprovada,
-          // porque a coleta dos dados não precisa esperar a nota sair; e na já
-          // faturada, porque a cédula é papel que vem depois do ato — corrigir
-          // uma matrícula nela não desfatura nada.
-          // Já FATURADA: o caminho para a cédula continua aberto (corrigir uma
-          // matrícula não desfatura nada). Enquanto ela ESPERA faturamento este
-          // botão não aparece — o de "Faturar Permuta" acima leva ao mesmo
-          // lugar, e dois botões para a mesma tela é um a mais.
-          if (_canOpenCpr && !_barter.awaitsInvoice) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _openCpr,
-                icon: const Icon(Icons.description_outlined),
-                label: const Text('Cédula de Produto Rural (CPR)'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.invoiced,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 20),
-          // O ANDAMENTO fecha a tela: quem abre a permuta vem primeiro pelo que
-          // ela É — por onde ela passou e o que ainda falta se lê depois. Para o
-          // faturista, é aqui que estão as peças das etapas anteriores; para o
-          // consultor, é a resposta ao "e a minha permuta?".
-          _ProgressSection(barter: _barter, loading: _loadingHistory),
-          const SizedBox(height: 16),
-        ],
+        ),
       ),
-    );
-  }
+
+    // A CÉDULA (CPR) — o documento que o posto do faturamento produz.
+    //
+    // Ela aparece nos DOIS estados do trecho do faturista: na aprovada,
+    // porque a coleta dos dados não precisa esperar a nota sair; e na já
+    // faturada, porque a cédula é papel que vem depois do ato — corrigir
+    // uma matrícula nela não desfatura nada.
+    // Enquanto ela ESPERA faturamento este botão não aparece — o de
+    // "Faturar Permuta" acima leva ao mesmo lugar, e dois botões para a
+    // mesma tela é um a mais.
+    if (_canOpenCpr && !_barter.awaitsInvoice)
+      DetailBlock.side(
+        ElevatedButton.icon(
+          onPressed: _openCpr,
+          icon: const Icon(Icons.description_outlined),
+          label: const Text('Cédula de Produto Rural (CPR)'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.invoiced,
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+        ),
+      ),
+
+    // A SEGUNDA VIA de quem administra: o mesmo documento, sem a mesa.
+    // Contorno em vez de preenchido — não é ação de posto nesta permuta, é
+    // uma cópia do papel.
+    if (_canGenerateCpr)
+      DetailBlock.side(
+        OutlinedButton.icon(
+          onPressed: () => generateCprDocument(context, _barter),
+          icon: const Icon(Icons.description_outlined),
+          label: const Text('Gerar Cédula (CPR)'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.invoiced,
+            side: BorderSide(color: AppColors.invoiced),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
+        ),
+      ),
+
+    // O PEDIDO DE ALTERAÇÃO — a ação do consultor sobre a permuta que já
+    // saiu da mão dele, e a única que ele tem depois de encaminhar.
+    //
+    // Contorno, e não botão cheio: ela não é o caminho normal da permuta. O
+    // normal é ela andar; pedir alteração é interromper isso, e custa o
+    // trabalho de quem já opinou ou decidiu.
+    if (_canRequestChange)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            OutlinedButton.icon(
+              onPressed: () => requestBarterChange(
+                context,
+                _barter,
+                onRequested: (updated) => setState(() => _barter = updated),
+              ),
+              icon: const Icon(Icons.edit_note_outlined),
+              label: const Text('Solicitar Alteração'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.pending,
+                side: BorderSide(color: AppColors.pending),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'O administrador avalia. Liberada, ela volta a ser rascunho seu e '
+              'percorre a linha de novo.',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ],
+        ),
+      ),
+
+    // O ANDAMENTO fecha a lista — e fica na coluna do ESTADO, não na do
+    // corpo.
+    //
+    // Ele já esteve em `main`, e era escolha pelo tamanho: a esteira é alta,
+    // e a coluna larga a acomodava melhor. Só que a pergunta que ele responde
+    // — por onde a permuta passou, com quem ela está, o que falta — é a mesma
+    // do cadastro e dos pareceres, e não a dos itens e totais. Em `main` ele
+    // ficava a três rolagens do "Com o gerente" que diz a mesma coisa em uma
+    // linha, enquanto a direita terminava cedo e sobrava tela.
+    //
+    // Último da lista nos dois desenhos: no estreito, quem abre a permuta vem
+    // primeiro pelo que ela É, e o histórico se lê depois. Trocar de coluna
+    // não mexeu nisso — é a ordem desta lista que manda no celular.
+    DetailBlock.side(_ProgressSection(barter: _barter, loading: _loadingHistory)),
+  ];
 
   bool get _awaitsMyOpinion => _barter.awaitsOpinionFrom(widget.opinionManagerId);
+
+  /// Este usuário DECIDE o pedido de alteração? É o admin — e a pergunta é
+  /// sobre a capacidade, não sobre o papel, pela mesma razão da decisão do
+  /// comitê: mover a etapa de um papel para outro é uma linha no servidor.
+  bool get _canDecideChange => AppData.can(Capability.bartersChangeReview);
+
+  /// Este usuário PEDE alteração desta permuta? Só quem a registrou, e só
+  /// enquanto ela não foi faturada — a mesma regra que o servidor aplica.
+  bool get _canRequestChange =>
+      AppData.can(Capability.bartersChangeRequest) &&
+      _barter.canBeChangedBy(AppData.currentUser?.id);
+
+  /// Este usuário tem o que fazer com a RECUSA de um pedido já decidido? Quem
+  /// pediu e quem decide. Para os demais ela é ruído: um assunto encerrado
+  /// entre outras duas pessoas.
+  bool get _seesChangeReply => _canDecideChange || _barter.consultantId == AppData.currentUser?.id;
 
   /// É um RASCUNHO MEU? Só quem registrou escreve o parecer e encaminha — a
   /// mesma conferência do servidor, repetida aqui para a tela não oferecer um
@@ -525,8 +724,9 @@ class _ConsultantDraftCard extends StatefulWidget {
 }
 
 class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
-  late final TextEditingController _note =
-      TextEditingController(text: widget.barter.consultantNote ?? '');
+  late final TextEditingController _note = TextEditingController(
+    text: widget.barter.consultantNote ?? '',
+  );
   bool _saving = false;
   bool _forwarding = false;
 
@@ -555,14 +755,38 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
         _saving = false;
       });
       widget.onChanged(updated);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Rascunho salvo. A permuta continua com você.'),
-      ));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Rascunho salvo. A permuta continua com você.')));
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
       showErrorSnack(context, e);
     }
+  }
+
+  /// Abre o CONSTRUTOR desta permuta para remontar os insumos dela.
+  ///
+  /// A mesma tela da permuta nova, com produtor e unidade congelados: remontar é
+  /// escolher insumos contra as mesmas regras de mínimo, e uma segunda tela para
+  /// isso seria uma segunda cópia da lista, dos filtros e da conta em sacas. Ver
+  /// `NewBarterScreen.draft`.
+  Future<void> _editInputs() async {
+    final me = AppData.currentUser;
+    if (me == null) return;
+    final updated = await Navigator.push<BarterModel>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => NewBarterScreen(consultant: me, draft: widget.barter),
+      ),
+    );
+    if (updated == null || !mounted) return;
+    widget.onChanged(updated);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Insumos atualizados. A permuta continua rascunho até você encaminhar.'),
+      ),
+    );
   }
 
   Future<void> _forward() async {
@@ -593,10 +817,12 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
       if (!mounted) return;
       setState(() => _forwarding = false);
       widget.onChanged(updated);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Permuta encaminhada a ${updated.managerLabel}.'),
-        backgroundColor: AppColors.atManager,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Permuta encaminhada a ${updated.managerLabel}.'),
+          backgroundColor: AppColors.atManager,
+        ),
+      );
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _forwarding = false);
@@ -621,9 +847,14 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
             children: [
               Icon(Icons.edit_note_rounded, size: 18, color: AppColors.draft),
               const SizedBox(width: 6),
-              Text('Seu parecer',
-                  style: TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+              Text(
+                'Seu parecer',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
@@ -658,7 +889,10 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
                   onPressed: _busy || !_dirty ? null : _save,
                   icon: _saving
                       ? const SizedBox(
-                          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.save_outlined),
                   label: const Text('Salvar'),
                   style: OutlinedButton.styleFrom(
@@ -675,7 +909,10 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
-                              strokeWidth: 2, color: AppColors.onPrimary))
+                            strokeWidth: 2,
+                            color: AppColors.onPrimary,
+                          ),
+                        )
                       : const Icon(Icons.send_outlined),
                   label: const Text('Encaminhar'),
                   style: ElevatedButton.styleFrom(
@@ -694,6 +931,23 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
                 style: TextStyle(fontSize: 11, color: AppColors.textMedium),
               ),
             ),
+          // OS INSUMOS, que só o rascunho deixa mexer.
+          //
+          // É a razão de o pedido de alteração existir: a permuta volta a ser
+          // rascunho justamente para os itens poderem mudar. O botão fica aqui,
+          // abaixo do parecer, porque a ordem é essa — remonta-se a permuta e
+          // depois se explica ao gerente o que mudou.
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _editInputs,
+            icon: const Icon(Icons.tune),
+            label: const Text('Alterar insumos'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: BorderSide(color: AppColors.primary),
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
         ],
       ),
     );
@@ -729,9 +983,14 @@ class _AwaitingOpinionCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Com o gerente',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.atManager)),
+                Text(
+                  'Com o gerente',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.atManager,
+                  ),
+                ),
                 const SizedBox(height: 2),
                 Text(
                   'Aguardando o parecer técnico de $managerLabel para seguir para o comitê.',
@@ -824,8 +1083,9 @@ class _ProgressSection extends StatelessWidget {
       if (!loading) return const SizedBox.shrink();
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 12),
-        child: Center(child: SizedBox(
-          width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+        child: Center(
+          child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
       );
     }
 
@@ -840,9 +1100,14 @@ class _ProgressSection extends StatelessWidget {
               children: [
                 Icon(Icons.checklist_rounded, size: 18, color: AppColors.textMedium),
                 const SizedBox(width: 8),
-                Text('Andamento',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                Text(
+                  'Andamento',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
                 if (tally != null) ...[
                   const Spacer(),
                   Text(tally, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
@@ -863,10 +1128,7 @@ class _ProgressSection extends StatelessWidget {
                 )
             else
               for (var i = 0; i < barter.events.length; i++)
-                _HistoryStep(
-                  event: barter.events[i],
-                  last: i == barter.events.length - 1,
-                ),
+                _HistoryStep(event: barter.events[i], last: i == barter.events.length - 1),
           ],
         ),
       ),
@@ -977,8 +1239,7 @@ class _ProgressStep extends StatelessWidget {
                   ],
                   if (step.note != null && step.note!.trim().isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Text(step.note!,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                    Text(step.note!, style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   ],
                 ],
               ),
@@ -1049,8 +1310,10 @@ class _OutcomeTag extends StatelessWidget {
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(label,
-          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color),
+      ),
     );
   }
 }
@@ -1077,10 +1340,7 @@ class _HistoryStep extends StatelessWidget {
                 margin: const EdgeInsets.only(top: 4),
                 decoration: BoxDecoration(color: color, shape: BoxShape.circle),
               ),
-              if (!last)
-                Expanded(
-                  child: Container(width: 2, color: AppColors.divider),
-                ),
+              if (!last) Expanded(child: Container(width: 2, color: AppColors.divider)),
             ],
           ),
           const SizedBox(width: 10),
@@ -1090,9 +1350,14 @@ class _HistoryStep extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(event.title,
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  Text(
+                    event.title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
+                    ),
+                  ),
                   const SizedBox(height: 2),
                   Text(
                     '${event.actorName}'
@@ -1102,8 +1367,7 @@ class _HistoryStep extends StatelessWidget {
                   ),
                   if (event.note != null && event.note!.trim().isNotEmpty) ...[
                     const SizedBox(height: 4),
-                    Text(event.note!,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                    Text(event.note!, style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   ],
                 ],
               ),
@@ -1152,9 +1416,14 @@ class _TaxCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Funrural + Senar (${barter.taxRateLabel})',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                Text(
+                  'Funrural + Senar (${barter.taxRateLabel})',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
                 const SizedBox(height: 2),
                 Text(
                   // A FORMA escolhida no fechamento, por extenso: é ela que
@@ -1168,9 +1437,10 @@ class _TaxCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          Text(value,
-              style: TextStyle(
-                  fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+          Text(
+            value,
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark),
+          ),
         ],
       ),
     );
@@ -1226,17 +1496,37 @@ class _ItemsSection extends StatelessWidget {
             Container(
               width: 30,
               height: 30,
-              decoration: BoxDecoration(color: accent.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
               child: Icon(icon, color: accent, size: 18),
             ),
             const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                Text(subtitle, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
-              ],
+            // Expanded, e não Column solta: numa `Row` sem ele o texto recebe
+            // largura infinita e `ellipsis` não tem onde cortar — é o mesmo
+            // defeito dos 33 pixels do rodapé do construtor, e aqui ele
+            // aparecia no subtítulo da seção do grão num telefone estreito.
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1244,64 +1534,69 @@ class _ItemsSection extends StatelessWidget {
         Card(
           child: Column(
             children: [
-              ...items.asMap().entries.map((entry) {
-                final i = entry.key;
-                final item = entry.value;
-                return Column(
-                  children: [
-                    if (i > 0) const Divider(height: 1),
-                    Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(item.productName,
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                                const SizedBox(height: 2),
-                                Text(
-                                  showValue
-                                      ? '${formatQty(item.quantity)} ${item.unit} × ${formatCurrency(item.unitValue)}'
-                                      : '${formatQty(item.quantity)} ${item.unit}',
-                                  style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                                ),
-                              ],
+              // OS ITENS LADO A LADO, e não um por linha.
+              //
+              // Uma permuta real tem dezenas de insumos, e uma linha inteira por
+              // item transformava a conferência numa rolagem longa em que o
+              // total — que é o que fecha a leitura — ficava sempre fora da
+              // tela. Cada item ocupa pouco: nome, código, quantidade e o
+              // equivalente. Dois cabem lado a lado até num celular, e a
+              // conferência passa a caber de uma vez.
+              //
+              // A largura mínima é o que decide quantas colunas, e não o nome do
+              // aparelho: no monitor a mesma regra dá três ou quatro, sem
+              // nenhuma faixa escrita à mão.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    const minTileWidth = 168.0;
+                    const gap = 10.0;
+                    final columns = ((constraints.maxWidth + gap) / (minTileWidth + gap))
+                        .floor()
+                        .clamp(1, 4);
+                    final tileWidth = (constraints.maxWidth - gap * (columns - 1)) / columns;
+                    return Wrap(
+                      spacing: gap,
+                      runSpacing: gap,
+                      children: [
+                        for (final item in items)
+                          SizedBox(
+                            width: tileWidth,
+                            child: _ItemTile(
+                              item: item,
+                              accent: accent,
+                              showValue: showValue,
+                              referenceValue: referenceValue,
+                              sacks: sacksOf(item),
                             ),
                           ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Builder(builder: (_) {
-                                final sacks = sacksOf(item);
-                                return Text(
-                                  sacks != null
-                                      ? formatSacks(sacks)
-                                      : (showValue ? formatCurrency(item.total) : ''),
-                                  style: TextStyle(
-                                      fontSize: 13, fontWeight: FontWeight.w700, color: accent),
-                                );
-                              }),
-                              if (referenceValue > 0 && showValue)
-                                Text('≈ ${formatCurrency(item.total)}',
-                                    style: TextStyle(fontSize: 10, color: AppColors.textLight)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              }),
+                      ],
+                    );
+                  },
+                ),
+              ),
               const Divider(height: 1),
               Padding(
                 padding: const EdgeInsets.all(14),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(totalLabel,
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                    // Pelo mesmo motivo do cabeçalho acima: "Total a entregar" e
+                    // um total em sacas com o nome do grão não cabem juntos numa
+                    // linha de telefone sem alguém poder encolher.
+                    Expanded(
+                      child: Text(
+                        totalLabel,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textDark,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -1309,11 +1604,17 @@ class _ItemsSection extends StatelessWidget {
                           totalSacks != null
                               ? '${formatSacks(totalSacks!)} ${referenceGrainName.toLowerCase()}'
                               : (showValue ? formatCurrency(total) : ''),
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: accent),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: accent,
+                          ),
                         ),
                         if (referenceValue > 0 && showValue)
-                          Text('≈ ${formatCurrency(total)}',
-                              style: TextStyle(fontSize: 10, color: AppColors.textLight)),
+                          Text(
+                            '≈ ${formatCurrency(total)}',
+                            style: TextStyle(fontSize: 10, color: AppColors.textLight),
+                          ),
                       ],
                     ),
                   ],
@@ -1323,6 +1624,104 @@ class _ItemsSection extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// UM ITEM da permuta, do tamanho de meia tela — a peça que se repete lado a
+/// lado na seção.
+///
+/// O CÓDIGO vem primeiro, acima do nome, e é isso que a conferência usa: é por
+/// ele que o insumo é achado no depósito e batido contra a nota, e dois
+/// produtos de nomes parecidos ("Glifosato 480 SL" e "Glifosato 480 WG") só se
+/// distinguem por ele. Some quando não há nenhum a mostrar — nem congelado no
+/// item nem no catálogo (ver [AppData.skuOf]) —, em vez de imprimir um traço no
+/// lugar mais visível do cartão.
+class _ItemTile extends StatelessWidget {
+  final BarterItem item;
+  final Color accent;
+  final bool showValue;
+  final double referenceValue;
+
+  /// Quantas sacas este item representa, ou null quando não dá para dizer —
+  /// ver `sacksOf` em [_ItemsSection].
+  final double? sacks;
+
+  const _ItemTile({
+    required this.item,
+    required this.accent,
+    required this.showValue,
+    required this.referenceValue,
+    required this.sacks,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final sku = AppData.skuOf(item);
+    final value = sacks != null
+        ? formatSacks(sacks!)
+        : (showValue ? formatCurrency(item.total) : '');
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (sku != null)
+            Text(
+              sku,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.4,
+                color: accent,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          Text(
+            item.productName,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, height: 1.15),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: Text(
+                  showValue
+                      ? '${formatQty(item.quantity)} ${item.unit} × ${formatCurrency(item.unitValue)}'
+                      : '${formatQty(item.quantity)} ${item.unit}',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (value.isNotEmpty) ...[
+                const SizedBox(width: 6),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      value,
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: accent),
+                    ),
+                    if (referenceValue > 0 && showValue)
+                      Text(
+                        '≈ ${formatCurrency(item.total)}',
+                        style: TextStyle(fontSize: 10, color: AppColors.textLight),
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1343,8 +1742,14 @@ class _InfoRow extends StatelessWidget {
             child: Text(label, style: TextStyle(fontSize: 12, color: AppColors.textLight)),
           ),
           Expanded(
-            child: Text(value,
-                style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: 13,
+                color: AppColors.textDark,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           ),
         ],
       ),

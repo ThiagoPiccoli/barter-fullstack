@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'creditor_screen.dart';
 import 'producer_profile_screen.dart';
@@ -136,7 +137,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       // do botão muda com isso — "cadastrar" enquanto não há, e nada depois,
       // porque não existe um segundo para criar.
       _Registry.committee => (
-          'Buscar não se aplica — o comitê é um cadastro só',
+          'Buscar não se aplica: o comitê é um cadastro só',
           AppData.committee == null ? 'sem cadastro' : '1 comitê',
           'Cadastrar comitê',
         ),
@@ -153,7 +154,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       // A credora não se busca nem se cria: é a própria empresa, e o cadastro é
       // um só — aberto desde a instalação, vazio ou preenchido.
       _Registry.creditor => (
-          'Buscar não se aplica — a credora é a sua empresa',
+          'Buscar não se aplica: a credora é a sua empresa',
           'A empresa como ela aparece nas cédulas emitidas',
           'Empresa',
         ),
@@ -176,62 +177,64 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
               label: Text(fab),
             )
           : null,
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-            child: _SegmentedToggle(
-              tab: _tab,
-              counts: {
-                _Registry.producers: AppData.producers.length,
-                _Registry.consultants: AppData.consultants.length,
-                _Registry.managers: AppData.managers.length,
-                _Registry.committee: AppData.committee == null ? 0 : 1,
-                _Registry.billers: AppData.billers.length,
-                _Registry.units: AppData.units.length,
-                // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
-                // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
-                _Registry.creditor: 1,
-              },
-              onChanged: _setTab,
-            ),
-          ),
-          if (_tab != _Registry.committee && _tab != _Registry.creditor)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: SearchField(
-              controller: _searchCtrl,
-              hint: hint,
-              onChanged: (v) => setState(() => _search = v),
-              onClear: () => setState(() {
-                _search = '';
-                _searchCtrl.clear();
-              }),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                count,
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
+      body: BoundedContent(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: _SegmentedToggle(
+                tab: _tab,
+                counts: {
+                  _Registry.producers: AppData.producers.length,
+                  _Registry.consultants: AppData.consultants.length,
+                  _Registry.managers: AppData.managers.length,
+                  _Registry.committee: AppData.committee == null ? 0 : 1,
+                  _Registry.billers: AppData.billers.length,
+                  _Registry.units: AppData.units.length,
+                  // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
+                  // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
+                  _Registry.creditor: 1,
+                },
+                onChanged: _setTab,
               ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: switch (_tab) {
-              _Registry.producers => _buildProducerList(producers),
-              _Registry.consultants => _buildConsultantList(consultants),
-              _Registry.managers => _buildManagerList(managers),
-              _Registry.committee => _buildCommittee(),
-              _Registry.billers => _buildBillerList(billers),
-              _Registry.units => _buildUnitList(units),
-              _Registry.creditor => const CreditorScreen(embedded: true),
-            },
-          ),
-        ],
+            if (_tab != _Registry.committee && _tab != _Registry.creditor)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: SearchField(
+                controller: _searchCtrl,
+                hint: hint,
+                onChanged: (v) => setState(() => _search = v),
+                onClear: () => setState(() {
+                  _search = '';
+                  _searchCtrl.clear();
+                }),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  count,
+                  style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: switch (_tab) {
+                _Registry.producers => _buildProducerList(producers),
+                _Registry.consultants => _buildConsultantList(consultants),
+                _Registry.managers => _buildManagerList(managers),
+                _Registry.committee => _buildCommittee(),
+                _Registry.billers => _buildBillerList(billers),
+                _Registry.units => _buildUnitList(units),
+                _Registry.creditor => const CreditorScreen(embedded: true),
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -402,7 +405,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Text(
             'O comitê é uma reunião: o acesso é um só, e quem participa entra com ele. '
-            'A decisão de cada permuta sai assinada pelo comitê — a ata (quem estava e o '
+            'A decisão de cada permuta sai assinada pelo comitê. A ata (quem estava e o '
             'que foi acordado) vai na observação da decisão.',
             style: TextStyle(fontSize: 11, color: AppColors.textLight),
           ),
@@ -773,7 +776,7 @@ class _NoCommitteeHint extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'O comitê é uma REUNIÃO, e o acesso dele é um só — não se cadastra um '
+                  'O comitê é uma REUNIÃO, e o acesso dele é um só: não se cadastra um '
                   'integrante por vez. Crie o cadastro e passe a senha de primeira entrada '
                   'a quem conduz a reunião.',
                   style: TextStyle(fontSize: 12, color: AppColors.textMedium),

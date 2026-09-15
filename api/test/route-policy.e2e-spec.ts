@@ -147,11 +147,30 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // isso vive sob a MESMA capacidade do faturamento, sem uma própria: quem
         // fatura preenche a cédula do que faturou. Ela fica editável depois de a
         // permuta ser faturada — o que o estado fecha é o ato, não o papel.
-        { route: 'GET /barters/:code/cpr', policy: 'capability:barters.invoice' },
+        { route: 'GET /barters/:code/cpr', policy: 'capability:barters.cprRead' },
         { route: 'PUT /barters/:code/cpr', policy: 'capability:barters.invoice' },
-        // O único texto do fluxo que se REESCREVE: o parecer do consultor
-        // enquanto a permuta é rascunho. Daí o PUT, e daí a capacidade do
-        // registro — ver `POST /barters/:code/forward`.
+        // O DESVIO da esteira — o único caminho de volta que a permuta tem.
+        // Duas capacidades DIFERENTES, e é o desenho: pedir é do consultor que
+        // registrou; decidir é do ADMIN, que administra o processo. Repare que
+        // a decisão não usa `barters.review` — o admin continua sem decidir
+        // permuta, e liberar uma alteração não é aprovar nada.
+        {
+          route: 'POST /barters/:code/change-request',
+          policy: 'capability:barters.changeRequest',
+        },
+        {
+          route: 'POST /barters/:code/change-request/decision',
+          policy: 'capability:barters.changeReview',
+        },
+        // A TABELA da permuta: quem alcança a permuta alcança os valores com que
+        // ela foi fechada — é deles que a remontagem precisa quando a gestão
+        // vigente já é outra. Escopo no service, como o detalhe.
+        { route: 'GET /barters/:code/version', policy: 'any-authenticated' },
+        // As duas escritas do RASCUNHO, sob a capacidade do registro: o parecer
+        // do consultor e os insumos. As duas são o mesmo tipo de ato — a
+        // bancada de quem montou a permuta, reescrita quantas vezes for preciso
+        // enquanto ela não sair da mão dele. Daí o PUT nas duas.
+        { route: 'PUT /barters/:code/inputs', policy: 'capability:barters.register' },
         { route: 'PUT /barters/:code/note', policy: 'capability:barters.register' },
 
         // Lançamento do Barter — safra e versões são do admin. A exceção é a
@@ -160,6 +179,13 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /barter-versions/current', policy: 'any-authenticated' },
         { route: 'GET /barter-versions/:code', policy: 'capability:barter.manage' },
         { route: 'POST /barter-versions/:code/close', policy: 'capability:barter.manage' },
+        // O MODO de encerramento por meta é da mesma alçada do encerramento
+        // manual: quem pode fechar o Barter é quem pode dizer que ele fecha
+        // sozinho.
+        {
+          route: 'PUT /barter-versions/:code/close-on-goal',
+          policy: 'capability:barter.manage',
+        },
         {
           route: 'PUT /barter-versions/:code/prices/:productId',
           policy: 'capability:barter.manage',

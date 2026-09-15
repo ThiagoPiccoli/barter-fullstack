@@ -54,6 +54,55 @@ void openInvoicing(
   ));
 }
 
+/// A SEGUNDA VIA da cédula: busca a mesa e entrega o .docx, sem abrir formulário.
+///
+/// É o caminho de quem LÊ a cédula sem preenchê-la — hoje, o admin. Ele não
+/// passa pela tela do faturista de propósito: aquela tela é a mesa de trabalho
+/// de um posto (tem *Faturar*, tem rascunho, tem campo de matrícula), e abri-la
+/// para quem não fatura ofereceria botões que o servidor recusaria.
+///
+/// A regra de completude é a MESMA da tela: cédula com lacuna não vira arquivo.
+/// Um documento que parece pronto e não é seria pior do que não gerar — e o que
+/// falta é dito por extenso, porque quem lê aqui não é quem preenche, e precisa
+/// saber a quem pedir.
+Future<void> generateCprDocument(BuildContext context, BarterModel barter) async {
+  final messenger = ScaffoldMessenger.of(context);
+  void fail(String message) => messenger.showSnackBar(
+        SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+      );
+
+  try {
+    final desk = await AppData.barterCpr(barter.id);
+    if (!desk.complete) {
+      // As duas listas continuam separadas aqui pelo mesmo motivo da tela: a
+      // credora é do admin e a cédula é do faturista, e juntá-las mandaria a
+      // pessoa procurar o campo errado.
+      final pending = [
+        if (desk.creditorGaps.isNotEmpty) 'na credora: ${desk.creditorGaps.join(', ')}',
+        if (desk.gaps.isNotEmpty) 'na cédula: ${desk.gaps.join(', ')}',
+      ].join(' • ');
+      fail('A cédula de ${barter.id} ainda tem lacunas: $pending.');
+      return;
+    }
+
+    await FileSaver.instance.saveFile(
+      name: 'cpr-${CprDocx.filename(desk)}',
+      bytes: CprDocx.build(desk),
+      ext: 'docx',
+      mimeType: MimeType.microsoftWord,
+    );
+    messenger.showSnackBar(SnackBar(
+      content: const Text('CPR gerada em Word.'),
+      backgroundColor: AppColors.approved,
+      behavior: SnackBarBehavior.floating,
+    ));
+  } on ApiException catch (e) {
+    fail(e.message);
+  } catch (e) {
+    fail('Não foi possível gerar a CPR: $e');
+  }
+}
+
 class CprFormScreen extends StatefulWidget {
   /// A permuta que está sendo faturada — ou cuja cédula já emitida se corrige.
   final BarterModel barter;
@@ -293,7 +342,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
       });
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(desk.complete
-            ? 'CPR completa — pronta para gerar.'
+            ? 'CPR completa, pronta para gerar.'
             : 'Rascunho salvo. Faltam ${desk.gaps.length} campo(s).'),
         backgroundColor: desk.complete ? AppColors.approved : AppColors.pending,
         behavior: SnackBarBehavior.floating,
@@ -450,7 +499,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           ]),
           const SizedBox(height: 14),
 
-          _section('EMITENTE — QUALIFICAÇÃO', Icons.badge_outlined),
+          _section('EMITENTE: QUALIFICAÇÃO', Icons.badge_outlined),
           Row(children: [
             Expanded(child: _textField(_nationality, 'Nacionalidade')),
             const SizedBox(width: 12),
@@ -474,9 +523,9 @@ class _CprFormScreenState extends State<CprFormScreen> {
             Expanded(child: _textField(_email, 'E-mail', caps: false)),
           ]),
           Row(children: [
-            Expanded(child: _textField(_fatherName, 'Filiação — pai')),
+            Expanded(child: _textField(_fatherName, 'Filiação: pai')),
             const SizedBox(width: 12),
-            Expanded(child: _textField(_motherName, 'Filiação — mãe')),
+            Expanded(child: _textField(_motherName, 'Filiação: mãe')),
           ]),
           const SizedBox(height: 14),
 
@@ -662,7 +711,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
             generate
                 ? 'A CPR está completa e o arquivo será gerado em seguida.'
                 : desk.complete
-                    ? 'A CPR fica salva e completa — você gera o arquivo quando quiser.'
+                    ? 'A CPR fica salva e completa. Você gera o arquivo quando quiser.'
                     : 'A CPR ainda tem ${desk.gaps.length} campo(s) em branco. Ela '
                         'continua salva e pode ser completada depois.',
             style: TextStyle(fontSize: 12, color: AppColors.textMedium),
@@ -974,7 +1023,7 @@ class _KnownCard extends StatelessWidget {
             const SizedBox(width: 6),
             Expanded(
               child: Text(
-                'DA PERMUTA ${known.barterCode} — não se digita aqui',
+                'DA PERMUTA ${known.barterCode} • não se digita aqui',
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
@@ -986,7 +1035,7 @@ class _KnownCard extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           _line('Emitente', '${known.emitterName} • ${known.emitterDocument}'),
-          _line('Produto', '${known.grainName} — safra ${known.versionCode}'),
+          _line('Produto', '${known.grainName} • safra ${known.versionCode}'),
           _line('Quantidade',
               '${formatSacks(known.sacks)} sacas • ${formatQty(known.quantityKg)} kg'),
           _line('Preço da saca', formatCurrency(known.sackPrice)),
@@ -1047,7 +1096,7 @@ class _GapsCard extends StatelessWidget {
               child: Text(
                 ok
                     ? (complete
-                        ? 'CPR completa — pronta para gerar.'
+                        ? 'CPR completa, pronta para gerar.'
                         : 'Sua parte está completa. Falta o cadastro da empresa.')
                     : 'Faltam ${gaps.length} campo(s) para a CPR ficar pronta',
                 style: TextStyle(
@@ -1110,7 +1159,7 @@ class _CreditorGapsCard extends StatelessWidget {
             ),
             const SizedBox(height: 3),
             Text(
-              '${gaps.join('; ')}. O seu preenchimento continua valendo — a '
+              '${gaps.join('; ')}. O seu preenchimento continua valendo: a '
               'cédula é que não fica pronta para virar documento.',
               style: TextStyle(fontSize: 11.5, color: AppColors.textLight, height: 1.35),
             ),
@@ -1171,7 +1220,7 @@ class _CreditorCard extends StatelessWidget {
                   style: TextStyle(
                       fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
               Text(
-                'CNPJ ${creditor.cnpj} • ${creditor.address}, ${creditor.addressNumber} — '
+                'CNPJ ${creditor.cnpj} • ${creditor.address}, ${creditor.addressNumber}, '
                 '${creditor.city} • Foro: ${creditor.effectiveForum}',
                 style: TextStyle(fontSize: 11.5, color: AppColors.textMedium, height: 1.35),
               ),
@@ -1199,7 +1248,7 @@ class _SuggestionNote extends StatelessWidget {
       Expanded(
         child: Text(
           'Campos preenchidos a partir da última cédula deste produtor. '
-          'Confira antes de salvar — o que mudou desde então é você quem sabe.',
+          'Confira antes de salvar: o que mudou desde então é você quem sabe.',
           style: TextStyle(fontSize: 11.5, color: AppColors.textLight, height: 1.35),
         ),
       ),
@@ -1471,11 +1520,11 @@ class _GuarantorCard extends StatelessWidget {
         ]),
         Row(children: [
           Expanded(
-              child: _f('Filiação — pai', guarantor.fatherName,
+              child: _f('Filiação: pai', guarantor.fatherName,
                   (v) => onChanged(guarantor.copyWith(fatherName: v)))),
           const SizedBox(width: 10),
           Expanded(
-              child: _f('Filiação — mãe', guarantor.motherName,
+              child: _f('Filiação: mãe', guarantor.motherName,
                   (v) => onChanged(guarantor.copyWith(motherName: v)))),
         ]),
         // O cônjuge do avalista, pela mesma regra do emitente: aval de quem é
@@ -1585,7 +1634,7 @@ class _DateField extends StatelessWidget {
             suffixIcon: Icon(Icons.calendar_today_outlined, size: 17, color: AppColors.textLight),
           ),
           child: Text(
-            value == null ? '—' : formatDate(value!),
+            value == null ? 'sem data' : formatDate(value!),
             style: TextStyle(
               fontSize: 14,
               color: value == null ? AppColors.textLight : AppColors.textDark,

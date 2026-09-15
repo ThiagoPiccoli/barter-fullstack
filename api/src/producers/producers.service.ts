@@ -199,7 +199,7 @@ export class ProducersService {
 
     throw new UnprocessableEntityException(
       named.length > 0
-        ? `Escolha apenas consultores para a carteira — ${named.join(', ')} não é consultor`
+        ? `Escolha apenas consultores para a carteira: ${named.join(', ')} não é consultor`
         : 'Escolha um consultor válido para a carteira',
     );
   }

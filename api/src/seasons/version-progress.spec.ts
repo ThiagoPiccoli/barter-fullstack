@@ -1,4 +1,11 @@
-import { anyGoalMet, goalsOf, isOpenAt, realizedFrom } from './version-progress';
+import {
+  anyGoalMet,
+  closingReasonOf,
+  countsAsRealized,
+  goalsOf,
+  isOpenAt,
+  realizedFrom,
+} from './version-progress';
 
 const item = (kind: string, quantity: number, unitValue: number) => ({
   kind,
@@ -70,6 +77,51 @@ describe('Metas e vigência da versão do Barter', () => {
     expect(goals.map((goal) => goal.met)).toEqual([true, true]);
     expect(goals[0].ratio).toBe(1);
     expect(anyGoalMet(goals)).toBe(true);
+  });
+
+  /**
+   * A frase do fechamento automático. Ela vai para o `closedBy` da versão e fica
+   * lá para sempre: é a única coisa que explica, meses depois, por que aquele
+   * Barter fechou sem ninguém ter clicado em nada.
+   */
+  describe('closingReasonOf — por que o Barter fechou sozinho', () => {
+    it('nomeia a meta batida e o número dela', () => {
+      const goals = goalsOf(
+        { targetSales: 3000, targetSacks: null, targetBarters: null },
+        realizedFrom(barters),
+      );
+      expect(closingReasonOf(goals)).toBe('Automático: meta de vendas atingida (3000.00)');
+    });
+
+    it('a meta de permutas é contagem, e sai sem centavos', () => {
+      const goals = goalsOf(
+        { targetSales: null, targetSacks: null, targetBarters: 2 },
+        realizedFrom(barters),
+      );
+      expect(closingReasonOf(goals)).toBe('Automático: meta de permutas atingida (2)');
+    });
+
+    it('meta longe de bater não fecha nada — e não há frase a escrever', () => {
+      const goals = goalsOf(
+        { targetSales: 500000, targetSacks: null, targetBarters: null },
+        realizedFrom(barters),
+      );
+      expect(closingReasonOf(goals)).toBeNull();
+      expect(closingReasonOf([])).toBeNull();
+    });
+  });
+
+  /**
+   * A lista de "o que soma na meta", vista de fora: é ela que decide se um ato do
+   * comitê pode ter acabado de bater a meta.
+   */
+  it('countsAsRealized responde pela mesma lista da conta do realizado', () => {
+    expect(countsAsRealized('approved')).toBe(true);
+    expect(countsAsRealized('approvedWithConditions')).toBe(true);
+    expect(countsAsRealized('invoiced')).toBe(true);
+    expect(countsAsRealized('denied')).toBe(false);
+    expect(countsAsRealized('pending')).toBe(false);
+    expect(countsAsRealized('draft')).toBe(false);
   });
 
   describe('isOpenAt — a vigência que TRAVA (a meta só avisa)', () => {

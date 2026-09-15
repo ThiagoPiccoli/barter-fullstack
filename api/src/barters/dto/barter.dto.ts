@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -214,6 +215,86 @@ export class InvoiceBarterDto {
   @IsString()
   @MaxLength(500)
   note?: string;
+}
+
+/**
+ * O TAMANHO MÍNIMO de um pedido de alteração e da resposta a ele.
+ *
+ * O mesmo do parecer, e pela mesma razão: os dois textos existem para dizer o
+ * que aconteceu a quem vai agir depois. "mudou" e "não" são botões, não
+ * pedidos — e quem os recebe volta a ter de telefonar.
+ */
+const CHANGE_NOTE_MESSAGE = 'Explique o que precisa mudar nesta permuta (mínimo de 10 caracteres)';
+
+/**
+ * O PEDIDO DE ALTERAÇÃO feito pelo consultor — o caminho de volta da esteira
+ * (ver `barters/change-request.ts`).
+ *
+ * O texto é OBRIGATÓRIO, e é a peça inteira do pedido: quem vai lê-lo é o admin,
+ * que não estava na conversa com o produtor e não tem como adivinhar se o caso
+ * é "trocar 200 kg de um insumo" ou "o produtor desistiu". A decisão dele
+ * depende disso — liberar a permuta apaga o parecer do gerente e a decisão do
+ * comitê.
+ */
+export class RequestBarterChangeDto {
+  @IsString({ message: CHANGE_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: CHANGE_NOTE_MESSAGE })
+  @MaxLength(2000)
+  note!: string;
+}
+
+/** A frase que o admin lê quando recusa um pedido sem dizer por quê. */
+const DENY_NOTE_MESSAGE = 'Escreva o motivo da recusa (mínimo de 10 caracteres)';
+
+/**
+ * A DECISÃO DO ADMIN sobre o pedido: libera ou não.
+ *
+ * `accept` é booleano, e não um `status` como na decisão do comitê, porque aqui
+ * as saídas são mesmo duas — não há "libera com ressalva". O que muda entre
+ * elas é o EFEITO: liberar devolve a permuta ao rascunho do consultor; recusar
+ * deixa tudo onde está e devolve o motivo.
+ *
+ * O motivo é obrigatório na RECUSA e opcional na liberação, pela mesma regra da
+ * decisão do comitê: a resposta que cria trabalho (ou o encerra) para outra
+ * pessoa precisa dizer por quê. A liberação fala pelo próprio efeito — a
+ * permuta reaparece na mão de quem pediu.
+ */
+export class DecideBarterChangeDto {
+  @IsBoolean({ message: 'Diga se o pedido de alteração foi aceito (accept: true/false)' })
+  accept!: boolean;
+
+  @ValidateIf((dto: DecideBarterChangeDto) => !dto.accept)
+  @IsString({ message: DENY_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: DENY_NOTE_MESSAGE })
+  // O teto também fala do MOTIVO, e não só do tamanho: com o campo ausente as
+  // três conferências falham juntas, e a que chegar até a tela precisa dizer o
+  // que falta — a mesma razão da mensagem gêmea em `ReviewBarterDto`.
+  @MaxLength(1000, { message: 'Escreva o motivo da recusa em até 1000 caracteres' })
+  note?: string;
+}
+
+/**
+ * A REESCRITA DOS INSUMOS de um rascunho — o que o consultor faz depois de o
+ * admin liberar a alteração (ou antes de encaminhar pela primeira vez).
+ *
+ * A lista vai INTEIRA, e não em pedaços ("tire este, mude aquele"): a permuta é
+ * um conjunto que precisa passar pelas regras de mínimo como um todo, e um
+ * `PATCH` item a item deixaria a permuta em estados intermediários que nenhuma
+ * regra aceita. É o mesmo formato do registro, e de propósito — a tela que
+ * monta a permuta é a mesma.
+ *
+ * Repare no que NÃO está aqui: produtor, unidade e preços. Trocar o produtor
+ * seria outra permuta (a área dele é o denominador de tudo e já está congelada
+ * no registro); trocar a unidade é logística e não passa por pedido nenhum; e
+ * preço nunca veio do cliente.
+ */
+export class ReplaceBarterInputsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200, { message: 'Uma permuta não pode ter mais de 200 insumos' })
+  @ValidateNested({ each: true })
+  @Type(() => BarterInputDto)
+  inputs!: BarterInputDto[];
 }
 
 /**

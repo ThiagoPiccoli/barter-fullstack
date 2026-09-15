@@ -222,8 +222,10 @@ void main() {
       expect(vazio.statusLabel, 'Rascunho');
       expect(vazio.waitingFor, UserRole.consultant);
       expect(vazio.hasConsultantOpinion, isFalse);
-      // Sem destinatário: ele é gravado no encaminhamento, não no registro.
-      expect(vazio.managerLabel, '—');
+      // Sem destinatário: ele é gravado no encaminhamento, não no registro. E
+      // a tela diz isso por extenso, em vez de um traço: quem lê precisa saber
+      // que ninguém foi escolhido ainda, e não que o dado sumiu.
+      expect(vazio.managerLabel, 'não definido');
 
       final escrito = BarterModel.fromJson(barterJson(status: 'draft')
         ..['consultantNote'] = 'Cliente de cinco safras, sem atraso.');
@@ -486,7 +488,7 @@ void main() {
       final barter = BarterModel.fromJson(json);
 
       expect(barter.unitId, isEmpty);
-      expect(barter.unitLabel, '—');
+      expect(barter.unitLabel, 'não informada');
     });
   });
 
@@ -518,6 +520,30 @@ void main() {
       expect(version.goals[1].kind, GoalKind.sales); // desconhecida → leitura mais comum
       expect(version.anyGoalMet, isTrue);
       expect(version.realizedBarters, 1);
+    });
+
+    /// O MODO de encerramento por meta. Ausente vale MANUAL: é o padrão do
+    /// servidor, e é o que uma versão publicada antes desta opção sempre foi.
+    test('o modo de encerramento vem do servidor, e ausente é manual', () {
+      expect(BarterVersionModel.fromJson(versionJson()).closeOnGoal, isFalse);
+
+      final automatico = versionJson()..['closeOnGoal'] = true;
+      expect(BarterVersionModel.fromJson(automatico).closeOnGoal, isTrue);
+    });
+
+    /// A versão que fechou sozinha guarda o MOTIVO no mesmo campo de quem
+    /// encerrou — é o que o histórico do lançamento exibe.
+    test('a versão encerrada por meta diz por que fechou', () {
+      final fechada = versionJson()
+        ..['status'] = 'closed'
+        ..['isOpen'] = false
+        ..['closeOnGoal'] = true
+        ..['closedAt'] = '2026-03-02T10:00:00.000Z'
+        ..['closedBy'] = 'Automático — meta de vendas atingida (1000000.00)';
+
+      final version = BarterVersionModel.fromJson(fechada);
+      expect(version.isOpen, isFalse);
+      expect(version.closedBy, contains('meta de vendas atingida'));
     });
   });
 

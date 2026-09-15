@@ -42,6 +42,19 @@ export const AUDIT_ACTION = {
   barterReviewed: 'barter.reviewed',
   barterInvoiced: 'barter.invoiced',
   /**
+   * O DESVIO da linha: o pedido de alteração do consultor e a decisão do admin
+   * sobre ele (ver `barters/change-request.ts`).
+   *
+   * Os dois entram pelo critério dos três acima — o efeito, não o esforço. A
+   * liberação APAGA da permuta o parecer do gerente e a decisão do comitê, que é
+   * o ato de maior alcance que o admin pratica sobre uma permuta; e o pedido é
+   * o que o justifica. Ler um sem o outro na trilha global (a que cruza contas e
+   * permutas) deixaria "por que esta permuta aprovada voltou a rascunho?" sem
+   * resposta fora do registro dela.
+   */
+  barterChangeRequested: 'barter.change-requested',
+  barterChangeDecided: 'barter.change-decided',
+  /**
    * O PREENCHIMENTO DA CÉDULA (CPR). Entra aqui pelo mesmo critério dos três
    * acima, e com folga: a cédula é um título de crédito, e o que ela diz — a
    * qualificação de quem se obriga, a matrícula do imóvel dado em penhor, o
@@ -87,6 +100,14 @@ export const AUDIT_ACTION = {
   versionPublished: 'barter.version-published',
   versionPriceChanged: 'barter.price-changed',
   versionClosed: 'barter.version-closed',
+  /**
+   * Trocou o MODO de encerramento da versão (automático ao bater meta ↔ manual).
+   *
+   * Entra na trilha porque decide quando a cooperativa para de aceitar permuta:
+   * desligar o automático no dia em que a meta está para bater é uma decisão de
+   * quanto crédito a mais vai ser aprovado.
+   */
+  versionCloseRuleChanged: 'barter.version-close-rule',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];

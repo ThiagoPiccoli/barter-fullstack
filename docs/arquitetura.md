@@ -78,6 +78,39 @@ unidades) e enxerga tudo. A capacidade `barters.review` era dele e foi para o
 comitê: quem administra o acesso não pode ser também quem decide o negócio,
 porque aí é a mesma pessoa concedendo o poder e usando-o.
 
+**Há UM caminho de volta, e ele tem dono nas duas pontas.** A esteira só anda
+para a frente, mas a permuta erra depois de sair da mão de quem a montou — o
+produtor troca um insumo na véspera da retirada, a quantidade saiu errada. O
+consultor que registrou pode então **pedir alteração** (`POST
+/barters/:code/change-request`, com justificativa) em qualquer permuta que não
+tenha sido faturada, e quem decide é o **admin** (`.../change-request/decision`):
+
+```
+                     ┌─ liberado ─▶ volta a Rascunho (parecer e decisão APAGADOS)
+pedido do consultor ─┤
+                     └─ recusado ─▶ fica onde estava, com o motivo escrito
+```
+
+A alteração **atravessa versões e não atravessa culturas**: a permuta fechada na
+primeira versão da soja continua alterável com a terceira no ar (ela não foi
+faturada, e o que falta nela é uma correção de insumos), mas com o Barter do
+milho aberto uma permuta de soja não se remonta, porque os insumos, os mínimos e
+o grão que a paga são outros. Os PREÇOS da remontagem são os da gestão em que a
+permuta foi fechada, e é para isso que existe `GET /barters/:code/version`: a
+tela precisa da tabela daquela versão, não da vigente.
+
+O pedido **não move a permuta**: ela continua na fila em que estava, com uma
+bandeira que todo mundo enxerga — quem a tem na mesa precisa saber que os
+insumos podem mudar antes de gastar um parecer sobre eles. Quem decide é o admin
+porque o que se julga aqui é o **processo**, e não o negócio: liberar joga fora o
+trabalho assinado do gerente e do comitê (a história fica nos `BarterEvent`; o
+que é apagado é o estado atual, que passou a ser falso). Liberada, ela é rascunho
+de novo — os insumos se reescrevem por `PUT /barters/:code/inputs`, contra as
+mesmas travas do registro, e ela percorre a linha inteira outra vez. A regra mora
+em [change-request.ts](../api/src/barters/change-request.ts), FORA de
+`BARTER_STEPS`: um desvio que quase nenhuma permuta toma não é um degrau da
+esteira, e como etapa ele apareceria como pendência em toda permuta do sistema.
+
 O caminho inteiro mora em [barter-workflow.ts](../api/src/barters/barter-workflow.ts) —
 os estados, quem move o quê e **o que responder a quem chega fora de hora**. Essa
 última parte não é enfeite: dizer "já foi decidida" a quem espera o gerente manda
@@ -144,11 +177,29 @@ linhas: com 656 itens, um ícone que nunca muda ocupa a coluna onde o olho
 procura diferença e não oferece nenhuma. Classe nova aparece com o ícone
 genérico de insumo até alguém escolher a dela.
 
-**Data trava, meta avisa.** A `endsAt` da versão é uma decisão com hora marcada:
-passada a data, a API recusa permuta nova. As metas (vendas, lucro, sacas,
-quantidade) só medem — quem encerra é o admin, com um toque. As duas regras
-moram juntas em [version-progress.ts](../api/src/seasons/version-progress.ts)
-(`isOpenAt`), que é o lugar de inverter isso se um dia a meta precisar travar.
+**Data trava; meta avisa ou fecha, e isso é opção do lançamento.** A `endsAt` da
+versão é uma decisão com hora marcada: passada a data, a API recusa permuta nova.
+As metas (vendas, sacas, quantidade) medem, e o efeito de batê-las é escolhido ao
+publicar — `closeOnGoal`:
+
+| Modo | O que acontece ao bater a meta |
+|---|---|
+| Manual (padrão) | o painel do admin acende o aviso; encerrar é um toque dele |
+| Automático | a **aprovação que cruzou a meta** encerra a versão, na hora |
+
+O automático **não tem relógio**: quem fecha é `closeIfGoalReached`
+([seasons.service.ts](../api/src/seasons/seasons.service.ts)), chamado depois de
+cada decisão do comitê — o único ato que faz o realizado crescer. Assim o
+fechamento tem hora, ator e motivo (o `closedBy` da versão fica
+`Automático — meta de vendas atingida (…)`), em vez de acontecer de madrugada.
+Falhando, o Barter só continua aberto com a meta batida: o estado do modo manual.
+
+O admin troca o modo na versão vigente sem republicar a tabela
+(`PUT /barter-versions/:code/close-on-goal`); ligar com a meta **já** batida
+encerra na hora, e a tela avisa antes. As contas moram em
+[version-progress.ts](../api/src/seasons/version-progress.ts), junto de
+`isOpenAt` — que segue olhando só data e status, porque no automático a versão já
+chega com `status: closed`.
 
 **O Barter mede vendas, não lucro.** A lista de preços do fornecedor traz preço
 de VENDA e mais nada — não há custo em lugar nenhum do modelo. Enquanto houve
@@ -185,7 +236,8 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | `barters.investmentPerHa` | admin, comitê, faturista — o sc/ha, a régua que compara permutas |
 | `barters.invoice` | **faturista** |
 | `creditor.manage` | admin **e** faturista (a única dividida — é o timbre, não decisão) |
-| `barters.register` | consultor |
+| `barters.changeReview` | **admin** — decide o pedido de alteração (processo, não negócio) |
+| `barters.register` · `barters.changeRequest` | consultor |
 
 `barter.manage` (lançar safra e versões) é separada de `catalog.manage`
 (cadastro do produto e regra das classes) de propósito: uma decide **por
@@ -577,8 +629,23 @@ insumos entregando grão, e essa entrega é uma venda como outra qualquer. Sobre
 ela incidem a contribuição previdenciária rural (o "Funrural") e a contribuição
 ao Senar.
 
-No FECHAMENTO da permuta escolhem-se as **duas formas de recolhimento** da parte
-previdenciária, e é isso que `Barter.taxRegime` guarda:
+A forma de recolhimento da parte previdenciária é do **PRODUTOR**, e mora no
+cadastro dele (`Producer.taxRegime`): a opção pela folha é feita uma vez, perante
+o fisco, e vale para o ano e para todas as entregas. Cada permuta nova a **herda**
+no registro e a congela em `Barter.taxRegime` — enquanto a pergunta era feita
+permuta a permuta, o consultor respondia de memória a cada fechamento, e duas
+permutas do mesmo produtor saíam em regimes diferentes sem nada ter mudado no
+mundo real.
+
+O app **não oferece trocar o regime na permuta**: o fechamento mostra um AVISO
+com o que o cadastro diz e quanto isso dá em sacas. Dois percentuais lado a lado,
+um deles oito vezes menor, convidavam a marcar o barato numa permuta específica,
+e isso não é preferência de quem fecha a permuta: é uma declaração ao fisco que
+ele não tem como fazer. Quem corrige o regime é o admin, no cadastro, e vale da
+próxima permuta em diante. O corpo do `POST /barters` ainda aceita `taxRegime`
+(outros clientes da API), mas o app não o envia.
+
+São **duas formas**, e é isso que os dois campos guardam:
 
 | Forma | Produtor CPF | Produtor CNPJ |
 | --- | --- | --- |
@@ -826,7 +893,7 @@ e não é, que é pior do que um botão desabilitado com o motivo ao lado.
 permitiu `sentToManager` — e depois `invoiced` — entrarem sem migration de tipo;
 e como o app tolera status desconhecido, as versões instaladas continuaram
 carregando a lista (mostrando a permuta na etapa errada: impreciso, mas visível
-e sem ação indevida). Vieram assim do SQLite, que não tem enum, e ficaram: a
+e sem ação indevida). São `String` de propósito, e não `enum` do Postgres: a
 validação mora nos DTOs (`@IsIn`), e um valor novo não pede migration nem deploy
 coordenado entre banco e aplicação.
 
@@ -997,6 +1064,10 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | POST/PUT/DELETE | `/units`, `/units/:id` | admin | cadastro dos locais |
 | POST | `/barters` | consultor | com `unitId`; sem `grainId`; 422 se não há Barter aberto |
 | PUT | `/barters/:code/note` | consultor | o parecer DELE, salvo no rascunho; só enquanto é rascunho |
+| GET | `/barters/:code/version` | escopado | a tabela com que a permuta foi fechada (a remontagem é precificada por ela) |
+| PUT | `/barters/:code/inputs` | consultor | remonta os insumos; lista inteira, só no rascunho e só na mesma cultura |
+| POST | `/barters/:code/change-request` | consultor | pede alteração (justificativa obrigatória); vale até o faturamento |
+| POST | `/barters/:code/change-request/decision` | **admin** | libera (volta a rascunho) ou recusa (motivo obrigatório) |
 | POST | `/barters/:code/forward` | consultor | encaminha ao gerente, com o parecer junto (obrigatório) |
 | POST | `/barters/:code/opinion` | gerente | parecer técnico; só na permuta endereçada a ele |
 | POST | `/barters/:code/review` | comitê | decide: aprova, aprova com ressalva (texto obrigatório) ou nega (idem) |
@@ -1606,6 +1677,8 @@ Estes pares andam juntos. Mudou de um lado, procure o outro:
 | `GET /barter-versions/current` devolvendo `null` | estado "Barter fechado" em [barter_screen.dart](../app/lib/screens/barter_screen.dart) |
 | `BARTER_STATUSES` em [barter.dto.ts](../api/src/barters/dto/barter.dto.ts) | `enum BarterStatus` em [models.dart](../app/lib/models/models.dart) — os nomes precisam bater, é `status.name` que compara |
 | `POST /barters/:code/opinion` | `giveBarterOpinion` em [common_widgets.dart](../app/lib/widgets/common_widgets.dart) |
+| [change-request.ts](../api/src/barters/change-request.ts) (quem pede, até quando, o que o aceite apaga) | `canBeChangedBy` / `hasOpenChangeRequest` em [models.dart](../app/lib/models/models.dart) + `ChangeRequestCard` em [common_widgets.dart](../app/lib/widgets/common_widgets.dart) |
+| `PUT /barters/:code/inputs` | `NewBarterScreen.draft` em [barter_screen.dart](../app/lib/screens/barter_screen.dart) — a mesma tela do registro, com produtor e unidade congelados |
 | upload multipart de `/versions/import` | `ApiClient.upload` + `file_picker` em [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) |
 
 **As mensagens de erro do backend estão em pt-BR de propósito** — elas vão
@@ -1646,7 +1719,7 @@ Se for ler tudo em ordem, sugiro:
 | a figura de uma classe nova | nada | `iconForClass` em `class_avatar.dart` |
 | aceitar outra coluna na planilha | `COLUMNS` em `version-import.ts` (+ spec) | nada |
 | uma meta nova (ex.: hectares) | `schema.prisma`, `Targets`/`goalsOf` em `version-progress.ts`, `VersionLimitsDto` | `GoalKind`, campo no `_PublishSheet` |
-| fazer a meta ENCERRAR sozinha | `isOpenAt` em `version-progress.ts` | nada (o app lê `isOpen`) |
+| mudar QUANDO a meta encerra sozinha | `closeIfGoalReached` em `seasons.service.ts` (o gatilho é a decisão do comitê, em `barters.service.ts`) | nada (o app lê `isOpen` e `closeOnGoal`) |
 | mudar validade da sessão | `TOKEN_TTL_DAYS` no `.env` | nada |
 | um endpoint novo | módulo (controller+service+dto) + serializer | repositório novo + campo no `AppData` |
 | uma etapa nova no fluxo da permuta | valor em `BARTER_STATUSES`, transição no `barters.service.ts`, capacidade em `policy.ts` | `BarterStatus`, `statusLabel`, `StatusBadge`, `statusColor`, cor na paleta da marca, aba em `barters_screen.dart` |

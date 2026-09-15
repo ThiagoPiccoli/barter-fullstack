@@ -1,6 +1,7 @@
 import {
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -31,6 +32,7 @@ import {
 import {
   BARTER_ACTION,
   BARTER_STATUS,
+  BARTER_STATUS_LABELS,
   BARTER_STEPS,
   lineFrom,
   outcomeLabelOf,
@@ -38,20 +40,34 @@ import {
   type BarterAction,
   type BarterStatus,
 } from './barter-workflow';
-import { TAX_REGIME, taxRateOf } from './tax-regime';
+import { taxRateOf, type TaxRegime } from './tax-regime';
+import {
+  CHANGE_REQUEST_ACTION,
+  CHANGE_REQUEST_STATUS,
+  CLEARED_BY_CHANGE,
+  changeDecisionRefusal,
+  changeRequestRefusal,
+  cultureRefusal,
+  type ChangeRequestAction,
+} from './change-request';
 import { EMPTY_CPR, cprGaps, knownFrom, suggestFrom, type CprKnown } from './cpr';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
 import { ROLE } from '../common/roles';
 import { CreditorService } from '../creditor/creditor.service';
-import { SeasonsService } from '../seasons/seasons.service';
+import { SeasonsService, type VersionWithPrices } from '../seasons/seasons.service';
+import { countsAsRealized } from '../seasons/version-progress';
 import {
+  BarterInputDto,
   BarterOpinionDto,
   CreateBarterDto,
+  DecideBarterChangeDto,
   ForwardBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
   MIN_OPINION_LENGTH,
+  ReplaceBarterInputsDto,
+  RequestBarterChangeDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
@@ -103,6 +119,8 @@ const summarize = (text: string): string =>
  */
 @Injectable()
 export class BartersService {
+  private readonly logger = new Logger('Barters');
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -284,13 +302,83 @@ export class BartersService {
       throw new UnprocessableEntityException('Escolha uma unidade de retirada válida');
     }
 
+    // 4, 5 e 6 — a precificação e as travas — em um lugar só, porque a
+    // ALTERAÇÃO de um rascunho passa exatamente pelas mesmas (ver
+    // `replaceInputs`): mudar um insumo é refazer a permuta inteira contra as
+    // mesmas regras, e duas cópias delas divergiriam no primeiro ajuste.
+    const items = await this.pricedItemsFor(version, producer, dto.inputs);
+
+    // A FORMA de recolhimento: a do CADASTRO do produtor, que é onde a opção
+    // formal dele mora (ver `Producer.taxRegime`). O corpo ainda pode dizer
+    // outra — o consultor corrige na hora quando o cadastro está atrasado —, e
+    // a ausência não é mais um chute: é o que está registrado sobre ele.
+    const taxRegime = dto.taxRegime ?? (producer.taxRegime as TaxRegime);
+
+    return this.createWithCode({
+      versionId: version.id,
+      versionCode: version.code,
+      consultantId: consultant.id,
+      consultantName: consultant.fullName,
+      consultantBranch: consultant.branch ?? '',
+      producerId: producer.id,
+      producerName: producer.name,
+      // A ÁREA congelada, pelo mesmo motivo do preço do item: ela é o
+      // denominador do investimento por hectare, e o produtor arrenda mais terra
+      // na safra seguinte. Ver `producerAreaHa` no schema.
+      producerAreaHa: producer.areaHa,
+      unitId: unit.id,
+      unitName: unit.name,
+      // O IMPOSTO DA ENTREGA: a forma escolhida no fechamento, e a alíquota que
+      // ela produz para ESTE produtor (CPF ou CNPJ muda o percentual). A
+      // alíquota é congelada aqui — a entrega é comercialização de produção
+      // rural, e o que vale é a tabela do dia. Ver `tax-regime.ts`.
+      taxRegime,
+      taxRate: taxRateOf(taxRegime, producer.documentDigits),
+      // Sem `managerId`: o destinatário é gravado no ENVIO, e o envio é o
+      // encaminhamento (ver `forward`). Trocar o gerente do consultor entre o
+      // registro e o encaminhamento vale para esta permuta; depois dele, não.
+      status: BARTER_STATUS.draft,
+      // O PARECER, quando ele já vem escrito. `null` é rascunho sem parecer, que
+      // é o caso normal de quem acabou de simular.
+      consultantNote: dto.note?.trim() ? dto.note.trim() : null,
+      items: { create: items },
+      // O PRIMEIRO EVENTO da linha do tempo nasce junto com a permuta, na mesma
+      // transação — não existe permuta sem o registro de que ela foi registrada.
+      events: {
+        create: [this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.draft)],
+      },
+    });
+  }
+
+  /**
+   * OS ITENS DA PERMUTA, precificados pela versão e conferidos contra as regras
+   * de mínimo — a linha do grão inclusa, que é o pagamento.
+   *
+   * É a parte do registro que a ALTERAÇÃO refaz por inteiro, e por isso ela mora
+   * aqui e não dentro de `create`: trocar um insumo de um rascunho não é uma
+   * edição pontual, é a permuta sendo remontada e submetida às mesmas travas —
+   * a exigência por hectare, o mínimo de cada classe e a conversão em sacas.
+   * Enquanto isto foi corpo de `create`, o único jeito de alterar uma permuta
+   * seria uma segunda cópia das regras, e a primeira divergência entre as duas
+   * seria uma permuta gravada fora do que o Barter exige.
+   *
+   * A VERSÃO é parâmetro, e não lida daqui de dentro, porque quem a escolhe é
+   * quem chama: o registro usa a VIGENTE (é ela que diz por quanto se permuta
+   * hoje); a alteração usa a DA PERMUTA (o acordo foi fechado nela, e a gestão
+   * seguinte não reescreve o que já foi combinado).
+   */
+  private async pricedItemsFor(
+    version: VersionWithPrices,
+    producer: { areaHa: number },
+    inputs: BarterInputDto[],
+  ): Promise<Prisma.BarterItemUncheckedCreateWithoutBarterInput[]> {
     // Consolida quantidades por produto (payload pode repetir ids) e as leva à
     // precisão em que serão GRAVADAS. Arredondar aqui, e não só no app, é o que
     // faz o item registrado ser o mesmo número que o comprovante imprime: o app
     // já mandava 2 casas, mas quem manda é este lado, e ele aceitava qualquer
     // precisão de quem chamasse a API direto.
     const quantities = new Map<number, number>();
-    for (const item of dto.inputs) {
+    for (const item of inputs) {
       quantities.set(item.productId, (quantities.get(item.productId) ?? 0) + item.quantity);
     }
     for (const [productId, quantity] of quantities) {
@@ -366,11 +454,14 @@ export class BartersService {
     // 6. Converte o custo em sacas do grão da safra — o coração do escambo.
     const sacks = sacksToCover(totalCost, version.grainPrice);
 
-    const items = [
+    return [
       {
         productId: version.season.grainId,
         kind: 'grain',
         productName: version.season.grainName,
+        // O grão não leva código: quem o identifica é a safra, e o item existe
+        // para dizer quantas sacas pagam a permuta — não para ser separado no
+        // balcão, que é a pergunta a que o código do insumo responde.
         unit: version.season.grainUnit,
         quantity: sacks,
         unitValue: version.grainPrice,
@@ -379,50 +470,15 @@ export class BartersService {
         productId: product.id,
         kind: 'input',
         productName: product.name,
+        // O CÓDIGO congelado junto com o nome: é por ele que o insumo é
+        // separado, conferido e faturado, e o cadastro pode ser recodificado
+        // (ou o produto excluído) depois. Ver `BarterItem.productSku`.
+        productSku: product.sku,
         unit: product.unit,
         quantity: quantities.get(product.id)!,
         unitValue: valueOf.get(product.id)!.price,
       })),
     ];
-
-    // A FORMA de recolhimento escolhida no fechamento. Ausente vale
-    // `comercializacao`: é o regime de quem não fez a opção formal pela folha.
-    const taxRegime = dto.taxRegime ?? TAX_REGIME.comercializacao;
-
-    return this.createWithCode({
-      versionId: version.id,
-      versionCode: version.code,
-      consultantId: consultant.id,
-      consultantName: consultant.fullName,
-      consultantBranch: consultant.branch ?? '',
-      producerId: producer.id,
-      producerName: producer.name,
-      // A ÁREA congelada, pelo mesmo motivo do preço do item: ela é o
-      // denominador do investimento por hectare, e o produtor arrenda mais terra
-      // na safra seguinte. Ver `producerAreaHa` no schema.
-      producerAreaHa: producer.areaHa,
-      unitId: unit.id,
-      unitName: unit.name,
-      // O IMPOSTO DA ENTREGA: a forma escolhida no fechamento, e a alíquota que
-      // ela produz para ESTE produtor (CPF ou CNPJ muda o percentual). A
-      // alíquota é congelada aqui — a entrega é comercialização de produção
-      // rural, e o que vale é a tabela do dia. Ver `tax-regime.ts`.
-      taxRegime,
-      taxRate: taxRateOf(taxRegime, producer.documentDigits),
-      // Sem `managerId`: o destinatário é gravado no ENVIO, e o envio é o
-      // encaminhamento (ver `forward`). Trocar o gerente do consultor entre o
-      // registro e o encaminhamento vale para esta permuta; depois dele, não.
-      status: BARTER_STATUS.draft,
-      // O PARECER, quando ele já vem escrito. `null` é rascunho sem parecer, que
-      // é o caso normal de quem acabou de simular.
-      consultantNote: dto.note?.trim() ? dto.note.trim() : null,
-      items: { create: items },
-      // O PRIMEIRO EVENTO da linha do tempo nasce junto com a permuta, na mesma
-      // transação — não existe permuta sem o registro de que ela foi registrada.
-      events: {
-        create: [this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.draft)],
-      },
-    });
   }
 
   /**
@@ -434,7 +490,10 @@ export class BartersService {
    */
   private eventOf(
     actor: User,
-    action: BarterAction,
+    // Os atos do DESVIO entram aqui junto com os da esteira, e é a linha do
+    // tempo que os une: ela conta o que aconteceu com esta permuta, e um pedido
+    // de alteração aconteceu tanto quanto um parecer. Ver `change-request.ts`.
+    action: BarterAction | ChangeRequestAction,
     from: BarterStatus | null,
     to: BarterStatus,
     note?: string | null,
@@ -572,7 +631,7 @@ export class BartersService {
         : await this.prisma.user.findUnique({ where: { id: consultant.managerId } });
     if (!manager) {
       throw new UnprocessableEntityException(
-        'Você está sem gerente designado — fale com o administrador antes de encaminhar permutas',
+        'Você está sem gerente designado. Fale com o administrador antes de encaminhar permutas',
       );
     }
 
@@ -654,12 +713,10 @@ export class BartersService {
    * e a gravação existe uma fresta: dois registros simultâneos podem escolher
    * o mesmo número.
    *
-   * Essa corrida é REAL hoje. Enquanto o banco era SQLite, um comentário aqui
-   * dizia que ela não acontecia porque as escritas eram serializadas dentro do
-   * processo — e avisava que trocar para Postgres a traria de volta. A troca
-   * aconteceu: sob `READ COMMITTED`, duas transações simultâneas leem o mesmo
-   * máximo e escolhem o mesmo número, e com mais de uma instância da API isso
-   * deixa de depender de sorte.
+   * Essa corrida é REAL, e não teórica: sob `READ COMMITTED` — o isolamento
+   * padrão do Postgres —, duas transações simultâneas leem o mesmo máximo e
+   * escolhem o mesmo número, e com mais de uma instância da API isso deixa de
+   * depender de sorte.
    *
    * Quem resolve não é o banco, é este par: o índice único em `code` transforma
    * a colisão numa falha limpa (P2002), e o laço abaixo a trata como "pegue o
@@ -739,10 +796,50 @@ export class BartersService {
       // a terceira saída (a ressalva) nasceu justamente onde havia um "aprovada
       // ou negada" escrito à mão, e ela teria entrado na trilha como "negada".
       detail: `${(outcomeLabelOf(BARTER_ACTION.review, dto.status) ?? dto.status).toLowerCase()}${
-        reviewed.reviewNote ? ` — ${summarize(reviewed.reviewNote)}` : ''
+        reviewed.reviewNote ? `: ${summarize(reviewed.reviewNote)}` : ''
       }`,
     });
+
+    await this.closeBarterIfGoalReached(committee, reviewed);
     return reviewed;
+  }
+
+  /**
+   * A APROVAÇÃO PODE ENCERRAR O BARTER — quando a versão pediu isso ao ser
+   * publicada (`closeOnGoal`) e esta permuta cruzou a meta.
+   *
+   * Fica aqui, e não numa rotina de madrugada, porque a aprovação é o único ato
+   * que faz o realizado crescer (ver `COUNTS_AS_REALIZED` em
+   * version-progress.ts): amarrar o fechamento a ela é o que dá ao Barter fechado
+   * uma hora e um ato humano por trás, em vez de um relógio.
+   *
+   * NÃO derruba a aprovação se falhar, e por isso é uma chamada separada — a
+   * mesma escolha da trilha de auditoria (ver `AuditService.record`), e pelo
+   * mesmo raciocínio: a decisão do comitê já aconteceu e é o que a permuta
+   * precisa. Falhando o fechamento, o Barter continua aberto com a meta batida —
+   * que é exatamente o estado do modo manual, com o alerta aceso no painel do
+   * admin. O erro vai para o log, e o admin encerra com um toque.
+   */
+  private async closeBarterIfGoalReached(committee: User, barter: Barter): Promise<void> {
+    // Negada não somou nada, e sem soma nova nenhuma meta pode ter acabado de
+    // ser batida. A pergunta é feita à mesma lista que a conta usa.
+    if (!countsAsRealized(barter.status)) return;
+    // Permuta sem versão é registro histórico cuja gestão foi removida do banco
+    // (o `versionCode` desnormalizado é o que sobra dela). Não há Barter aberto
+    // do outro lado para encerrar.
+    if (barter.versionId === null) return;
+
+    try {
+      const closed = await this.seasons.closeIfGoalReached(committee, barter.versionId);
+      if (closed) {
+        this.logger.log(`Barter ${closed.version.code} encerrado — ${closed.reason}`);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Falha ao encerrar o Barter da permuta ${barter.code} depois da aprovação`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   /**
@@ -785,6 +882,306 @@ export class BartersService {
       detail: `faturada${invoiced.invoiceNote ? ` — ${summarize(invoiced.invoiceNote)}` : ''}`,
     });
     return invoiced;
+  }
+
+  /* ── O DESVIO: o pedido de alteração e o caminho de volta ─────────────── */
+
+  /**
+   * O PEDIDO DE ALTERAÇÃO do consultor — o único caminho de volta da esteira.
+   *
+   * Ele não move a permuta: ela continua exatamente onde estava, na fila de quem
+   * estava, e o gerente que ia dar o parecer continua podendo dar. O que o
+   * pedido faz é PENDURAR uma bandeira nela e pôr uma linha na mesa do admin —
+   * porque devolver a permuta na hora do pedido tiraria da mesa de terceiros um
+   * trabalho que talvez nem precise ser desfeito (o admin pode recusar), e
+   * ninguém saberia por que a permuta sumiu da fila.
+   *
+   * Quem pede é o consultor QUE REGISTROU. O escopo dele já é "as minhas", então
+   * a conferência abaixo só morde quando alguém com esta capacidade enxergar
+   * mais do que a própria carteira — que é o dia em que o gerente puder pedir
+   * pelo time. Melhor a regra estar escrita antes desse dia.
+   */
+  async requestChange(
+    consultant: User,
+    code: string,
+    dto: RequestBarterChangeDto,
+  ): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(consultant, code);
+    if (barter.consultantId !== consultant.id) {
+      throw new ForbiddenException('Só quem registrou a permuta pode pedir a alteração dela');
+    }
+
+    const refusal = changeRequestRefusal(barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    // A CULTURA: a alteração atravessa versões, e não atravessa culturas. Ela é
+    // conferida já no PEDIDO, e não só na remontagem, para o consultor não
+    // esperar a resposta do admin por um caminho que termina fechado.
+    await this.requireSameCulture(barter);
+
+    const note = dto.note.trim();
+    const requested = await this.applyChange(
+      barter,
+      CHANGE_REQUEST_ACTION.changeRequested,
+      consultant,
+      barter.status as BarterStatus,
+      {
+        changeRequestStatus: CHANGE_REQUEST_STATUS.open,
+        changeRequestNote: note,
+        changeRequestBy: consultant.fullName,
+        changeRequestById: consultant.id,
+        changeRequestAt: new Date(),
+        // DE ONDE o pedido foi feito. Não é o estado para onde voltar (a recusa
+        // não mexe no status): é o que a linha do tempo precisa para dizer "ele
+        // pediu quando ela já estava aprovada", que é o que muda a leitura do
+        // admin — desfazer um parecer custa menos do que desfazer uma decisão.
+        changeRequestFrom: barter.status,
+        // A recusa ANTERIOR sai de cena junto: o pedido novo é outro assunto, e
+        // deixar a resposta do pedido passado ao lado dele faria a tela mostrar
+        // um "recusado" sobre um pedido que ainda não foi lido.
+        changeRequestReply: null,
+      },
+      note,
+    );
+
+    await this.audit.record({
+      actor: consultant,
+      action: AUDIT_ACTION.barterChangeRequested,
+      targetType: 'barter',
+      targetId: requested.id,
+      targetLabel: requested.code,
+      detail: `alteração pedida com a permuta em "${
+        BARTER_STATUS_LABELS[barter.status as BarterStatus] ?? barter.status
+      }": ${summarize(note)}`,
+    });
+    return requested;
+  }
+
+  /**
+   * A DECISÃO DO ADMIN sobre o pedido: liberar a permuta ou recusar o pedido.
+   *
+   * LIBERAR devolve a permuta a `draft` e apaga o que as etapas cumpridas
+   * escreveram nela (ver `CLEARED_BY_CHANGE`) — o parecer e a decisão falavam de
+   * uma permuta que está prestes a mudar. A história não se perde: os eventos
+   * continuam lá, e é por isso que apagar o estado atual é seguro.
+   *
+   * RECUSAR não mexe em nada além do próprio pedido: a permuta segue onde
+   * estava, com o motivo da recusa visível para quem pediu. Não é preciso
+   * "restaurar" estado nenhum justamente porque o pedido nunca o tirou dela.
+   *
+   * O admin decide o PROCESSO, e não o negócio — ver `bartersChangeReview`. Ele
+   * continua sem poder aprovar ou negar permuta.
+   */
+  async decideChange(admin: User, code: string, dto: DecideBarterChangeDto): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(admin, code);
+
+    const refusal = changeDecisionRefusal(barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const decided = dto.accept
+      ? await this.applyChange(
+          barter,
+          CHANGE_REQUEST_ACTION.changeAccepted,
+          admin,
+          BARTER_STATUS.draft,
+          {
+            ...CLEARED_BY_CHANGE,
+            // O pedido ATENDIDO some por inteiro: quem conta essa história a
+            // partir de agora é o `status` da permuta, que voltou a ser
+            // rascunho, e o evento gravado aqui. Um pedido "aceito" pendurado
+            // seria um segundo lugar dizendo a mesma coisa.
+            changeRequestStatus: null,
+            changeRequestNote: null,
+            changeRequestBy: null,
+            changeRequestById: null,
+            changeRequestAt: null,
+            changeRequestFrom: null,
+            changeRequestReply: null,
+          },
+          note,
+        )
+      : await this.applyChange(
+          barter,
+          CHANGE_REQUEST_ACTION.changeDenied,
+          admin,
+          barter.status as BarterStatus,
+          {
+            changeRequestStatus: CHANGE_REQUEST_STATUS.denied,
+            changeRequestReply: note,
+          },
+          note,
+        );
+
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.barterChangeDecided,
+      targetType: 'barter',
+      targetId: decided.id,
+      targetLabel: decided.code,
+      detail: dto.accept
+        ? `alteração liberada — a permuta de ${decided.consultantName} voltou a rascunho${
+            note ? `: ${summarize(note)}` : ''
+          }`
+        : `alteração recusada${note ? `: ${summarize(note)}` : ''}`,
+    });
+    return decided;
+  }
+
+  /**
+   * A REESCRITA DOS INSUMOS de um rascunho — o que o pedido de alteração existe
+   * para permitir, e o que o consultor faz antes do primeiro encaminhamento.
+   *
+   * Só o RASCUNHO, e é `refusalFor(forward)` quem diz isso: a mesma porta do
+   * parecer salvo (`saveNote`), com a mesma frase para quem chega tarde. Uma
+   * permuta na mesa de outra pessoa não se edita por baixo dela — é para isso
+   * que existe o pedido.
+   *
+   * A permuta é remontada por inteiro contra as mesmas regras do registro
+   * (`pricedItemsFor`), com duas escolhas que merecem nome:
+   *
+   * - a VERSÃO é a DA PERMUTA, e não a vigente. O acordo foi fechado naquela
+   *   tabela, e a gestão seguinte não reescreve preço combinado — é o mesmo
+   *   motivo de o item guardar o preço em vez de lê-lo;
+   * - a ÁREA é a CONGELADA no registro (`producerAreaHa`), e não a do cadastro
+   *   de hoje. Ela é o denominador dos mínimos por hectare e do investimento, e
+   *   trocá-la aqui faria a alteração de um insumo mudar em silêncio a régua
+   *   pela qual a permuta inteira é medida.
+   *
+   * Sem evento na linha do tempo, como em `saveNote` e pelo mesmo motivo: o
+   * rascunho é a bancada do consultor, e o ato que o processo registra é o
+   * ENCAMINHAMENTO — que vem logo depois e leva o parecer junto.
+   */
+  async replaceInputs(
+    consultant: User,
+    code: string,
+    dto: ReplaceBarterInputsDto,
+  ): Promise<BarterDetail> {
+    const barter = await this.requireBarter(consultant, code, BARTER_ACTION.forward);
+
+    const version = await this.requireSameCulture(barter);
+
+    const items = await this.pricedItemsFor(version, { areaHa: barter.producerAreaHa }, dto.inputs);
+
+    // Os itens antigos SAEM e os novos entram, na mesma transação: a permuta é
+    // um conjunto, e um instante em que ela esteja sem insumos (ou com os dois
+    // conjuntos somados) é um instante em que qualquer leitura dela mente.
+    //
+    // O `status` no `where` do update é a mesma trava de `applyStep`: entre a
+    // conferência e a gravação cabe o encaminhamento vindo de outro aparelho do
+    // mesmo consultor, e sem ele os itens seriam trocados DEPOIS de a permuta
+    // já estar na mesa do gerente.
+    try {
+      await this.prisma.$transaction([
+        this.prisma.barterItem.deleteMany({ where: { barterId: barter.id } }),
+        this.prisma.barter.update({
+          where: { id: barter.id, status: BARTER_STATUS.draft },
+          data: { items: { create: items } },
+        }),
+      ]);
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new UnprocessableEntityException(BARTER_STEPS[BARTER_ACTION.forward].done);
+      }
+      throw error;
+    }
+
+    return this.findFor(consultant, code);
+  }
+
+  /**
+   * A TABELA COM QUE ESTA PERMUTA FOI FECHADA — a gestão dela, com os valores.
+   *
+   * Ela existe porque a REMONTAGEM acontece sobre a tabela da permuta, e não
+   * sobre a vigente (ver `cultureRefusal`): sem esta rota, a tela do consultor
+   * montaria os insumos lendo os preços de hoje enquanto o servidor gravaria os
+   * daquela gestão, e o total em sacas que ele mostrasse ao produtor não seria o
+   * que ficaria registrado.
+   *
+   * O escopo é o da PERMUTA (`findFor`), e não o do lançamento: quem alcança a
+   * permuta alcança a tabela com que ela foi feita. O detalhe da versão em si
+   * (`GET /barter-versions/:code`, com metas e realizado) continua sendo do
+   * admin — aqui não vai meta nenhuma, só o que precifica esta permuta.
+   */
+  async versionOf(viewer: User, code: string): Promise<VersionWithPrices> {
+    const barter = await this.findFor(viewer, code);
+    if (!barter.versionCode) {
+      throw new UnprocessableEntityException(
+        'Esta permuta é anterior ao lançamento por versões e não tem tabela própria',
+      );
+    }
+    return this.seasons.findVersion(barter.versionCode);
+  }
+
+  /**
+   * A GESTÃO EM QUE A PERMUTA FOI FECHADA, conferida contra a que está aberta
+   * hoje: as duas precisam ser da MESMA CULTURA.
+   *
+   * Devolve a versão da permuta — é ela que reprecifica a remontagem, porque foi
+   * nela que o acordo foi fechado. Ver `cultureRefusal` em `change-request.ts`,
+   * onde a regra mora e está explicada.
+   */
+  private async requireSameCulture(barter: Barter): Promise<VersionWithPrices> {
+    if (!barter.versionCode) {
+      throw new UnprocessableEntityException(
+        'Esta permuta é anterior ao lançamento por versões e não pode ser alterada',
+      );
+    }
+    const version = await this.seasons.findVersion(barter.versionCode);
+    // `requireOpenVersion` é quem recusa quando não há Barter aberto, com a
+    // frase do lançamento: sem cultura vigente não há com o que comparar, e
+    // remontar uma permuta fora de qualquer gestão aberta não é alteração, é
+    // reabrir a praça por conta própria.
+    const open = await this.seasons.requireOpenVersion();
+
+    const refusal = cultureRefusal(version, open);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    return version;
+  }
+
+  /**
+   * UM PASSO DO DESVIO: grava o pedido (ou a decisão sobre ele) e o evento
+   * juntos, como `applyStep` faz com a esteira.
+   *
+   * Separado dele por uma diferença que não é de forma: aqui o `to` PODE SER O
+   * MESMO estado de onde a permuta está — o pedido e a recusa não a movem. O
+   * `where` continua com o status de origem pelo motivo de sempre (dois admins
+   * decidindo o mesmo pedido), e a mensagem de quem perde a corrida é a do
+   * pedido, não a de uma etapa da esteira: ele já foi decidido por outro.
+   */
+  private async applyChange(
+    barter: Barter,
+    action: ChangeRequestAction,
+    actor: User,
+    to: BarterStatus,
+    fields: Prisma.BarterUncheckedUpdateInput,
+    note?: string | null,
+  ): Promise<BarterDetail> {
+    try {
+      return await this.prisma.barter.update({
+        where: {
+          id: barter.id,
+          status: barter.status,
+          changeRequestStatus: barter.changeRequestStatus,
+        },
+        data: {
+          ...fields,
+          status: to,
+          events: {
+            create: [this.eventOf(actor, action, barter.status as BarterStatus, to, note)],
+          },
+        },
+        include: { items: true, events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] } },
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2025') {
+        throw new UnprocessableEntityException(
+          'Esta permuta mudou enquanto você decidia. Abra de novo para ver como ela está',
+        );
+      }
+      throw error;
+    }
   }
 
   /**
@@ -925,7 +1322,7 @@ export class BartersService {
       // pessoal por um registro que ninguém apaga. O que ela precisa dizer é
       // que a cédula foi mexida, por quem, e em que pé ela ficou.
       detail:
-        `CPR ${desk.cpr?.number || 'sem número'} — ` +
+        `CPR ${desk.cpr?.number || 'sem número'}: ` +
         (desk.gaps.length === 0 ? 'completa' : `faltam ${desk.gaps.length} campo(s)`),
     });
     return desk;
@@ -986,6 +1383,25 @@ export class BartersService {
    * permuta existe e a quem cobrar.
    */
   private async requireBarter(actor: User, code: string, action: BarterAction): Promise<Barter> {
+    const barter = await this.visibleBarter(actor, code);
+
+    const refusal = refusalFor(action, barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    return barter;
+  }
+
+  /**
+   * As DUAS PRIMEIRAS perguntas de [requireBarter], sem a terceira: a permuta
+   * existe e o autor a enxerga.
+   *
+   * Ela é separada porque o DESVIO não passa pela esteira: "posso pedir
+   * alteração?" e "posso decidir este pedido?" não são perguntas sobre o ponto
+   * da linha em que a permuta está, e são respondidas por `change-request.ts`.
+   * O que não muda é a ordem — existe, enxerga, só então a regra do ato —, que
+   * é o que impede a mensagem da regra de contar o que o escopo esconde.
+   */
+  private async visibleBarter(actor: User, code: string): Promise<Barter> {
     const barter = await this.prisma.barter.findUnique({ where: { code } });
     if (!barter) throw new NotFoundException('Registro não encontrado.');
 
@@ -993,9 +1409,6 @@ export class BartersService {
       where: { code, ...this.scopeFor(actor) },
     });
     if (visible === 0) throw new ForbiddenException(this.noAccessFor(actor));
-
-    const refusal = refusalFor(action, barter);
-    if (refusal) throw new UnprocessableEntityException(refusal);
 
     return barter;
   }

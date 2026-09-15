@@ -56,7 +56,7 @@ Future<bool> sendSimulationToManager(
     // precisa dizer — senão o consultor acha que perdeu o trabalho.
     showErrorOn(
       messenger,
-      '${e.message} Sua simulação continua guardada — tente de novo quando tiver sinal.',
+      '${e.message} Sua simulação continua guardada. Tente de novo quando tiver sinal.',
     );
     return false;
   }
@@ -229,9 +229,13 @@ Future<_SendChoice?> _confirmSend(
                 ),
                 child: Column(
                   children: [
+                    // O CÓDIGO antes do nome, aqui como em toda lista de
+                    // produto do app: esta é a última conferência antes de a
+                    // permuta virar registro, e é por ele que o consultor
+                    // confirma que o insumo é o que o produtor pediu.
                     for (final item in sim.items)
                       DialogLine(
-                        item.productName.isEmpty ? item.productId : item.productName,
+                        simulationItemLabel(item),
                         '${formatQty(item.quantity)} ${item.unit}',
                       ),
                   ],
@@ -330,7 +334,7 @@ Future<void> _showSent(BuildContext context, SendResult result) {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
-                'Esta permuta já havia sido registrada no envio anterior — a '
+                'Esta permuta já havia sido registrada no envio anterior: a '
                 'resposta é que não chegou até você.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textMedium),
@@ -408,7 +412,7 @@ Future<void> _showUncertain(BuildContext context, String reason) {
       icon: Icon(Icons.help_outline, color: AppColors.pending, size: 44),
       title: const Text('Não deu para confirmar'),
       content: Text(
-        '$reason\n\nA permuta PODE ter sido registrada — a conexão caiu antes de '
+        '$reason\n\nA permuta PODE ter sido registrada: a conexão caiu antes de '
         'o servidor responder. Sua simulação continua guardada.\n\n'
         'Antes de enviar de novo, confira a aba "No gerente": se a permuta já '
         'estiver lá, descarte esta simulação em vez de reenviá-la.',

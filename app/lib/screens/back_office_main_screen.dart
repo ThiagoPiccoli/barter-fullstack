@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
-import '../branding/brand_wordmark.dart';
 import '../data/app_data.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
@@ -60,31 +60,25 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
     final post = _Post.of(widget.user);
     final waiting = post?.queue.length ?? 0;
 
-    return Scaffold(
+    return AdaptiveNavScaffold(
+      user: widget.user,
+      selectedIndex: _selectedIndex,
+      onSelect: (i) => setState(() => _selectedIndex = i),
       body: IndexedStack(index: _selectedIndex, children: _screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (i) => setState(() => _selectedIndex = i),
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.textLight,
-        selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-        unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: [
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.insights_outlined),
-            activeIcon: Icon(Icons.insights),
-            label: 'Início',
-          ),
-          BottomNavigationBarItem(
-            icon: _PendingBadge(
-                count: waiting, color: post?.color, child: const Icon(Icons.swap_horiz_outlined)),
-            activeIcon: _PendingBadge(
-                count: waiting, color: post?.color, child: const Icon(Icons.swap_horiz)),
-            label: brand.copy.barterPluralTitle,
-          ),
-        ],
-      ),
+      destinations: [
+        const AdaptiveDestination(
+          icon: Icons.insights_outlined,
+          activeIcon: Icons.insights,
+          label: 'Início',
+        ),
+        AdaptiveDestination(
+          icon: Icons.swap_horiz_outlined,
+          activeIcon: Icons.swap_horiz,
+          label: brand.copy.barterPluralTitle,
+          badgeCount: waiting,
+          badgeColor: post?.color,
+        ),
+      ],
     );
   }
 }
@@ -161,31 +155,6 @@ class _CreditorTileState extends State<_CreditorTile> {
           await _load();
         },
       ),
-    );
-  }
-}
-
-/// Selo com a contagem do que espera parecer. Some quando não há nada — um selo
-/// zerado treina o olho a ignorá-lo, e é justamente o contrário do que ele
-/// existe para fazer.
-class _PendingBadge extends StatelessWidget {
-  final int count;
-
-  /// A cor da ETAPA de quem está olhando — o mesmo índigo/âmbar/verde-azulado
-  /// que a permuta tem na lista. Um selo de cor fixa faria a fila do faturista
-  /// parecer a do gerente.
-  final Color? color;
-  final Widget child;
-  const _PendingBadge({required this.count, required this.child, this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    if (count == 0) return child;
-    return Badge(
-      label: Text('$count'),
-      backgroundColor: color ?? AppColors.atManager,
-      textColor: AppColors.onPrimary,
-      child: child,
     );
   }
 }
@@ -415,28 +384,18 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandWordmark(size: 32, showTagline: false),
+        title: const MainAppBarTitle('Início'),
         actions: [
           const ChangePasswordButton(),
           const LogoutButton(),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: CircleAvatar(
-              backgroundColor: AppColors.primaryAccent,
-              radius: 18,
-              child: Text(
-                user.avatarInitials,
-                style: TextStyle(
-                    color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
+          AppBarUserAvatar(user: user),
         ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         color: AppColors.primary,
-        child: ListView(
+        child: BoundedContent(
+          child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             DashboardHeader(
@@ -515,6 +474,7 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
                       )),
             const SizedBox(height: 16),
           ],
+          ),
         ),
       ),
     );

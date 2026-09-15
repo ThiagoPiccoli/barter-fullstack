@@ -60,8 +60,29 @@ class Capability {
   /// FATURAR a permuta aprovada (faturista).
   static const bartersInvoice = 'barters.invoice';
 
+  /// LER a mesa da cédula e gerar o documento — sem preenchê-la e sem faturar.
+  ///
+  /// É do faturista **e do admin**. O faturista a tem porque preenche; o admin,
+  /// porque a cédula de uma permuta faturada é registro da operação que ele
+  /// administra, e pedir segunda via a outra pessoa não fazia sentido. O ATO
+  /// continua sendo de quem fatura — ver `bartersInvoice` e a rota `PUT
+  /// /barters/:code/cpr`, que não mudou de dono.
+  static const bartersCprRead = 'barters.cprRead';
+
   /// Registrar permuta (consultor).
   static const bartersRegister = 'barters.register';
+
+  /// PEDIR a alteração de uma permuta que já saiu da mão de quem a registrou —
+  /// o único caminho de volta da esteira (consultor).
+  static const bartersChangeRequest = 'barters.changeRequest';
+
+  /// DECIDIR o pedido de alteração: liberar a permuta para ser refeita, ou
+  /// recusar com o motivo (admin).
+  ///
+  /// Ela é do admin e NÃO do comitê, ao contrário de [bartersReview]: o comitê
+  /// julga o negócio, e o que se julga aqui é o processo — se o trabalho já
+  /// feito pelos outros postos vai ser jogado fora.
+  static const bartersChangeReview = 'barters.changeReview';
 
   /// Enxergar as permutas do PRÓPRIO TIME — o escopo do gerente, entre "só as
   /// minhas" e "todas". É por ela que as telas dizem "do seu time".
@@ -278,6 +299,17 @@ class ProducerModel {
   /// exigências mínimas de insumo: cada insumo com taxa por hectare exige, no
   /// mínimo, `taxa × areaHa` na permuta deste produtor.
   final double areaHa;
+
+  /// COMO ESTE PRODUTOR RECOLHE o Funrural: sobre a comercialização (o padrão,
+  /// de quem não fez opção nenhuma) ou sobre a folha de pagamento — e aí sobre
+  /// a entrega fica só o Senar. Ver `services/tax_regime.dart`.
+  ///
+  /// É dado de CADASTRO porque é o que ele é: a opção formal perante o fisco é
+  /// feita uma vez e vale para todas as entregas do produtor. Toda permuta nova
+  /// nasce com ele, e grava a alíquota que ele produziu — que é o número
+  /// congelado no comprovante.
+  final TaxRegime taxRegime;
+
   final String avatarInitials;
   final DateTime createdAt;
 
@@ -290,6 +322,7 @@ class ProducerModel {
     required this.farmName,
     required this.city,
     required this.areaHa,
+    this.taxRegime = TaxRegime.comercializacao,
     required this.avatarInitials,
     required this.createdAt,
   });
@@ -306,6 +339,7 @@ class ProducerModel {
         farmName: json['farmName'] as String,
         city: json['city'] as String,
         areaHa: _asDouble(json['areaHa']),
+        taxRegime: taxRegimeFrom(json['taxRegime']),
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
       );
@@ -316,7 +350,7 @@ class ProducerModel {
   bool isAttendedBy(String consultantId) => consultantIds.contains(consultantId);
 
   /// Localização resumida (ex.: "Fazenda Boa Vista – Maringá/PR").
-  String get location => '$farmName – $city';
+  String get location => '$farmName, $city';
 
   /// Área formatada (ex.: "120 ha" / "85,5 ha").
   String get areaLabel {
@@ -396,6 +430,19 @@ BarterStatus _asStatus(dynamic v) {
     if (status.name == v) return status;
   }
   return BarterStatus.pending;
+}
+
+/// Estado da permuta que pode simplesmente NÃO VIR — é o caso de
+/// `changeRequestFrom`, presente só enquanto há (ou houve) pedido de alteração.
+///
+/// Diferente de [_asStatus], que cai em `pending`: aqui o desconhecido vira
+/// null, e a tela cala em vez de afirmar que o pedido foi feito de um estado
+/// que ninguém escolheu.
+BarterStatus? _asStatusOrNull(dynamic v) {
+  for (final status in BarterStatus.values) {
+    if (status.name == v) return status;
+  }
+  return null;
 }
 
 /// Papel vindo da API quando ele pode simplesmente NÃO VIR — é o caso de
@@ -481,6 +528,15 @@ class BarterEventModel {
         return 'Decisão do comitê';
       case 'invoice':
         return 'Faturada';
+      // O DESVIO: o pedido de alteração e a decisão do admin sobre ele. Três
+      // atos, e três linhas na história — quem pediu, e o que responderam. Ver
+      // `api/src/barters/change-request.ts`.
+      case 'changeRequested':
+        return 'Alteração solicitada';
+      case 'changeAccepted':
+        return 'Alteração liberada: voltou a rascunho';
+      case 'changeDenied':
+        return 'Pedido de alteração recusado';
       default:
         // Ato de um servidor mais novo que este app: mostra o passo em vez de
         // esconder um pedaço da história por não saber nomeá-lo.
@@ -614,6 +670,19 @@ class BarterStepModel {
 class BarterItem {
   final String productId;
   final String productName;
+
+  /// O CÓDIGO do produto congelado no registro (o `sku` do catálogo).
+  ///
+  /// Ele anda junto do nome em toda tela e em todo documento: é por ele que o
+  /// insumo é procurado no depósito, conferido na retirada e batido contra a
+  /// nota — e dois produtos de nomes parecidos ("Glifosato 480 SL" e "Glifosato
+  /// 480 WG") só se distinguem por ele.
+  ///
+  /// Null nos itens gravados antes de o campo existir e nos produtos sem
+  /// código. Aí a tela cai no código ATUAL do catálogo (ver `AppData.skuOf`), o
+  /// que é uma leitura do cadastro e não uma afirmação sobre o dia do acordo.
+  final String? sku;
+
   final String unit;
   final double quantity;
   final double unitValue;
@@ -630,6 +699,7 @@ class BarterItem {
   const BarterItem({
     required this.productId,
     required this.productName,
+    this.sku,
     required this.unit,
     required this.quantity,
     required this.unitValue,
@@ -639,6 +709,7 @@ class BarterItem {
   factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
         productId: _asId(json['productId']),
         productName: json['productName'] as String,
+        sku: json['sku'] as String?,
         unit: json['unit'] as String,
         quantity: _asDouble(json['quantity']),
         unitValue: _asDouble(json['unitValue']),
@@ -743,6 +814,32 @@ class BarterModel {
   final DateTime? invoicedAt;
   final String? invoiceNote;
 
+  /// O PEDIDO DE ALTERAÇÃO — o único caminho de volta que a permuta tem.
+  ///
+  /// O consultor que registrou pede, com uma justificativa, enquanto a permuta
+  /// não foi faturada; o ADMIN decide. Liberar devolve a permuta a rascunho (e
+  /// apaga o parecer do gerente e a decisão do comitê, que falavam de insumos
+  /// prestes a mudar); recusar deixa tudo onde está, com o motivo escrito.
+  ///
+  /// [changeRequestStatus] é `open` (na mesa do admin), `denied` (recusado, e o
+  /// motivo está em [changeRequestReply]) ou null — que é o caso normal: nunca
+  /// se pediu nada, ou o pedido foi atendido e a permuta voltou a ser rascunho.
+  ///
+  /// O pedido NÃO move a permuta: ela continua na fila em que estava, e quem a
+  /// tem na mesa vê a bandeira antes de gastar trabalho nela.
+  final String? changeRequestStatus;
+  final String? changeRequestNote;
+  final String? changeRequestBy;
+  final DateTime? changeRequestAt;
+
+  /// O ESTADO em que a permuta estava quando o pedido foi feito — é ele que diz
+  /// ao admin o tamanho do que ele vai desfazer: um parecer, ou uma decisão.
+  final BarterStatus? changeRequestFrom;
+
+  /// A resposta do admin, que só sobrevive na RECUSA: a liberação fala pelo
+  /// próprio efeito, e a permuta reaparece na mão de quem pediu.
+  final String? changeRequestReply;
+
   /// COM QUEM a permuta está parada agora, resolvido pelo servidor. Null nos
   /// dois fins de linha (negada, faturada), onde não há próximo passo.
   ///
@@ -797,6 +894,12 @@ class BarterModel {
     this.invoicedBy,
     this.invoicedAt,
     this.invoiceNote,
+    this.changeRequestStatus,
+    this.changeRequestNote,
+    this.changeRequestBy,
+    this.changeRequestAt,
+    this.changeRequestFrom,
+    this.changeRequestReply,
     this.waitingFor,
     this.serverStatusLabel,
     this.events = const [],
@@ -844,6 +947,12 @@ class BarterModel {
       invoicedBy: json['invoicedBy'] as String?,
       invoicedAt: _asDateOrNull(json['invoicedAt']),
       invoiceNote: json['invoiceNote'] as String?,
+      changeRequestStatus: json['changeRequestStatus'] as String?,
+      changeRequestNote: json['changeRequestNote'] as String?,
+      changeRequestBy: json['changeRequestBy'] as String?,
+      changeRequestAt: _asDateOrNull(json['changeRequestAt']),
+      changeRequestFrom: _asStatusOrNull(json['changeRequestFrom']),
+      changeRequestReply: json['changeRequestReply'] as String?,
       waitingFor: _asRoleOrNull(json['waitingFor']),
       serverStatusLabel: json['statusLabel'] as String?,
       events: ((json['events'] as List?) ?? const [])
@@ -1024,17 +1133,47 @@ class BarterModel {
   /// este campo. Nenhum dos dois é motivo para esconder a história da permuta.
   bool get hasProgress => steps.isNotEmpty;
 
+  /* ── O pedido de alteração ────────────────────────────────────────── */
+
+  /// Há um pedido de alteração ESPERANDO o admin?
+  ///
+  /// É o que acende a bandeira na permuta — para quem pediu ("já está lá") e
+  /// para quem a tem na mesa ("os insumos disto podem mudar; não gaste o
+  /// parecer ainda").
+  bool get hasOpenChangeRequest => changeRequestStatus == 'open';
+
+  /// O último pedido foi RECUSADO, e o motivo está em [changeRequestReply].
+  ///
+  /// Ele sobrevive à decisão, e o aceito não: o aceite fala pelo próprio efeito
+  /// (a permuta voltou a ser rascunho), e a recusa precisa continuar visível —
+  /// sem ela, o consultor veria só a permuta parada onde estava, sem nada
+  /// dizendo que ele já pediu e ouviu não.
+  bool get changeRequestDenied => changeRequestStatus == 'denied';
+
+  /// ESTE usuário pode pedir alteração desta permuta agora?
+  ///
+  /// Mesma regra do servidor (`api/src/barters/change-request.ts`), repetida
+  /// aqui pela razão de sempre: a tela não oferece um botão que levaria 422. O
+  /// rascunho fica de fora porque ele já é dele — altera-se direto; a faturada,
+  /// porque o que saiu para fora não se corrige por aqui.
+  bool canBeChangedBy(String? userId) =>
+      userId != null &&
+      consultantId == userId &&
+      !isDraft &&
+      !isInvoiced &&
+      !hasOpenChangeRequest;
+
   /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
   /// — repetida aqui só para a tela não oferecer um botão que levaria 403.
   bool awaitsOpinionFrom(String? managerId) =>
       managerId != null && managerId.isNotEmpty && awaitsManager && this.managerId == managerId;
 
   /// O gerente a quem ela foi enviada, como se lê na tela.
-  String get managerLabel => managerName ?? '—';
+  String get managerLabel => managerName ?? 'não definido';
 
-  /// A unidade de retirada como se lê na tela (travessão nas permutas antigas,
+  /// A unidade de retirada como se lê na tela ("não informada" nas permutas
   /// anteriores ao cadastro de unidades).
-  String get unitLabel => unitName.isEmpty ? '—' : unitName;
+  String get unitLabel => unitName.isEmpty ? 'não informada' : unitName;
 
   /// O estado como se lê na tela.
   ///
@@ -1045,22 +1184,33 @@ class BarterModel {
   String get statusLabel {
     final fromServer = serverStatusLabel;
     if (fromServer != null && fromServer.isNotEmpty) return fromServer;
-    switch (status) {
-      case BarterStatus.draft:
-        return 'Rascunho';
-      case BarterStatus.sentToManager:
-        return 'No gerente';
-      case BarterStatus.pending:
-        return 'No comitê';
-      case BarterStatus.approved:
-        return 'Aprovada — a faturar';
-      case BarterStatus.approvedWithConditions:
-        return 'Aprovada com ressalva — a faturar';
-      case BarterStatus.denied:
-        return 'Negada';
-      case BarterStatus.invoiced:
-        return 'Faturada';
-    }
+    return barterStatusLabel(status);
+  }
+}
+
+/// O rótulo LOCAL de um estado da permuta.
+///
+/// Ele sustenta [BarterModel.statusLabel] quando a resposta não traz o rótulo do
+/// servidor, e serve a quem precisa nomear um estado que NÃO é o atual da
+/// permuta — o pedido de alteração é o caso: ele guarda de onde foi feito
+/// (`changeRequestFrom`), e a tela diz "pedido com ela em Aprovada, a faturar"
+/// em vez de imprimir o nome cru do enum.
+String barterStatusLabel(BarterStatus status) {
+  switch (status) {
+    case BarterStatus.draft:
+      return 'Rascunho';
+    case BarterStatus.sentToManager:
+      return 'No gerente';
+    case BarterStatus.pending:
+      return 'No comitê';
+    case BarterStatus.approved:
+      return 'Aprovada, a faturar';
+    case BarterStatus.approvedWithConditions:
+      return 'Aprovada com ressalva, a faturar';
+    case BarterStatus.denied:
+      return 'Negada';
+    case BarterStatus.invoiced:
+      return 'Faturada';
   }
 }
 
@@ -1105,8 +1255,8 @@ class ProductModel {
   /// reconhece o item já cadastrado — e é por ele que se procura na busca.
   final String? sku;
 
-  /// O código como se lê na tela (vazio vira travessão).
-  String get codeLabel => sku?.isNotEmpty == true ? sku! : '—';
+  /// O código como se lê na tela (vazio vira "sem código").
+  String get codeLabel => sku?.isNotEmpty == true ? sku! : 'sem código';
 
   /// A UNIDADE deste item é palpite e precisa de revisão.
   ///
@@ -1411,7 +1561,19 @@ class BarterVersionModel {
   final DateTime startsAt;
   final DateTime? endsAt;
   final DateTime? closedAt;
+
+  /// Quem encerrou — ou a FRASE do encerramento automático ("Automático — meta
+  /// de vendas atingida"). O servidor escreve as duas coisas no mesmo campo de
+  /// propósito: quem lê uma versão encerrada quer saber por que ela fechou, e a
+  /// resposta é uma pessoa ou uma meta.
   final String? closedBy;
+
+  /// Bater a meta ENCERRA este Barter, ou só avisa?
+  ///
+  /// A escolha é do lançamento e vive no servidor — o app não decide nada com
+  /// ela, só conta ao admin em que modo o Barter está. Quem fecha, quando ligado,
+  /// é a aprovação que cruza a meta (ver `closeIfGoalReached` na API).
+  final bool closeOnGoal;
   final String? sourceFile;
   final String? note;
 
@@ -1446,6 +1608,7 @@ class BarterVersionModel {
     this.endsAt,
     this.closedAt,
     this.closedBy,
+    this.closeOnGoal = false,
     this.sourceFile,
     this.note,
     this.goals = const [],
@@ -1473,6 +1636,7 @@ class BarterVersionModel {
       endsAt: _asDateOrNull(json['endsAt']),
       closedAt: _asDateOrNull(json['closedAt']),
       closedBy: json['closedBy'] as String?,
+      closeOnGoal: json['closeOnGoal'] == true,
       sourceFile: json['sourceFile'] as String?,
       note: json['note'] as String?,
       prices: (json['prices'] as List? ?? const [])
@@ -1513,8 +1677,8 @@ class BarterVersionModel {
     return null;
   }
 
-  /// Alguma meta foi atingida? É o aviso de "hora de encerrar" para o admin —
-  /// o Barter não se fecha sozinho.
+  /// Alguma meta foi atingida? No modo manual é o aviso de "hora de encerrar"
+  /// para o admin; no automático, a versão já vem encerrada do servidor.
   bool get anyGoalMet => goals.any((goal) => goal.met);
 
   /// Rótulo curto para a faixa do consultor: "S2026.02 • paga em soja".

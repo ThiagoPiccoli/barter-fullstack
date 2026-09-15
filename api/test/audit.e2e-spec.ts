@@ -180,7 +180,7 @@ describe('Auditoria (e2e)', () => {
     ]);
     expect(rows[0].detail).toBe('faturada — NF 4471');
     expect(rows[1].targetLabel).toBe('PRM-2026-002');
-    expect(rows[1].detail).toBe('aprovada — ok pelo comitê');
+    expect(rows[1].detail).toBe('aprovada: ok pelo comitê');
   });
 
   /**

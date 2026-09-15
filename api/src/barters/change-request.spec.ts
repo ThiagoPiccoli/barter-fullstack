@@ -1,0 +1,228 @@
+import { CAPABILITY, rolesWith } from '../common/policy';
+import { ROLE } from '../common/roles';
+import { BARTER_STATUS, BARTER_STATUSES, progressOf } from './barter-workflow';
+import {
+  CHANGE_REQUEST_ACTION,
+  CHANGE_REQUEST_LABELS,
+  CHANGE_REQUEST_STATUS,
+  CLEARED_BY_CHANGE,
+  changeDecisionRefusal,
+  changeRequestRefusal,
+  cultureRefusal,
+  requestedFrom,
+} from './change-request';
+
+/**
+ * O DESVIO da esteira, escrito por extenso.
+ *
+ * A esteira só anda para a frente, e este é o único caminho de volta que existe
+ * no sistema. O que estes testes protegem é POR ONDE ele passa: quem pode
+ * pedir, até quando, e o que o aceite desfaz. Alargá-lo sem perceber (uma
+ * permuta faturada que aceita pedido, um segundo pedido por cima de um em
+ * aberto) é a diferença entre corrigir uma permuta e apagar o trabalho de três
+ * postos sem ninguém decidir isso.
+ */
+describe('Pedido de alteração da permuta', () => {
+  const barterIn = (status: string, changeRequestStatus: string | null = null) => ({
+    status,
+    changeRequestStatus,
+  });
+
+  /* ── Quem pede e quem decide ────────────────────────────────────────── */
+
+  /**
+   * Os dois lados do desvio têm capacidades DIFERENTES, e nenhum papel tem as
+   * duas: pedir é do consultor, decidir é do admin. Se um dia coincidirem, o
+   * pedido nasce concedido — e o portão vira enfeite.
+   */
+  it('o consultor pede e o admin decide, e ninguém faz as duas coisas', () => {
+    expect(rolesWith(CAPABILITY.bartersChangeRequest)).toEqual([ROLE.consultant]);
+    expect(rolesWith(CAPABILITY.bartersChangeReview)).toEqual([ROLE.admin]);
+  });
+
+  /**
+   * O admin decide o PROCESSO e continua sem decidir o NEGÓCIO. As duas coisas
+   * juntas na mesma pessoa fariam do "libere e refaça" um caminho para aprovar
+   * o que o comitê negou.
+   */
+  it('quem decide o pedido não decide a permuta', () => {
+    expect(rolesWith(CAPABILITY.bartersReview)).not.toContain(ROLE.admin);
+    expect(rolesWith(CAPABILITY.bartersChangeReview)).not.toContain(ROLE.committee);
+  });
+
+  /* ── Até quando se pode pedir ───────────────────────────────────────── */
+
+  it('pede-se em qualquer permuta que já saiu da mão do consultor', () => {
+    for (const status of [
+      BARTER_STATUS.sentToManager,
+      BARTER_STATUS.pending,
+      BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
+      // A NEGADA também: o pedido é o caminho de refazer a permuta que o comitê
+      // recusou, e é ele que substitui o "registra outra igual e esquece esta".
+      BARTER_STATUS.denied,
+    ]) {
+      expect(changeRequestRefusal(barterIn(status))).toBeNull();
+    }
+  });
+
+  /** O rascunho já é dele: pedir permissão para mexer no próprio é burocracia. */
+  it('o rascunho não pede nada — ele se altera direto', () => {
+    expect(changeRequestRefusal(barterIn(BARTER_STATUS.draft))).toContain('rascunho seu');
+  });
+
+  /** O que saiu para fora não volta: a nota se corrige onde ela foi emitida. */
+  it('a faturada não aceita pedido', () => {
+    expect(changeRequestRefusal(barterIn(BARTER_STATUS.invoiced))).toContain('faturada');
+  });
+
+  /**
+   * Um pedido por vez. Dois em aberto sobre a mesma permuta dariam ao admin
+   * duas versões do que precisa mudar, e a decisão sobre uma apagaria a outra
+   * em silêncio.
+   */
+  it('não se pede duas vezes antes de o admin responder', () => {
+    const refusal = changeRequestRefusal(
+      barterIn(BARTER_STATUS.approved, CHANGE_REQUEST_STATUS.open),
+    );
+    expect(refusal).toContain('Já existe um pedido');
+  });
+
+  /** Recusado, pede-se de novo: o motivo da recusa pode ter sido resolvido. */
+  it('depois de recusado, pede-se outra vez', () => {
+    expect(
+      changeRequestRefusal(barterIn(BARTER_STATUS.approved, CHANGE_REQUEST_STATUS.denied)),
+    ).toBeNull();
+  });
+
+  /* ── A decisão ──────────────────────────────────────────────────────── */
+
+  it('só há o que decidir quando há pedido em aberto', () => {
+    expect(
+      changeDecisionRefusal(barterIn(BARTER_STATUS.approved, CHANGE_REQUEST_STATUS.open)),
+    ).toBeNull();
+    expect(changeDecisionRefusal(barterIn(BARTER_STATUS.approved))).toContain('não tem pedido');
+    // Quem chega tarde ouve que o pedido JÁ FOI decidido, e não que ele nunca
+    // existiu: é o segundo admin na mesma permuta, e a diferença entre as duas
+    // frases é ele procurar (ou não) um defeito que não há.
+    expect(
+      changeDecisionRefusal(barterIn(BARTER_STATUS.approved, CHANGE_REQUEST_STATUS.denied)),
+    ).toContain('já foi decidido');
+  });
+
+  /* ── O que o aceite desfaz ──────────────────────────────────────────── */
+
+  /**
+   * A permuta liberada volta a ser um rascunho DE VERDADE: sem parecer do
+   * gerente e sem decisão do comitê pendurados nela. Os dois falavam de insumos
+   * que estão prestes a mudar — e a linha do tempo continua guardando que eles
+   * existiram.
+   */
+  it('o aceite apaga o parecer do gerente e a decisão do comitê', () => {
+    expect(CLEARED_BY_CHANGE).toEqual({
+      consultantSentAt: null,
+      managerId: null,
+      managerName: null,
+      managerNote: null,
+      managerReviewedAt: null,
+      reviewNote: null,
+      reviewedBy: null,
+      reviewedById: null,
+      reviewedAt: null,
+    });
+  });
+
+  /**
+   * O que ele NÃO apaga: o parecer do consultor. É o texto dele sobre o próprio
+   * cliente, ele vai reencaminhar a permuta, e o que continua valendo não se
+   * pede para reescrever.
+   */
+  it('o aceite preserva o parecer de quem pediu', () => {
+    expect(Object.keys(CLEARED_BY_CHANGE)).not.toContain('consultantNote');
+  });
+
+  /**
+   * O rascunho de volta é um rascunho como outro qualquer: a checklist recomeça
+   * do registro, e as três etapas seguintes voltam a estar por vir. É o que
+   * garante que a permuta refeita passe pelo gerente e pelo comitê de novo, em
+   * vez de reaparecer aprovada do outro lado.
+   */
+  it('a permuta liberada recomeça a esteira', () => {
+    const steps = progressOf({ status: BARTER_STATUS.draft });
+    // Só o REGISTRO segue cumprido — a permuta continua existindo, e é a única
+    // etapa que o desvio não desfaz.
+    expect(steps.filter((step) => step.state === 'done').map((step) => step.action)).toEqual([
+      'register',
+    ]);
+    expect(steps.find((step) => step.state === 'current')?.action).toBe('forward');
+  });
+
+  /* ── Até onde a alteração alcança: versões sim, culturas não ────────── */
+
+  const versionOf = (code: string, grainId: number | null, grainName: string) => ({
+    code,
+    season: { grainId, grainName },
+  });
+
+  /**
+   * A permuta fechada na PRIMEIRA versão da soja continua alterável com a
+   * terceira no ar: ela não foi faturada, e o que falta nela é uma correção de
+   * insumos. Amarrá-la à versão vigente faria de cada publicação de tabela um
+   * prazo de validade para as permutas em aberto.
+   */
+  it('a alteração atravessa versões da mesma cultura', () => {
+    expect(
+      cultureRefusal(versionOf('S2026.01', 1, 'Soja'), versionOf('S2026.03', 1, 'Soja')),
+    ).toBeNull();
+  });
+
+  /**
+   * E não atravessa a CULTURA: com o Barter do milho no ar, uma permuta de soja
+   * seria remontada com os insumos, os mínimos e o grão de outro negócio.
+   */
+  it('a alteração não atravessa culturas, e a recusa diz quais são', () => {
+    const refusal = cultureRefusal(
+      versionOf('S2026.02', 1, 'Soja'),
+      versionOf('M2026.01', 2, 'Milho'),
+    );
+    expect(refusal).toContain('Soja');
+    expect(refusal).toContain('Milho');
+    expect(refusal).toContain('mesma cultura');
+  });
+
+  /**
+   * Safra cujo GRÃO foi excluído do catálogo: o FK virou null e sobrou o nome
+   * congelado. Comparar por nome aí é a única comparação possível, e é melhor do
+   * que recusar toda permuta dessas safras.
+   */
+  it('sem id do grão, a cultura é comparada pelo nome congelado', () => {
+    expect(
+      cultureRefusal(versionOf('S2026.01', null, 'Soja'), versionOf('S2026.03', null, ' soja ')),
+    ).toBeNull();
+    expect(
+      cultureRefusal(versionOf('S2026.01', null, 'Soja'), versionOf('M2026.01', null, 'Milho')),
+    ).not.toBeNull();
+  });
+
+  /* ── O registro do desvio ───────────────────────────────────────────── */
+
+  /** Três fatos, três autores possíveis, três linhas na história da permuta. */
+  it('cada ato do desvio tem nome e rótulo', () => {
+    expect(Object.keys(CHANGE_REQUEST_LABELS).sort()).toEqual(
+      Object.values(CHANGE_REQUEST_ACTION).sort(),
+    );
+  });
+
+  /**
+   * `changeRequestFrom` guarda um estado da esteira — é ele que deixa a linha
+   * do tempo dizer "pediu com a permuta já aprovada", que é o que muda o peso
+   * da decisão do admin.
+   */
+  it('o pedido guarda de onde foi feito', () => {
+    expect(requestedFrom({ changeRequestFrom: BARTER_STATUS.approved })).toBe(
+      BARTER_STATUS.approved,
+    );
+    expect(requestedFrom({})).toBeNull();
+    expect(BARTER_STATUSES).toContain(requestedFrom({ changeRequestFrom: 'pending' })!);
+  });
+});

@@ -25,16 +25,16 @@ class BarterRepository {
     required String producerId,
     required String unitId,
     required Map<String, double> inputQuantities,
-    TaxRegime taxRegime = TaxRegime.comercializacao,
     String note = '',
   }) async {
     final data = await api.post('/barters', body: {
       'producerId': int.parse(producerId),
       if (note.trim().isNotEmpty) 'note': note.trim(),
-      // COMO o Funrural desta entrega é recolhido — a escolha do fechamento. A
-      // ALÍQUOTA que ela produz é do servidor: a tabela é lei, e o app
-      // instalado não pode ser a fonte dela.
-      'taxRegime': taxRegime.apiValue,
+      // SEM `taxRegime`: o regime é do produtor e mora no cadastro dele, e é de
+      // lá que o servidor o lê. Mandá-lo daqui significaria mandar o que o
+      // aparelho tinha guardado, que pode ser mais velho que o cadastro; e a
+      // alíquota que ele produz é do servidor de qualquer forma, porque a
+      // tabela é lei e o app instalado não pode ser a fonte dela.
       // A unidade de retirada — logística, e só: quem dá o parecer é o gerente
       // do CONSULTOR, e ele é definido no encaminhamento.
       'unitId': int.parse(unitId),
@@ -65,6 +65,58 @@ class BarterRepository {
   /// parecer seria um botão de "seguir" disfarçado.
   Future<BarterModel> forward(String code, String note) async {
     final data = await api.post('/barters/$code/forward', body: {
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A TABELA DE VALORES com que esta permuta foi fechada.
+  ///
+  /// É o que a tela precisa para REMONTAR os insumos de um rascunho de uma
+  /// gestão anterior: os preços da permuta são os daquela versão, e não os da
+  /// vigente. Sem ela, o consultor montaria a permuta lendo um número e o
+  /// servidor gravaria outro.
+  ///
+  /// Vem na moeda da LENTE, como a versão vigente: sacas por unidade para o
+  /// consultor, R$ para a retaguarda.
+  Future<BarterVersionModel> versionOf(String code) async {
+    final data = await api.get('/barters/$code/version');
+    return BarterVersionModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A REESCRITA DOS INSUMOS de um rascunho — a permuta remontada por quem a
+  /// registrou, depois de o admin liberar a alteração (ou antes do primeiro
+  /// encaminhamento).
+  ///
+  /// A lista vai INTEIRA, como no registro: a permuta passa pelas regras de
+  /// mínimo como um conjunto, e o servidor a reprecifica pela tabela da versão
+  /// em que ela foi fechada. Só vale enquanto ela é rascunho — depois disso o
+  /// caminho é o pedido de alteração (ver [requestChange]).
+  Future<BarterModel> replaceInputs(String code, Map<String, double> inputQuantities) async {
+    final data = await api.put('/barters/$code/inputs', body: {
+      'inputs': [
+        for (final entry in inputQuantities.entries)
+          if (entry.value > 0) {'productId': int.parse(entry.key), 'quantity': entry.value},
+      ],
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O PEDIDO DE ALTERAÇÃO — o consultor pede ao admin que a permuta volte para
+  /// ser refeita. Vale enquanto ela não foi faturada, e a justificativa é
+  /// obrigatória: é ela a peça inteira do pedido, e é sobre ela que o admin
+  /// decide.
+  Future<BarterModel> requestChange(String code, String note) async {
+    final data = await api.post('/barters/$code/change-request', body: {'note': note.trim()});
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A DECISÃO DO ADMIN sobre o pedido: liberar (a permuta volta a rascunho, e
+  /// o parecer do gerente e a decisão do comitê são apagados) ou recusar — e aí
+  /// o motivo é obrigatório, como em toda resposta que fecha a porta de alguém.
+  Future<BarterModel> decideChange(String code, {required bool accept, String note = ''}) async {
+    final data = await api.post('/barters/$code/change-request/decision', body: {
+      'accept': accept,
       if (note.trim().isNotEmpty) 'note': note.trim(),
     });
     return BarterModel.fromJson(data as Map<String, dynamic>);

@@ -447,6 +447,39 @@ class AppData {
     return null;
   }
 
+  /// O CÓDIGO de um item de permuta, como a tela o mostra.
+  ///
+  /// Preferência absoluta pelo código CONGELADO no item: é ele que estava no
+  /// cadastro no dia do acordo, e é o que a conferência da retirada vai
+  /// comparar. O do catálogo entra só quando o item não tem o seu — os
+  /// registrados antes de o campo existir —, e aí o número está sendo LIDO do
+  /// cadastro de hoje, não afirmado sobre aquele dia.
+  ///
+  /// Null quando nenhum dos dois responde: produto sem código, ou catálogo que
+  /// não veio (o consultor sem rede). A tela cala em vez de mostrar um traço
+  /// onde caberia o nome do insumo.
+  static String? skuOf(BarterItem item) {
+    final frozen = item.sku;
+    if (frozen != null && frozen.isNotEmpty) return frozen;
+    return productSkuById(item.productId);
+  }
+
+  /// O CÓDIGO de um produto do catálogo, pelo id — para onde não há item de
+  /// permuta com código congelado: a simulação guardada no aparelho e a
+  /// conferência de envio, que carregam só o id, o nome e a quantidade.
+  ///
+  /// Null quando o catálogo não veio (consultor sem rede) ou o produto não tem
+  /// código: quem chama some com a informação em vez de mostrar um traço.
+  static String? productSkuById(String productId) {
+    for (final product in [...inputs, ...grains]) {
+      if (product.id == productId) {
+        final sku = product.sku;
+        return sku != null && sku.isNotEmpty ? sku : null;
+      }
+    }
+    return null;
+  }
+
   /// Busca uma unidade pelo id (null se não encontrada ou id vazio).
   static UnitModel? unitById(String? id) {
     if (id == null || id.isEmpty) return null;
@@ -493,14 +526,12 @@ class AppData {
     required String producerId,
     required String unitId,
     required Map<String, double> inputQuantities,
-    TaxRegime taxRegime = TaxRegime.comercializacao,
     String note = '',
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
       unitId: unitId,
       inputQuantities: inputQuantities,
-      taxRegime: taxRegime,
       note: note,
     );
     barters.insert(0, barter);
@@ -645,7 +676,6 @@ class AppData {
         producerId: simulation.producerId,
         unitId: simulation.unitId,
         inputQuantities: simulation.inputQuantities,
-        taxRegime: simulation.taxRegime,
         note: note,
       );
       await deleteSimulation(simulation.id);
@@ -743,6 +773,7 @@ class AppData {
     double? targetSales,
     double? targetSacks,
     int? targetBarters,
+    bool closeOnGoal = false,
     String? note,
     bool carryOver = false,
   }) async {
@@ -755,6 +786,7 @@ class AppData {
       targetSales: targetSales,
       targetSacks: targetSacks,
       targetBarters: targetBarters,
+      closeOnGoal: closeOnGoal,
       note: note,
       carryOver: carryOver,
     );
@@ -780,6 +812,18 @@ class AppData {
   static Future<void> closeVersion(String code) async {
     await _program.closeVersion(code);
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+  }
+
+  /// Liga ou desliga o encerramento automático por meta na versão vigente.
+  ///
+  /// Recarrega safras e versão vigente como o encerramento manual faz, e pelo
+  /// mesmo motivo: ligar com a meta já batida ENCERRA o Barter no servidor, e um
+  /// cache que só guardasse o interruptor mostraria um Barter aberto que não
+  /// existe mais. Devolve a versão como o servidor a deixou.
+  static Future<BarterVersionModel> setVersionCloseOnGoal(String code, bool enabled) async {
+    final version = await _program.setCloseOnGoal(code, enabled);
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+    return version;
   }
 
   static Future<void> closeSeason(String code) async {
@@ -812,6 +856,45 @@ class AppData {
   /// O FATURAMENTO da permuta aprovada — o último posto da linha.
   static Future<BarterModel> invoiceBarter(String code, String note) async {
     final updated = await _barters.invoice(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O PEDIDO DE ALTERAÇÃO do consultor — o caminho de volta da esteira.
+  static Future<BarterModel> requestBarterChange(String code, String note) async {
+    final updated = await _barters.requestChange(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A DECISÃO DO ADMIN sobre o pedido: liberar ou recusar.
+  static Future<BarterModel> decideBarterChange(
+    String code, {
+    required bool accept,
+    String note = '',
+  }) async {
+    final updated = await _barters.decideChange(code, accept: accept, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A TABELA com que uma permuta foi fechada — a gestão DELA, não a vigente.
+  ///
+  /// Fora do cache, como o detalhe: o cache guarda a versão VIGENTE, que é a que
+  /// precifica permuta nova. Esta é a de uma permuta específica, e guardá-la no
+  /// mesmo lugar faria a tela de registro passar a montar com a tabela de uma
+  /// gestão encerrada.
+  static Future<BarterVersionModel> barterVersion(String code) => _barters.versionOf(code);
+
+  /// A REESCRITA DOS INSUMOS do rascunho — a permuta remontada.
+  ///
+  /// Quem reprecifica é o servidor, pela tabela da versão em que a permuta foi
+  /// fechada: o cache guarda a resposta dele, e não uma permuta montada aqui.
+  static Future<BarterModel> replaceBarterInputs(
+    String code,
+    Map<String, double> inputQuantities,
+  ) async {
+    final updated = await _barters.replaceInputs(code, inputQuantities);
     _replaceBarter(updated);
     return updated;
   }

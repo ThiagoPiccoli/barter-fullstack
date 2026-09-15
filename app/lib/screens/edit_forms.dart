@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../services/tax_regime.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/provisional_password_dialog.dart';
 
@@ -43,6 +44,13 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   /// dividem região e atendem o mesmo cliente.
   final Set<String> _consultantIds = {};
 
+  /// COMO ELE RECOLHE o Funrural — a opção formal dele perante o fisco.
+  ///
+  /// Começa na comercialização porque é o regime de quem não fez opção nenhuma,
+  /// que é a maioria: o cadastro não inventa uma escolha, mostra o padrão legal
+  /// para ser confirmado ou trocado.
+  TaxRegime _taxRegime = TaxRegime.comercializacao;
+
   bool get _isNew => widget.producer == null;
 
   @override
@@ -55,9 +63,15 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       _consultantIds.addAll(
         p.consultantIds.where((id) => AppData.consultantById(id) != null),
       );
+      _taxRegime = p.taxRegime;
     }
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
+    // O DOCUMENTO redesenha a tela porque ele é quem decide as alíquotas
+    // mostradas ao lado do regime: 11 dígitos é CPF, 14 é CNPJ, e os
+    // percentuais são outros. Sem isto, quem digita o CNPJ depois de escolher o
+    // regime continuaria vendo os números de pessoa física até salvar.
+    _document.addListener(() => setState(() {}));
     _phone = TextEditingController(text: p?.phone ?? '');
     _farm = TextEditingController(text: p?.farmName ?? '');
     _city = TextEditingController(text: p?.city ?? '');
@@ -95,6 +109,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       farmName: _farm.text.trim(),
       city: _city.text.trim(),
       areaHa: double.parse(_area.text.trim().replaceAll(',', '.')),
+      taxRegime: _taxRegime,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
     );
@@ -141,6 +156,15 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
                 return null;
               },
             ),
+            // O IMPOSTO do produtor, no cadastro dele: é aqui que a opção pela
+            // folha mora, porque é uma opção só — feita perante o fisco, valendo
+            // para o ano e para todas as entregas. Cada permuta nova nasce com
+            // ela e congela a alíquota que ela produziu.
+            _TaxRegimeField(
+              selected: _taxRegime,
+              document: _document.text,
+              onChanged: (regime) => setState(() => _taxRegime = regime),
+            ),
             const SizedBox(height: 8),
             Text(
               'A área define os insumos obrigatórios e a quantidade mínima de cada '
@@ -150,6 +174,111 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             ),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// O REGIME DE RECOLHIMENTO do Funrural, no cadastro do produtor.
+///
+/// Toda entrega de grão é comercialização de produção rural, e sobre ela incidem
+/// o Funrural e o Senar. O que se escolhe aqui é a BASE da parte previdenciária:
+/// a receita da venda (o padrão, de quem não fez opção formal) ou a folha de
+/// pagamento do produtor.
+///
+/// Escolher a FOLHA não isenta as entregas: o Senar continua saindo da
+/// comercialização, e é por isso que a alíquota cai em vez de zerar. Os dois
+/// percentuais aparecem ao lado dos nomes justamente para essa diferença ficar
+/// visível na hora da escolha — e eles saem do DOCUMENTO digitado acima, porque
+/// CPF e CNPJ pagam diferente.
+///
+/// Ela vive no cadastro, e não na permuta, porque é uma opção só: feita perante
+/// o fisco, ela vale para o ano e para todas as entregas do produtor. Cada
+/// permuta nova a herda daqui e congela a alíquota que ela produziu — o que já
+/// foi fechado não muda quando esta escolha mudar.
+class _TaxRegimeField extends StatelessWidget {
+  final TaxRegime selected;
+
+  /// O documento como está sendo digitado: é a contagem de dígitos dele que
+  /// decide se os percentuais mostrados são os de CPF ou os de CNPJ.
+  final String document;
+
+  final ValueChanged<TaxRegime> onChanged;
+
+  const _TaxRegimeField({
+    required this.selected,
+    required this.document,
+    required this.onChanged,
+  });
+
+  String _rateLabel(TaxRegime regime) =>
+      '${taxRateOf(regime, document).toStringAsFixed(2).replaceAll('.', ',')}%';
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: AppShape.field,
+          border: Border.all(color: AppColors.borderSubtle),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+              child: Row(
+                children: [
+                  Icon(Icons.receipt_long_outlined, size: 20, color: AppColors.textLight),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Recolhimento do Funrural',
+                      style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            RadioGroup<TaxRegime>(
+              groupValue: selected,
+              onChanged: (value) {
+                if (value != null) onChanged(value);
+              },
+              child: Column(
+                children: [
+                  for (final regime in TaxRegime.values)
+                    RadioListTile<TaxRegime>(
+                      value: regime,
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(regime.shortLabel, style: const TextStyle(fontSize: 14)),
+                          ),
+                          Text(
+                            _rateLabel(regime),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textMedium,
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: Text(
+                        regime.description,
+                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -505,19 +634,19 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.consultant =>
           'As permutas registradas por este consultor são enviadas ao gerente escolhido '
               'acima, que dá o parecer técnico antes de elas seguirem para o comitê. A '
-              'unidade é onde ele trabalha — ela não decide o parecer, e a retirada de cada '
+              'unidade é onde ele trabalha: ela não decide o parecer, e a retirada de cada '
               'permuta é combinada caso a caso.',
         UserRole.manager =>
           'O gerente recebe as permutas dos consultores do time dele e escreve o parecer '
               'técnico de cada uma. Ele passa a aparecer na lista de gerentes do cadastro de '
-              'consultor — é lá que o time é montado.',
+              'consultor: é lá que o time é montado.',
         UserRole.committee =>
           'O comitê é uma REUNIÃO, e este é o cadastro dela: um acesso só, compartilhado '
               'por quem participa. É por ele que se aprova ou nega a permuta depois do '
-              'parecer do gerente, e a decisão sai assinada pelo comitê — a ata (quem '
+              'parecer do gerente, e a decisão sai assinada pelo comitê. A ata (quem '
               'estava, o que foi acordado) vai na observação da decisão.',
         UserRole.biller =>
-          'O faturista fatura o que o comitê aprovou — a última etapa da permuta. A fila '
+          'O faturista fatura o que o comitê aprovou, a última etapa da permuta. A fila '
               'dele não é pessoal: é o estado da permuta, e todos os faturistas veem a '
               'mesma. Quem emitiu cada uma fica registrado na linha do tempo dela.',
         UserRole.admin => '',
@@ -775,7 +904,7 @@ class _EditUnitScreenState extends State<EditUnitScreen> {
             const SizedBox(height: 8),
             Text(
               'A unidade é o local de retirada dos insumos. O consultor escolhe uma ao '
-              'registrar cada permuta — pode ser qualquer uma, combinada com o produtor. '
+              'registrar cada permuta: pode ser qualquer uma, combinada com o produtor. '
               'Ela não decide quem analisa a permuta: isso é o gerente do consultor.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),

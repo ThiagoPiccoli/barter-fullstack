@@ -3,7 +3,17 @@ import ExcelJS from 'exceljs';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { MAX_VERSION_PRICES } from '../src/seasons/version-import';
-import { ADMIN, BACK_OFFICE, JOAO, UNIT, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  BACK_OFFICE,
+  COMITE,
+  GERENTE,
+  JOAO,
+  UNIT,
+  createTestApp,
+  loginAs,
+  resetDb,
+} from './utils';
 
 /**
  * O LANÇAMENTO do Barter, ponta a ponta.
@@ -37,6 +47,38 @@ describe('Barter — safra e versões (e2e)', () => {
       { productId: 6, quantity: 300 },
       { productId: 7, quantity: 18 },
     ],
+  };
+
+  /**
+   * Uma permuta nova percorrendo a esteira INTEIRA, do rascunho à decisão do
+   * comitê. Devolve a resposta da decisão.
+   *
+   * Ela aparece nos casos de meta porque a decisão do comitê é o único ato que
+   * mexe no realizado — e, portanto, o único capaz de bater uma meta. Chegar até
+   * lá exige os quatro passos: sem o parecer do gerente, o comitê não alcança a
+   * permuta.
+   */
+  const aprovarUmaPermuta = async (status: 'approved' | 'denied' = 'approved') => {
+    const consultor = await asUser(JOAO);
+    const criada = await http()
+      .post('/api/v1/barters')
+      .set('Authorization', consultor)
+      .send(permuta);
+    const code = criada.body.data.code as string;
+
+    await http()
+      .post(`/api/v1/barters/${code}/forward`)
+      .set('Authorization', consultor)
+      .send({ note: 'Cliente antigo, pagou as três últimas safras em dia.' });
+    await http()
+      .post(`/api/v1/barters/${code}/opinion`)
+      .set('Authorization', await asUser(GERENTE))
+      .send({ note: 'Área conferida e histórico bom.' });
+
+    return http()
+      .post(`/api/v1/barters/${code}/review`)
+      .set('Authorization', await asUser(COMITE))
+      .send({ status, ...(status === 'denied' ? { note: 'Endividamento acima do limite.' } : {}) });
   };
 
   /** Tabela mínima para publicar uma versão nova pelo corpo da requisição. */
@@ -431,7 +473,7 @@ describe('Barter — safra e versões (e2e)', () => {
       expect(response.body.data.goals.every((g: { met: boolean }) => !g.met)).toBe(true);
     });
 
-    it('a meta não fecha o Barter sozinha — quem encerra é o admin', async () => {
+    it('no modo manual (o padrão) a meta não fecha o Barter — quem encerra é o admin', async () => {
       const admin = await asUser(ADMIN);
       // Meta de uma permuta só, com três já aprovadas na versão.
       await http()
@@ -439,11 +481,187 @@ describe('Barter — safra e versões (e2e)', () => {
         .set('Authorization', admin)
         .send({ ...tabela(115), targetBarters: 1 });
 
+      await aprovarUmaPermuta();
+
+      const versão = await http()
+        .get('/api/v1/barter-versions/S2026.03')
+        .set('Authorization', admin);
+      expect(versão.body.data.goals[0].met).toBe(true);
+      expect(versão.body.data.status).toBe('active');
+      expect(versão.body.data.closeOnGoal).toBe(false);
+
+      // E o Barter segue aceitando permuta: a meta avisou, e mais nada.
       const permutaNova = await http()
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
       expect(permutaNova.status).toBe(201);
+    });
+
+    /**
+     * O ENCERRAMENTO AUTOMÁTICO, ponta a ponta — a outra metade da opção.
+     *
+     * O que estes casos protegem: quem fecha o Barter é a APROVAÇÃO que cruzou a
+     * meta. Não há relógio, o fechamento tem hora e ator, e o `closedBy` explica
+     * o motivo para quem abrir a versão meses depois.
+     */
+    describe('encerrar ao bater meta', () => {
+      it('a aprovação que bate a meta encerra o Barter na hora', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1, closeOnGoal: true });
+
+        const aprovada = await aprovarUmaPermuta();
+        expect(aprovada.status).toBe(200);
+
+        const versão = await http()
+          .get('/api/v1/barter-versions/S2026.03')
+          .set('Authorization', admin);
+        expect(versão.body.data.status).toBe('closed');
+        expect(versão.body.data.isOpen).toBe(false);
+        expect(versão.body.data.closedAt).toBeTruthy();
+        // O MOTIVO fica gravado: ninguém clicou em nada, e a versão precisa
+        // dizer por que fechou.
+        expect(versão.body.data.closedBy).toBe('Automático: meta de permutas atingida (1)');
+
+        // E o consultor para de registrar permuta na hora.
+        //
+        // A mensagem é a de "não há Barter aberto", e não a de "este Barter está
+        // fechado": encerrada a única versão ativa da safra, não existe versão
+        // vigente para nomear. É a mesma frase de quando nada foi lançado ainda,
+        // e é a verdade da tela — o consultor está esperando o próximo
+        // lançamento.
+        const tardeDemais = await http()
+          .post('/api/v1/barters')
+          .set('Authorization', await asUser(JOAO))
+          .send(permuta);
+        expect(tardeDemais.status).toBe(422);
+        expect(tardeDemais.body.message).toContain('Não há Barter aberto');
+      });
+
+      it('a permuta que a aprovação fechou continua aprovada: o Barter fecha DEPOIS dela', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1, closeOnGoal: true });
+
+        const aprovada = await aprovarUmaPermuta();
+        expect(aprovada.body.data.status).toBe('approved');
+        // Ela é a permuta que bateu a meta, e o realizado a conta.
+        const versão = await http()
+          .get('/api/v1/barter-versions/S2026.03')
+          .set('Authorization', admin);
+        expect(versão.body.data.realized.barters).toBe(1);
+      });
+
+      it('permuta NEGADA não fecha nada — ela não soma na meta', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1, closeOnGoal: true });
+
+        await aprovarUmaPermuta('denied');
+
+        const versão = await http()
+          .get('/api/v1/barter-versions/S2026.03')
+          .set('Authorization', admin);
+        expect(versão.body.data.status).toBe('active');
+        expect(versão.body.data.realized.barters).toBe(0);
+      });
+
+      it('encerrar ao bater meta SEM meta é recusado — seria uma opção que nunca acontece', async () => {
+        const response = await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', await asUser(ADMIN))
+          .send({ ...tabela(115), closeOnGoal: true });
+
+        expect(response.status).toBe(422);
+        expect(response.body.message).toContain('ao menos uma meta');
+      });
+
+      it('o admin liga o automático na versão vigente, sem republicar a tabela', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 2 });
+
+        const ligado = await http()
+          .put('/api/v1/barter-versions/S2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: true });
+        expect(ligado.status).toBe(200);
+        expect(ligado.body.data.closeOnGoal).toBe(true);
+        // Meta de duas permutas, nenhuma aprovada ainda: ligar não fecha.
+        expect(ligado.body.data.status).toBe('active');
+
+        const desligado = await http()
+          .put('/api/v1/barter-versions/S2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: false });
+        expect(desligado.body.data.closeOnGoal).toBe(false);
+      });
+
+      /**
+       * Ligar a opção com a meta JÁ batida encerra na hora. É a leitura literal
+       * de "encerre ao bater meta" — a alternativa seria um Barter aberto, com a
+       * meta batida e a opção ligada, esperando uma aprovação que talvez nunca
+       * venha.
+       */
+      it('ligar o automático com a meta já batida encerra na hora', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1 });
+
+        await aprovarUmaPermuta();
+
+        const ligado = await http()
+          .put('/api/v1/barter-versions/S2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: true });
+        expect(ligado.status).toBe(200);
+        expect(ligado.body.data.status).toBe('closed');
+        expect(ligado.body.data.closedBy).toBe('Automático: meta de permutas atingida (1)');
+      });
+
+      it('versão sem meta não aceita o automático, e versão encerrada não muda de modo', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/S2026/versions')
+          .set('Authorization', admin)
+          .send(tabela(115));
+
+        const semMeta = await http()
+          .put('/api/v1/barter-versions/S2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: true });
+        expect(semMeta.status).toBe(422);
+        expect(semMeta.body.message).toContain('não tem meta');
+
+        await http().post('/api/v1/barter-versions/S2026.03/close').set('Authorization', admin);
+        const encerrada = await http()
+          .put('/api/v1/barter-versions/S2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: false });
+        expect(encerrada.status).toBe(422);
+        expect(encerrada.body.message).toContain('Só a versão vigente');
+      });
+
+      it('consultor e retaguarda não mudam o modo de encerramento', async () => {
+        for (const email of [JOAO, ...BACK_OFFICE]) {
+          const response = await http()
+            .put('/api/v1/barter-versions/S2026.02/close-on-goal')
+            .set('Authorization', await asUser(email))
+            .send({ enabled: true });
+          expect(response.status).toBe(403);
+        }
+      });
     });
   });
 

@@ -206,6 +206,10 @@ export function toProducerJson(producer: Producer & { consultants: { consultantI
     farmName: producer.farmName,
     city: producer.city,
     areaHa: producer.areaHa,
+    // COMO ELE RECOLHE o Funrural — a opção formal dele perante o fisco, que
+    // vale para todas as entregas e por isso mora no cadastro. É o que a permuta
+    // nova assume sem perguntar. Ver `Producer.taxRegime`.
+    taxRegime: producer.taxRegime,
     createdAt: producer.createdAt,
     initials: initialsOf(producer.name),
   };
@@ -412,6 +416,11 @@ export function toBarterVersionJson(
         }
       : {}),
     targetSacks: version.targetSacks,
+    // O MODO de encerramento vai para todo mundo, e não só para a retaguarda:
+    // ele não é um valor, é uma regra de vigência — a mesma natureza de `isOpen`
+    // e de `endsAt`, que o consultor já recebe. Saber que o Barter pode fechar ao
+    // bater meta é o que explica a tela dele fechar no meio da tarde.
+    closeOnGoal: version.closeOnGoal,
     sourceFile: version.sourceFile,
     note: version.note,
     closedAt: version.closedAt,
@@ -437,6 +446,12 @@ export function toBarterItemJson(item: BarterItem, lens: ValueLens = CURRENCY_LE
     kind: item.kind,
     productId: item.productId,
     productName: item.productName,
+    // O CÓDIGO congelado no registro. Ele acompanha o nome em toda tela e em
+    // todo documento onde o item aparece: é por ele que o insumo é procurado no
+    // depósito, conferido na retirada e batido contra a nota — e dois produtos
+    // de nomes parecidos ("Glifosato 480 SL" e "Glifosato 480 WG") só se
+    // distinguem por ele. Null nos itens anteriores ao campo.
+    sku: item.productSku,
     unit: item.unit,
     quantity: item.quantity,
     ...(lens.showsCurrency ? { unitValue: item.unitValue } : {}),
@@ -616,6 +631,20 @@ export function toBarterJson(
     invoicedBy: barter.invoicedBy,
     invoicedAt: barter.invoicedAt,
     invoiceNote: barter.invoiceNote,
+    // O PEDIDO DE ALTERAÇÃO em aberto (ou a recusa do último), com o texto dos
+    // dois lados. Ver `barters/change-request.ts`.
+    //
+    // Vai para TODO MUNDO que enxerga a permuta, e não só para o consultor e o
+    // admin: quem tem a permuta na mesa precisa saber que o consultor pediu para
+    // refazê-la — dar um parecer técnico sobre insumos que estão prestes a mudar
+    // é trabalho jogado fora, e hoje a única maneira de descobrir isso era o
+    // telefonema que este pedido existe para substituir.
+    changeRequestStatus: barter.changeRequestStatus,
+    changeRequestNote: barter.changeRequestNote,
+    changeRequestBy: barter.changeRequestBy,
+    changeRequestAt: barter.changeRequestAt,
+    changeRequestFrom: barter.changeRequestFrom,
+    changeRequestReply: barter.changeRequestReply,
     // COM QUEM ela está parada e QUAL é o próximo ato, resolvidos pela máquina de
     // estados do servidor. Vão no JSON para o app não ter uma segunda cópia do
     // fluxo em Dart: uma etapa nova aparece nas telas já instaladas em vez de

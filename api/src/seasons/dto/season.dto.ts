@@ -18,10 +18,31 @@ const NumberFromText = (): PropertyDecorator =>
     if (typeof value !== 'string' || value.trim() === '') return undefined;
     return parseNumber(value) ?? value;
   });
+
+/**
+ * Booleano que pode chegar como TEXTO — o mesmo motivo do `NumberFromText`: os
+ * dois caminhos de publicação são JSON (booleano de verdade) e multipart (onde
+ * `true` é a palavra "true").
+ *
+ * Só "true"/"false" passam. Texto de outra forma é devolvido intacto para o
+ * `@IsBoolean` reclamar: um `Boolean("qualquer coisa")` silencioso ligaria o
+ * encerramento automático por causa de um erro de digitação.
+ */
+const BooleanFromText = (): PropertyDecorator =>
+  Transform(({ value }: { value: unknown }) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value !== 'string') return value;
+    const text = value.trim().toLowerCase();
+    if (text === '') return undefined;
+    if (text === 'true') return true;
+    if (text === 'false') return false;
+    return value;
+  });
 import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsInt,
   IsNumber,
@@ -82,6 +103,18 @@ export class VersionLimitsDto {
   @IsOptional()
   @IsDateString({}, { message: 'Data de encerramento inválida' })
   endsAt?: string;
+
+  /**
+   * Bater a meta ENCERRA o Barter (true) ou apenas avisa (false, o padrão)?
+   *
+   * Que exista pelo menos uma meta é conferido no service, e não aqui: o DTO vê
+   * um campo por vez, e esta é uma regra sobre a combinação deles. Ver
+   * `assertPublishable`.
+   */
+  @IsOptional()
+  @BooleanFromText()
+  @IsBoolean({ message: 'closeOnGoal deve ser true ou false' })
+  closeOnGoal?: boolean;
 
   // Metas: ver NumberFromText — no multipart elas chegam como texto.
   @IsOptional()
@@ -159,4 +192,18 @@ export class UpdateVersionPriceDto {
   @IsNumber()
   @IsPositive()
   price!: number;
+}
+
+/**
+ * Troca o modo de encerramento da versão vigente, sem republicar a tabela.
+ *
+ * Existe porque a alternativa era pior: a opção nasce no lançamento, junto das
+ * metas, e mudar de ideia no meio do Barter obrigaria a publicar uma versão nova
+ * — o que encerraria a atual e reiniciaria a contagem do realizado só para
+ * virar um interruptor.
+ */
+export class CloseOnGoalDto {
+  @BooleanFromText()
+  @IsBoolean({ message: 'Informe true para encerrar ao bater meta, ou false para manual' })
+  enabled!: boolean;
 }

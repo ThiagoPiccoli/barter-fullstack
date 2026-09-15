@@ -162,7 +162,7 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               const SizedBox(height: 40),
               Text(
-                'v1.0.0 – ${brand.identity.legalName} © 2026',
+                'v1.0.0 • ${brand.identity.legalName} © 2026',
                 style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11),
               ),
             ],

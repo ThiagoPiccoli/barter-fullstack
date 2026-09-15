@@ -61,6 +61,10 @@ class AppColors {
   static Color get invoiced => brand.palette.invoiced;
   static Color get invoicedBg => brand.palette.invoicedBg;
 
+  /// O AVISO que não é estado de permuta — ver `info` em BrandPalette.
+  static Color get info => brand.palette.info;
+  static Color get infoBg => brand.palette.infoBg;
+
   // --- Traços e estados neutros ------------------------------------------
   static Color get divider => brand.palette.divider;
   static Color get borderSubtle => brand.palette.borderSubtle;

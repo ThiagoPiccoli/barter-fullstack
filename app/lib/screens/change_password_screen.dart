@@ -86,7 +86,9 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
         appBar: AppBar(
           title: Text(widget.forced ? 'Defina sua senha' : 'Alterar senha'),
           automaticallyImplyLeading: !widget.forced,
-          actions: [if (widget.forced) const LogoutButton()],
+          // `alwaysShow`: na troca OBRIGATÓRIA, sair é a única outra porta da
+          // tela. Ela não pode depender de haver ou não coluna lateral em volta.
+          actions: [if (widget.forced) const LogoutButton(alwaysShow: true)],
         ),
         body: Form(
           key: _formKey,

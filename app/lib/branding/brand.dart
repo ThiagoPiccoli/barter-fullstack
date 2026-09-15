@@ -114,6 +114,17 @@ class BrandPalette {
   final Color invoiced;
   final Color invoicedBg;
 
+  /// [info] é o AVISO que não é estado de permuta: um fato que a tela precisa
+  /// dizer e sobre o qual quem está lendo não age.
+  ///
+  /// Ela não podia sair das cores do caminho, e é por isso que existe: pintar
+  /// um aviso de âmbar ([pending]) pede uma ação que ninguém precisa tomar, e
+  /// pintá-lo de [atManager] o faria parecer um recado do gerente dentro de uma
+  /// tela que já usa aquele índigo para dizer onde a permuta está. Azul frio,
+  /// fora da paleta do fluxo: informação, e não fila.
+  final Color info;
+  final Color infoBg;
+
   /// Separadores e bordas de campo.
   final Color divider;
 
@@ -176,6 +187,8 @@ class BrandPalette {
     required this.deniedBg,
     required this.invoiced,
     required this.invoicedBg,
+    required this.info,
+    required this.infoBg,
     required this.divider,
     required this.borderSubtle,
     required this.cardShadow,

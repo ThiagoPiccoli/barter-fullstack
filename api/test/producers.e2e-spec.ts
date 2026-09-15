@@ -73,6 +73,65 @@ describe('Producers — carteira (e2e)', () => {
     expect(asAdmin.body.data.consultantIds).toEqual([CONSULTANT.joao]);
   });
 
+  /**
+   * O REGIME DE RECOLHIMENTO é dado do produtor: a opção pela folha é feita uma
+   * vez, perante o fisco, e vale para todas as entregas dele. É daqui que cada
+   * permuta nova o herda (ver `Producer.taxRegime`).
+   */
+  describe('regime de recolhimento do Funrural', () => {
+    const cadastrar = async (taxRegime?: string) =>
+      request(app.getHttpServer())
+        .post('/api/v1/producers')
+        .set('Authorization', `Bearer ${await loginAs(app, ADMIN)}`)
+        .send({
+          name: 'Produtor da Folha',
+          consultantIds: [CONSULTANT.joao],
+          document: 'CPF 888.888.888-88',
+          farmName: 'Fazenda da Folha',
+          city: 'Maringá/PR',
+          areaHa: 90,
+          ...(taxRegime === undefined ? {} : { taxRegime }),
+        });
+
+    it('o cadastro guarda a opção do produtor', async () => {
+      const response = await cadastrar('folha');
+      expect(response.status).toBe(201);
+      expect(response.body.data.taxRegime).toBe('folha');
+    });
+
+    /** Quem não fez opção nenhuma cai na comercialização — que é a maioria. */
+    it('sem opção declarada, o produtor recolhe sobre a comercialização', async () => {
+      const response = await cadastrar();
+      expect(response.body.data.taxRegime).toBe('comercializacao');
+    });
+
+    it('regime que não existe é recusado', async () => {
+      const response = await cadastrar('presumido');
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('recolhimento');
+    });
+
+    it('a edição troca o regime do produtor já cadastrado', async () => {
+      const admin = `Bearer ${await loginAs(app, ADMIN)}`;
+      // Antônio Carvalho (id 1) está na comercialização no dataset.
+      const response = await request(app.getHttpServer())
+        .put('/api/v1/producers/1')
+        .set('Authorization', admin)
+        .send({
+          name: 'Antônio Carvalho',
+          consultantIds: [CONSULTANT.joao],
+          document: 'CPF 123.456.789-00',
+          farmName: 'Fazenda Boa Vista',
+          city: 'Maringá/PR',
+          areaHa: 120,
+          taxRegime: 'folha',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.taxRegime).toBe('folha');
+    });
+  });
+
   it('produtor precisa nascer na carteira de pelo menos um consultor válido', async () => {
     const admin = await loginAs(app, ADMIN);
     const create = (consultantIds: unknown) =>

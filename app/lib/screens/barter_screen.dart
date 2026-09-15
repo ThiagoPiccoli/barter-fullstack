@@ -33,7 +33,24 @@ class NewBarterScreen extends StatefulWidget {
   /// simulação, em vez de deixar uma segunda cópia na lista.
   final BarterSimulation? simulation;
 
-  const NewBarterScreen({super.key, required this.consultant, this.simulation});
+  /// Um RASCUNHO JÁ REGISTRADO sendo remontado — a permuta que voltou para a
+  /// mão do consultor depois de o admin liberar a alteração dela (ou que ainda
+  /// não foi encaminhada).
+  ///
+  /// É a mesma tela, e de propósito: remontar uma permuta é escolher insumos
+  /// contra as mesmas regras de mínimo, com a mesma lista e a mesma conta em
+  /// sacas. O que muda é o desfecho — aqui o botão do rodapé grava no SERVIDOR
+  /// (`PUT /barters/:code/inputs`) em vez de guardar uma simulação no aparelho,
+  /// e as etapas de produtor e unidade não existem: as duas estão congeladas no
+  /// registro, e trocá-las seria outra permuta.
+  final BarterModel? draft;
+
+  const NewBarterScreen({
+    super.key,
+    required this.consultant,
+    this.simulation,
+    this.draft,
+  });
   @override
   State<NewBarterScreen> createState() => _NewBarterScreenState();
 }
@@ -72,20 +89,31 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// mesma permuta na lista.
   String? _simulationId;
 
-  /// COMO o Funrural desta entrega vai ser recolhido — a escolha do fechamento.
-  ///
-  /// Começa na comercialização porque é o que se aplica a quem não fez a opção
-  /// formal pela folha: a permuta não inventa um regime, ela mostra o padrão
-  /// para ser confirmado ou trocado. Ver `services/tax_regime.dart`.
-  TaxRegime _taxRegime = TaxRegime.comercializacao;
+
+  /// A permuta registrada que esta tela está remontando, quando é o caso.
+  BarterModel? get _draft => widget.draft;
 
   @override
   void initState() {
     super.initState();
+
+    // A REMONTAGEM de um rascunho já registrado: produtor, unidade e imposto
+    // vêm congelados do registro, e só os insumos estão em jogo. Ela sai daqui
+    // com as três etapas respondidas, direto na lista de insumos.
+    final draft = widget.draft;
+    if (draft != null) {
+      _producerId = draft.producerId;
+      _unitId = draft.unitId;
+      for (final item in draft.inputs) {
+        if (item.quantity > 0) _inputQty[item.productId] = item.quantity;
+      }
+      _loadDraftVersion(draft);
+      return;
+    }
+
     final simulation = widget.simulation;
     if (simulation == null) return;
     _simulationId = simulation.id;
-    _taxRegime = simulation.taxRegime;
     _producerId = simulation.producerId;
     _unitId = simulation.unitId;
     _inputQty.addAll(simulation.inputQuantities);
@@ -98,19 +126,56 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       if (!mounted) return;
       if (_producer == null) {
         _toast(
-          '${simulation.producerName} não está mais na sua carteira — escolha outro produtor.',
+          '${simulation.producerName} não está mais na sua carteira. Escolha outro produtor.',
         );
       } else if (_unit == null) {
-        _toast('A unidade ${simulation.unitName} não está mais disponível — escolha outra.');
+        _toast('A unidade ${simulation.unitName} não está mais disponível. Escolha outra.');
       }
     });
   }
 
-  /// O Barter vigente. Null (ou fechado) trava a tela inteira.
-  BarterVersionModel? get _version => AppData.currentVersion;
+  /// A TABELA DA PERMUTA que está sendo remontada, quando a tela está em modo
+  /// de alteração.
+  ///
+  /// Ela é buscada no servidor (`GET /barters/:code/version`) porque pode ser de
+  /// uma gestão ANTERIOR: a alteração atravessa versões da mesma cultura, e os
+  /// preços continuam sendo os da gestão em que a permuta foi fechada. Montar
+  /// com a tabela vigente mostraria ao consultor um total em sacas diferente do
+  /// que o servidor gravaria.
+  BarterVersionModel? _draftVersion;
 
-  /// Os insumos que a versão vigente colocou na mesa.
-  List<ProductModel> get _catalog => AppData.barterInputs;
+  /// E se ela não veio (sem rede, gestão apagada), o que houve.
+  String? _versionError;
+
+  /// Busca a tabela da permuta em remontagem.
+  ///
+  /// Falha em VOZ ALTA, ao contrário da linha do tempo do detalhe: sem a tabela
+  /// não há preço, e uma tela de alteração que abrisse "vazia" deixaria o
+  /// consultor zerar os insumos sem perceber.
+  Future<void> _loadDraftVersion(BarterModel draft) async {
+    try {
+      final version = await AppData.barterVersion(draft.id);
+      if (!mounted) return;
+      setState(() => _draftVersion = version);
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _versionError = error.message);
+    }
+  }
+
+  /// A VERSÃO que precifica esta tela.
+  ///
+  /// Na permuta nova é a vigente — é ela que diz por quanto se permuta hoje. Na
+  /// REMONTAGEM é a da permuta, pelo motivo em [_draftVersion].
+  BarterVersionModel? get _version =>
+      widget.draft != null ? _draftVersion : AppData.currentVersion;
+
+  /// Os insumos que a versão desta tela colocou na mesa.
+  List<ProductModel> get _catalog {
+    final version = _version;
+    if (version == null) return const [];
+    return AppData.inputs.where((input) => version.priceOf(input.id) != null).toList();
+  }
 
   /// Os insumos escolhidos, precificados PELA VERSÃO — a entrada da matemática
   /// da permuta (services/barter_math.dart, espelho do cálculo do servidor).
@@ -124,7 +189,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         PricedInput(
           productId: e.key,
           quantity: e.value,
-          unitPrice: AppData.valuePerUnitOf(e.key),
+          unitPrice: _version?.priceOf(e.key)?.perUnit ?? 0,
           classId: _productById(e.key)?.classId,
         ),
   ];
@@ -307,6 +372,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       return;
     }
 
+    // A REMONTAGEM não passa por aqui: ela grava no servidor, não no aparelho.
+    if (_draft != null) return _saveDraft();
+
     setState(() => _saving = true);
     final now = DateTime.now();
     final version = _version;
@@ -332,7 +400,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       ],
       simulatedSacks: _sacksNeeded,
       grainName: version?.grainName ?? '',
-      taxRegime: _taxRegime,
+      // O REGIME é o do CADASTRO do produtor, lido agora: a permuta não escolhe
+      // imposto, ela herda o que ele declarou ao fisco. Guardá-lo na simulação é
+      // só o registro do que valia quando ela foi montada — quem aplica a
+      // alíquota é o servidor, no envio, lendo o cadastro de novo.
+      taxRegime: producer.taxRegime,
       createdAt: widget.simulation?.createdAt ?? now,
       updatedAt: now,
     );
@@ -375,6 +447,36 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           : 'Simulação guardada só nesta sessão: o aparelho não permitiu gravá-la. '
                 'Envie-a antes de fechar o app.',
     );
+  }
+
+  /// A REMONTAGEM gravada no SERVIDOR — o desfecho quando esta tela está
+  /// refazendo um rascunho já registrado.
+  ///
+  /// Ela é o contrário da simulação em quase tudo, e o motivo é o mesmo dos dois
+  /// lados: a permuta já EXISTE no servidor. Guardá-la no aparelho criaria uma
+  /// segunda versão dela fora dali — e a próxima sincronização não saberia qual
+  /// das duas é a permuta. Por isso aqui não há "guardar para depois": ou os
+  /// insumos novos entram no registro, ou nada mudou.
+  ///
+  /// Quem reprecifica é o servidor, pela tabela da versão em que a permuta foi
+  /// fechada, e é ele quem confere de novo os mínimos por hectare e por classe —
+  /// as mesmas travas do registro. A tela devolve a permuta atualizada a quem a
+  /// abriu.
+  Future<void> _saveDraft() async {
+    final draft = _draft;
+    if (draft == null) return;
+
+    setState(() => _saving = true);
+    try {
+      final updated = await AppData.replaceBarterInputs(draft.id, _inputQty);
+      if (!mounted) return;
+      setState(() => _saving = false);
+      Navigator.pop(context, updated);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showErrorSnack(context, e);
+    }
   }
 
   /// "Encaminhar agora?" — a pergunta que vem logo depois de guardar.
@@ -458,7 +560,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.simulation == null
+          _draft != null
+              ? 'Alterar insumos • ${_draft!.id}'
+              : widget.simulation == null
               ? 'Nova ${brand.copy.barterTitle}'
               : 'Simulação • ${widget.simulation!.producerName}',
         ),
@@ -467,13 +571,114 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       // As três etapas, na ordem em que uma habilita a seguinte: o produtor
       // define a área (e com ela os mínimos por hectare); a unidade define
       // onde se retira e de quem é o parecer; só então os insumos.
-      body: version == null || !version.isOpen
+      // A REMONTAGEM depende da tabela DA PERMUTA, que vem do servidor: ela pode
+      // ser de uma gestão anterior, e é ela que precifica esta tela.
+      body: _draft != null && _draftVersion == null
+          ? _buildLoadingDraftVersion()
+          : version == null || !version.isOpen
           ? _buildClosedBarter()
+          // A ALTERAÇÃO atravessa VERSÕES da mesma cultura, e não atravessa
+          // culturas: com o Barter do milho no ar, uma permuta de soja seria
+          // remontada com os insumos, os mínimos e o grão de outro negócio. É a
+          // mesma regra que o servidor aplica (ver `change-request.ts`), dita
+          // aqui para a tela não abrir um caminho que termina em 422.
+          : _draft != null && !_sameCultureAsOpenBarter
+          ? _buildDraftFromOtherCulture()
           : producer == null
           ? _buildProducerStep(version)
           : unit == null
           ? _buildUnitStep(version, producer)
           : _buildInputStep(version, producer, unit),
+    );
+  }
+
+  /// A permuta em remontagem é da MESMA cultura do Barter aberto hoje?
+  ///
+  /// Comparada pelo GRÃO, e não pelo código da versão: a alteração atravessa
+  /// versões (a permuta da primeira soja continua alterável com a terceira no
+  /// ar) e não atravessa culturas. Mesma regra do servidor, em `cultureRefusal`.
+  bool get _sameCultureAsOpenBarter {
+    final open = AppData.currentVersion;
+    final mine = _draftVersion;
+    if (open == null || mine == null) return false;
+    if (open.grainId.isNotEmpty && mine.grainId.isNotEmpty) return open.grainId == mine.grainId;
+    return open.grainName.trim().toLowerCase() == mine.grainName.trim().toLowerCase();
+  }
+
+  /// A tabela da permuta está a caminho, ou não veio.
+  ///
+  /// Falha em VOZ ALTA, ao contrário da linha do tempo do detalhe: sem a tabela
+  /// não há preço nesta tela, e uma alteração aberta "vazia" deixaria o
+  /// consultor mexer em quantidades cujo total ele não pode ver.
+  Widget _buildLoadingDraftVersion() {
+    final error = _versionError;
+    if (error == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        const SizedBox(height: 40),
+        Icon(Icons.cloud_off_outlined, size: 56, color: AppColors.textLight),
+        const SizedBox(height: 14),
+        Text(
+          'Não deu para abrir a tabela desta permuta',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '$error\n\nOs valores da ${_draft!.id} são os do '
+          '${brand.copy.programTitle} ${_draft!.versionCode}, e sem eles não dá para '
+          'remontar os insumos. Tente de novo quando tiver sinal.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+        ),
+        const SizedBox(height: 18),
+        Center(
+          child: FilledButton.icon(
+            onPressed: () {
+              setState(() => _versionError = null);
+              _loadDraftVersion(_draft!);
+            },
+            icon: const Icon(Icons.refresh, size: 18),
+            label: const Text('Tentar de novo'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// A permuta a remontar é de OUTRA CULTURA, e por isso ela não se remonta.
+  ///
+  /// Não é o código da versão que impede: a permuta de uma gestão anterior da
+  /// mesma cultura é alterável, e é para isso que a tela busca a tabela dela. O
+  /// que não atravessa é a cultura, porque os insumos, os mínimos por hectare e
+  /// o grão que paga são outros: remontá-la aqui seria montá-la com a régua de
+  /// um negócio diferente.
+  Widget _buildDraftFromOtherCulture() {
+    final open = AppData.currentVersion;
+    return ListView(
+      padding: const EdgeInsets.all(32),
+      children: [
+        const SizedBox(height: 40),
+        Icon(Icons.grass_outlined, size: 56, color: AppColors.textLight),
+        const SizedBox(height: 14),
+        Text(
+          'Esta permuta é de outra cultura',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'A ${_draft!.id} é de ${_draftVersion?.grainName.toLowerCase() ?? 'outro grão'} '
+          '(${brand.copy.programTitle} ${_draft!.versionCode}), e o que está aberto hoje é '
+          '${open?.grainName.toLowerCase() ?? 'outra cultura'}. A alteração vale entre '
+          'gestões da mesma cultura. Fale com o administrador.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+        ),
+      ],
     );
   }
 
@@ -655,7 +860,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             color: AppColors.primary,
             text:
                 'Etapa 2: onde ${producer.name.split(' ').first} vai retirar os insumos. '
-                'Pode ser qualquer unidade — combine com ele.',
+                'Pode ser qualquer unidade, combine com ele.',
           ),
         ),
         if (all.isEmpty)
@@ -779,7 +984,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       ],
       sortLabel: _sort == _InputSort.name ? 'Nome' : 'Escolhidos',
       sortOptions: const {
-        _InputSort.name: 'Nome (A–Z)',
+        _InputSort.name: 'Nome (A a Z)',
         _InputSort.chosenFirst: 'Escolhidos primeiro',
       },
       current: _sort,
@@ -866,17 +1071,22 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               ],
             ),
           ),
-          TextButton.icon(
-            onPressed: _changeProducer,
-            icon: const Icon(Icons.swap_horiz, size: 16),
-            label: const Text('Trocar', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.primary,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              minimumSize: const Size(0, 0),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          // TROCAR só existe na permuta que está sendo MONTADA. Numa remontagem
+          // o produtor está congelado no registro — a área dele é o denominador
+          // dos mínimos e do investimento —, e trocá-lo seria outra permuta, não
+          // uma alteração desta.
+          if (_draft == null)
+            TextButton.icon(
+              onPressed: _changeProducer,
+              icon: const Icon(Icons.swap_horiz, size: 16),
+              label: const Text('Trocar', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: const Size(0, 0),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -910,17 +1120,20 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          TextButton.icon(
-            onPressed: _changeUnit,
-            icon: const Icon(Icons.swap_horiz, size: 16),
-            label: const Text('Trocar', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(
-              foregroundColor: AppColors.primary,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              minimumSize: const Size(0, 0),
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          // Congelada na remontagem, pelo mesmo motivo do produtor: a retirada
+          // combinada está no registro. Ver o cabeçalho do produtor.
+          if (_draft == null)
+            TextButton.icon(
+              onPressed: _changeUnit,
+              icon: const Icon(Icons.swap_horiz, size: 16),
+              label: const Text('Trocar', style: TextStyle(fontSize: 12)),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                minimumSize: const Size(0, 0),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -987,7 +1200,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           // nela: o que trava a mão dele é o mínimo, e é isso que precisa estar
           // escrito.
           text: _hasRequiredInputs
-              ? 'Os obrigatórios já vêm no mínimo da área — você pode aumentar, não reduzir.'
+              ? 'Os obrigatórios já vêm no mínimo da área. Você pode aumentar, não reduzir.'
               : 'Escolha os insumos que o produtor precisa.',
         ),
         const SizedBox(height: 8),
@@ -1157,22 +1370,24 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                 ),
               ],
             ),
-            // O IMPOSTO DA ENTREGA, no fechamento da permuta: as duas formas de
-            // recolher o Funrural, e o que cada uma custa em sacas — a unidade
-            // em que o consultor enxerga a permuta (ele não vê R$).
-            //
-            // A escolha fica AQUI, junto do total, porque é onde a conversa
+            // O IMPOSTO DA ENTREGA, junto do total, porque é onde a conversa
             // acontece: o produtor pergunta "quanto eu entrego?" na fazenda, e a
             // resposta honesta inclui o Funrural. Descobrir depois, na nota, era
             // a diferença virar assunto no pior momento.
+            //
+            // AVISO, e não escolha. O regime é do produtor e mora no cadastro
+            // dele (a opção é feita perante o fisco, uma vez, valendo para todas
+            // as entregas): um seletor aqui convidava a marcar a alíquota menor
+            // numa permuta específica, que é uma declaração que quem fecha a
+            // permuta não tem como fazer. Corrigir o regime é ato do admin, no
+            // cadastro.
             if (inputCount > 0) ...[
               const SizedBox(height: 8),
-              _TaxRegimeChooser(
-                selected: _taxRegime,
+              _TaxRegimeNotice(
+                regime: producer.taxRegime,
                 document: producer.document,
                 sacks: sacks,
                 grainName: version.grainName,
-                onChanged: (regime) => setState(() => _taxRegime = regime),
               ),
             ],
             const SizedBox(height: 8),
@@ -1195,7 +1410,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                     : const Icon(Icons.bookmark_added_outlined, size: 18),
                 label: Text(
                   _saving
-                      ? 'Guardando...'
+                      ? (_draft == null ? 'Guardando...' : 'Salvando...')
+                      : _draft != null
+                      ? 'Salvar insumos da ${_draft!.id}'
                       : widget.simulation == null
                       ? 'Guardar simulação'
                       : 'Salvar alterações',
@@ -1206,9 +1423,16 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             // Dito em voz alta porque é a pergunta que o botão sozinho deixa no
             // ar — "então já foi para o gerente?". Vale com e sem sinal: ter
             // rede não faz a permuta escapar; quem decide o momento é ele.
+            //
+            // Na REMONTAGEM a frase é outra porque o desfecho é outro: a permuta
+            // já existe, o que se está fazendo é reescrever os insumos dela no
+            // servidor, e ela continua rascunho até ser encaminhada de novo.
             Text(
-              'Nada é enviado agora: ela fica em Minhas ${brand.copy.barterPluralTitle} › '
-              'Simulações até você encaminhar.',
+              _draft != null
+                  ? 'Os insumos são gravados na permuta. Ela continua rascunho até você '
+                        'encaminhá-la de novo ao gerente.'
+                  : 'Nada é enviado agora: ela fica em Minhas ${brand.copy.barterPluralTitle} › '
+                        'Simulações até você encaminhar.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
@@ -1241,135 +1465,90 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   }
 }
 
-/// AS DUAS FORMAS DE RECOLHER O FUNRURAL, no fechamento da permuta.
+/// O IMPOSTO DA ENTREGA, no fechamento da permuta: um AVISO, e não uma escolha.
 ///
-/// A entrega de grão é comercialização de produção rural: sobre ela incidem o
-/// Funrural e o Senar. O que se escolhe aqui é a base da parte previdenciária —
-/// a receita da venda ou a folha de pagamento do produtor.
+/// A entrega de grão é comercialização de produção rural, e sobre ela incidem o
+/// Funrural e o Senar. A base da parte previdenciária (a receita da venda ou a
+/// folha de pagamento) é a opção FORMAL que o produtor fez perante o fisco: ela
+/// vale para o ano e para todas as entregas dele, e por isso mora no CADASTRO.
+/// Aqui ela é lida, e é isso que este bloco diz em voz alta.
+///
+/// Ele já foi um seletor de duas opções, e o seletor era o erro: dois
+/// percentuais lado a lado, um deles oito vezes menor, convidam a marcar o
+/// barato numa permuta específica. Isso não é preferência de quem fecha a
+/// permuta; é uma declaração ao fisco que ele não tem como fazer. Quem corrige
+/// o regime é o admin, no cadastro do produtor, e vale da próxima permuta em
+/// diante.
 ///
 /// Escolher a FOLHA não isenta a entrega: o Senar continua saindo da
-/// comercialização, e é por isso que a alíquota cai (para 0,20% de CPF, 0,25%
-/// de CNPJ) em vez de zerar. O número ao lado existe justamente para essa
-/// diferença aparecer no momento da escolha, e não na nota fiscal.
+/// comercialização, e por isso a alíquota cai (0,20% de CPF, 0,25% de CNPJ) em
+/// vez de zerar. PF ou PJ não é perguntado: sai do documento do produtor.
 ///
-/// PF ou PJ não é perguntado: sai do documento do produtor desta permuta.
-///
-/// ## Por que cada segmento diz a alíquota E o nome
-///
-/// Os dois juntos, e não um ou outro. A alíquota sozinha era o desenho
-/// anterior, pela razão certa — é o percentual que muda a conta, e é ele que a
-/// pessoa do outro lado do balcão pergunta. Mas com só o número o nome da opção
-/// NÃO SELECIONADA ficava invisível, e descobri-lo custava tocar nela — o que
-/// não é espiar, é declarar: esta escolha é gravada na permuta e vira o
-/// `taxRate` congelado do comprovante.
-///
-/// E "1,63% ou 0,20%, escolha" descreve errado o que está sendo perguntado. O
-/// regime não é preferência de quem fecha a permuta: é a opção FORMAL que o
-/// produtor fez (ou não fez) perante o fisco, e quem não fez cai na
-/// comercialização. Dois números anônimos lado a lado, um deles oito vezes
-/// menor, convidam a marcar o barato — que só é legítimo para quem de fato
-/// optou. Por isso o nome voltou ao segmento e a linha de baixo diz o que a
-/// forma selecionada significa, em vez de só repetir o rótulo dela.
-class _TaxRegimeChooser extends StatelessWidget {
-  final TaxRegime selected;
+/// O QUANTO sai em SACAS porque é a unidade em que o consultor enxerga a
+/// permuta (ele não vê R$), e é a resposta à pergunta que o produtor faz na
+/// fazenda: "quanto eu entrego?".
+class _TaxRegimeNotice extends StatelessWidget {
+  /// O regime do CADASTRO do produtor desta permuta.
+  final TaxRegime regime;
 
-  /// O documento do produtor desta permuta — é a contagem de dígitos dele que
-  /// decide se as alíquotas mostradas são as de CPF ou as de CNPJ.
+  /// O documento dele: é a contagem de dígitos que decide se a alíquota é a de
+  /// CPF ou a de CNPJ.
   final String document;
 
-  /// As sacas a entregar, para a linha de baixo dizer quanto o percentual dá em
-  /// grão — o consultor não vê R$ em lugar nenhum do app.
+  /// As sacas a entregar, para o aviso dizer quanto o percentual dá em grão.
   final double sacks;
   final String grainName;
 
-  final ValueChanged<TaxRegime> onChanged;
-
-  const _TaxRegimeChooser({
-    required this.selected,
+  const _TaxRegimeNotice({
+    required this.regime,
     required this.document,
     required this.sacks,
     required this.grainName,
-    required this.onChanged,
   });
-
-  String _rateLabel(TaxRegime regime) =>
-      '${taxRateOf(regime, document).toStringAsFixed(2).replaceAll('.', ',')}%';
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(Icons.receipt_long_outlined, size: 14, color: AppColors.textMedium),
-            const SizedBox(width: 6),
-            // Expanded aqui pela mesma razão do cabeçalho do produtor: `Text`
-            // solto numa `Row` não tem largura máxima e não corta.
-            Expanded(
-              child: Text(
-                'Recolhimento do Funrural',
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        SizedBox(
-          width: double.infinity,
-          child: SegmentedButton<TaxRegime>(
-            segments: [
-              for (final regime in TaxRegime.values)
-                ButtonSegment(
-                  value: regime,
-                  label: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Nenhum dos dois fixa `color`: quem pinta o texto do
-                      // segmento é o próprio botão, conforme selecionado ou
-                      // não, e uma cor nossa aqui apagaria essa diferença — que
-                      // é o que diz qual das formas está valendo.
-                      Text(
-                        _rateLabel(regime),
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-                      ),
-                      Text(
-                        regime.shortLabel,
-                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+    final rate = taxRateOf(regime, document);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.infoBg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.info.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.receipt_long_outlined, size: 16, color: AppColors.info),
+          const SizedBox(width: 8),
+          // Expanded pela razão de sempre nesta tela: `Text` solto numa `Row`
+          // não tem largura máxima, e a linha estoura no telefone estreito.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'No cadastro, este produtor recolhe o Funrural '
+                  '${regime.shortLabel.toLowerCase()} '
+                  '(${rate.toStringAsFixed(2).replaceAll('.', ',')}%).',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.info,
+                    height: 1.25,
                   ),
                 ),
-            ],
-            selected: {selected},
-            showSelectedIcon: false,
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            onSelectionChanged: (escolha) => onChanged(escolha.first),
+                Text(
+                  'Estimativa de + ${formatSacks(taxAmountOf(sacks, rate))} '
+                  '${grainName.toLowerCase()} de Funrural e Senar sobre a entrega.',
+                  style: TextStyle(fontSize: 11, color: AppColors.info, height: 1.25),
+                ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 3),
-        // O QUANTO e o PORQUÊ, em um parágrafo só.
-        //
-        // O quanto vem primeiro porque é a resposta à pergunta que o produtor
-        // faz na fazenda ("quanto eu entrego?"), e sai em sacas porque é a
-        // unidade em que o consultor enxerga a permuta. O porquê é
-        // `description`, que existia no modelo desde o começo e não aparecia em
-        // lugar nenhum — era a única frase do app que dizia a diferença entre as
-        // duas formas, e estava sobrando enquanto a tela pedia a escolha sem
-        // explicá-la.
-        //
-        // Um Text só, e não dois: em tela estreita ambos quebram de qualquer
-        // jeito, e separá-los custava uma linha inteira de altura num rodapé que
-        // já disputa espaço com a lista de insumos.
-        Text(
-          '+ ${formatSacks(taxAmountOf(sacks, taxRateOf(selected, document)))} '
-          '${grainName.toLowerCase()} de Funrural/Senar sobre a entrega — estimativa. '
-          '${selected.description}',
-          style: TextStyle(fontSize: 11, color: AppColors.textLight, height: 1.25),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -1597,11 +1776,22 @@ class _InputTileState extends State<_InputTile> {
                           ],
                         ],
                       ),
+                      // O CÓDIGO ao lado da unidade, na linha de apoio: a busca
+                      // já aceita procurar por ele, e sem vê-lo escrito o
+                      // consultor não tinha como conferir se o insumo que ele
+                      // achou é mesmo o que o produtor pediu — dois nomes
+                      // parecidos ("Glifosato 480 SL" e "Glifosato 480 WG") só
+                      // se distinguem por aí. Some quando o produto não tem
+                      // código, em vez de imprimir um traço.
                       Text(
-                        _required
-                            ? 'Obrigatório • medido em ${product.unit}'
-                            : 'Medido em ${product.unit}',
+                        [
+                          if ((product.sku ?? '').isNotEmpty) product.sku!,
+                          _required
+                              ? 'Obrigatório • medido em ${product.unit}'
+                              : 'Medido em ${product.unit}',
+                        ].join(' • '),
                         style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),

@@ -582,12 +582,11 @@ estado possível para uma verificação de saúde.
 
 ### Banco de dados
 
-**PostgreSQL.** A troca aconteceu ANTES da primeira carga real, de propósito:
-sem dado de produção, o custo foi reescrever as migrations; com dado, seria
-janela de parada e script de transferência. O que o SQLite não dava não era
-desempenho — era operação: ele roda dentro do processo, então duas instâncias
-da API sobre o mesmo arquivo não se coordenam, e sem isso não há deploy sem
-downtime, réplica de leitura nem backup online.
+**PostgreSQL**, em dev, em teste e em produção — o que a suíte exercita é o
+mesmo banco que atende a operação. A razão não é desempenho, é OPERAÇÃO: o banco
+é um servidor à parte, então duas instâncias da API se coordenam sobre o mesmo
+dado, e é essa coordenação que permite deploy sem downtime, réplica de leitura e
+backup online.
 
 Local, com o cluster da própria máquina:
 

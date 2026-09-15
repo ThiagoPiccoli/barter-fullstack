@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/price_chart.dart';
 import 'barter_program_screen.dart';
@@ -186,99 +187,103 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Relatório do Item')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          _header(product, deltaPct, up),
-          const SizedBox(height: 16),
-
-          // Chart card
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 14, 16, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      body: BoundedContent(
+        child: BoundedContent(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              _header(product, deltaPct, up),
+              const SizedBox(height: 16),
+    
+              // Chart card
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 14, 16, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4, bottom: 8),
+                        child: Row(
+                          children: [
+                            Icon(Icons.show_chart, size: 18, color: _accent),
+                            const SizedBox(width: 6),
+                            Text('Evolução do valor',
+                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            const Spacer(),
+                            Text('R\$ / ${product.unit}',
+                                style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                          ],
+                        ),
+                      ),
+                      SizedBox(
+                        height: 200,
+                        child: PriceLineChart(
+                          key: ValueKey('${product.id}_${_period}_${product.priceHistory.length}'),
+                          history: history,
+                          color: _accent,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      _periodSelector(),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+    
+              // Stats
+              Row(
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4, bottom: 8),
-                    child: Row(
-                      children: [
-                        Icon(Icons.show_chart, size: 18, color: _accent),
-                        const SizedBox(width: 6),
-                        Text('Evolução do valor',
-                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        const Spacer(),
-                        Text('R\$ / ${product.unit}',
-                            style: TextStyle(fontSize: 11, color: AppColors.textLight)),
-                      ],
-                    ),
-                  ),
-                  SizedBox(
-                    height: 200,
-                    child: PriceLineChart(
-                      key: ValueKey('${product.id}_${_period}_${product.priceHistory.length}'),
-                      history: history,
-                      color: _accent,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  _periodSelector(),
+                  Expanded(child: _StatChip(label: 'Menor', value: formatCurrency(minV), color: AppColors.approved, icon: Icons.south)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _StatChip(label: 'Médio', value: formatCurrency(avgV), color: AppColors.primaryMedium, icon: Icons.drag_handle)),
+                  const SizedBox(width: 10),
+                  Expanded(child: _StatChip(label: 'Maior', value: formatCurrency(maxV), color: AppColors.denied, icon: Icons.north)),
                 ],
               ),
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          // Stats
-          Row(
-            children: [
-              Expanded(child: _StatChip(label: 'Menor', value: formatCurrency(minV), color: AppColors.approved, icon: Icons.south)),
-              const SizedBox(width: 10),
-              Expanded(child: _StatChip(label: 'Médio', value: formatCurrency(avgV), color: AppColors.primaryMedium, icon: Icons.drag_handle)),
-              const SizedBox(width: 10),
-              Expanded(child: _StatChip(label: 'Maior', value: formatCurrency(maxV), color: AppColors.denied, icon: Icons.north)),
-            ],
-          ),
-          const SizedBox(height: 20),
-
-          // Timeline
-          Row(
-            children: [
-              Icon(Icons.history, size: 18, color: _accent),
-              const SizedBox(width: 6),
-              Text('Linha do Tempo',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-              const Spacer(),
-              Text('${product.priceHistory.length} registros',
-                  style: TextStyle(fontSize: 11, color: AppColors.textLight)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          _timeline(product),
-          const SizedBox(height: 20),
-
-          // Corrigir o valor é ato do LANÇAMENTO, não do cadastro: só aparece
-          // enquanto houver Barter vigente, e o que ele muda é a tabela da
-          // versão — o `currentPrice` acima é o último valor publicado.
-          if (_editableInVersion(product))
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _correctInVersion(context, product),
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                label: Text('Corrigir no Barter ${AppData.currentVersion!.code}'),
-                style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+              const SizedBox(height: 20),
+    
+              // Timeline
+              Row(
+                children: [
+                  Icon(Icons.history, size: 18, color: _accent),
+                  const SizedBox(width: 6),
+                  Text('Linha do Tempo',
+                      style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  const Spacer(),
+                  Text('${product.priceHistory.length} registros',
+                      style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                ],
               ),
-            ),
-          const SizedBox(height: 20),
-
-          // O CADASTRO do item vive aqui, junto do histórico dele, e não na
-          // lista: são atos raros (classificar, exigir por hectare, excluir) e
-          // ficavam repetidos em cada cartão de uma lista que se lê para
-          // consultar valor.
-          _registration(product),
-          const SizedBox(height: 16),
-        ],
+              const SizedBox(height: 12),
+              _timeline(product),
+              const SizedBox(height: 20),
+    
+              // Corrigir o valor é ato do LANÇAMENTO, não do cadastro: só aparece
+              // enquanto houver Barter vigente, e o que ele muda é a tabela da
+              // versão — o `currentPrice` acima é o último valor publicado.
+              if (_editableInVersion(product))
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _correctInVersion(context, product),
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: Text('Corrigir no Barter ${AppData.currentVersion!.code}'),
+                    style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                  ),
+                ),
+              const SizedBox(height: 20),
+    
+              // O CADASTRO do item vive aqui, junto do histórico dele, e não na
+              // lista: são atos raros (classificar, exigir por hectare, excluir) e
+              // ficavam repetidos em cada cartão de uma lista que se lê para
+              // consultar valor.
+              _registration(product),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
       ),
     );
   }

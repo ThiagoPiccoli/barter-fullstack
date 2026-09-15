@@ -98,7 +98,7 @@ export class AuthService {
         targetType: 'session',
         targetId: user.id,
         targetLabel: user.email,
-        detail: `${MAX_FAILED_ATTEMPTS} tentativas erradas — bloqueada por ${LOCK_MINUTES} min`,
+        detail: `${MAX_FAILED_ATTEMPTS} tentativas erradas: bloqueada por ${LOCK_MINUTES} min`,
       });
       return;
     }

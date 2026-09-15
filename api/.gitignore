@@ -18,9 +18,8 @@ credentials*.json
 acessos*.pdf
 acessos*.html
 
-# SQLite (dev/test) e artefatos do Prisma
-*.db
-*.db-journal
+# Artefatos do Prisma. O banco é um servidor PostgreSQL, então não existe
+# arquivo de banco para ignorar — só o rascunho que o CLI deixa para trás.
 prisma/migrations/**/migration.sql.bak
 
 # Logs

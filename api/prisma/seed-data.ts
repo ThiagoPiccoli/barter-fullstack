@@ -3,6 +3,7 @@ import { hashPassword } from '../src/auth/password.util';
 import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
 import { TAX_REGIME, taxRateOf, type TaxRegime } from '../src/barters/tax-regime';
+import { CHANGE_REQUEST_ACTION, CHANGE_REQUEST_STATUS } from '../src/barters/change-request';
 import { normalizeName } from '../src/seasons/product-name';
 
 /**
@@ -100,7 +101,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'joao.silva@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0002',
-    branch: 'Filial 02 – Gran. Santa T.',
+    branch: 'Filial 02 (Gran. Santa T.)',
     createdAt: at(2021, 3, 15),
   });
   const ana = await mkUser({
@@ -108,7 +109,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'ana.ferreira@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0003',
-    branch: 'Filial 04 – Gran. Inharap.',
+    branch: 'Filial 04 (Gran. Inharap.)',
     createdAt: at(2021, 6, 20),
   });
   const roberto = await mkUser({
@@ -116,7 +117,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'roberto.souza@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0004',
-    branch: 'Filial 34 – Gran. Jari',
+    branch: 'Filial 34 (Gran. Jari)',
     createdAt: at(2022, 2, 8),
   });
   const maria = await mkUser({
@@ -124,7 +125,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'maria.oliveira@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0005',
-    branch: 'Filial 24 – Gran. Oliveira',
+    branch: 'Filial 24 (Gran. Oliveira)',
     createdAt: at(2022, 9, 1),
   });
   const lucas = await mkUser({
@@ -132,7 +133,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'lucas.barros@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0006',
-    branch: 'Filial 18 – Gran. São Joa.',
+    branch: 'Filial 18 (Gran. São Joa.)',
     createdAt: at(2023, 1, 15),
   });
 
@@ -184,7 +185,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'gerente.sul@agrobarter.com.br',
     role: ROLE.manager,
     phone: '(44) 99999-0013',
-    branch: 'Filial 34 – Gran. Jari',
+    branch: 'Filial 34 (Gran. Jari)',
     createdAt: at(2021, 8, 16),
   });
 
@@ -197,11 +198,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     prisma.unit.create({ data: { name, nameKey: normalizeName(name), city } });
 
   const matriz = await mkUnit('Matriz', 'Maringá/PR');
-  const filial02 = await mkUnit('Filial 02 – Gran. Santa T.', 'Sarandi/PR');
-  const filial04 = await mkUnit('Filial 04 – Gran. Inharap.', 'Maringá/PR');
-  const filial18 = await mkUnit('Filial 18 – Gran. São Joa.', 'Paiçandu/PR');
-  const filial24 = await mkUnit('Filial 24 – Gran. Oliveira', 'Marialva/PR');
-  const filial34 = await mkUnit('Filial 34 – Gran. Jari', 'Mandaguari/PR');
+  const filial02 = await mkUnit('Filial 02 (Gran. Santa T.)', 'Sarandi/PR');
+  const filial04 = await mkUnit('Filial 04 (Gran. Inharap.)', 'Maringá/PR');
+  const filial18 = await mkUnit('Filial 18 (Gran. São Joa.)', 'Paiçandu/PR');
+  const filial24 = await mkUnit('Filial 24 (Gran. Oliveira)', 'Marialva/PR');
+  const filial34 = await mkUnit('Filial 34 (Gran. Jari)', 'Mandaguari/PR');
 
   // A lotação e o gerente de cada um, num segundo passo porque as unidades só
   // existem agora. `branch` continua sendo o NOME da unidade — quem o escreve
@@ -302,6 +303,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     areaHa: 320,
     createdAt: at(2020, 11, 3),
   });
+  // Os DOIS produtores do dataset que optaram pela FOLHA. Eles existem para as
+  // telas mostrarem as duas alíquotas — Cláudia é CPF (sobra o Senar de 0,20%)
+  // e Vanessa é CNPJ (0,25%) —, e agora a opção mora no cadastro deles, que é
+  // onde ela é feita: perante o fisco, uma vez, valendo para todas as entregas.
   const claudia = await mkProducer({
     name: 'Cláudia Nunes',
     consultants: [ana.id],
@@ -310,6 +315,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     farmName: 'Fazenda Recanto',
     city: 'Marialva/PR',
     areaHa: 80,
+    taxRegime: TAX_REGIME.folha,
     createdAt: at(2022, 3, 21),
   });
   const sebastiao = await mkProducer({
@@ -330,6 +336,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     farmName: 'Fazenda Três Irmãos',
     city: 'Floresta/PR',
     areaHa: 210,
+    taxRegime: TAX_REGIME.folha,
     createdAt: at(2023, 1, 30),
   });
   const osmar = await mkProducer({
@@ -452,7 +459,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       sku: 'SEM-7062',
-      name: 'Semente Soja RR – TMG 7062',
+      name: 'Semente Soja RR TMG 7062',
       unit: 'saco 40kg',
       type: 'input',
       prices: [300.0, 305.0, 310.0, 312.0, 318.0, 322.0, 320.0],
@@ -462,6 +469,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
   const products: {
     id: number;
+    sku: string;
     name: string;
     unit: string;
     price: number;
@@ -490,6 +498,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     });
     products.push({
       id: product.id,
+      sku: item.sku,
       name: product.name,
       unit: product.unit,
       price: product.currentPrice,
@@ -620,7 +629,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     priceIndex: 2,
     startsAt: at(2026, 1, 5),
     closedAt: at(2026, 1, 8),
-    note: 'Tabela de abertura — corrigida três dias depois.',
+    note: 'Tabela de abertura, corrigida três dias depois.',
   });
   const sojaV2 = await mkVersion({
     seasonId: sojaSeason.id,
@@ -648,6 +657,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     productId: p.id,
     kind: 'input',
     productName: p.name,
+    // O CÓDIGO junto do nome, como o servidor o congela hoje (ver
+    // `BarterItem.productSku`). O dataset o traz porque é ele que aparece na
+    // tela, no comprovante e na conferência do balcão — sem ele, a demonstração
+    // mostraria um traço em toda linha de insumo.
+    productSku: p.sku,
     unit: p.unit,
     quantity,
     unitValue,
@@ -722,7 +736,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       status: 'denied',
       createdAt: at(2026, 2, 5, 8, 0),
       managerNote:
-        'Não temos fertilizante para esse volume no período pedido — a próxima carga ' +
+        'Não temos fertilizante para esse volume no período pedido: a próxima carga ' +
         'chega depois da janela de plantio dele. Sugiro reprogramar ou dividir a retirada.',
       managerReviewedAt: at(2026, 2, 5, 17, 20),
       reviewedAt: at(2026, 2, 6, 10, 30),
@@ -783,7 +797,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       createdAt: at(2026, 4, 10, 9, 0),
       managerNote:
         'Retirada do inseticida já separada. Produtor é cliente antigo da unidade e ' +
-        'costuma retirar tudo de uma vez — reservei doca para o dia 15.',
+        'costuma retirar tudo de uma vez, então reservei doca para o dia 15.',
       managerReviewedAt: at(2026, 4, 10, 14, 5),
       reviewedAt: at(2026, 4, 11, 11, 0),
       // A RESSALVA é o texto da decisão, e é obrigatória neste desfecho: ela diz
@@ -791,6 +805,21 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       reviewNote:
         'Aprovada com ressalva: exigir seguro agrícola da área e aval do cônjuge ' +
         'antes da retirada. Confirmar a apólice com o produtor.',
+      // O ÚNICO PEDIDO DE ALTERAÇÃO em aberto do dataset, e ele existe pelo
+      // mesmo motivo da permuta em cada posto da linha: sem ele, a mesa do
+      // admin abre vazia, e o caminho de volta da esteira só apareceria na
+      // demonstração depois de alguém pedir uma alteração — o mais provável é
+      // que ninguém descobrisse que dá.
+      //
+      // Ele está numa permuta JÁ DECIDIDA de propósito: é aí que a decisão do
+      // admin custa alguma coisa — liberar joga fora o parecer do gerente e a
+      // ressalva do comitê —, e é esse peso que a tela dele precisa mostrar.
+      changeRequest: {
+        at: at(2026, 4, 12, 8, 5),
+        note:
+          'O produtor trocou o inseticida depois da última chuva: o talhão 3 apareceu ' +
+          'com percevejo e ele quer dobrar a dose. Preciso refazer a permuta antes da retirada.',
+      },
       items: [
         grainItem(soja, 134.0068, 148.5),
         inputItem(lambda, 200, 42.0),
@@ -872,18 +901,13 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   ]);
   const pickupOverride = new Map([['PRM-2026-008', matriz]]);
 
-  // A FORMA de recolhimento escolhida no fechamento de cada permuta. O padrão é
-  // a comercialização; estas duas fecharam sobre a FOLHA, e existem para o
-  // dataset mostrar as duas alíquotas — uma de produtor CPF (fica só o Senar de
-  // 0,20%) e outra de CNPJ (0,25%). Sem elas, toda permuta sairia com o mesmo
-  // percentual e a linha de imposto passaria por certa mostrando sempre o mesmo
-  // número.
-  const taxRegimeOverride = new Map<string, TaxRegime>([
-    // Cláudia Nunes, CPF: sobra o Senar de 0,20%.
-    ['PRM-2026-004', TAX_REGIME.folha],
-    // Vanessa Lopes, CNPJ: sobra o Senar de 0,25%.
-    ['PRM-2026-007', TAX_REGIME.folha],
-  ]);
+  // A FORMA de recolhimento de cada permuta sai do CADASTRO do produtor dela —
+  // é lá que a opção pela folha é feita, e é de lá que o servidor a lê no
+  // registro (ver `Producer.taxRegime`). As permutas de Cláudia (CPF) e de
+  // Vanessa (CNPJ) saem sozinhas com as alíquotas reduzidas do Senar, que é o
+  // que o dataset precisa mostrar: duas telas com percentuais diferentes.
+  const taxRegimeOf = (producer: { taxRegime: string }): TaxRegime =>
+    producer.taxRegime as TaxRegime;
 
   for (const entry of barters) {
     const homeUnit = unitOfConsultant.get(entry.consultant.id)!;
@@ -891,7 +915,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     // O destinatário é o gerente do CONSULTOR — a mesma regra que o
     // BartersService impõe, aqui só reproduzida para o dataset.
     const manager = managerOfConsultant.get(entry.consultant.id)!;
-    const taxRegime = taxRegimeOverride.get(entry.code) ?? TAX_REGIME.comercializacao;
+    const taxRegime = taxRegimeOf(entry.producer);
 
     await prisma.barter.create({
       data: {
@@ -935,6 +959,15 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         invoicedBy: entry.invoicedAt ? patricia.fullName : null,
         invoicedById: entry.invoicedAt ? patricia.id : null,
         invoicedAt: entry.invoicedAt ?? null,
+        // O PEDIDO DE ALTERAÇÃO em aberto, quando há. Ele NÃO move a permuta:
+        // ela continua na fila em que estava, com a bandeira acesa — é assim
+        // que o service o grava (ver `barters/change-request.ts`).
+        changeRequestStatus: entry.changeRequest ? CHANGE_REQUEST_STATUS.open : null,
+        changeRequestNote: entry.changeRequest?.note ?? null,
+        changeRequestBy: entry.changeRequest ? entry.consultant.fullName : null,
+        changeRequestById: entry.changeRequest ? entry.consultant.id : null,
+        changeRequestAt: entry.changeRequest?.at ?? null,
+        changeRequestFrom: entry.changeRequest ? entry.status : null,
         createdAt: entry.createdAt,
         items: { create: entry.items },
         events: { create: timelineOf(entry) },
@@ -998,7 +1031,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
       // O local da entrega é a unidade de retirada dele — o caso comum, e o
       // que a tela sugere. Ele SAI no documento (cláusula V, "d").
-      deliveryPlace: 'Filial 02 – Gran. Santa T.',
+      deliveryPlace: 'Filial 02 (Gran. Santa T.)',
       mortgages: 'Hipoteca de 1º grau sobre a matrícula 18.442, junto ao Banco do Brasil S.A.',
 
       spouseName: 'Marta Regina Carvalho',
@@ -1060,7 +1093,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
             registryBook: '2-RG',
             registryDistrict: 'Floresta/PR',
             owners: {
-              create: [{ position: 0, name: 'Espólio de Idalina Perotto', document: '456.789.123-00' }],
+              create: [
+                { position: 0, name: 'Espólio de Idalina Perotto', document: '456.789.123-00' },
+              ],
             },
           },
         ],
@@ -1165,6 +1200,22 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         actorRole: ROLE.committee,
         note: entry.reviewNote ?? null,
         at: entry.reviewedAt,
+      });
+    }
+
+    // O DESVIO entra na linha do tempo como qualquer outro ato: ele aconteceu,
+    // tem autor e data. Vai por último porque é o mais recente — o pedido é
+    // feito depois de a permuta ter andado.
+    if (entry.changeRequest) {
+      steps.push({
+        action: CHANGE_REQUEST_ACTION.changeRequested,
+        fromStatus: entry.status,
+        toStatus: entry.status,
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        note: entry.changeRequest.note,
+        at: entry.changeRequest.at,
       });
     }
 

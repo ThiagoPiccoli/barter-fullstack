@@ -12,4 +12,4 @@ export function documentDigitsOf(document: string): string {
 export const DOCUMENT_PATTERN = /^(?:\D*\d){11}\D*$|^(?:\D*\d){14}\D*$/;
 
 export const DOCUMENT_MESSAGE =
-  'Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) — a pontuação é opcional';
+  'Informe um CPF (11 dígitos) ou CNPJ (14 dígitos). A pontuação é opcional';

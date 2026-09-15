@@ -130,8 +130,8 @@ export const BARTER_STATUS_LABELS: Record<BarterStatus, string> = {
   [BARTER_STATUS.draft]: 'Rascunho',
   [BARTER_STATUS.sentToManager]: 'No gerente',
   [BARTER_STATUS.pending]: 'No comitê',
-  [BARTER_STATUS.approved]: 'Aprovada — a faturar',
-  [BARTER_STATUS.approvedWithConditions]: 'Aprovada com ressalva — a faturar',
+  [BARTER_STATUS.approved]: 'Aprovada, a faturar',
+  [BARTER_STATUS.approvedWithConditions]: 'Aprovada com ressalva, a faturar',
   [BARTER_STATUS.denied]: 'Negada',
   [BARTER_STATUS.invoiced]: 'Faturada',
 };

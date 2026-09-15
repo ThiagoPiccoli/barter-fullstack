@@ -126,7 +126,7 @@ describe('Barters (e2e)', () => {
     expect(barter.status).toBe('draft');
     expect(barter.waitingFor).toBe('consultant');
     expect(barter.managerName).toBeNull();
-    expect(barter.unitName).toBe('Filial 02 – Gran. Santa T.');
+    expect(barter.unitName).toBe('Filial 02 (Gran. Santa T.)');
     expect(barter.producerName).toBe('Antônio Carvalho');
 
     const grains = barter.items.filter((i: { kind: string }) => i.kind === 'grain');
@@ -192,6 +192,35 @@ describe('Barters (e2e)', () => {
       const response = await registrar();
       expect(response.body.data.taxRegime).toBe('comercializacao');
       expect(response.body.data.taxRate).toBe(1.63);
+    });
+
+    /**
+     * O REGIME É DO PRODUTOR, e a permuta o herda sem perguntar: a opção pela
+     * folha é feita uma vez, perante o fisco, e vale para todas as entregas
+     * dele. Enquanto a pergunta era feita permuta a permuta, o consultor
+     * respondia de memória — e a segunda permuta do mesmo produtor saía num
+     * regime diferente da primeira sem nada ter mudado no mundo.
+     */
+    it('a permuta herda o regime do cadastro do produtor', async () => {
+      // Cláudia Nunes (id 4, CPF, 80 ha) optou pela FOLHA no cadastro, e a
+      // carteira dela é da Ana. Nada de `taxRegime` no corpo.
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(ANA))
+        .send({
+          producerId: 4,
+          unitId: UNIT.filial04,
+          inputs: [
+            { productId: 5, quantity: 32 },
+            { productId: 6, quantity: 200 },
+            { productId: 7, quantity: 12 },
+          ],
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.taxRegime).toBe('folha');
+      // Sobra o Senar de CPF.
+      expect(response.body.data.taxRate).toBe(0.2);
     });
 
     it('forma de recolhimento que não existe é recusada', async () => {
@@ -884,7 +913,7 @@ describe('Barters (e2e)', () => {
      * Ela é um estado próprio, e não uma observação dentro da aprovação, porque
      * a ressalva é uma CONDIÇÃO do negócio — garantia real, seguro, aval — e
      * quem a cumpre não é quem a escreveu. Escondida dentro de `approved`, a
-     * lista e o cartão diriam "Aprovada — a faturar" sobre uma permuta que
+     * lista e o cartão diriam "Aprovada, a faturar" sobre uma permuta que
      * depende de alguém providenciar um aval.
      */
     it('aprovar com ressalva é um desfecho próprio, e ele exige o texto da exigência', async () => {
@@ -906,7 +935,7 @@ describe('Barters (e2e)', () => {
         .send({ status: 'approvedWithConditions', note: ressalva });
       expect(decisão.status).toBe(200);
       expect(decisão.body.data.status).toBe('approvedWithConditions');
-      expect(decisão.body.data.statusLabel).toBe('Aprovada com ressalva — a faturar');
+      expect(decisão.body.data.statusLabel).toBe('Aprovada com ressalva, a faturar');
       expect(decisão.body.data.reviewNote).toBe(ressalva);
       // Ela é a fila do FATURISTA, como a aprovação limpa: a ressalva é
       // condição do negócio, não um portão deste fluxo.
@@ -915,8 +944,9 @@ describe('Barters (e2e)', () => {
 
       // E o andamento diz COMO a etapa terminou, com as três palavras
       // distinguíveis entre si.
-      const passoDaDecisão = (decisão.body.data.steps as { action: string; outcomeLabel: string }[])
-        .find((step) => step.action === 'review');
+      const passoDaDecisão = (
+        decisão.body.data.steps as { action: string; outcomeLabel: string }[]
+      ).find((step) => step.action === 'review');
       expect(passoDaDecisão?.outcomeLabel).toBe('Aprovada com ressalva');
 
       // O faturista a alcança e a fatura.
@@ -1501,7 +1531,7 @@ describe('Barters (e2e)', () => {
         unitId: UNIT.filial34,
       });
       expect(response.status).toBe(200);
-      expect(response.body.data.unitName).toBe('Filial 34 – Gran. Jari');
+      expect(response.body.data.unitName).toBe('Filial 34 (Gran. Jari)');
       expect(response.body.data.managerName).toBe('Beatriz Nogueira');
     });
   });
@@ -1550,6 +1580,264 @@ describe('Barters (e2e)', () => {
       expect(response.body.data).toHaveLength(1);
       expect(response.body.meta.total).toBe(2);
       expect(response.body.data[0].status).toBe('sentToManager');
+    });
+  });
+
+  /**
+   * O DESVIO da esteira: o consultor pede alteração, o admin decide.
+   *
+   * É o único caminho de volta que a permuta tem, e o que estes casos protegem
+   * é o preço dele: liberar apaga o parecer do gerente e a decisão do comitê.
+   * Ver `barters/change-request.ts`.
+   */
+  describe('pedido de alteração', () => {
+    const pedir = async (
+      code: string,
+      email: string,
+      note = 'O produtor trocou o fungicida pelo inseticida na véspera da retirada.',
+    ) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/change-request`)
+        .set('Authorization', await asUser(email))
+        .send({ note });
+
+    const decidir = async (code: string, email: string, body: object) =>
+      request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/change-request/decision`)
+        .set('Authorization', await asUser(email))
+        .send(body);
+
+    /**
+     * O pedido NÃO move a permuta: ela continua na fila em que estava, com uma
+     * bandeira. Devolvê-la na hora tiraria da mesa de terceiros um trabalho que
+     * o admin ainda pode dizer que não precisa ser desfeito.
+     */
+    it('o pedido pendura a bandeira sem tirar a permuta da fila', async () => {
+      // PRM-2026-005 é do João e está na mesa da Beatriz.
+      const response = await pedir('PRM-2026-005', JOAO);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('sentToManager');
+      expect(response.body.data.changeRequestStatus).toBe('open');
+      expect(response.body.data.changeRequestBy).toBe('João Silva');
+      expect(response.body.data.changeRequestFrom).toBe('sentToManager');
+      expect(response.body.data.changeRequestNote).toContain('fungicida');
+    });
+
+    /** Quem tem a permuta na mesa PRECISA ver o pedido — é trabalho dele que está em jogo. */
+    it('o gerente enxerga o pedido feito sobre a permuta que está com ele', async () => {
+      await pedir('PRM-2026-005', JOAO);
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/barters/PRM-2026-005')
+        .set('Authorization', await asUser(GERENTE));
+
+      expect(response.body.data.changeRequestStatus).toBe('open');
+    });
+
+    it('a liberação devolve a permuta ao rascunho e apaga parecer e decisão', async () => {
+      // PRM-2026-004 é da Ana, já aprovada pelo comitê.
+      await pedir('PRM-2026-004', ANA);
+      const response = await decidir('PRM-2026-004', ADMIN, { accept: true });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('draft');
+      expect(response.body.data.managerNote).toBeNull();
+      expect(response.body.data.reviewedBy).toBeNull();
+      expect(response.body.data.reviewNote).toBeNull();
+      // O pedido atendido some: quem conta a história agora é o status.
+      expect(response.body.data.changeRequestStatus).toBeNull();
+      // O parecer do CONSULTOR fica: ele vai reencaminhar a permuta.
+      expect(response.body.data.consultantNote).toContain('Área pequena');
+      // E a história continua inteira na linha do tempo.
+      const acoes = response.body.data.events.map((e: { action: string }) => e.action);
+      expect(acoes).toContain('opinion');
+      expect(acoes).toContain('review');
+      expect(acoes).toContain('changeRequested');
+      expect(acoes).toContain('changeAccepted');
+    });
+
+    /** Liberada, ela recomeça a esteira: passa pelo gerente e pelo comitê de novo. */
+    it('a permuta liberada é remontada e reencaminhada pelo consultor', async () => {
+      await pedir('PRM-2026-004', ANA);
+      await decidir('PRM-2026-004', ADMIN, { accept: true });
+
+      const asAna = await asUser(ANA);
+      // Cláudia Nunes tem 80 ha: 32 NPK, 200 glifosato, 12 lambda são os mínimos.
+      const alterada = await request(app.getHttpServer())
+        .put('/api/v1/barters/PRM-2026-004/inputs')
+        .set('Authorization', asAna)
+        .send({
+          inputs: [
+            { productId: 5, quantity: 32 },
+            { productId: 6, quantity: 200 },
+            { productId: 7, quantity: 12 },
+          ],
+        });
+
+      expect(alterada.status).toBe(200);
+      const insumos = alterada.body.data.items.filter(
+        (item: { kind: string }) => item.kind === 'input',
+      );
+      expect(insumos).toHaveLength(3);
+      // 32×115 + 200×18,9 + 12×42 = R$ 7.964,00 → 53,6296 sacas de soja.
+      const grao = alterada.body.data.items.find((item: { kind: string }) => item.kind === 'grain');
+      expect(grao.quantity).toBeCloseTo(53.6296, 3);
+
+      const reenviada = await encaminhar('PRM-2026-004', asAna, 'Permuta refeita com o produtor.');
+      expect(reenviada.status).toBe(200);
+      expect(reenviada.body.data.status).toBe('sentToManager');
+    });
+
+    it('a recusa mantém a permuta onde estava e devolve o motivo', async () => {
+      await pedir('PRM-2026-004', ANA);
+      const response = await decidir('PRM-2026-004', ADMIN, {
+        accept: false,
+        note: 'A retirada já foi separada no depósito — refaça na próxima permuta.',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('approved');
+      expect(response.body.data.changeRequestStatus).toBe('denied');
+      expect(response.body.data.changeRequestReply).toContain('depósito');
+      // O que a decisão do comitê escreveu continua lá: nada foi desfeito.
+      expect(response.body.data.reviewedBy).toBe('Comitê de Permutas');
+    });
+
+    it('a recusa sem motivo é recusada', async () => {
+      await pedir('PRM-2026-004', ANA);
+      const response = await decidir('PRM-2026-004', ADMIN, { accept: false });
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('motivo');
+    });
+
+    it('não se pede duas vezes antes de o admin responder', async () => {
+      await pedir('PRM-2026-005', JOAO);
+      const segundo = await pedir('PRM-2026-005', JOAO);
+      expect(segundo.status).toBe(422);
+      expect(segundo.body.message).toContain('Já existe');
+    });
+
+    it('a faturada não aceita pedido', async () => {
+      // PRM-2026-001 é do João e é a única já faturada.
+      const response = await pedir('PRM-2026-001', JOAO);
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('faturada');
+    });
+
+    it('o pedido é de quem registrou: outro consultor nem enxerga a permuta', async () => {
+      const response = await pedir('PRM-2026-005', ANA);
+      expect(response.status).toBe(403);
+    });
+
+    /**
+     * Quem decide é o ADMIN. O comitê decide o negócio e o gerente opina sobre
+     * ele — nenhum dos dois administra a linha.
+     */
+    it('nem o comitê nem o gerente decidem o pedido', async () => {
+      await pedir('PRM-2026-004', ANA);
+      for (const quem of [COMITE, GERENTE, FATURISTA, ANA]) {
+        const response = await decidir('PRM-2026-004', quem, { accept: true });
+        expect(response.status).toBe(403);
+      }
+    });
+
+    it('sem pedido em aberto não há o que decidir', async () => {
+      const response = await decidir('PRM-2026-004', ADMIN, { accept: true });
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('não tem pedido');
+    });
+
+    /**
+     * A ALTERAÇÃO ATRAVESSA VERSÕES, e não atravessa CULTURAS.
+     *
+     * A permuta fechada numa gestão anterior da soja continua alterável quando a
+     * seguinte já está no ar: ela não foi faturada, e o que falta nela é uma
+     * correção de insumos. Amarrá-la à versão vigente faria de cada publicação
+     * de tabela um prazo de validade para as permutas em aberto.
+     */
+    it('a permuta de uma gestão anterior da MESMA cultura continua alterável', async () => {
+      // A soja S2026.03 entra no ar; a PRM-2026-005 continua sendo da S2026.02.
+      const publicada = await request(app.getHttpServer())
+        .post('/api/v1/seasons/S2026/versions')
+        .set('Authorization', await asUser(ADMIN))
+        .send({
+          grainPrice: 150,
+          prices: [
+            { productId: 5, price: 120 },
+            { productId: 6, price: 18.9 },
+            { productId: 7, price: 42 },
+          ],
+        });
+      expect(publicada.status).toBe(201);
+
+      const pedido = await pedir('PRM-2026-005', JOAO);
+      expect(pedido.status).toBe(200);
+      expect(pedido.body.data.versionCode).toBe('S2026.02');
+
+      const liberado = await decidir('PRM-2026-005', ADMIN, { accept: true });
+      expect(liberado.body.data.status).toBe('draft');
+
+      // E a remontagem é precificada pela tabela DA PERMUTA (NPK a 115, da
+      // S2026.02), não pela que acabou de entrar (NPK a 120): o acordo foi
+      // fechado naquela gestão, e publicar a seguinte não o reescreve.
+      const alterada = await request(app.getHttpServer())
+        .put('/api/v1/barters/PRM-2026-005/inputs')
+        .set('Authorization', await asUser(JOAO))
+        .send({
+          inputs: [
+            { productId: 5, quantity: 24 },
+            { productId: 6, quantity: 150 },
+            { productId: 7, quantity: 9 },
+          ],
+        });
+
+      expect(alterada.status).toBe(200);
+      // 24x115 + 150x18,9 + 9x42 = R$ 5.973,00, a 148,50 a saca: 40,2222 sacas.
+      // Pela tabela NOVA (NPK a 120, saca a 150) dariam 40,62 — é essa diferença
+      // que prova qual das duas gestões precificou a remontagem. O consultor não
+      // vê R$, então quem denuncia a tabela errada é a conta em sacas.
+      const grao = alterada.body.data.items.find((item: { kind: string }) => item.kind === 'grain');
+      expect(grao.quantity).toBeCloseTo(40.2222, 3);
+    });
+
+    /**
+     * A CULTURA é o limite. Com o Barter da soja no ar, uma permuta de trigo não
+     * é mais o negócio da praça: os insumos, os mínimos e o grão que a paga são
+     * outros, e remontá-la ali seria montá-la com a régua errada.
+     */
+    it('permuta de outra cultura não se altera', async () => {
+      // PRM-2026-008 é do trigo (S2026T.01), do Roberto; o Barter aberto é soja.
+      const response = await pedir('PRM-2026-008', ROBERTO);
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('mesma cultura');
+      expect(response.body.message).toContain('Trigo');
+    });
+
+    /**
+     * A REESCRITA dos insumos só alcança o rascunho — é a mesma porta do parecer
+     * salvo. Uma permuta na mesa de outra pessoa não se edita por baixo dela.
+     */
+    it('os insumos de uma permuta encaminhada não se reescrevem', async () => {
+      const response = await request(app.getHttpServer())
+        .put('/api/v1/barters/PRM-2026-005/inputs')
+        .set('Authorization', await asUser(JOAO))
+        .send({ inputs: [{ productId: 5, quantity: 24 }] });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('já foi encaminhada');
+    });
+
+    /** A remontagem passa pelas MESMAS travas do registro. */
+    it('a remontagem respeita o mínimo por hectare', async () => {
+      // PRM-2026-009 é o rascunho do João, do Antônio (120 ha).
+      const response = await request(app.getHttpServer())
+        .put('/api/v1/barters/PRM-2026-009/inputs')
+        .set('Authorization', await asUser(JOAO))
+        .send({ inputs: [{ productId: 5, quantity: 10 }] });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('no mínimo');
     });
   });
 });

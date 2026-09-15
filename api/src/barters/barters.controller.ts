@@ -2,14 +2,17 @@ import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from '@nestj
 import type { User } from '@prisma/client';
 import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
-import { toBarterJson, toCprJson } from '../common/serializers';
+import { toBarterJson, toBarterVersionJson, toCprJson } from '../common/serializers';
 import { BartersService } from './barters.service';
 import {
   BarterOpinionDto,
   CreateBarterDto,
+  DecideBarterChangeDto,
   ForwardBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
+  ReplaceBarterInputsDto,
+  RequestBarterChangeDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
@@ -91,6 +94,83 @@ export class BartersController {
   }
 
   /**
+   * A TABELA DE VALORES com que esta permuta foi fechada.
+   *
+   * É o que a tela precisa para REMONTAR os insumos de um rascunho que veio de
+   * uma gestão anterior: os preços da permuta são os daquela versão, e não os da
+   * vigente. Sem ela, o consultor montaria a permuta lendo um número e o
+   * servidor gravaria outro.
+   *
+   * `@AnyRole` com escopo no service, como o detalhe da permuta: quem alcança a
+   * permuta alcança a tabela dela, e nos valores da própria lente (o consultor
+   * recebe sacas por unidade, sem R$).
+   */
+  @Get(':code/version')
+  @AnyRole()
+  async version(@CurrentUser() user: User, @Param('code') code: string) {
+    return toBarterVersionJson(await this.bartersService.versionOf(user, code), undefined, user);
+  }
+
+  /**
+   * A REESCRITA DOS INSUMOS do rascunho — a permuta remontada por quem a
+   * registrou.
+   *
+   * `PUT`, e não `PATCH`: a lista vai inteira, porque a permuta passa pelas
+   * regras de mínimo como um conjunto (ver `ReplaceBarterInputsDto`). Chamar
+   * duas vezes com o mesmo corpo dá o mesmo resultado, que é o que a etapa do
+   * rascunho tem de diferente das outras — as demais são atos, e ato repetido a
+   * máquina de estados recusa.
+   *
+   * Mesma capacidade e mesma porta do parecer salvo: é do CONSULTOR, e só
+   * alcança o próprio rascunho.
+   */
+  @Put(':code/inputs')
+  @RequireCapability(CAPABILITY.bartersRegister)
+  async replaceInputs(
+    @CurrentUser() consultant: User,
+    @Param('code') code: string,
+    @Body() dto: ReplaceBarterInputsDto,
+  ) {
+    return toBarterJson(await this.bartersService.replaceInputs(consultant, code, dto), consultant);
+  }
+
+  /**
+   * O PEDIDO DE ALTERAÇÃO — o caminho de volta da esteira, aberto pelo
+   * consultor que registrou a permuta (ver `barters/change-request.ts`).
+   *
+   * `POST`, e não `PUT`: é um ato, e um segundo pedido sobre o mesmo pedido em
+   * aberto é recusado pelo service — não é a mesma escrita repetida.
+   */
+  @Post(':code/change-request')
+  @RequireCapability(CAPABILITY.bartersChangeRequest)
+  @HttpCode(200)
+  async requestChange(
+    @CurrentUser() consultant: User,
+    @Param('code') code: string,
+    @Body() dto: RequestBarterChangeDto,
+  ) {
+    return toBarterJson(await this.bartersService.requestChange(consultant, code, dto), consultant);
+  }
+
+  /**
+   * A DECISÃO DO ADMIN sobre o pedido: libera a permuta para o consultor
+   * refazê-la, ou recusa o pedido com o motivo.
+   *
+   * A capacidade é OUTRA que a da decisão do comitê, e isso é o desenho: o admin
+   * decide o processo, o comitê decide o negócio. Ver `bartersChangeReview`.
+   */
+  @Post(':code/change-request/decision')
+  @RequireCapability(CAPABILITY.bartersChangeReview)
+  @HttpCode(200)
+  async decideChange(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Body() dto: DecideBarterChangeDto,
+  ) {
+    return toBarterJson(await this.bartersService.decideChange(admin, code, dto), admin);
+  }
+
+  /**
    * PARECER TÉCNICO do gerente sobre uma permuta que chegou à unidade dele.
    *
    * A capacidade abre a porta para o papel; quem confere que a permuta é de uma
@@ -149,15 +229,24 @@ export class BartersController {
    * para montar o formulário: o rascunho, o que a permuta já responde, a
    * credora configurada e o que ainda falta.
    *
-   * As duas rotas são do FATURISTA, sob a mesma capacidade do faturamento. A
-   * cédula é o documento que o posto dele produz — o mesmo motivo pelo qual a
-   * nota fiscal é dele —, e por isso não ganharam capacidade própria: quem
-   * fatura preenche a cédula do que faturou.
+   * As duas rotas ANDAVAM sob a mesma capacidade do faturamento, com o
+   * argumento de que a cédula é o documento que o posto do faturista produz —
+   * o mesmo motivo pelo qual a nota fiscal é dele. O argumento continua de pé
+   * para ESCREVER, e é por isso que o `PUT` não se mexeu: quem apura a
+   * matrícula do imóvel e responde pelo que o título afirma é quem fatura.
+   *
+   * O que se separou foi LER. A segunda via de uma cédula já emitida é registro
+   * da operação, e o admin — que enxerga a operação inteira e responde pelo
+   * timbre dela — precisava pedir a outra pessoa uma cópia do papel que ele
+   * mesmo administra. Ver `bartersCprRead`.
+   *
+   * O escopo não afrouxou junto: `cprFor` abre a permuta por `findFor`, a mesma
+   * porta do detalhe. Quem não alcança a permuta continua sem alcançar a cédula.
    */
   @Get(':code/cpr')
-  @RequireCapability(CAPABILITY.bartersInvoice)
-  async cpr(@CurrentUser() biller: User, @Param('code') code: string) {
-    return toCprJson(await this.bartersService.cprFor(biller, code));
+  @RequireCapability(CAPABILITY.bartersCprRead)
+  async cpr(@CurrentUser() viewer: User, @Param('code') code: string) {
+    return toCprJson(await this.bartersService.cprFor(viewer, code));
   }
 
   /**

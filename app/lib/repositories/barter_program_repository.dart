@@ -55,6 +55,19 @@ class BarterProgramRepository {
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
+  /// Troca o modo de encerramento por meta da versão vigente.
+  ///
+  /// A versão que volta pode vir ENCERRADA: ligar o automático com a meta já
+  /// batida fecha o Barter na hora, e é o servidor quem decide isso. Por isso a
+  /// resposta é usada como está, e não remendada com `closeOnGoal: true`.
+  Future<BarterVersionModel> setCloseOnGoal(String code, bool enabled) async {
+    final data = await api.put(
+      '/barter-versions/$code/close-on-goal',
+      body: {'enabled': enabled},
+    );
+    return BarterVersionModel.fromJson(data as Map<String, dynamic>);
+  }
+
   /// Publica a próxima versão a partir da planilha do fornecedor.
   ///
   /// Os limites vão como TEXTO porque o corpo é multipart; o servidor aceita
@@ -69,6 +82,7 @@ class BarterProgramRepository {
     double? targetSales,
     double? targetSacks,
     int? targetBarters,
+    bool closeOnGoal = false,
     String? note,
     bool carryOver = false,
   }) async {
@@ -82,6 +96,9 @@ class BarterProgramRepository {
         if (targetSales != null) 'targetSales': '$targetSales',
         if (targetSacks != null) 'targetSacks': '$targetSacks',
         if (targetBarters != null) 'targetBarters': '$targetBarters',
+        // Só vai quando é `true`: o padrão do servidor é o manual, e mandar
+        // "false" é dizer a mesma coisa com um campo a mais no multipart.
+        if (closeOnGoal) 'closeOnGoal': 'true',
         if (note != null && note.isNotEmpty) 'note': note,
         if (carryOver) 'carryOver': 'true',
       },

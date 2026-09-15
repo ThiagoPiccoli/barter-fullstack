@@ -76,7 +76,7 @@ export class CreditorService {
       targetType: 'creditor',
       targetId: saved.id,
       targetLabel: saved.name || '(sem razão social)',
-      detail: `CNPJ ${saved.cnpj || '—'} — ${saved.city || '—'}`,
+      detail: `CNPJ ${saved.cnpj || 'não informado'}, ${saved.city || 'cidade não informada'}`,
     });
     return saved;
   }

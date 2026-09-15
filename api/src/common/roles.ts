@@ -1,6 +1,6 @@
 /**
- * Os PAPÉIS do sistema, em um só lugar. `role` é String no banco (SQLite não
- * tem enum), então a lista abaixo é a única definição do que vale — guard,
+ * Os PAPÉIS do sistema, em um só lugar. `role` é String no banco, e não `enum`
+ * do Postgres, então a lista abaixo é a única definição do que vale — guard,
  * seed, serializador e app conferem por aqui.
  *
  * Os identificadores são em inglês para acompanhar os dois que já existiam

@@ -4,9 +4,9 @@
 // - Os "enums" são String: role admin|consultant|manager|committee|biller,
 //   type grain|input, kind grain|input, status sentToManager|pending|approved|
 //   denied|invoiced,
-//   ruleType none|percentOfTotal|valuePerHa. Vieram assim do SQLite, que não
-//   tem enum, e continuam assim de propósito — a validação mora nos DTOs
-//   (`@IsIn`) e um valor novo não pede migration nem deploy coordenado.
+//   ruleType none|percentOfTotal|valuePerHa. São String de propósito, e não
+//   `enum` do Postgres — a validação mora nos DTOs (`@IsIn`) e um valor novo
+//   não pede migration nem deploy coordenado entre banco e aplicação.
 // - Permuta é registro HISTÓRICO: nomes/preços ficam desnormalizados
 //   (snapshots) e os FKs usam SetNull para o histórico sobreviver a exclusões.
 
@@ -183,6 +183,26 @@ model Producer {
   city         String
   /// Área cultivável (ha): base das exigências mínimas por hectare.
   areaHa       Float
+
+  /// COMO ESTE PRODUTOR RECOLHE o Funrural: `comercializacao` (sobre a receita
+  /// da venda) ou `folha` (sobre a folha de pagamento — e aí sobre a entrega
+  /// fica só o Senar). Ver `src/barters/tax-regime.ts`.
+  ///
+  /// Mora no CADASTRO, e não na permuta, porque é o que ele é: a opção formal
+  /// que o produtor fez (ou não fez) perante o fisco vale para o ano inteiro e
+  /// para todas as entregas dele. Enquanto a pergunta era feita permuta a
+  /// permuta, o consultor respondia de memória a cada fechamento — e a segunda
+  /// permuta do mesmo produtor saía num regime diferente da primeira sem
+  /// ninguém ter mudado nada no mundo real.
+  ///
+  /// A permuta continua GRAVANDO o regime e a alíquota que aplicou
+  /// (`Barter.taxRegime`/`taxRate`): daqui sai o valor do dia, e o que já foi
+  /// fechado não se reescreve quando o produtor faz a opção no ano seguinte.
+  ///
+  /// O padrão é `comercializacao` — é o regime de quem não fez opção nenhuma,
+  /// e é o que os cadastros anteriores a este campo têm de verdade.
+  taxRegime String @default("comercializacao")
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -334,8 +354,8 @@ model Season {
 ///
 /// A VIGÊNCIA tem duas naturezas de propósito: `endsAt` é uma data que o admin
 /// marcou e por isso TRAVA (a API recusa permuta depois dela); as metas abaixo
-/// apenas medem — quem encerra por meta é o admin, para nada fechar sozinho de
-/// madrugada. Ver isOpenAt() em version-progress.ts.
+/// medem, e o que elas fazem ao serem batidas é ESCOLHA da versão —
+/// `closeOnGoal`. Ver isOpenAt() em version-progress.ts.
 model BarterVersion {
   id       Int    @id @default(autoincrement())
   seasonId Int
@@ -352,13 +372,28 @@ model BarterVersion {
   endsAt   DateTime?
 
   /// Metas de encerramento (null = sem meta). Medem o realizado das permutas
-  /// APROVADAS da versão; ao atingir, o painel avisa e o admin decide.
+  /// APROVADAS da versão; ao atingir, o painel avisa e `closeOnGoal` diz se o
+  /// Barter fecha junto.
   ///
   /// Não há meta de lucro: sem custo na lista de preços, ela seria a de vendas
   /// com outro nome.
   targetSales   Float?
   targetSacks   Float?
   targetBarters Int?
+
+  /// O QUE FAZER quando a meta bater: encerrar o Barter (true) ou só avisar e
+  /// esperar o admin encerrar (false, o padrão).
+  ///
+  /// Ligado, o fechamento acontece no instante da APROVAÇÃO que cruzou a meta —
+  /// não há relógio nem rotina de madrugada. É o único momento em que o
+  /// realizado cresce (ver COUNTS_AS_REALIZED em version-progress.ts), então o
+  /// ato humano que bateu a meta é também o que fecha a versão, e a trilha
+  /// aponta para ele.
+  ///
+  /// Só faz sentido com pelo menos uma meta definida, e o DTO recusa a
+  /// combinação vazia: "encerrar ao bater meta" sem meta é uma versão que nunca
+  /// fecharia, com uma opção ligada dizendo o contrário.
+  closeOnGoal Boolean @default(false)
 
   /// De onde a tabela veio (nome do arquivo) e a observação do lançamento.
   sourceFile String?
@@ -570,6 +605,43 @@ model Barter {
   invoicedAt   DateTime?
   invoiceNote  String?
 
+  /// O PEDIDO DE ALTERAÇÃO — o único caminho de VOLTA da esteira, e ele tem
+  /// dono nas duas pontas: pede o consultor que registrou, decide o admin.
+  ///
+  /// Ele existe porque a permuta erra depois de sair da mão de quem a montou:
+  /// o produtor troca um insumo na véspera da retirada, a área muda, a
+  /// quantidade saiu errada. Sem este caminho, as saídas eram pedir ao comitê
+  /// que negasse (uma decisão de negócio usada como borracha, e que fica na
+  /// história como negativa) ou registrar uma segunda permuta e deixar a
+  /// primeira apodrecendo na fila de alguém.
+  ///
+  /// `changeRequestStatus` é o que existe de estado próprio: `open` (pedido na
+  /// mesa do admin) ou `denied` (recusado, e o texto da recusa fica visível ao
+  /// consultor). ACEITO não é um valor: o aceite devolve a permuta a `draft`, e
+  /// é o `status` dela que passa a contar a história — um pedido "aceito"
+  /// pendurado numa permuta que voltou a ser rascunho seria um segundo lugar
+  /// dizendo a mesma coisa, e os dois poderiam divergir.
+  ///
+  /// `changeRequestFrom` é de onde ela veio, e é o que a RECUSA restaura: o
+  /// pedido não tira a permuta da fila em que está (o gerente que ia dar o
+  /// parecer continua podendo dar), então recusar precisa devolvê-la
+  /// exatamente ao estado que ela tinha — e não a um estado deduzido.
+  ///
+  /// Por que campos na permuta, e não uma tabela de pedidos: o que a operação
+  /// precisa saber é se ESTA permuta tem um pedido em aberto agora, e a
+  /// história de todos eles já é gravada em `BarterEvent`, que é onde a
+  /// trajetória mora. Uma tabela daria consulta por pedido, que ninguém faz.
+  changeRequestStatus String?
+  changeRequestNote   String?
+  changeRequestBy     String?
+  changeRequestById   Int?
+  changeRequestAt     DateTime?
+  changeRequestFrom   String?
+  /// A resposta do admin ao pedido — obrigatória na recusa, que é a única em
+  /// que ela sobrevive: o aceite fala pelo próprio efeito (a permuta voltou a
+  /// ser rascunho, e o consultor a tem de novo nas mãos).
+  changeRequestReply  String?
+
   createdAt    DateTime  @default(now())
 
   items  BarterItem[]
@@ -588,6 +660,10 @@ model Barter {
   // define é o ESTADO ("as que esperam decisão", "as aprovadas a faturar"), e
   // esta é a consulta que as duas telas fazem o tempo todo.
   @@index([status, createdAt])
+  // A fila do admin: os pedidos de alteração em aberto. Ela é pequena e some
+  // sozinha (o pedido decidido sai do `open`), mas é varrida sobre a tabela
+  // inteira de permutas toda vez que o admin abre a tela.
+  @@index([changeRequestStatus, changeRequestAt])
 }
 
 /// O HISTÓRICO DA PERMUTA — cada passagem dela de um estado para o outro.
@@ -646,6 +722,16 @@ model BarterItem {
   product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   kind        String
   productName String
+  /// O CÓDIGO do produto no momento do registro (o `sku` do catálogo).
+  ///
+  /// Snapshot pelo mesmo motivo do nome e do preço: é por ele que o estoque, a
+  /// nota e a conferência no balcão encontram o item, e ele precisa continuar
+  /// dizendo o que dizia no dia do acordo — inclusive depois que o cadastro for
+  /// recodificado ou o produto excluído (o FK vira null e sobra este texto).
+  ///
+  /// `null` nos itens anteriores a este campo e nos produtos sem código: um
+  /// traço na tela é honesto, um código inventado não.
+  productSku  String?
   unit        String
   quantity    Float
   unitValue   Float

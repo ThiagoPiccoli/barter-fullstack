@@ -48,6 +48,28 @@ describe('Tabela de capacidades', () => {
     expect(rolesWith(CAPABILITY.bartersInvoice)).toEqual([ROLE.biller]);
   });
 
+  /**
+   * LER a cédula e PREENCHER a cédula são duas perguntas.
+   *
+   * O admin ganhou a segunda via do documento — ele já enxerga a operação
+   * inteira e já responde pelo timbre dela, e pedir a outra pessoa uma cópia do
+   * papel que ele administra não fazia sentido. O que ele NÃO ganhou é o ato:
+   * preencher a cédula continua com quem apura a matrícula do imóvel, e faturar
+   * continua sendo do faturista.
+   *
+   * Este teste é o que segura as duas metades separadas. Dar `bartersInvoice`
+   * ao admin — que era o atalho óbvio para o mesmo pedido — quebra aqui.
+   */
+  it('a cédula: o admin lê e gera, mas quem preenche e fatura é o faturista', () => {
+    expect(rolesWith(CAPABILITY.bartersCprRead).sort()).toEqual([ROLE.admin, ROLE.biller].sort());
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCprRead)).toBe(true);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersInvoice)).toBe(false);
+    // E não vazou para quem não emite documento em nome da empresa.
+    expect(can({ role: ROLE.committee }, CAPABILITY.bartersCprRead)).toBe(false);
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersCprRead)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersCprRead)).toBe(false);
+  });
+
   it('registrar permuta é só do consultor', () => {
     expect(rolesWith(CAPABILITY.bartersRegister)).toEqual([ROLE.consultant]);
   });
@@ -104,6 +126,7 @@ describe('Tabela de capacidades', () => {
         CAPABILITY.bartersReadInvoicing,
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersInvoice,
+        CAPABILITY.bartersCprRead,
         CAPABILITY.creditorManage,
         CAPABILITY.pricesRead,
         CAPABILITY.bartersInvestmentPerHa,

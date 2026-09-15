@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
@@ -220,7 +221,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           ],
         ),
       ),
-      body: Column(
+      body: BoundedContent(
+        child: Column(
         children: [
           if (_hasSimulations) const OfflineBanner(),
           Padding(
@@ -256,6 +258,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -438,6 +441,71 @@ class _BarterCard extends StatelessWidget {
                         ' • ${formatQty(barter.producerAreaHa!)} ha',
                         style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                       ),
+                  ],
+                ),
+              ],
+              // O IMPOSTO DA ENTREGA na própria lista.
+              //
+              // Ele já estava no detalhe, e chegar lá custa um toque por
+              // permuta — mas a pergunta que ele responde é de comparação
+              // ("quais das minhas permutas saem pela folha?"), e comparação se
+              // faz na lista. Ele também muda o que o produtor de fato entrega:
+              // duas permutas do mesmo tamanho com regimes diferentes pedem
+              // sacas diferentes na colheita, e sem esta linha as duas se leem
+              // idênticas aqui.
+              //
+              // Em SACAS para quem não vê R$, como em todo o resto do app: é a
+              // unidade em que o consultor enxerga a permuta.
+              if (barter.hasTax) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.receipt_long_outlined, size: 13, color: AppColors.textLight),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'Funrural/Senar ${barter.taxRateLabel} • '
+                        '${barter.taxRegime.shortLabel.toLowerCase()}',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isAdmin
+                          ? '+ ${formatCurrency(barter.taxAmount)}'
+                          : '+ ${formatSacks(barter.taxInSacks)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              // A BANDEIRA do pedido de alteração, na lista: quem tem a permuta
+              // na mesa precisa ver isto ANTES de abri-la para trabalhar nela —
+              // os insumos podem mudar, e o parecer (ou a decisão) que ele daria
+              // hoje seria refeito amanhã.
+              if (barter.hasOpenChangeRequest) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.edit_note_outlined, size: 13, color: AppColors.pending),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'Alteração solicitada por '
+                        '${barter.changeRequestBy ?? barter.consultantName}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.pending,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -636,7 +704,7 @@ class _SimulationList extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 'Monte a permuta em "Nova ${brand.copy.barterTitle}" e guarde. A '
-                'simulação fica neste aparelho e funciona sem internet — o envio '
+                'simulação fica neste aparelho e funciona sem internet: o envio '
                 'ao gerente pode ser feito na hora ou aqui, quando você tiver sinal.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: AppColors.textMedium),
@@ -786,9 +854,11 @@ class _SimulationCardState extends State<_SimulationCard> {
                 ),
                 child: Column(
                   children: [
+                    // Com o CÓDIGO na frente, como em toda lista de produto
+                    // do app — é por ele que o insumo é procurado e conferido.
                     for (final item in shown)
                       DialogLine(
-                        item.productName.isEmpty ? item.productId : item.productName,
+                        simulationItemLabel(item),
                         '${formatQty(item.quantity)} ${item.unit}',
                       ),
                     if (rest > 0)
@@ -834,7 +904,7 @@ class _SimulationCardState extends State<_SimulationCard> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      simulation.unitName.isEmpty ? '—' : simulation.unitName,
+                      simulation.unitName.isEmpty ? 'unidade não informada' : simulation.unitName,
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                       overflow: TextOverflow.ellipsis,
                     ),

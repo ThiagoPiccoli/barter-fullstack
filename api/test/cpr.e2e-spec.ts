@@ -384,18 +384,37 @@ describe('CPR — o preenchimento da cédula (e2e)', () => {
   });
 
   /**
-   * A CÉDULA É DO FATURISTA. Os outros papéis levam 403 na porta — inclusive o
-   * admin, que administra o sistema e não emite documento de permuta, e o
-   * comitê, que decide e não fatura.
+   * PREENCHER A CÉDULA É DO FATURISTA — e continua sendo, para todo mundo.
+   *
+   * O `PUT` é o ato: quem apura a matrícula do imóvel responde pelo que o
+   * título afirma. Nenhum outro papel escreve nele, o admin inclusive.
    */
-  it('só o faturista abre e preenche a cédula', async () => {
+  it('só o faturista preenche a cédula', async () => {
     for (const email of [ADMIN, COMITE, GERENTE, JOAO]) {
-      const leitura = await readCpr('PRM-2026-004', await asUser(email));
-      expect([email, leitura.status]).toEqual([email, 403]);
-      expect(leitura.body.message).toContain('Faturista');
-
       const escrita = await saveCpr('PRM-2026-004', await asUser(email), { number: 'X' });
       expect([email, escrita.status]).toEqual([email, 403]);
+    }
+  });
+
+  /**
+   * LER A CÉDULA é outra pergunta, e o admin passa por ela.
+   *
+   * A segunda via de um documento emitido é registro da operação que ele
+   * administra — ele já enxerga a permuta inteira por `bartersReadAll` e já
+   * responde pelo timbre por `creditorManage`. O que ele NÃO ganhou está no
+   * teste acima: ler não virou escrever.
+   *
+   * O comitê, o gerente e o consultor continuam na porta: quem não emite
+   * documento em nome da empresa não tira segunda via dele.
+   */
+  it('o admin lê a cédula e gera o documento; os demais papéis não', async () => {
+    const admin = await readCpr('PRM-2026-004', await asUser(ADMIN));
+    expect(admin.status).toBe(200);
+    expect(admin.body.data).toHaveProperty('creditor');
+
+    for (const email of [COMITE, GERENTE, JOAO]) {
+      const leitura = await readCpr('PRM-2026-004', await asUser(email));
+      expect([email, leitura.status]).toEqual([email, 403]);
     }
   });
 

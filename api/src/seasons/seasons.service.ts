@@ -4,7 +4,14 @@ import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeName, slugify } from './product-name';
 import { letterFor, seasonCode, versionCode } from './season-code';
-import { goalsOf, isOpenAt, realizedFrom, type Goal, type Realized } from './version-progress';
+import {
+  closingReasonOf,
+  goalsOf,
+  isOpenAt,
+  realizedFrom,
+  type Goal,
+  type Realized,
+} from './version-progress';
 import { parseSheet, readWorkbook, type ImportRow } from './version-import';
 import {
   ImportVersionDto,
@@ -36,6 +43,22 @@ export type VersionProgress = { realized: Realized; goals: Goal[] };
  */
 const PUBLISH_TIMEOUT_MS = 60_000;
 const PUBLISH_MAX_WAIT_MS = 10_000;
+
+/**
+ * O que `assertPublishable` precisa ver: a data e a combinação meta × modo de
+ * encerramento. Um `Pick` em vez do DTO inteiro porque a conferência acontece
+ * antes de a tabela existir, e nos dois caminhos de publicação.
+ */
+type PublishableLimits = Pick<
+  VersionLimitsDto,
+  'endsAt' | 'closeOnGoal' | 'targetSales' | 'targetSacks' | 'targetBarters'
+>;
+
+/** A versão tem alguma meta definida? É o que dá sentido ao `closeOnGoal`. */
+const hasAnyTarget = (limits: PublishableLimits): boolean =>
+  [limits.targetSales, limits.targetSacks, limits.targetBarters].some(
+    (target) => target !== undefined && target !== null && target > 0,
+  );
 
 /** Uma linha da tabela já resolvida contra o catálogo. */
 export interface ResolvedPrice {
@@ -136,7 +159,7 @@ export class SeasonsService {
       targetType: 'season',
       targetId: season.id,
       targetLabel: season.code,
-      detail: `${season.name} — pagamento em ${season.grainName}`,
+      detail: `${season.name}, pagamento em ${season.grainName}`,
     });
     return season;
   }
@@ -362,7 +385,7 @@ export class SeasonsService {
    * portão final, e o caminho do corpo JSON não passa por outro lugar. Chamar
    * duas vezes na importação é barato e mantém a regra num arquivo só.
    */
-  private assertPublishable(season: Season, limits: Pick<VersionLimitsDto, 'endsAt'>): void {
+  private assertPublishable(season: Season, limits: PublishableLimits): void {
     if (season.status !== 'open') {
       throw new UnprocessableEntityException(
         'Esta safra está encerrada; abra uma nova safra para lançar um Barter.',
@@ -370,6 +393,13 @@ export class SeasonsService {
     }
     if (limits.endsAt && new Date(limits.endsAt).getTime() <= Date.now()) {
       throw new UnprocessableEntityException('A data de encerramento precisa ser no futuro');
+    }
+    // Encerrar ao bater meta, sem meta nenhuma, é uma opção ligada que nunca
+    // aconteceria — e o admin sairia daqui achando que o Barter se fecha.
+    if (limits.closeOnGoal && !hasAnyTarget(limits)) {
+      throw new UnprocessableEntityException(
+        'Defina ao menos uma meta (vendas, sacas ou permutas) para o Barter encerrar ao atingi-la.',
+      );
     }
   }
 
@@ -450,6 +480,7 @@ export class SeasonsService {
         targetSales: limits.targetSales ?? null,
         targetSacks: limits.targetSacks ?? null,
         targetBarters: limits.targetBarters ?? null,
+        closeOnGoal: limits.closeOnGoal ?? false,
         sourceFile,
         note: limits.note?.trim() || null,
       },
@@ -520,7 +551,11 @@ export class SeasonsService {
       targetLabel: version.code,
       detail:
         `${version.prices.length} insumo(s), saca a ${grainPrice.toFixed(2)}` +
-        (sourceFile ? ` — arquivo ${sourceFile}` : ''),
+        (sourceFile ? `, arquivo ${sourceFile}` : '') +
+        // O MODO entra na trilha do lançamento porque ele é uma decisão do
+        // lançamento: "por que este Barter fechou sozinho em março?" começa a
+        // ser respondida aqui, e não só na linha do fechamento.
+        (version.closeOnGoal ? ', encerra ao bater meta' : ''),
     });
   }
 
@@ -531,15 +566,13 @@ export class SeasonsService {
       throw new UnprocessableEntityException('Esta versão já foi encerrada');
     }
 
-    await this.prisma.barterVersion.update({
-      where: { id: version.id },
-      data: {
-        status: 'closed',
-        closedAt: new Date(),
-        closedBy: admin.fullName,
-        closedById: admin.id,
-      },
-    });
+    // Não encontrou a linha ATIVA: entre a leitura e a gravação alguém fechou
+    // esta versão — o outro admin, ou a aprovação que bateu a meta. Quem chega
+    // tarde recebe a mesma resposta de quem chegou tarde de qualquer outro jeito,
+    // e não uma trilha dizendo que encerrou o que já estava encerrado.
+    if (!(await this.writeClose(version.id, admin.fullName, admin.id))) {
+      throw new UnprocessableEntityException('Esta versão já foi encerrada');
+    }
 
     await this.audit.record({
       actor: admin,
@@ -549,6 +582,125 @@ export class SeasonsService {
       targetLabel: version.code,
       detail: version.season.name,
     });
+    return this.findVersion(code);
+  }
+
+  /**
+   * A GRAVAÇÃO do encerramento, comum ao manual e ao automático.
+   *
+   * O `status` entra no `where`, e não só na conferência de antes, pelo mesmo
+   * motivo de `applyStep` em barters.service.ts: o encerramento automático nasce
+   * de uma aprovação, e duas aprovações no mesmo segundo cruzariam a meta juntas.
+   * Com ele, a segunda não encontra a linha, `count` volta 0 e ninguém escreve
+   * um `closedAt` por cima do que já estava fechado.
+   */
+  private async writeClose(
+    versionId: number,
+    closedBy: string,
+    closedById: number | null,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.barterVersion.updateMany({
+      where: { id: versionId, status: 'active' },
+      data: { status: 'closed', closedAt: new Date(), closedBy, closedById },
+    });
+    return count > 0;
+  }
+
+  /**
+   * O ENCERRAMENTO AUTOMÁTICO: fecha a versão se ela pediu para fechar ao bater
+   * meta e a meta bateu. Devolve o que fechou, ou `null` quando não havia o que
+   * fechar — o caso comum, e não um erro.
+   *
+   * Chamado DEPOIS de cada aprovação do comitê (barters.service.ts), que é o
+   * único ato capaz de aumentar o realizado. Por isso não existe rotina de
+   * madrugada e por isso o fechamento tem autor: quem aprovou a permuta que
+   * cruzou a meta.
+   *
+   * `closeOnGoal` desligado sai antes de qualquer conta — é o caminho da maioria
+   * das aprovações, e ele não paga por uma funcionalidade que a versão não
+   * ligou.
+   */
+  async closeIfGoalReached(
+    actor: User,
+    versionId: number,
+  ): Promise<{ version: VersionWithPrices; reason: string } | null> {
+    const version = await this.prisma.barterVersion.findUnique({
+      where: { id: versionId },
+      include: { season: true },
+    });
+    if (!version || version.status !== 'active' || !version.closeOnGoal) return null;
+
+    const { goals } = await this.progressOf(version);
+    const reason = closingReasonOf(goals);
+    if (!reason) return null;
+
+    if (!(await this.writeClose(version.id, reason, null))) return null;
+
+    await this.audit.record({
+      actor,
+      action: AUDIT_ACTION.versionClosed,
+      targetType: 'version',
+      targetId: version.id,
+      // O ATOR é quem aprovou, e o detalhe diz que o fechamento foi
+      // consequência: a trilha responde "quem mexeu no sistema", e ninguém
+      // mexeu no Barter — alguém aprovou uma permuta, e a regra da versão fez o
+      // resto. Um ator inventado ("Sistema") esconderia justamente o ato que
+      // interessa reencontrar.
+      targetLabel: version.code,
+      detail: `${version.season.name}: encerrado ao bater a meta, na aprovação de uma permuta`,
+    });
+
+    return { version: await this.findVersion(version.code), reason };
+  }
+
+  /**
+   * Troca o MODO de encerramento da versão vigente: automático ao bater meta, ou
+   * manual.
+   *
+   * Ligar com a meta JÁ batida encerra na hora, e isso é a leitura literal da
+   * opção — a alternativa seria uma versão com "encerra ao bater meta" ligado,
+   * meta batida e Barter aberto, esperando uma próxima aprovação que talvez
+   * nunca venha. A tela avisa antes de enviar.
+   *
+   * Versão encerrada não aceita a troca: o modo é sobre o futuro dela, e ela não
+   * tem mais futuro.
+   */
+  async setCloseOnGoal(admin: User, code: string, enabled: boolean): Promise<VersionWithPrices> {
+    const version = await this.findVersion(code);
+    if (version.status !== 'active') {
+      throw new UnprocessableEntityException(
+        'Só a versão vigente pode mudar o modo de encerramento',
+      );
+    }
+    const { goals } = await this.progressOf(version);
+    if (enabled && goals.length === 0) {
+      throw new UnprocessableEntityException(
+        'Esta versão não tem meta. Publique a próxima com meta para o Barter encerrar sozinho.',
+      );
+    }
+
+    if (version.closeOnGoal !== enabled) {
+      await this.prisma.barterVersion.update({
+        where: { id: version.id },
+        data: { closeOnGoal: enabled },
+      });
+      await this.audit.record({
+        actor: admin,
+        action: AUDIT_ACTION.versionCloseRuleChanged,
+        targetType: 'version',
+        targetId: version.id,
+        targetLabel: version.code,
+        detail: enabled ? 'passa a encerrar ao bater meta' : 'passa a encerrar só por decisão',
+      });
+    }
+
+    // A meta pode já estar batida: ligar a opção agora é dizer "feche quando
+    // bater", e ela bateu. Vale a mesma porta do fechamento por aprovação, para
+    // a trilha e o `closedBy` saírem iguais nos dois caminhos.
+    if (enabled) {
+      const closed = await this.closeIfGoalReached(admin, version.id);
+      if (closed) return closed.version;
+    }
     return this.findVersion(code);
   }
 
@@ -654,7 +806,7 @@ export class SeasonsService {
       }
       if (product.type !== 'input') {
         throw new UnprocessableEntityException(
-          `${product.name} não é um insumo — o grão da safra tem valor próprio`,
+          `${product.name} não é um insumo: o grão da safra tem valor próprio`,
         );
       }
       return { product, price: row.price };

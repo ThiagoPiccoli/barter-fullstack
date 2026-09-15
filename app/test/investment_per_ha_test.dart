@@ -228,10 +228,16 @@ void main() {
 
     final texto = textoDoPdf(bytes);
     // A rede de segurança do próprio teste: se a extração falhar, ela acha
-    // "Investimento" em lugar nenhum — e passaria a atestar exatamente nada.
+    // "INVESTIMENTO" em lugar nenhum — e passaria a atestar exatamente nada.
     expect(texto, contains('PRM-2026-001'));
-    expect(texto, contains('Investimento'));
+    // Ele mora no QUADRO DO TOTAL, em destaque, e não mais como uma linha de
+    // cadastro ao lado da área: é a régua que compara esta permuta com
+    // qualquer outra, e o lugar dela é junto do número que ela mede.
+    expect(texto, contains('INVESTIMENTO NA LAVOURA'));
     expect(texto, contains('2,10 sc/ha'));
+    // Sem a área ao lado: ela já está impressa no bloco do produtor, e repetida
+    // aqui competia com o número que este quadro existe para destacar.
+    expect(texto, isNot(contains('2,10 sc/ha (120 ha)')));
   });
 
   /// E some do comprovante de quem não o recebe — o do consultor.

@@ -3,7 +3,7 @@ import type { User } from '@prisma/client';
 import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterVersionJson } from '../common/serializers';
-import { UpdateVersionPriceDto } from './dto/season.dto';
+import { CloseOnGoalDto, UpdateVersionPriceDto } from './dto/season.dto';
 import { SeasonsService } from './seasons.service';
 
 /**
@@ -51,6 +51,28 @@ export class BarterVersionsController {
   ) {
     return toBarterVersionJson(
       await this.seasons.updatePrice(admin, code, productId, dto),
+      undefined,
+      admin,
+    );
+  }
+
+  /**
+   * O MODO de encerramento por meta da versão vigente: automático ou manual.
+   *
+   * `PUT` porque é um estado que se declara ("passe a ser assim"), e não um ato
+   * a disparar: reenviar o mesmo valor não faz nada além do que já está feito.
+   * O que ele PODE fazer é encerrar o Barter na hora, quando a meta já estava
+   * batida — ver `setCloseOnGoal`.
+   */
+  @Put(':code/close-on-goal')
+  @RequireCapability(CAPABILITY.barterManage)
+  async closeOnGoal(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Body() dto: CloseOnGoalDto,
+  ) {
+    return toBarterVersionJson(
+      await this.seasons.setCloseOnGoal(admin, code, dto.enabled),
       undefined,
       admin,
     );

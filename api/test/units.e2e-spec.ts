@@ -115,7 +115,7 @@ describe('Unidades (e2e)', () => {
     expect(barter.status).toBe(200);
     // O vínculo cai, o nome congelado fica — o comprovante continua legível.
     expect(barter.body.data.unitId).toBeNull();
-    expect(barter.body.data.unitName).toBe('Filial 02 – Gran. Santa T.');
+    expect(barter.body.data.unitName).toBe('Filial 02 (Gran. Santa T.)');
     expect(barter.body.data.status).toBe('sentToManager');
 
     // E a etapa do gerente segue exatamente como estava.
@@ -139,7 +139,7 @@ describe('Unidades (e2e)', () => {
       .set('Authorization', admin);
     expect(trilha.body.data).toHaveLength(1);
     expect(trilha.body.data[0].detail).toBe(
-      'nome: Filial 02 – Gran. Santa T. → Filial 02 – Santa Terezinha',
+      'nome: Filial 02 (Gran. Santa T.) → Filial 02 – Santa Terezinha',
     );
   });
 
@@ -173,7 +173,7 @@ describe('Unidades (e2e)', () => {
       });
     expect(criado.status).toBe(201);
     expect(criado.body.data.unitId).toBe(UNIT.filial18);
-    expect(criado.body.data.branch).toBe('Filial 18 – Gran. São Joa.');
+    expect(criado.body.data.branch).toBe('Filial 18 (Gran. São Joa.)');
   });
 
   /**
@@ -193,9 +193,9 @@ describe('Unidades (e2e)', () => {
     const roberto = porNome.get('Roberto Souza') as { branch: string; managerName: string };
     const ana = porNome.get('Ana Paula Ferreira') as { branch: string; managerName: string };
 
-    expect(roberto.branch).toBe('Filial 34 – Gran. Jari');
+    expect(roberto.branch).toBe('Filial 34 (Gran. Jari)');
     expect(roberto.managerName).toBe('Gustavo Ramires');
-    expect(ana.branch).toBe('Filial 04 – Gran. Inharap.');
+    expect(ana.branch).toBe('Filial 04 (Gran. Inharap.)');
     expect(ana.managerName).toBe('Beatriz Nogueira');
   });
 
@@ -217,7 +217,7 @@ describe('Unidades (e2e)', () => {
         ],
       });
     expect(criada.status).toBe(201);
-    expect(criada.body.data.unitName).toBe('Filial 34 – Gran. Jari');
+    expect(criada.body.data.unitName).toBe('Filial 34 (Gran. Jari)');
     // Ela nasce RASCUNHO, e sem destinatário: quem endereça é o
     // encaminhamento, que é onde o envio de fato acontece.
     expect(criada.body.data.status).toBe('draft');

@@ -4,6 +4,7 @@ import '../data/app_data.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 
 /// A CREDORA — a empresa nos documentos que ela emite.
@@ -143,7 +144,9 @@ class _CreditorScreenState extends State<CreditorScreen> {
     }
     return Scaffold(
       appBar: AppBar(title: const Text('Empresa (credora)')),
-      body: _body(),
+      body: BoundedContent(
+        child: _body(),
+      ),
       bottomNavigationBar: _creditor == null ? null : SafeArea(child: _saveBar()),
     );
   }
@@ -283,7 +286,7 @@ class _StatusCard extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(
               ok
-                  ? 'Cadastro completo — as cédulas saem com estes dados.'
+                  ? 'Cadastro completo. As cédulas saem com estes dados.'
                   : 'Falta preencher: ${creditor.gaps.join(', ')}.',
               style: TextStyle(
                   fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark),

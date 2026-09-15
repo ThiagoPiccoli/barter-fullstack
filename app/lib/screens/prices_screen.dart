@@ -5,6 +5,7 @@ import '../models/models.dart';
 import '../data/app_data.dart';
 import '../widgets/class_avatar.dart';
 import '../widgets/filter_bar.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_program_screen.dart';
 import 'product_report_screen.dart';
@@ -112,7 +113,8 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
           ],
         ),
       ),
-      body: Column(
+      body: BoundedContent(
+        child: Column(
         children: [
           if (_showsSearch)
             Padding(
@@ -139,6 +141,7 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -252,7 +255,7 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
           sortLabel: _sortLabel,
           onSort: (value) => setState(() => _sort = value),
           sortOptions: const {
-            _ValueSort.name: 'Nome (A–Z)',
+            _ValueSort.name: 'Nome (A a Z)',
             _ValueSort.priceDesc: 'Maior preço',
             _ValueSort.priceAsc: 'Menor preço',
           },
@@ -574,7 +577,7 @@ class _HistoryListState extends State<_HistoryList> {
           sortLabel: _sortLabel,
           onSort: (value) => setState(() => _sort = value),
           sortOptions: const {
-            _HistorySort.name: 'Nome (A–Z)',
+            _HistorySort.name: 'Nome (A a Z)',
             _HistorySort.price: 'Maior valor',
             _HistorySort.up: 'Maior alta',
             _HistorySort.down: 'Maior queda',

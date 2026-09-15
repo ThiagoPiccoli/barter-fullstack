@@ -174,13 +174,11 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   soma sacas e valores sobre todas as permutas. Quando isso deixar de caber, a
   API já está pronta para as telas carregarem sob demanda.
 - **PostgreSQL, em todos os ambientes**: dev, teste e produção usam o mesmo
-  banco (Prisma 7 + driver adapter `@prisma/adapter-pg`). Antes era SQLite
-  embutido no processo, e a troca aconteceu **antes da primeira carga real** de
-  propósito: sem dado de produção, o custo foi reescrever migrations; com dado,
-  seria janela de parada e script de transferência. O que o SQLite não dava não
-  era desempenho — era operação: duas instâncias sobre o mesmo arquivo não se
-  coordenam, então não havia deploy sem downtime, réplica de leitura nem backup
-  online.
+  banco (Prisma 7 + driver adapter `@prisma/adapter-pg`), e o que se testa é o
+  banco que roda em produção. A escolha não é por desempenho — é por
+  **operação**: um servidor de banco à parte coordena várias instâncias da API
+  sobre o mesmo dado, e é isso que sustenta deploy sem downtime, réplica de
+  leitura e backup online.
 - **A conta é do servidor, a sessão tem fim**: senha com `scrypt` (parâmetros
   gravados junto ao hash, reescrita sozinha quando o custo sobe) e política
   única em `api/src/auth/password-policy.ts`; token opaco guardado só como

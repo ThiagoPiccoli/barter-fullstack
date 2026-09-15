@@ -77,6 +77,29 @@ export const CAPABILITY = {
   /** Registrar permuta (ato do consultor dono da carteira). */
   bartersRegister: 'barters.register',
   /**
+   * PEDIR a alteração de uma permuta que já saiu da mão de quem a registrou.
+   *
+   * É do consultor, e anda junto com `bartersRegister` na prática — mas é
+   * capacidade própria porque responde a outra pergunta: registrar é o ato de
+   * entrada da esteira, e pedir alteração é o único caminho de VOLTA nela (ver
+   * `barters/change-request.ts`). Um dia o gerente vai poder pedir pelo time
+   * dele, e é esta linha que muda — sem lhe dar de carona o registro de
+   * permutas em carteira que não é dele.
+   */
+  bartersChangeRequest: 'barters.changeRequest',
+  /**
+   * DECIDIR o pedido de alteração: liberar a permuta para o consultor refazê-la
+   * ou recusar o pedido, com o motivo.
+   *
+   * É do ADMIN, e não do comitê — apesar de o comitê ser quem decide permuta.
+   * As duas decisões são de naturezas diferentes: o comitê julga o NEGÓCIO
+   * ("esta permuta se aprova?"), e o que se julga aqui é o PROCESSO ("o
+   * trabalho já feito pelos outros postos vai ser jogado fora?"). Liberar
+   * apaga o parecer do gerente e a decisão do comitê da permuta — é
+   * administração da linha, que é justamente o que o admin faz.
+   */
+  bartersChangeReview: 'barters.changeReview',
+  /**
    * Dar o PARECER TÉCNICO sobre uma permuta enviada pelo consultor.
    *
    * A capacidade é o portão ("este papel participa da etapa do gerente"); ela
@@ -112,6 +135,22 @@ export const CAPABILITY = {
    * trabalho, e é por isso que ele não precisa de nenhuma capacidade de decisão.
    */
   bartersInvoice: 'barters.invoice',
+  /**
+   * LER a mesa da cédula e gerar o documento — sem preenchê-la e sem faturar.
+   *
+   * Ela existe porque VER a cédula e ESCREVER nela deixaram de ser a mesma
+   * pergunta. Preencher continua sendo do posto que fatura: é ele quem apura a
+   * matrícula do imóvel e responde pelo que o título afirma, e `bartersInvoice`
+   * segue guardando o `PUT`. Mas o documento de uma permuta já faturada é
+   * registro da operação, e o admin — que já enxerga a operação inteira por
+   * `bartersReadAll` e já responde pelo timbre por `creditorManage` — precisava
+   * pedir a alguém uma segunda via daquilo que ele mesmo administra.
+   *
+   * O par com `creditorManage` é de propósito: as duas dizem que o admin
+   * alcança o PAPEL que a empresa emite, sem por isso alcançar o ATO que o
+   * produziu.
+   */
+  bartersCprRead: 'barters.cprRead',
   /**
    * Ler e editar o CADASTRO DA CREDORA — a identidade da empresa nos documentos
    * que ela emite (razão social, CNPJ, endereço da sede e foro eleito).
@@ -191,9 +230,17 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadAll,
     CAPABILITY.creditorManage,
+    // A CÉDULA em segunda via: ler e gerar o documento do que já foi faturado.
+    // Não vem com `bartersInvoice` junto — o admin não fatura permuta, e
+    // preencher a cédula continua sendo de quem apura a matrícula.
+    CAPABILITY.bartersCprRead,
     CAPABILITY.auditRead,
     CAPABILITY.pricesRead,
     CAPABILITY.bartersInvestmentPerHa,
+    // O caminho de VOLTA da esteira. Ele não é decisão de negócio — é o admin
+    // dizendo se o trabalho já feito pelos outros postos vai ser refeito. Ver
+    // `bartersChangeReview`, e repare que `bartersReview` continua fora daqui.
+    CAPABILITY.bartersChangeReview,
   ],
   // O gerente é o único com escopo de TIME: ele enxerga as permutas
   // endereçadas a ele, e não a operação inteira. Repare que `bartersReadAll`
@@ -232,11 +279,14 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadInvoicing,
     CAPABILITY.bartersInvoice,
+    // Quem preenche também lê: o `GET` da mesa da cédula passou a pedir esta
+    // capacidade, e sem ela o faturista perderia a própria tela.
+    CAPABILITY.bartersCprRead,
     CAPABILITY.creditorManage,
     CAPABILITY.pricesRead,
     CAPABILITY.bartersInvestmentPerHa,
   ],
-  [ROLE.consultant]: [CAPABILITY.bartersRegister],
+  [ROLE.consultant]: [CAPABILITY.bartersRegister, CAPABILITY.bartersChangeRequest],
 };
 
 /** O usuário tem a capacidade? É a única pergunta de autorização do sistema. */

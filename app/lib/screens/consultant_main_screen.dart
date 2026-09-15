@@ -4,8 +4,8 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
-import '../branding/brand_wordmark.dart';
 import 'barters_screen.dart';
 import 'barter_screen.dart';
 
@@ -58,23 +58,33 @@ class _ConsultantMainScreenState extends State<ConsultantMainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return AdaptiveNavScaffold(
+      user: widget.consultant,
+      selectedIndex: _selectedIndex,
+      onSelect: _go,
       body: IndexedStack(index: _selectedIndex, children: _screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: _go,
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.textLight,
-        selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-        unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: [
-          BottomNavigationBarItem(icon: Icon(Icons.home_outlined), activeIcon: Icon(Icons.home), label: 'Início'),
-          BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: const Icon(Icons.swap_horiz), label: brand.copy.barterPluralTitle),
-          BottomNavigationBarItem(icon: Icon(Icons.add_circle_outline), activeIcon: const Icon(Icons.add_circle), label: 'Nova ${brand.copy.barterTitle}'),
-          BottomNavigationBarItem(icon: Icon(Icons.person_outlined), activeIcon: Icon(Icons.person), label: 'Perfil'),
-        ],
-      ),
+      destinations: [
+        const AdaptiveDestination(
+          icon: Icons.home_outlined,
+          activeIcon: Icons.home,
+          label: 'Início',
+        ),
+        AdaptiveDestination(
+          icon: Icons.swap_horiz_outlined,
+          activeIcon: Icons.swap_horiz,
+          label: brand.copy.barterPluralTitle,
+        ),
+        AdaptiveDestination(
+          icon: Icons.add_circle_outline,
+          activeIcon: Icons.add_circle,
+          label: 'Nova ${brand.copy.barterTitle}',
+        ),
+        const AdaptiveDestination(
+          icon: Icons.person_outlined,
+          activeIcon: Icons.person,
+          label: 'Perfil',
+        ),
+      ],
     );
   }
 }
@@ -115,24 +125,17 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandWordmark(size: 32, showTagline: false),
+        title: const MainAppBarTitle('Início'),
         actions: [
           const LogoutButton(),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: CircleAvatar(
-              backgroundColor: AppColors.primaryAccent,
-              radius: 18,
-              child: Text(consultant.avatarInitials,
-                  style: TextStyle(color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.bold)),
-            ),
-          ),
+          AppBarUserAvatar(user: consultant),
         ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         color: AppColors.primary,
-        child: ListView(
+        child: BoundedContent(
+          child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           // Antes de tudo: se o app abriu pelo pacote gravado, o consultor
@@ -150,15 +153,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             icon: Icons.agriculture_outlined,
           ),
           const SizedBox(height: 16),
-          GridView(
-            shrinkWrap: true,
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 2,
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              mainAxisExtent: 160,
-            ),
-            physics: const NeverScrollableScrollPhysics(),
+          AdaptiveCardGrid(
             children: [
               SummaryCard(
                 title: 'Minhas ${brand.copy.barterPluralTitle}',
@@ -294,6 +289,7 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             ...myBarters.take(3).map((b) => MiniBarterCard(barter: b, isAdmin: false)),
           const SizedBox(height: 16),
         ],
+          ),
         ),
       ),
     );
@@ -358,7 +354,7 @@ class _ConsultantProfileTab extends StatelessWidget {
                 InfoTile(
                   icon: Icons.assignment_ind_outlined,
                   label: 'Meu gerente',
-                  value: consultant.managerName.isEmpty ? '—' : consultant.managerName,
+                  value: consultant.managerName.isEmpty ? 'não definido' : consultant.managerName,
                 ),
                 const Divider(height: 1),
                 InfoTile(

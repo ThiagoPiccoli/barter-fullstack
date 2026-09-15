@@ -1,11 +1,30 @@
 import 'package:flutter/material.dart';
+import '../branding/brand_wordmark.dart';
 import '../theme/app_theme.dart';
+import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
 import '../screens/login_screen.dart';
 import '../screens/barter_detail_screen.dart';
 import '../screens/change_password_screen.dart';
+
+/// COMO UM ITEM DE SIMULAÇÃO se lê numa lista: o código na frente, o nome
+/// depois.
+///
+/// O código vem do catálogo pelo id — a simulação guarda só id, nome e
+/// quantidade, porque ela é montada no aparelho e precisa sobreviver a ele
+/// estar sem rede. Some quando não há catálogo carregado ou o produto não tem
+/// código: aí sobra o nome, que é o que existe para dizer.
+///
+/// O id como último recurso é a regra antiga desta linha, e continua: uma
+/// simulação de uma versão anterior do app pode não ter o nome congelado, e
+/// mostrar o id é melhor do que mostrar uma linha em branco.
+String simulationItemLabel(SimulationItem item) {
+  final name = item.productName.isEmpty ? item.productId : item.productName;
+  final sku = AppData.productSkuById(item.productId);
+  return sku == null ? name : '$sku • $name';
+}
 
 /// SnackBar padrão de erro do app (usada por todos os fluxos que chamam a
 /// API). [error] pode ser uma [ApiException] (mensagem legível do servidor)
@@ -351,7 +370,7 @@ class BarterBalanceBar extends StatelessWidget {
                       Text(formatCurrency(inputCost),
                           style: TextStyle(color: AppColors.onPrimary, fontSize: 28, fontWeight: FontWeight.w800))
                     else
-                      Text('—',
+                      Text('a definir',
                           style: TextStyle(color: AppColors.onPrimary, fontSize: 28, fontWeight: FontWeight.w800)),
                     const SizedBox(height: 2),
                     Text(
@@ -368,7 +387,20 @@ class BarterBalanceBar extends StatelessWidget {
           ),
           if (showValue) ...[
             const SizedBox(height: 12),
-            Row(
+            // A FAIXA DAS TRÊS LEITURAS tem teto de largura, e encosta à
+            // esquerda.
+            //
+            // Cada célula é um `Expanded`, então sem teto elas dividem a largura
+            // do cartão: num monitor isso vira "Insumos" grudado na borda
+            // esquerda, "Paga com" na direita e um divisor solto no meio de 400px
+            // de vazio — três números que se leem juntos, espalhados a ponto de
+            // exigir um giro de cabeça. No celular a barra é mais estreita que o
+            // teto, e nada disto muda.
+            Align(
+              alignment: Alignment.centerLeft,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: Row(
               children: [
                 Expanded(
                   child: _MiniStat(
@@ -382,7 +414,7 @@ class BarterBalanceBar extends StatelessWidget {
                 Expanded(
                   child: _MiniStat(
                     label: 'Paga com',
-                    value: hasGrain ? '${formatSacks(sacks)}$grainLabel' : '—',
+                    value: hasGrain ? '${formatSacks(sacks)}$grainLabel' : 'a definir',
                     sub: hasGrain ? '${formatCurrency(referenceValue)}/sc' : 'sem grão',
                     icon: Icons.grass,
                     alignEnd: sacksPerHa == null,
@@ -404,6 +436,8 @@ class BarterBalanceBar extends StatelessWidget {
                   ),
                 ],
               ],
+                ),
+              ),
             ),
           ],
         ],
@@ -498,16 +532,90 @@ void openChangePassword(BuildContext context) {
   );
 }
 
+/// "Existe uma coluna lateral em volta desta tela?"
+///
+/// Quem pergunta são os botões de conta e saída da barra de título: no
+/// computador eles moram no pé da coluna, e mantê-los também na barra deixaria a
+/// mesma ação em dois lugares da mesma tela.
+///
+/// É um [InheritedWidget], e não uma conta de largura, de propósito. Largura
+/// responde "a janela é grande?", que é a pergunta errada: a troca de senha
+/// obrigatória e as telas empurradas por cima (o detalhe, a cédula) são largas e
+/// NÃO têm coluna — esconder a saída nelas deixaria a pessoa sem porta. Só quem
+/// realmente desenhou uma coluna anuncia isso aqui, e o padrão é `false`.
+class RailScope extends InheritedWidget {
+  final bool hasRail;
+
+  const RailScope({super.key, required this.hasRail, required super.child});
+
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<RailScope>()?.hasRail ?? false;
+
+  @override
+  bool updateShouldNotify(RailScope oldWidget) => oldWidget.hasRail != hasRail;
+}
+
 /// Botão de "Alterar senha" para a AppBar das telas de nível principal.
 class ChangePasswordButton extends StatelessWidget {
   const ChangePasswordButton({super.key});
 
   @override
   Widget build(BuildContext context) {
+    if (RailScope.of(context)) return const SizedBox.shrink();
     return IconButton(
       icon: const Icon(Icons.lock_reset),
       tooltip: 'Alterar senha',
       onPressed: () => openChangePassword(context),
+    );
+  }
+}
+
+/// O título da barra de um painel: a MARCA quando não há coluna lateral, o NOME
+/// DA TELA quando há.
+///
+/// Sem coluna, a barra é o único lugar da tela onde a marca cabe, e é ali que
+/// ela fica. Com coluna, a assinatura já está no topo dela — repetir o logotipo
+/// no centro da barra é dizer duas vezes de que app se trata e nenhuma vez em
+/// que parte dele a pessoa está. É a mesma troca que a identidade fez: cada
+/// coisa em um lugar só, e o lugar depende de haver moldura.
+class MainAppBarTitle extends StatelessWidget {
+  /// Onde a pessoa está — "Dashboard", "Início", "Permutas".
+  final String screen;
+  const MainAppBarTitle(this.screen, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    if (RailScope.of(context)) return Text(screen);
+    return const BrandWordmark(size: 32, showTagline: false);
+  }
+}
+
+/// O avatar de quem está logado, na barra de título.
+///
+/// Some sob a coluna lateral pelo mesmo motivo dos botões acima: lá a identidade
+/// tem endereço fixo no pé, com nome e cargo por extenso, e repeti-la aqui seria
+/// dizer duas vezes quem a pessoa é na mesma tela.
+class AppBarUserAvatar extends StatelessWidget {
+  final UserModel user;
+  const AppBarUserAvatar({super.key, required this.user});
+
+  @override
+  Widget build(BuildContext context) {
+    if (RailScope.of(context)) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: CircleAvatar(
+        backgroundColor: AppColors.primaryAccent,
+        radius: 18,
+        child: Text(
+          user.avatarInitials,
+          style: TextStyle(
+            color: AppColors.onPrimary,
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -569,10 +677,18 @@ class OfflineBanner extends StatelessWidget {
 }
 
 class LogoutButton extends StatelessWidget {
-  const LogoutButton({super.key});
+  /// Ignora a coluna lateral e aparece de qualquer jeito.
+  ///
+  /// Existe para UM caso: a troca de senha obrigatória, que é a tela onde a
+  /// pessoa entra antes do app e onde sair é a única outra saída. Ali não há
+  /// coluna, mas o dia em que houver, esta porta não pode sumir junto.
+  final bool alwaysShow;
+
+  const LogoutButton({super.key, this.alwaysShow = false});
 
   @override
   Widget build(BuildContext context) {
+    if (!alwaysShow && RailScope.of(context)) return const SizedBox.shrink();
     return IconButton(
       icon: const Icon(Icons.logout),
       tooltip: 'Sair',
@@ -744,7 +860,7 @@ class MiniBarterCard extends StatelessWidget {
             Text(
                 barter.hasSacks
                     ? '${formatSacks(barter.sacksToDeliver)} ${barter.referenceGrainName.toLowerCase()}'
-                    : '—',
+                    : 'a definir',
                 style: TextStyle(fontSize: 10, color: AppColors.textMedium)),
           ],
         ),
@@ -804,7 +920,7 @@ class BarterLogItem extends StatelessWidget {
                         Text(
                             barter.hasSacks
                                 ? '${formatSacks(barter.sacksToDeliver)} ${barter.referenceGrainName.toLowerCase()}'
-                                : '—',
+                                : 'a definir',
                             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary)),
                       ],
                     ),
@@ -1107,6 +1223,342 @@ void giveBarterOpinion(
       );
     },
   );
+}
+
+/// O PEDIDO DE ALTERAÇÃO, escrito pelo consultor que registrou a permuta.
+///
+/// É o único caminho de volta da esteira, e o texto é a peça inteira do pedido:
+/// quem vai lê-lo é o admin, que não estava na conversa com o produtor e não
+/// tem como adivinhar se o caso é trocar 200 kg de um insumo ou refazer tudo. A
+/// decisão dele depende disso — liberar apaga o parecer do gerente e a decisão
+/// do comitê.
+///
+/// O diálogo diz, antes do campo, ONDE a permuta está: pedir alteração de uma
+/// permuta que já foi aprovada custa o trabalho de dois postos, e quem pede
+/// merece saber o tamanho do que está pedindo antes de escrever.
+void requestBarterChange(
+  BuildContext context,
+  BarterModel barter, {
+  required ValueChanged<BarterModel> onRequested,
+}) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final enough = noteCtrl.text.trim().length >= minOpinionLength;
+          return AlertDialog(
+            title: const Text('Solicitar Alteração'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Permuta: ${barter.id}',
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  Text('${barter.producerName} • ${barter.statusLabel}',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  const SizedBox(height: 12),
+                  Text(
+                    'O administrador decide. Liberada, ela volta a ser rascunho seu, '
+                    'e o parecer do gerente e a decisão do comitê são refeitos '
+                    'do zero.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    autofocus: true,
+                    minLines: 3,
+                    maxLines: 8,
+                    maxLength: 2000,
+                    textCapitalization: TextCapitalization.sentences,
+                    onChanged: (_) => setLocal(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'O que precisa mudar',
+                      hintText: 'O produtor trocou o fungicida; a quantidade de NPK saiu errada…',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: submitting || !enough
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated =
+                              await AppData.requestBarterChange(barter.id, noteCtrl.text);
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onRequested(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: const Text(
+                                'Pedido enviado ao administrador. A permuta segue onde está até ele responder.'),
+                            backgroundColor: AppColors.pending,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.pending),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                    : const Text('Enviar Pedido'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+/// A DECISÃO DO ADMIN sobre o pedido de alteração: liberar ou recusar.
+///
+/// Irmão de [reviewBarter] na forma e diferente no que julga: ali se decide o
+/// NEGÓCIO (e quem decide é o comitê); aqui se decide o PROCESSO — se o
+/// trabalho já feito pelos outros postos vai ser jogado fora.
+///
+/// O texto é obrigatório só na RECUSA, pela regra de sempre: a resposta que
+/// fecha a porta de alguém precisa dizer por quê. A liberação fala pelo próprio
+/// efeito — a permuta reaparece na mão de quem pediu.
+void decideBarterChange(
+  BuildContext context,
+  BarterModel barter, {
+  required bool accept,
+  required ValueChanged<BarterModel> onDecided,
+}) {
+  final color = accept ? AppColors.approved : AppColors.denied;
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final enough = accept || noteCtrl.text.trim().length >= minOpinionLength;
+          return AlertDialog(
+            title: Text(accept ? 'Liberar Alteração' : 'Recusar Pedido'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Permuta: ${barter.id}',
+                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 2),
+                  Text('${barter.changeRequestBy ?? barter.consultantName} pediu a alteração',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                  const SizedBox(height: 12),
+                  Text(
+                    accept
+                        // O PREÇO da liberação, dito antes do clique: é a única
+                        // ação do admin que apaga o trabalho assinado de outras
+                        // pessoas, e ele precisa saber disso agora — não depois.
+                        ? 'A permuta volta a ser rascunho do consultor. O parecer do gerente '
+                            'e a decisão do comitê saem dela (o histórico continua registrado), '
+                            'e ela percorre a linha de novo.'
+                        : 'A permuta continua exatamente onde está. O motivo aparece para o '
+                            'consultor, que pode pedir de novo depois de resolvê-lo.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: noteCtrl,
+                    autofocus: !accept,
+                    minLines: 2,
+                    maxLines: 6,
+                    maxLength: 1000,
+                    textCapitalization: TextCapitalization.sentences,
+                    onChanged: (_) => setLocal(() {}),
+                    decoration: InputDecoration(
+                      labelText: accept ? 'Observação (opcional)' : 'Motivo da recusa',
+                      hintText: accept
+                          ? 'Combine com o consultor o prazo para reenviar…'
+                          : 'A retirada já foi separada no depósito…',
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: submitting || !enough
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated = await AppData.decideBarterChange(
+                            barter.id,
+                            accept: accept,
+                            note: noteCtrl.text,
+                          );
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onDecided(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(accept
+                                ? 'Alteração liberada. A permuta voltou para o consultor.'
+                                : 'Pedido recusado. A permuta segue onde estava.'),
+                            backgroundColor: color,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: color),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(strokeWidth: 2, color: AppColors.onPrimary))
+                    : Text(accept ? 'Liberar' : 'Recusar'),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+/// O PEDIDO DE ALTERAÇÃO como bloco de leitura — a bandeira pendurada na
+/// permuta enquanto o admin não responde, e o motivo quando ele recusa.
+///
+/// Ele aparece para TODO MUNDO que enxerga a permuta, e não só para quem pediu
+/// e quem decide: quem a tem na mesa precisa saber que os insumos dela podem
+/// mudar antes de gastar um parecer sobre eles.
+class ChangeRequestCard extends StatelessWidget {
+  final BarterModel barter;
+
+  /// As ações do admin. Nulas para quem só lê — a bandeira é a mesma; o que
+  /// muda é poder resolvê-la.
+  final VoidCallback? onAccept;
+  final VoidCallback? onDeny;
+
+  const ChangeRequestCard({
+    super.key,
+    required this.barter,
+    this.onAccept,
+    this.onDeny,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final open = barter.hasOpenChangeRequest;
+    final color = open ? AppColors.pending : AppColors.denied;
+    final from = barter.changeRequestFrom;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: AppShape.card,
+        border: Border.all(color: color.withValues(alpha: 0.30)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(open ? Icons.edit_note_outlined : Icons.block_outlined, size: 16, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  open ? 'Alteração solicitada' : 'Alteração recusada',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: color),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            [
+              barter.changeRequestBy ?? barter.consultantName,
+              if (barter.changeRequestAt != null) formatDate(barter.changeRequestAt!),
+              // DE ONDE ela foi pedida: é o que diz o tamanho do que seria
+              // desfeito — um parecer, ou uma decisão do comitê.
+              if (from != null && from != barter.status)
+                'pedido com ela em "${barterStatusLabel(from)}"',
+            ].join(' • '),
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+          ),
+          if ((barter.changeRequestNote ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(barter.changeRequestNote!,
+                style: TextStyle(fontSize: 13, color: AppColors.textDark, height: 1.35)),
+          ],
+          if ((barter.changeRequestReply ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Resposta do administrador',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color)),
+            Text(barter.changeRequestReply!,
+                style: TextStyle(fontSize: 13, color: AppColors.textDark, height: 1.35)),
+          ],
+          if (open && onAccept != null && onDeny != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onDeny,
+                    icon: const Icon(Icons.close, size: 18),
+                    label: const Text('Recusar'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.denied,
+                      side: BorderSide(color: AppColors.denied),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: onAccept,
+                    icon: const Icon(Icons.lock_open_outlined, size: 18),
+                    label: const Text('Liberar'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.approved,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 /// O parecer do gerente, como bloco de leitura. Aparece no detalhe da permuta e

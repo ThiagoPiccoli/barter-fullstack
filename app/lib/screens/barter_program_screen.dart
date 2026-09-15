@@ -13,10 +13,15 @@ import '../widgets/common_widgets.dart';
 /// versão vigente com o valor da saca, o quanto falta para cada meta e o botão
 /// que publica a próxima versão a partir da planilha do fornecedor.
 ///
-/// O que esta tela deliberadamente NÃO faz é fechar o Barter sozinha. As metas
-/// medem e avisam; encerrar continua sendo um ato do admin, com um toque — o
-/// realizado é leitura de negócio, e desligar a operação de madrugada por causa
-/// de uma soma seria pior do que avisar.
+/// O ENCERRAMENTO POR META é uma OPÇÃO do lançamento, e as duas metades dela
+/// aparecem aqui: o interruptor no formulário de publicação e o mesmo
+/// interruptor no cartão de metas, para quem mudou de ideia no meio do Barter.
+///
+/// Nenhuma das duas fecha nada nesta tela. Quem encerra, no automático, é a
+/// aprovação do comitê que cruza a meta — no servidor, com autor e hora (ver
+/// `closeIfGoalReached` na API). O que esta tela faz é dizer em que modo o
+/// Barter está e avisar antes de ligar o automático com a meta já batida, porque
+/// aí o Barter fecha no mesmo toque.
 class BarterProgramTab extends StatefulWidget {
   final VoidCallback onChanged;
   const BarterProgramTab({super.key, required this.onChanged});
@@ -96,6 +101,7 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
         targetSales: result.targetSales,
         targetSacks: result.targetSacks,
         targetBarters: result.targetBarters,
+        closeOnGoal: result.closeOnGoal,
         note: result.note,
         carryOver: result.carryOver,
       );
@@ -149,6 +155,54 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
       if (!mounted) return;
       setState(() {});
       widget.onChanged();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  /// Liga ou desliga o encerramento automático por meta na versão vigente.
+  ///
+  /// O diálogo aparece só num caso, e é o caso que importa: ligar com a meta JÁ
+  /// batida encerra o Barter na hora. Sem ele, o admin marcaria um interruptor
+  /// para valer "daqui para a frente" e descobriria a operação parada.
+  Future<void> _setCloseOnGoal(BarterVersionModel version, bool enabled) async {
+    if (enabled && version.anyGoalMet) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: Icon(Icons.flag, color: AppColors.pending, size: 36),
+          title: const Text('A meta já foi atingida'),
+          content: Text(
+            'Ligar o encerramento automático agora encerra ${version.code} '
+            'imediatamente: os consultores param de registrar permutas. As '
+            'permutas já enviadas continuam valendo.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.denied),
+              child: const Text('Ligar e encerrar'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    try {
+      final updated = await AppData.setVersionCloseOnGoal(version.code, enabled);
+      await _loadDetail();
+      if (!mounted) return;
+      setState(() {});
+      widget.onChanged();
+      // O servidor pode ter ENCERRADO a versão nesta mesma chamada. Quem conta é
+      // a resposta dele, e não o que o app pediu.
+      _toast(updated.isOpen
+          ? (enabled
+              ? '${updated.code} passa a encerrar ao bater meta.'
+              : '${updated.code} só encerra por decisão sua.')
+          : '${updated.code} encerrado: meta atingida.');
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
@@ -251,7 +305,10 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
               if (current.goals.isNotEmpty) ...[
                 _sectionTitle('Metas do lançamento'),
                 const SizedBox(height: 8),
-                _GoalsCard(version: current),
+                _GoalsCard(
+                  version: current,
+                  onModeChanged: (enabled) => _setCloseOnGoal(current, enabled),
+                ),
                 const SizedBox(height: 16),
               ],
             ],
@@ -314,7 +371,7 @@ class _NoSeasonCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               'A safra é a temporada do Barter sobre um grão. Sem ela não há '
-              'lançamento — e sem lançamento os consultores não registram permuta.',
+              'lançamento, e sem lançamento os consultores não registram permuta.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: AppColors.textMedium),
             ),
@@ -454,7 +511,7 @@ class _CurrentVersionCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   version.endsAt == null
-                      ? 'Sem data de encerramento — vale até você encerrar'
+                      ? 'Sem data de encerramento: vale até você encerrar'
                       : 'Vigente até ${_fullDate(version.endsAt!)}',
                   style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12),
                 ),
@@ -516,13 +573,27 @@ class _CurrentVersionCard extends StatelessWidget {
       '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
 }
 
-/// As metas com o realizado. Meta atingida vira aviso — não fecha nada.
+/// As metas com o realizado, e o que acontece quando uma delas bate.
+///
+/// O interruptor mora aqui, junto das barras, porque é aqui que o admin olha
+/// quando a meta está para bater — e é nesse momento que ele decide se o Barter
+/// para sozinho ou espera um toque dele.
 class _GoalsCard extends StatelessWidget {
   final BarterVersionModel version;
-  const _GoalsCard({required this.version});
+
+  /// Ligar/desligar o encerramento automático. Pode ENCERRAR o Barter (a tela
+  /// avisa antes) — ver `_setCloseOnGoal`.
+  final ValueChanged<bool> onModeChanged;
+
+  const _GoalsCard({required this.version, required this.onModeChanged});
 
   String _value(BarterGoal goal, double number) =>
       goal.isMoney ? formatCurrency(number) : formatQty(number);
+
+  /// A frase da faixa verde: o que a meta batida SIGNIFICA neste modo.
+  String get _metMessage => version.closeOnGoal
+      ? 'Meta atingida. O Barter foi encerrado: a próxima aprovação já não entra nesta versão.'
+      : 'Meta atingida. O Barter continua aberto até você encerrá-lo.';
 
   @override
   Widget build(BuildContext context) {
@@ -544,7 +615,7 @@ class _GoalsCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Meta atingida. O Barter continua aberto até você encerrá-lo.',
+                        _metMessage,
                         style: TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark),
                       ),
@@ -558,6 +629,19 @@ class _GoalsCard extends StatelessWidget {
               if (i > 0) const SizedBox(height: 14),
               _goalRow(version.goals[i]),
             ],
+            const Divider(height: 26),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: version.closeOnGoal,
+              onChanged: onModeChanged,
+              title: const Text('Encerrar ao bater meta', style: TextStyle(fontSize: 13)),
+              subtitle: Text(
+                version.closeOnGoal
+                    ? 'A aprovação que cruzar a meta encerra o Barter na hora.'
+                    : 'A meta só avisa: o Barter fica aberto até você encerrá-lo.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ),
           ],
         ),
       ),
@@ -647,6 +731,16 @@ class _VersionHistoryTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                   ),
+                  // POR QUE ela fechou — uma pessoa, ou a meta que a encerrou
+                  // sozinha. É a única resposta disponível meses depois, e o
+                  // servidor escreve as duas no mesmo campo.
+                  if (!isCurrent && version.closedBy != null)
+                    Text(
+                      'Encerrada: ${version.closedBy}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                    ),
                 ],
               ),
             ),
@@ -700,6 +794,7 @@ class _PublishRequest {
   final double? targetSales;
   final double? targetSacks;
   final int? targetBarters;
+  final bool closeOnGoal;
   final String? note;
   final bool carryOver;
 
@@ -711,6 +806,7 @@ class _PublishRequest {
     this.targetSales,
     this.targetSacks,
     this.targetBarters,
+    this.closeOnGoal = false,
     this.note,
     this.carryOver = false,
   });
@@ -735,6 +831,7 @@ class _PublishSheetState extends State<_PublishSheet> {
   List<int>? _bytes;
   DateTime? _endsAt;
   bool _carryOver = false;
+  bool _closeOnGoal = false;
   String? _error;
 
   late final TextEditingController _grainPrice = TextEditingController(
@@ -803,6 +900,13 @@ class _PublishSheetState extends State<_PublishSheet> {
       setState(() => _error = 'Informe o valor da saca de ${widget.season.grainName.toLowerCase()}.');
       return;
     }
+    // A mesma regra do servidor, respondida antes de subir a planilha: sem meta,
+    // "encerrar ao bater meta" é uma opção ligada que nunca aconteceria. O 422
+    // chegaria depois do upload inteiro.
+    if (_closeOnGoal && !_hasTarget) {
+      setState(() => _error = 'Defina ao menos uma meta para o Barter encerrar ao atingi-la.');
+      return;
+    }
 
     Navigator.pop(
       context,
@@ -814,11 +918,15 @@ class _PublishSheetState extends State<_PublishSheet> {
         targetSales: _number(_sales),
         targetSacks: _number(_sacks),
         targetBarters: _number(_barters)?.round(),
+        closeOnGoal: _closeOnGoal,
         note: _note.text.trim().isEmpty ? null : _note.text.trim(),
         carryOver: _carryOver,
       ),
     );
   }
+
+  /// Alguma meta foi digitada? É o que dá sentido ao encerramento automático.
+  bool get _hasTarget => [_sales, _sacks, _barters].any((c) => (_number(c) ?? 0) > 0);
 
   @override
   Widget build(BuildContext context) {
@@ -903,7 +1011,7 @@ class _PublishSheetState extends State<_PublishSheet> {
             const Divider(height: 24),
             Text('Metas (opcionais)',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-            Text('Ao atingir, o painel avisa — quem encerra o Barter é você.',
+            Text('Medem o realizado das permutas aprovadas nesta versão.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight)),
             const SizedBox(height: 10),
             Row(
@@ -915,7 +1023,23 @@ class _PublishSheetState extends State<_PublishSheet> {
                 Expanded(child: _target(_barters, 'Permutas')),
               ],
             ),
-            const SizedBox(height: 12),
+
+            // O QUE FAZER quando a meta bater. Fica encostado nos campos de meta
+            // de propósito: é a segunda metade da mesma decisão, e o admin que
+            // digita um número precisa dizer se ele avisa ou desliga a operação.
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _closeOnGoal,
+              onChanged: (v) => setState(() => _closeOnGoal = v),
+              title: const Text('Encerrar ao bater meta', style: TextStyle(fontSize: 13)),
+              subtitle: Text(
+                _closeOnGoal
+                    ? 'A aprovação que cruzar a meta encerra este Barter na hora.'
+                    : 'A meta só avisa no painel: quem encerra é você.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ),
+            const SizedBox(height: 4),
 
             TextField(
               controller: _note,
@@ -1113,7 +1237,7 @@ Future<void> showVersionPriceDialog(
           ),
           const SizedBox(height: 8),
           Text(
-            'As permutas já registradas não mudam — elas guardam o valor do momento em que foram fechadas.',
+            'As permutas já registradas não mudam: elas guardam o valor do momento em que foram fechadas.',
             style: TextStyle(fontSize: 11, color: AppColors.textLight),
           ),
         ],
