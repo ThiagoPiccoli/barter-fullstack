@@ -910,9 +910,17 @@ informação a quem a tem, e uma vez só.**
   na colheita dela, milho safrinha no dele — e todas as cédulas de uma mesma
   safra vencem no mesmo dia, porque é uma decisão comercial tomada uma vez.
   Enquanto foi campo, duas CPRs da mesma safra saíam com vencimentos diferentes e
-  a única maneira de descobrir era comparar os papéis. Hoje ele é da SAFRA
-  (`PUT /seasons/:code/cpr-due-date`), o servidor o copia para a cédula a cada
-  gravação, e ele **congela na emissão**;
+  a única maneira de descobrir era comparar os papéis. Hoje ele é da SAFRA, o
+  servidor o copia para a cédula a cada gravação, e ele **congela na emissão**.
+  O admin o acerta em dois momentos, os dois na aba *Lançamento*: ao **abrir a
+  safra** (`POST /seasons`, campo opcional — a safra abre antes de a colheita ter
+  data fechada) e depois dela, no cartão do vencimento
+  (`PUT /seasons/:code/cpr-due-date`). Mudá-lo alcança toda cédula da safra que
+  ainda **não** foi emitida, e por isso a tela confirma o alcance antes de
+  gravar; as emitidas ficam com a data que congelaram, porque estão assinadas.
+  A data viaja como **meio-dia UTC** do dia escolhido: o vencimento é um DIA, e
+  meia-noite local a leste de Greenwich cai no dia anterior em UTC — a cédula
+  sairia vencendo um dia antes do que o admin escolheu;
 - **os NÚMEROS DA NOTA e da DUPLICATA** eram dois campos de texto dentro da
   cédula, e três coisas estavam erradas ao mesmo tempo: quem os digitava não era
   quem emitia a nota, cabia **uma só**, e o documento em si não existia em lugar
@@ -1592,7 +1600,7 @@ A aba **Barter** do admin é [prices_screen.dart](../app/lib/screens/prices_scre
 
 | Aba | O que é |
 |---|---|
-| Lançamento | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) — safra, versão vigente, metas, publicar nova versão pela planilha, encerrar |
+| Lançamento | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) — safra, **vencimento da CPR** da safra, versão vigente, metas, publicar nova versão pela planilha, encerrar |
 | Valores | a tabela da versão vigente: valor da saca + preço/custo/margem de cada insumo, com correção pontual. Filtra por pasta e ordena por preço ou margem (inclusive **menor margem**, que é a pergunta real ao revisar um lançamento) |
 | Histórico | como o valor de cada item andou entre as versões: último valor publicado, variação e quantos pontos tem a linha do tempo. Filtra por grão/insumo e ordena por maior alta, maior queda ou maior valor. Marca quem está **fora do Barter** vigente |
 | Classes | as nove classes do negócio, só leitura, com a regra de mínimo de cada uma |

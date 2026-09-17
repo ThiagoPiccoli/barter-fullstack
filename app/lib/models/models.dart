@@ -2127,6 +2127,20 @@ class SeasonModel {
   final DateTime? closedAt;
   final List<BarterVersionModel> versions;
 
+  /// O VENCIMENTO DA CPR desta safra — a data em que o produtor entrega o grão.
+  ///
+  /// Mora na SAFRA, e não na cédula, porque ele muda conforme a CULTURA: soja
+  /// vence na colheita da soja, milho safrinha no dele, e todas as cédulas de
+  /// uma mesma safra vencem no mesmo dia. Enquanto foi campo do formulário, quem
+  /// o digitava não tinha nada que dissesse qual era a data certa daquela
+  /// cultura — e duas cédulas da mesma safra saíam com vencimentos diferentes.
+  ///
+  /// Nulo é "ainda não acertado", e não é erro: a safra abre sem ele e a
+  /// pendência aparece na cédula, endereçada a quem a resolve (o admin, aqui).
+  /// O servidor o copia para cada cédula a cada gravação, até ela ser emitida —
+  /// depois disso, congela.
+  final DateTime? cprDueDate;
+
   const SeasonModel({
     required this.id,
     required this.code,
@@ -2138,6 +2152,7 @@ class SeasonModel {
     required this.openedAt,
     required this.versions,
     this.closedAt,
+    this.cprDueDate,
   });
 
   factory SeasonModel.fromJson(Map<String, dynamic> json) => SeasonModel(
@@ -2150,6 +2165,7 @@ class SeasonModel {
         status: (json['status'] ?? 'closed') as String,
         openedAt: _asDate(json['openedAt']),
         closedAt: _asDateOrNull(json['closedAt']),
+        cprDueDate: _asDateOrNull(json['cprDueDate']),
         versions: (json['versions'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(BarterVersionModel.fromJson)

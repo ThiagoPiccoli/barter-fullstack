@@ -868,9 +868,23 @@ class AppData {
     required int year,
     String? name,
     String? letter,
+    DateTime? cprDueDate,
   }) async {
-    await _program.openSeason(grainId: grainId, year: year, name: name, letter: letter);
+    await _program.openSeason(
+      grainId: grainId,
+      year: year,
+      name: name,
+      letter: letter,
+      cprDueDate: cprDueDate,
+    );
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+  }
+
+  /// ACERTA o vencimento da CPR de uma safra já aberta — a data de entrega de
+  /// todas as cédulas dela que ainda não foram emitidas.
+  static Future<void> setSeasonCprDueDate(String code, DateTime dueDate) async {
+    await _program.setCprDueDate(code, dueDate);
+    await refreshSeasons();
   }
 
   /// A DECISÃO DO COMITÊ: aprovar, aprovar com RESSALVA ou negar. O cache

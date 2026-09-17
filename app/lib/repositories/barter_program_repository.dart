@@ -1,6 +1,17 @@
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 
+/// O VENCIMENTO DA CPR como INSTANTE: meio-dia UTC do dia escolhido.
+///
+/// O vencimento é um DIA, e não um instante — mas ele viaja como data-hora, e o
+/// aparelho oferece o que o calendário devolveu: meia-noite em hora LOCAL.
+/// Meia-noite de Brasília vira 03:00 UTC, ainda o mesmo dia; meia-noite num fuso
+/// a leste de Greenwich cai no dia ANTERIOR em UTC, e a cédula sairia vencendo
+/// um dia antes do que o admin escolheu — num campo que ninguém mais confere
+/// depois, dentro de um título executável. Meio-dia é o único horário que não
+/// vira o dia em fuso nenhum.
+DateTime cprDueDateInstant(DateTime day) => DateTime.utc(day.year, day.month, day.day, 12);
+
 /// O LANÇAMENTO do Barter: safras, versões e a tabela de valores.
 ///
 /// `current` é a única leitura que o consultor faz — é dela que a tela de nova
@@ -30,18 +41,38 @@ class BarterProgramRepository {
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
+  /// [cprDueDate] é o VENCIMENTO DA CPR desta safra — a data em que o produtor
+  /// entrega o grão. Opcional aqui de propósito: ele é da colheita, e a safra
+  /// abre antes de o calendário dela estar fechado. Sem ele a safra abre do
+  /// mesmo jeito, e a pendência aparece na cédula endereçada ao admin.
   Future<SeasonModel> openSeason({
     required String grainId,
     required int year,
     String? name,
     String? letter,
+    DateTime? cprDueDate,
   }) async {
     final data = await api.post('/seasons', body: {
       'grainId': int.parse(grainId),
       'year': year,
       if (name != null && name.isNotEmpty) 'name': name,
       if (letter != null && letter.isNotEmpty) 'letter': letter,
+      if (cprDueDate != null) 'cprDueDate': cprDueDateInstant(cprDueDate).toIso8601String(),
     });
+    return SeasonModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// ACERTA o vencimento da CPR de uma safra JÁ ABERTA.
+  ///
+  /// Rota própria (`PUT`), e não um "editar safra": é o único campo dela que se
+  /// corrige depois de aberta, e mexer nele muda a data de entrega de TODA
+  /// cédula da safra que ainda não foi emitida — por isso ele deixa rastro na
+  /// trilha de auditoria, sozinho.
+  Future<SeasonModel> setCprDueDate(String code, DateTime dueDate) async {
+    final data = await api.put(
+      '/seasons/$code/cpr-due-date',
+      body: {'cprDueDate': cprDueDateInstant(dueDate).toIso8601String()},
+    );
     return SeasonModel.fromJson(data as Map<String, dynamic>);
   }
 

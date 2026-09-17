@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:agrobarter_app/models/models.dart';
+import 'package:agrobarter_app/repositories/barter_program_repository.dart';
 import 'package:agrobarter_app/services/barter_math.dart';
 
 /// O parse do JSON da API é o ponto em que uma mudança no servidor chega ao
@@ -680,6 +681,73 @@ void main() {
       });
       expect(season.isOpen, isTrue);
       expect(season.versions.single.code, 'S2026.02');
+    });
+
+    /// O VENCIMENTO DA CPR é da SAFRA, e o app só o transporta: ele muda
+    /// conforme a CULTURA, e vale para todas as cédulas da temporada.
+    test('o vencimento da CPR chega com a safra', () {
+      final season = SeasonModel.fromJson({
+        'id': 3,
+        'code': 'S2026',
+        'name': 'Soja 2026',
+        'year': 2026,
+        'grainId': 1,
+        'grainName': 'Soja',
+        'status': 'open',
+        'openedAt': '2026-01-05T00:00:00.000Z',
+        'cprDueDate': '2026-06-30T12:00:00.000Z',
+        'versions': const [],
+      });
+
+      // O modelo guarda o instante em hora LOCAL, como todas as datas do app.
+      // O que precisa sobreviver é o DIA — e é o meio-dia UTC que garante isso
+      // em qualquer fuso (ver `cprDueDateInstant`).
+      expect(season.cprDueDate!.toUtc(), DateTime.utc(2026, 6, 30, 12));
+      expect(season.cprDueDate!.day, 30);
+      expect(season.cprDueDate!.month, 6);
+    });
+
+    /// SEM VENCIMENTO é um estado legítimo, e não um erro: a safra abre antes de
+    /// o calendário da colheita estar fechado. Quem cobra a falta é a cédula,
+    /// endereçando a pendência ao admin.
+    test('safra sem vencimento acertado não inventa uma data', () {
+      final season = SeasonModel.fromJson({
+        'id': 4,
+        'code': 'M2026',
+        'name': 'Milho 2026',
+        'year': 2026,
+        'grainId': 2,
+        'grainName': 'Milho',
+        'status': 'open',
+        'openedAt': '2026-01-05T00:00:00.000Z',
+        'versions': const [],
+      });
+
+      expect(season.cprDueDate, isNull);
+    });
+
+    /// O DIA ESCOLHIDO NO CALENDÁRIO vira MEIO-DIA UTC, e não a meia-noite
+    /// local, porque meia-noite a leste de Greenwich cai no dia ANTERIOR em UTC
+    /// — e a cédula sairia vencendo um dia antes do que o admin escolheu.
+    test('o vencimento escolhido vira meio-dia UTC do mesmo dia', () {
+      // O que o `showDatePicker` devolve: meia-noite, em hora local.
+      final escolhido = DateTime(2026, 6, 30);
+
+      final instante = cprDueDateInstant(escolhido);
+
+      expect(instante.isUtc, isTrue);
+      expect(instante, DateTime.utc(2026, 6, 30, 12));
+      // O DIA é o mesmo em UTC, que é a única coisa que precisa sobreviver.
+      expect(instante.toIso8601String(), startsWith('2026-06-30'));
+    });
+
+    /// A virada do mês e do ano é onde o erro de fuso apareceria primeiro: 1º de
+    /// janeiro à meia-noite a leste de Greenwich é 31 de dezembro em UTC.
+    test('a virada do ano não anda um dia para trás', () {
+      expect(
+        cprDueDateInstant(DateTime(2027, 1, 1)).toIso8601String(),
+        startsWith('2027-01-01'),
+      );
     });
   });
 

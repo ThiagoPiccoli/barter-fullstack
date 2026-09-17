@@ -225,10 +225,57 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
         grainId: result.grainId,
         year: result.year,
         letter: result.letter,
+        cprDueDate: result.cprDueDate,
       );
       if (!mounted) return;
       setState(() {});
       widget.onChanged();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  /// ACERTA o vencimento da CPR de uma safra JÁ ABERTA.
+  ///
+  /// O diálogo AVISA o alcance antes de perguntar a data, e não depois: mexer
+  /// aqui muda a entrega de toda cédula da safra que ainda não foi emitida — as
+  /// já emitidas congelaram a data delas, e é por isso que elas não são
+  /// alcançadas. Sem o aviso, o admin corrigiria "a data desta safra" achando
+  /// que corrige um cadastro, e antecipando (ou adiando) a colheita de dezenas
+  /// de produtores num campo que ninguém mais confere depois.
+  Future<void> _cprDueDateDialog(SeasonModel season) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: season.cprDueDate ?? DateTime(season.year, 6, 30),
+      firstDate: DateTime(season.year, 1, 1),
+      lastDate: DateTime(season.year + 1, 12, 31),
+      helpText: 'Vencimento da CPR de ${season.name}',
+    );
+    if (picked == null || !mounted) return;
+
+    final confirmado = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Mudar o vencimento da CPR?'),
+        content: Text(
+          'As CPRs de ${season.name} passam a vencer em ${_fullDate(picked)}.\n\n'
+          'Vale para todas as cédulas da safra que ainda NÃO foram emitidas. '
+          'As já emitidas mantêm a data com que saíram — elas estão assinadas.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Mudar')),
+        ],
+      ),
+    );
+    if (confirmado != true) return;
+
+    try {
+      await AppData.setSeasonCprDueDate(season.code, picked);
+      if (!mounted) return;
+      setState(() {});
+      widget.onChanged();
+      _toast('Vencimento da CPR de ${season.name}: ${_fullDate(picked)}.');
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
@@ -312,6 +359,19 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
                 const SizedBox(height: 16),
               ],
             ],
+            // O VENCIMENTO DA CPR, fora do bloco da versão vigente.
+            //
+            // Cartão PRÓPRIO, e não uma linha dentro do cartão do lançamento:
+            // ele é da SAFRA e vale para TODAS as versões dela. Dentro daquele
+            // cartão pareceria que cada lançamento tem o seu — e a primeira
+            // versão nova sairia com alguém procurando onde mudá-lo de novo.
+            //
+            // E fica FORA do `if (current == null)` porque não depende de haver
+            // tabela publicada: o calendário da colheita se sabe quando a safra
+            // abre, e acertá-lo antes é melhor do que lembrar dele depois, com
+            // a primeira cédula travada.
+            _CprDueDateCard(season: season, onEdit: () => _cprDueDateDialog(season)),
+            const SizedBox(height: 16),
             _sectionTitle('Versões de ${season.name}'),
             const SizedBox(height: 8),
             ...season.versions.map((version) => _VersionHistoryTile(
@@ -569,8 +629,94 @@ class _CurrentVersionCard extends StatelessWidget {
     );
   }
 
-  static String _fullDate(DateTime date) =>
-      '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+}
+
+/// A data por extenso curto (30/06/2026). Fora de qualquer cartão porque três
+/// deles a usam — a vigência da versão, o vencimento da CPR e a correção dele.
+String _fullDate(DateTime date) =>
+    '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+
+/// O VENCIMENTO DA CPR da safra aberta — o dia em que o produtor entrega o grão.
+///
+/// Ele existe como cartão porque é uma decisão da SAFRA que ninguém mais toma:
+/// ele muda conforme a CULTURA (soja vence na colheita da soja, milho safrinha
+/// no dele) e vale para todas as cédulas da temporada. Já foi campo do
+/// formulário da cédula, digitado uma vez por permuta por quem não tinha como
+/// saber a data certa daquela cultura — e duas cédulas da mesma safra saíam com
+/// vencimentos diferentes, sem ninguém ter como descobrir qual estava certa a
+/// não ser comparando os papéis.
+///
+/// VAZIO É ÂMBAR, e não neutro: nada quebra até a primeira emissão, e então
+/// TODA cédula da safra trava de uma vez. O aviso é o que separa "acerto isto
+/// hoje" de "descubro isto com o produtor esperando na sala do emissor".
+class _CprDueDateCard extends StatelessWidget {
+  final SeasonModel season;
+  final VoidCallback onEdit;
+
+  const _CprDueDateCard({required this.season, required this.onEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    final due = season.cprDueDate;
+    final acertado = due != null;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: acertado ? AppColors.surface : AppColors.pendingBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: acertado
+              ? AppColors.borderSubtle
+              : AppColors.pending.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            acertado ? Icons.event_available_outlined : Icons.event_busy_outlined,
+            size: 22,
+            color: acertado ? AppColors.primary : AppColors.pending,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Vencimento da CPR',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  acertado
+                      ? '${_fullDate(due)} • todas as cédulas de ${season.name} '
+                          'vencem neste dia'
+                      : 'Ainda não acertado. Sem ele, nenhuma cédula de '
+                          '${season.name} pode ser emitida.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.3),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          acertado
+              ? TextButton(onPressed: onEdit, child: const Text('Mudar'))
+              : ElevatedButton(
+                  onPressed: onEdit,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.pending,
+                    foregroundColor: AppColors.onPrimary,
+                  ),
+                  child: const Text('Acertar'),
+                ),
+        ],
+      ),
+    );
+  }
 }
 
 /// As metas com o realizado, e o que acontece quando uma delas bate.
@@ -1098,7 +1244,17 @@ class _SeasonRequest {
   final String grainId;
   final int year;
   final String? letter;
-  const _SeasonRequest({required this.grainId, required this.year, this.letter});
+
+  /// O VENCIMENTO DA CPR da safra — ver [SeasonModel.cprDueDate]. Opcional: a
+  /// safra abre antes de o calendário da colheita estar fechado.
+  final DateTime? cprDueDate;
+
+  const _SeasonRequest({
+    required this.grainId,
+    required this.year,
+    this.letter,
+    this.cprDueDate,
+  });
 }
 
 class _OpenSeasonDialog extends StatefulWidget {
@@ -1113,6 +1269,7 @@ class _OpenSeasonDialogState extends State<_OpenSeasonDialog> {
   late String _grainId = widget.grains.first.id;
   late final _year = TextEditingController(text: '${DateTime.now().year}');
   final _letter = TextEditingController();
+  DateTime? _cprDueDate;
 
   @override
   void dispose() {
@@ -1174,6 +1331,16 @@ class _OpenSeasonDialogState extends State<_OpenSeasonDialog> {
           const SizedBox(height: 8),
           Text('Código da safra: $_preview • versões $_preview.01, $_preview.02…',
               style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+          const SizedBox(height: 14),
+          // O VENCIMENTO DA CPR nasce AQUI porque ele é da CULTURA, e a cultura
+          // é o que esta tela acabou de escolher no primeiro campo. Perguntá-lo
+          // no mesmo lugar em que se escolhe o grão é perguntá-lo a quem tem a
+          // resposta na cabeça — o calendário da colheita daquele grão.
+          _CprDueDateField(
+            value: _cprDueDate,
+            year: int.tryParse(_year.text.trim()) ?? DateTime.now().year,
+            onPicked: (d) => setState(() => _cprDueDate = d),
+          ),
         ],
       ),
       actions: [
@@ -1188,12 +1355,73 @@ class _OpenSeasonDialogState extends State<_OpenSeasonDialog> {
                 grainId: _grainId,
                 year: year,
                 letter: _letter.text.trim().isEmpty ? null : _letter.text.trim(),
+                cprDueDate: _cprDueDate,
               ),
             );
           },
           child: const Text('Abrir'),
         ),
       ],
+    );
+  }
+}
+
+/// O CAMPO DO VENCIMENTO DA CPR — usado na abertura da safra e na correção
+/// depois dela.
+///
+/// Ele é um DIA escolhido no calendário, e não um texto digitado: "30/06/26",
+/// "30-06-2026" e "06/30/2026" são a mesma intenção escrita de três jeitos, e
+/// uma delas vira a data errada dentro de um título executável.
+///
+/// A JANELA vai do ano da safra ao seguinte porque a colheita atravessa o ano:
+/// a soja 2026 vence em junho de 2026, e o milho safrinha da mesma temporada, em
+/// setembro — mas uma safra aberta em novembro colhe no ano seguinte.
+class _CprDueDateField extends StatelessWidget {
+  final DateTime? value;
+  final int year;
+  final ValueChanged<DateTime> onPicked;
+
+  const _CprDueDateField({
+    required this.value,
+    required this.year,
+    required this.onPicked,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final escolhido = value != null;
+    return InkWell(
+      onTap: () async {
+        final picked = await showDatePicker(
+          context: context,
+          initialDate: value ?? DateTime(year, 6, 30),
+          firstDate: DateTime(year, 1, 1),
+          lastDate: DateTime(year + 1, 12, 31),
+          helpText: 'Vencimento da CPR',
+        );
+        if (picked != null) onPicked(picked);
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: 'Vencimento da CPR',
+          isDense: true,
+          prefixIcon: const Icon(Icons.event_available_outlined, size: 20),
+          // O QUE ACONTECE SE FICAR EM BRANCO, e não "opcional": quem lê precisa
+          // saber o que está adiando, e o preço é uma cédula que não é emitida.
+          helperText: escolhido
+              ? 'Todas as CPRs desta safra vencem neste dia'
+              : 'Sem ele, a cédula da safra não pode ser emitida',
+          helperMaxLines: 2,
+        ),
+        child: Text(
+          escolhido ? _fullDate(value!) : 'Escolher a data da entrega',
+          style: TextStyle(
+            fontSize: 14,
+            color: escolhido ? AppColors.textDark : AppColors.textLight,
+          ),
+        ),
+      ),
     );
   }
 }

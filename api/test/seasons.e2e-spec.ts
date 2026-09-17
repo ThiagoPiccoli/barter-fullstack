@@ -440,6 +440,55 @@ describe('Barter — safra e versões (e2e)', () => {
       });
     });
 
+    /**
+     * O VENCIMENTO DA CPR nasce COM A SAFRA — é a porta que o app usa ao abri-la.
+     *
+     * Ele é da CULTURA, e a cultura é o que se escolhe no mesmo formulário: soja
+     * vence na colheita da soja, milho safrinha no dele. Perguntá-lo aqui é
+     * perguntá-lo a quem acabou de decidir o grão, com o calendário na cabeça —
+     * e é o que evita a alternativa, que é lembrar dele semanas depois, com a
+     * primeira cédula travada na mesa do emissor.
+     *
+     * OPCIONAL de propósito: a safra abre antes de a colheita ter data fechada,
+     * e travar a abertura por isso pararia a esteira inteira por um campo que a
+     * cédula sabe cobrar sozinha, de quem o resolve.
+     */
+    it('a safra pode nascer com o vencimento da CPR, e sem ele também', async () => {
+      const admin = await asUser(ADMIN);
+      await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
+
+      const comData = await http()
+        .post('/api/v1/seasons')
+        .set('Authorization', admin)
+        .send({ grainId: 2, year: 2027, cprDueDate: '2027-09-20T12:00:00.000Z' });
+      expect(comData.status).toBe(201);
+      expect(comData.body.data.cprDueDate).toBe('2027-09-20T12:00:00.000Z');
+
+      // E sem ele a safra abre igual, com o campo nulo — a pendência aparece na
+      // cédula, endereçada ao admin.
+      await http().post('/api/v1/seasons/M2027/close').set('Authorization', admin);
+      const semData = await http()
+        .post('/api/v1/seasons')
+        .set('Authorization', admin)
+        .send({ grainId: 2, year: 2028 });
+      expect(semData.status).toBe(201);
+      expect(semData.body.data.cprDueDate).toBeNull();
+    });
+
+    /** Data que não é data não vira vencimento de título executável. */
+    it('vencimento inválido na abertura é recusado', async () => {
+      const admin = await asUser(ADMIN);
+      await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
+
+      const response = await http()
+        .post('/api/v1/seasons')
+        .set('Authorization', admin)
+        .send({ grainId: 2, year: 2027, cprDueDate: '30/06/2027' });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Vencimento da CPR inválido');
+    });
+
     it('a primeira versão da safra nova é a .01', async () => {
       const admin = await asUser(ADMIN);
       await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
