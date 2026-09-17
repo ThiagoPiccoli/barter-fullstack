@@ -33,9 +33,13 @@ class AppData {
   static final UnitRepository _units = UnitRepository();
   static const StaffRepository _managers = StaffRepository('/managers');
 
-  /// FATURISTAS — quem fatura o que o comitê aprovou. Rota de admin, como as
-  /// outras duas de pessoas.
+  /// FATURISTAS — quem fatura o que o comitê aprovou e anexa as notas. Rota de
+  /// admin, como as outras de pessoas.
   static const StaffRepository _billers = StaffRepository('/billers');
+
+  /// EMISSORES — o posto da CÉDULA: conferem o que o consultor preencheu,
+  /// emitem o título, colhem as assinaturas e o levam a registro.
+  static const StaffRepository _emitters = StaffRepository('/emitters');
 
   /// O COMITÊ — cadastro único, e por isso um repositório de outra forma: sem
   /// lista, sem id e sem exclusão.
@@ -67,6 +71,11 @@ class AppData {
 
   /// FATURISTAS cadastrados (só o admin enxerga — a API restringe a rota).
   static List<UserModel> billers = [];
+
+  /// EMISSORES cadastrados (idem). Sem pelo menos um, toda permuta faturada
+  /// para em "a emitir a CPR" — é a primeira coisa que falta numa instalação
+  /// nova.
+  static List<UserModel> emitters = [];
 
   /// O CADASTRO DO COMITÊ, ou null enquanto ele não existe.
   ///
@@ -271,6 +280,7 @@ class AppData {
     consultants = [];
     managers = [];
     billers = [];
+    emitters = [];
     committee = null;
     producers = [];
     units = [];
@@ -300,6 +310,7 @@ class AppData {
       if (isAdmin) refreshConsultants(),
       if (isAdmin) refreshManagers(),
       if (isAdmin) refreshBillers(),
+      if (isAdmin) refreshEmitters(),
       if (isAdmin) refreshCommittee(),
       if (isAdmin) refreshSeasons(),
     ]);
@@ -397,6 +408,10 @@ class AppData {
 
   static Future<void> refreshBillers() async {
     billers = await _billers.list();
+  }
+
+  static Future<void> refreshEmitters() async {
+    emitters = await _emitters.list();
   }
 
   static Future<void> refreshCommittee() async {
@@ -508,6 +523,17 @@ class AppData {
   /// A fila do FATURISTA: o que o comitê aprovou e ainda não foi faturado.
   static List<BarterModel> get invoiceQueue =>
       barters.where((b) => b.awaitsInvoice).toList();
+
+  /// A fila do EMISSOR: o que foi faturado e ainda não virou título registrado.
+  ///
+  /// Ela inclui os TRÊS degraus da cédula — a que espera emissão, a que espera
+  /// assinatura e a que espera registro —, e não só o primeiro: os três são
+  /// trabalho dele, acontecem em dias diferentes, e uma fila que mostrasse só o
+  /// primeiro esconderia dele as cédulas assinadas paradas esperando cartório —
+  /// que é exatamente o que estava invisível antes deste posto existir.
+  static List<BarterModel> get issuanceQueue => barters
+      .where((b) => b.awaitsCprIssue || b.awaitsSignatures || b.awaitsRegistration)
+      .toList();
 
   /// Busca uma classe pelo id (null se não encontrada ou id null).
   static ProductClassModel? classById(String? id) {
@@ -682,8 +708,14 @@ class AppData {
       if (!forward) return SendResult.sent(barter);
       try {
         return SendResult.sent(await forwardBarter(barter.id, note));
-      } on ApiException {
-        return SendResult.sent(barter);
+      } on ApiException catch (error) {
+        // A PERMUTA ENTROU e não foi encaminhada — e agora a tela sabe POR QUÊ.
+        //
+        // O motivo mais comum passou a ser a cédula: encaminhar exige a CPR
+        // preenchida, e quem envia a simulação sem tê-la feito para no rascunho.
+        // Engolir a mensagem aqui faria a tela dizer "enviada" e o consultor
+        // descobrir dias depois, pelo gerente que nunca recebeu nada.
+        return SendResult.sent(barter, notForwardedReason: error.message);
       }
     } on ApiException catch (error) {
       if (error.statusCode != 0) return SendResult.refused(error.message);
@@ -853,9 +885,112 @@ class AppData {
     return updated;
   }
 
-  /// O FATURAMENTO da permuta aprovada — o último posto da linha.
+  /// O FATURAMENTO da permuta aprovada.
+  ///
+  /// O servidor recusa (422) sem NOTA anexada: é ela que a cédula cita como
+  /// origem da dívida. A tela cuida de anexar antes — ver [attachBarterInvoice].
   static Future<BarterModel> invoiceBarter(String code, String note) async {
     final updated = await _barters.invoice(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// ANEXA UMA NOTA FISCAL ao faturamento — o arquivo e os dados dele.
+  ///
+  /// SÃO VÁRIAS por permuta: a retirada sai em mais de um carregamento, cada uma
+  /// gera a sua nota, e a cancelada é reemitida. A resposta é a permuta inteira,
+  /// e é ela que entra no cache — a lista precisa saber que a permuta já tem
+  /// nota.
+  static Future<BarterModel> attachBarterInvoice(
+    String code, {
+    required String number,
+    required String filename,
+    required List<int> bytes,
+    String series = '',
+    String duplicateNumber = '',
+    DateTime? issuedAt,
+    double? value,
+    String note = '',
+  }) async {
+    final updated = await _barters.attachInvoice(
+      code,
+      number: number,
+      filename: filename,
+      bytes: bytes,
+      series: series,
+      duplicateNumber: duplicateNumber,
+      issuedAt: issuedAt,
+      value: value,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// REMOVE uma nota anexada — a cancelada, ou a que subiu trocada.
+  static Future<BarterModel> removeBarterInvoice(String code, String invoiceId) async {
+    final updated = await _barters.removeInvoice(code, invoiceId);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /* ── A EMISSÃO DA CÉDULA: os três atos do emissor ───────────────────── */
+
+  /// EMITE a cédula — o ato que CONFERE o que os outros postos produziram.
+  ///
+  /// O servidor recusa (422) com a lista do que falta, e cada item dela diz com
+  /// quem a pendência se resolve: o RG é com o consultor, a nota é com o
+  /// faturista, o vencimento é com quem cadastra a safra.
+  static Future<BarterModel> issueBarterCpr(
+    String code, {
+    String number = '',
+    String note = '',
+  }) async {
+    final updated = await _barters.issueCpr(code, number: number, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A COLETA DE ASSINATURAS concluída — o lançamento de um fato de fora, com a
+  /// CÉDULA ASSINADA anexada no mesmo ato.
+  static Future<BarterModel> signBarterCpr(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+    DateTime? signedAt,
+    String note = '',
+  }) async {
+    final updated = await _barters.signCpr(
+      code,
+      filename: filename,
+      bytes: bytes,
+      signedAt: signedAt,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O REGISTRO do título — o fim da linha. O número é obrigatório; a via
+  /// carimbada do cartório, não (ver [saveCprRegistryFile]).
+  static Future<BarterModel> registerBarterCpr(
+    String code, {
+    required String registryNumber,
+    String registryPlace = '',
+    DateTime? registeredAt,
+    String note = '',
+    String? filename,
+    List<int>? bytes,
+  }) async {
+    final updated = await _barters.registerCpr(
+      code,
+      registryNumber: registryNumber,
+      registryPlace: registryPlace,
+      registeredAt: registeredAt,
+      note: note,
+      filename: filename,
+      bytes: bytes,
+    );
     _replaceBarter(updated);
     return updated;
   }
@@ -968,17 +1103,55 @@ class AppData {
   /// A CÉDULA (CPR) desta permuta, e a gravação dela.
   ///
   /// Fora do cache pelo mesmo motivo do detalhe, e com um a mais: a cédula é
-  /// editável por mais de um faturista, e um rascunho guardado em memória
-  /// mostraria a versão de quem abriu a tela primeiro. Ela é sempre lida do
-  /// servidor e a gravação devolve a mesa recalculada — inclusive o que falta.
+  /// lida por três papéis (o consultor que preenche, o emissor que confere e o
+  /// admin que tira a segunda via), e um rascunho guardado em memória mostraria
+  /// a versão de quem abriu a tela primeiro. Ela é sempre lida do servidor e a
+  /// gravação devolve a mesa recalculada — inclusive o que falta.
   static Future<CprDesk> barterCpr(String code) => _barters.cpr(code);
 
   static Future<CprDesk> saveBarterCpr(String code, CprDraft draft) =>
       _barters.saveCpr(code, draft);
 
+  /// ANEXA O SCR DO PRODUTOR à cédula — anexo OBRIGATÓRIO para ela ser emitida.
+  static Future<CprDesk> saveBarterScr(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+  }) =>
+      _barters.saveScr(code, filename: filename, bytes: bytes);
+
+  /// BAIXA o arquivo de uma NOTA FISCAL anexada ao faturamento.
+  static Future<({List<int> bytes, String filename, String contentType})>
+      downloadBarterInvoiceFile(String code, String invoiceId) =>
+          _barters.download(_barters.invoiceFilePath(code, invoiceId));
+
+  /// BAIXA o arquivo do SCR anexado à cédula.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadBarterScr(
+    String code,
+  ) =>
+      _barters.download(_barters.scrFilePath(code));
+
+  /// ANEXA A VIA CARIMBADA do registro, quando ela chega depois do ato.
+  static Future<CprDesk> saveCprRegistryFile(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+  }) =>
+      _barters.saveCprRegistryFile(code, filename: filename, bytes: bytes);
+
+  /// BAIXA a CÉDULA ASSINADA e a VIA DO REGISTRO — os documentos que voltaram.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadSignedCpr(
+    String code,
+  ) =>
+      _barters.download(_barters.signedCprPath(code));
+
+  static Future<({List<int> bytes, String filename, String contentType})>
+      downloadCprRegistryFile(String code) =>
+          _barters.download(_barters.cprRegistryFilePath(code));
+
   /// O CADASTRO DA CREDORA. Fora do cache pelo mesmo motivo da cédula: ele tem
-  /// dois donos (admin e faturista), e uma cópia em memória mostraria a versão
-  /// de quem abriu a tela primeiro.
+  /// dois donos (admin e EMISSOR), e uma cópia em memória mostraria a versão de
+  /// quem abriu a tela primeiro.
   static Future<CprCreditor> creditor() => _creditor.get();
 
   static Future<CprCreditor> saveCreditor(CprCreditor creditor) => _creditor.save(creditor);
@@ -1096,6 +1269,47 @@ class AppData {
       billers.add(saved);
     } else {
       billers[index] = saved;
+    }
+  }
+
+  /* ── Emissores (pessoas, várias) ────────────────────────────────────── */
+  //
+  // O posto da CÉDULA. Ele é cadastrado como o faturista — pessoa, unidade, sem
+  // gerente — porque o formulário é o mesmo: o que muda entre os dois é o que
+  // cada um faz, e isso está na tabela de capacidades do servidor, não aqui.
+
+  static Future<ProvisionedConsultant> createEmitter(UserModel emitter) async {
+    final provisioned = await _emitters.create(emitter);
+    _cacheEmitter(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateEmitter(UserModel emitter) async {
+    final saved = await _emitters.update(emitter);
+    _cacheEmitter(saved);
+    return saved;
+  }
+
+  static Future<ProvisionedConsultant> resetEmitterPassword(String id) async {
+    final provisioned = await _emitters.resetPassword(id);
+    _cacheEmitter(provisioned.consultant);
+    return provisioned;
+  }
+
+  /// Excluir emissor não trava em nada, pelo mesmo motivo do faturista: as
+  /// cédulas que ele emitiu guardam o nome dele no próprio registro (snapshot),
+  /// e a fila é o ESTADO da permuta, não uma caixa de entrada pessoal.
+  static Future<void> deleteEmitter(String id) async {
+    await _emitters.delete(id);
+    emitters.removeWhere((e) => e.id == id);
+  }
+
+  static void _cacheEmitter(UserModel saved) {
+    final index = emitters.indexWhere((e) => e.id == saved.id);
+    if (index == -1) {
+      emitters.add(saved);
+    } else {
+      emitters[index] = saved;
     }
   }
 

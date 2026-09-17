@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import {
   ANY_ROLE_KEY,
   IS_PUBLIC_KEY,
+  ANY_CAPABILITY_KEY,
   REQUIRED_CAPABILITIES_KEY,
   ROLES_KEY,
 } from '../src/common/decorators';
@@ -55,6 +56,12 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
     if (read<boolean>(IS_PUBLIC_KEY)) return 'public';
     const capabilities = read<string[]>(REQUIRED_CAPABILITIES_KEY);
     if (capabilities?.length) return `capability:${[...capabilities].sort().join('+')}`;
+    // QUALQUER UMA das listadas (`@RequireAnyCapability`). O separador é outro —
+    // `|` em vez de `+` — de propósito: "e" e "ou" não podem sair iguais num
+    // inventário cuja razão de existir é dizer exatamente quem entra em cada
+    // porta.
+    const anyOf = read<string[]>(ANY_CAPABILITY_KEY);
+    if (anyOf?.length) return `capability-any:${[...anyOf].sort().join('|')}`;
     const roles = read<string[]>(ROLES_KEY);
     if (roles?.length) return `role:${[...roles].sort().join('+')}`;
     if (read<boolean>(ANY_ROLE_KEY)) return 'any-authenticated';
@@ -120,8 +127,8 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
 
         // A CREDORA — cadastro ÚNICO, no singular, sem `:id` e sem DELETE (o
         // mesmo desenho do comitê). É a única capacidade que o admin divide com
-        // um posto da linha: `creditor.manage` é dele E do faturista, porque a
-        // credora é o timbre dos documentos que o faturista emite. Ela não
+        // um posto da linha: `creditor.manage` é dele E do EMISSOR, porque a
+        // credora é o timbre do título que o emissor leva a registro. Ela não
         // decide permuta nem concede acesso — e é isso que este inventário
         // trava, para a divisão não virar precedente sem alguém escrever a linha.
         { route: 'GET /creditor', policy: 'capability:creditor.manage' },
@@ -143,12 +150,49 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /barters/:code/opinion', policy: 'capability:barters.opinion' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
         { route: 'POST /barters/:code/invoice', policy: 'capability:barters.invoice' },
+        // AS NOTAS FISCAIS do faturamento. Anexar e remover são do mesmo posto
+        // que fatura — a nota é o que ele produz. BAIXAR o arquivo é de quem
+        // alcança a permuta (o escopo do service, como o detalhe): é assim que o
+        // emissor confere a nota que a cédula cita, sem pedir o PDF a ninguém.
+        { route: 'DELETE /barters/:code/invoices/:id', policy: 'capability:barters.invoice' },
+        { route: 'GET /barters/:code/invoices/:id/file', policy: 'any-authenticated' },
+        { route: 'POST /barters/:code/invoices', policy: 'capability:barters.invoice' },
         // A CÉDULA (CPR) é o documento que o posto do faturamento produz, e por
         // isso vive sob a MESMA capacidade do faturamento, sem uma própria: quem
         // fatura preenche a cédula do que faturou. Ela fica editável depois de a
         // permuta ser faturada — o que o estado fecha é o ato, não o papel.
+        // A CÉDULA tem TRÊS MÃOS, e este bloco é onde a divisão fica travada:
+        //
+        // - LER é de quem preenche, de quem emite e de quem administra
+        //   (`barters.cprRead`: consultor, emissor e admin);
+        // - ESCREVER é só do CONSULTOR (`barters.cprFill`) — é ele quem tem a
+        //   matrícula da lavoura, o nome do cônjuge e o SCR. O faturista perdeu
+        //   isso, e devolvê-lo a ele quebra aqui;
+        // - EMITIR, ASSINAR e REGISTRAR são só do EMISSOR
+        //   (`barters.cprIssue`), porque quem confere o próprio texto não está
+        //   conferindo nada.
         { route: 'GET /barters/:code/cpr', policy: 'capability:barters.cprRead' },
-        { route: 'PUT /barters/:code/cpr', policy: 'capability:barters.invoice' },
+        { route: 'PUT /barters/:code/cpr', policy: 'capability:barters.cprFill' },
+        { route: 'GET /barters/:code/cpr/scr', policy: 'capability:barters.cprRead' },
+        // O SCR é a ÚNICA rota do sistema com duas chaves: o CONSULTOR anexa
+        // porque é ele quem consulta o SCR, e o EMISSOR porque é ele quem fica
+        // travado por ele na hora de emitir — "peça ao consultor e espere" seria
+        // a resposta errada com o produtor na sala. Anexar não é escrever a
+        // cédula: o que o emissor não pode é mexer no que ele confere.
+        {
+          route: 'PUT /barters/:code/cpr/scr',
+          policy: 'capability-any:barters.cprFill|barters.cprIssue',
+        },
+        { route: 'POST /barters/:code/cpr/issue', policy: 'capability:barters.cprIssue' },
+        { route: 'POST /barters/:code/cpr/registration', policy: 'capability:barters.cprIssue' },
+        { route: 'POST /barters/:code/cpr/signatures', policy: 'capability:barters.cprIssue' },
+        // A VIA CARIMBADA que chega depois do ato — escrita de quem emite.
+        { route: 'PUT /barters/:code/cpr/registry-file', policy: 'capability:barters.cprIssue' },
+        // OS DOIS DOCUMENTOS QUE VOLTARAM, para LER: mesma porta do SCR. É ela
+        // que deixa o admin tirar a segunda via da cédula assinada sem pedir o
+        // PDF ao emissor.
+        { route: 'GET /barters/:code/cpr/signed', policy: 'capability:barters.cprRead' },
+        { route: 'GET /barters/:code/cpr/registry-file', policy: 'capability:barters.cprRead' },
         // O DESVIO da esteira — o único caminho de volta que a permuta tem.
         // Duas capacidades DIFERENTES, e é o desenho: pedir é do consultor que
         // registrou; decidir é do ADMIN, que administra o processo. Repare que
@@ -216,6 +260,11 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/close', policy: 'capability:barter.manage' },
+        // O VENCIMENTO DA CPR é da SAFRA (ele muda conforme a cultura) e é a
+        // única coisa dela que se edita depois de aberta — daí a rota própria em
+        // vez de um `PUT /seasons/:code` genérico, que abriria a porta para
+        // reescrever o grão e o ano que as permutas já fechadas apontam.
+        { route: 'PUT /seasons/:code/cpr-due-date', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/versions', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/versions/import', policy: 'capability:barter.manage' },
 
@@ -260,6 +309,11 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /committee', policy: 'capability:users.manage' },
         { route: 'POST /committee/reset-password', policy: 'capability:users.manage' },
         { route: 'PUT /committee', policy: 'capability:users.manage' },
+        { route: 'DELETE /emitters/:id', policy: 'capability:users.manage' },
+        { route: 'GET /emitters', policy: 'capability:users.manage' },
+        { route: 'POST /emitters', policy: 'capability:users.manage' },
+        { route: 'POST /emitters/:id/reset-password', policy: 'capability:users.manage' },
+        { route: 'PUT /emitters/:id', policy: 'capability:users.manage' },
         { route: 'DELETE /consultants/:id', policy: 'capability:users.manage' },
         { route: 'GET /consultants', policy: 'capability:users.manage' },
         { route: 'POST /consultants', policy: 'capability:users.manage' },

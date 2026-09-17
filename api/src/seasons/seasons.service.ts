@@ -149,6 +149,10 @@ export class SeasonsService {
         grainName: grain.name,
         grainUnit: grain.unit,
         status: 'open',
+        // O VENCIMENTO DA CPR da safra — o mesmo para todas as cédulas dela,
+        // porque ele muda conforme a CULTURA e não conforme a permuta. Ver
+        // `Season.cprDueDate`.
+        cprDueDate: dto.cprDueDate ? new Date(dto.cprDueDate) : null,
       },
       include: { versions: true },
     });
@@ -162,6 +166,38 @@ export class SeasonsService {
       detail: `${season.name}, pagamento em ${season.grainName}`,
     });
     return season;
+  }
+
+  /**
+   * ACERTA O VENCIMENTO DA CPR da safra — a data em que a entrega vence.
+   *
+   * Ela é a ÚNICA coisa da safra que muda depois da abertura, e por isso tem rota
+   * própria em vez de um `PUT /seasons/:code` genérico: o grão, o ano e o código
+   * são o que as permutas já fechadas apontam, e um editor de safra abriria a
+   * porta para reescrevê-los.
+   *
+   * A safra ENCERRADA também aceita: o que ela muda são as cédulas que ainda não
+   * saíram, e uma safra fechada continua tendo permutas faturadas esperando
+   * emissão. Recusar aqui deixaria essas cédulas sem vencimento para sempre.
+   */
+  async setCprDueDate(admin: User, code: string, dueDate: Date): Promise<SeasonWithVersions> {
+    const season = await this.findSeason(code);
+
+    const saved = await this.prisma.season.update({
+      where: { id: season.id },
+      data: { cprDueDate: dueDate },
+      include: { versions: { orderBy: { number: 'desc' } } },
+    });
+
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.seasonCprDueDateSet,
+      targetType: 'season',
+      targetId: saved.id,
+      targetLabel: saved.code,
+      detail: `vencimento da CPR em ${dueDate.toLocaleDateString('pt-BR')}`,
+    });
+    return saved;
   }
 
   /** Encerra a safra e, junto, a versão que estiver vigente nela. */

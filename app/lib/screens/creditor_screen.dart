@@ -19,7 +19,7 @@ import '../widgets/common_widgets.dart';
 /// vezes, e a trezentésima primeira sai com um dígito trocado num título de
 /// crédito.
 ///
-/// Ela tem DOIS DONOS — o admin e o faturista (`creditor.manage`). É a única
+/// Ela tem DOIS DONOS — o admin e o EMISSOR (`creditor.manage`). É a única
 /// coisa deste sistema que os dois dividem, e a razão é que ela não decide
 /// permuta nem concede acesso: é o timbre do papel, e quem percebe o CNPJ
 /// errado é quem monta a cédula.
@@ -30,7 +30,7 @@ import '../widgets/common_widgets.dart';
 class CreditorScreen extends StatefulWidget {
   /// Dentro de outra tela (a aba Empresa dos Cadastros) ela dispensa o Scaffold
   /// e a barra de título — quem já os tem é a tela de fora. Aberta sozinha (o
-  /// caminho do faturista, a partir da cédula), ela os traz.
+  /// caminho do emissor, a partir da cédula), ela os traz.
   final bool embedded;
 
   const CreditorScreen({super.key, this.embedded = false});
@@ -294,7 +294,7 @@ class _StatusCard extends StatelessWidget {
             if (!ok) ...[
               const SizedBox(height: 3),
               Text(
-                'Sem isto o faturista consegue preencher a cédula, mas ela não '
+                'Sem isto o consultor consegue preencher a cédula, mas ela não '
                 'fica pronta para virar documento.',
                 style: TextStyle(fontSize: 11.5, color: AppColors.textMedium, height: 1.35),
               ),

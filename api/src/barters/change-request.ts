@@ -1,4 +1,4 @@
-import { BARTER_STATUS, type BarterStatus } from './barter-workflow';
+import { BARTER_STATUS, stageOf, type BarterStatus } from './barter-workflow';
 
 /**
  * O PEDIDO DE ALTERAÇÃO — o caminho de volta da esteira.
@@ -109,7 +109,21 @@ export function changeRequestRefusal(barter: BarterAtRequest): string | null {
   if (barter.status === BARTER_STATUS.draft) {
     return 'Esta permuta é um rascunho seu: altere-a e encaminhe de novo, sem pedir nada a ninguém';
   }
-  if (barter.status === BARTER_STATUS.invoiced) {
+  // DO FATURAMENTO EM DIANTE, não há mais volta — e a conferência é pelo DEGRAU
+  // da esteira, não pelo estado.
+  //
+  // Ela já foi `=== invoiced`, e isso era uma comparação que envelheceu mal: no
+  // dia em que a emissão da cédula virou etapa, `invoiced` deixou de ser o fim
+  // da linha e três estados passaram a existir depois dele — todos escapando
+  // por esta porta. Uma permuta com o TÍTULO JÁ EMITIDO aceitava pedido de
+  // alteração, e o admin podia devolvê-la a rascunho: o papel continuaria com o
+  // produtor, e o registro que o originou viraria outro.
+  //
+  // Pelo degrau, um estado novo depois do faturamento entra fechado por
+  // construção. `denied` continua passando (ele está FORA da esteira,
+  // `stageOf` = -1), e é de propósito: refazer a permuta negada é justamente
+  // para o que este caminho serve.
+  if (stageOf(barter.status) >= stageOf(BARTER_STATUS.invoiced)) {
     return 'Esta permuta já foi faturada, e o que saiu para fora não se corrige por aqui';
   }
   return null;

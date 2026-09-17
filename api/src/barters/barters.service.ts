@@ -8,6 +8,7 @@ import {
 import type {
   Barter,
   BarterCpr,
+  BarterInvoice,
   Creditor,
   BarterEvent,
   BarterItem,
@@ -16,6 +17,7 @@ import type {
   CprAreaOwner,
   CprGuarantor,
   Prisma,
+  Season,
   User,
 } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
@@ -38,6 +40,7 @@ import {
   lineFrom,
   outcomeLabelOf,
   refusalFor,
+  stageOf,
   type BarterAction,
   type BarterStatus,
 } from './barter-workflow';
@@ -63,7 +66,16 @@ import {
   type GrantedRequest,
   type ProductRequestAction,
 } from './product-request';
-import { EMPTY_CPR, cprGaps, knownFrom, suggestFrom, type CprKnown } from './cpr';
+import {
+  EMPTY_CPR,
+  consultantCprGaps,
+  cprGaps,
+  knownFrom,
+  suggestFrom,
+  type CprContext,
+  type CprKnown,
+} from './cpr';
+import { creditorGaps } from '../common/creditor';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
 import { ROLE } from '../common/roles';
@@ -71,6 +83,7 @@ import { CreditorService } from '../creditor/creditor.service';
 import { SeasonsService, type VersionWithPrices } from '../seasons/seasons.service';
 import { countsAsRealized } from '../seasons/version-progress';
 import {
+  AttachInvoiceDto,
   BarterInputDto,
   BarterOpinionDto,
   ChangeBarterPricesDto,
@@ -87,11 +100,132 @@ import {
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
-import { SaveCprDto } from './dto/cpr.dto';
+import { IssueCprDto, RegisterCprDto, SaveCprDto, SignCprDto } from './dto/cpr.dto';
+
+/**
+ * O ARQUIVO SEM OS BYTES — nome, tipo, tamanho e quem anexou.
+ *
+ * É o que toda leitura que não é download carrega. O `content` é `Bytes` e viria
+ * junto em qualquer `include` que não o excluísse de propósito: a listagem de
+ * permutas puxaria os PDFs de todas as notas de todas elas para desenhar uma
+ * tabela. Escrito uma vez aqui porque é lido de três lugares (a listagem, o
+ * detalhe e a mesa da cédula), e uma cópia que esquecesse de tirar o conteúdo
+ * não daria erro — daria uma resposta de dez megabytes.
+ */
+const FILE_META = {
+  id: true,
+  fileName: true,
+  contentType: true,
+  size: true,
+  uploadedBy: true,
+  uploadedAt: true,
+} as const satisfies Prisma.BarterFileSelect;
+
+/** O anexo como as telas o leem: tudo menos os bytes. */
+export type FileMeta = Prisma.BarterFileGetPayload<{ select: typeof FILE_META }>;
+
+/** Uma nota fiscal com o anexo dela (sem o conteúdo). */
+export type InvoiceWithFile = BarterInvoice & { file: FileMeta | null };
+
+/**
+ * QUANTO pode pesar um anexo. Dez megabytes cobre com folga um DANFE em PDF, o
+ * XML da nota e um SCR de várias páginas — e recusa, antes de o arquivo subir
+ * inteiro, a foto de 40 MB tirada do celular contra a tela do computador, que é
+ * o caso real que enche um banco de dados.
+ *
+ * O limite mora na REQUISIÇÃO (é o multer quem o aplica) e não numa coluna: o
+ * custo que ele controla é o de receber, não o de guardar.
+ */
+export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * O QUE SE ACEITA como anexo — os formatos em que nota fiscal e SCR de fato
+ * chegam.
+ *
+ * É uma LISTA DE PERMITIDOS, e não uma de proibidos, pelo motivo de sempre: o
+ * formato que ninguém previu entra por omissão na segunda. O XML está aqui
+ * porque a nota fiscal eletrônica É o XML — o PDF é a representação dela.
+ */
+export const ALLOWED_ATTACHMENT_TYPES: readonly string[] = [
+  'application/pdf',
+  'application/xml',
+  'text/xml',
+  'image/png',
+  'image/jpeg',
+];
+
+/**
+ * A EXTENSÃO como segunda opinião, quando o tipo declarado não diz nada.
+ *
+ * O `Content-Type` de um multipart é dito por quem envia, e quem envia às vezes
+ * não sabe: o Chrome manda `application/octet-stream` para todo arquivo cujo
+ * tipo o sistema não resolveu — inclusive um PDF perfeitamente comum, escolhido
+ * pelo seletor de arquivos. Recusá-lo pelo cabeçalho seria recusar o documento
+ * certo por uma informação que nunca foi confiável.
+ *
+ * Então a conferência passa a ser: o tipo declarado vale se for reconhecido; se
+ * for GENÉRICO, vale a extensão do nome. O que continua não passando é o
+ * arquivo que erra nos DOIS — o `.exe` arrastado por engano.
+ *
+ * Nada disto é trava de segurança, e vale repetir: o conteúdo nunca é executado
+ * nem interpretado por este servidor, e sai como `attachment`. O que a lista
+ * evita é o engano honesto.
+ */
+const EXTENSION_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  xml: 'application/xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+};
+
+/**
+ * Os tipos que significam "não sei": é com eles que o navegador preenche o
+ * cabeçalho quando o sistema operacional não resolveu a extensão.
+ */
+const UNKNOWN_TYPES: readonly string[] = ['', 'application/octet-stream', 'binary/octet-stream'];
+
+/**
+ * O TIPO REAL do anexo — o declarado, ou o que a extensão diz quando ele não
+ * diz nada. `null` quando nem um nem outro é aceitável.
+ */
+export function attachmentTypeOf(fileName: string, declared: string): string | null {
+  const type = declared.trim().toLowerCase();
+  if (ALLOWED_ATTACHMENT_TYPES.includes(type)) return type;
+  if (!UNKNOWN_TYPES.includes(type)) return null;
+
+  const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
+  return EXTENSION_TYPES[extension] ?? null;
+}
+
+/**
+ * O ARQUIVO COMO ELE CHEGA da requisição — o pedaço de `Express.Multer.File` de
+ * que este service precisa.
+ *
+ * É um tipo próprio, e não `Express.Multer.File`, para o domínio não depender do
+ * transporte: um anexo que um dia venha de outro lugar (um e-mail, uma
+ * integração) continua entrando por aqui sem inventar um objeto de multer só
+ * para atravessar a porta.
+ */
+export interface UploadedAttachment {
+  originalname: string;
+  mimetype: string;
+  size: number;
+  buffer: Buffer;
+}
+
+/** O arquivo guardado, COM os bytes — o que um download devolve. */
+export interface StoredFile {
+  fileName: string;
+  contentType: string;
+  size: number;
+  content: Buffer | Uint8Array;
+}
 
 type BarterWithItems = Barter & {
   items: BarterItem[];
   productRequests: BarterProductRequest[];
+  invoices: InvoiceWithFile[];
 };
 
 /** A permuta com a LINHA DO TEMPO junto — a forma do detalhe. */
@@ -108,6 +242,17 @@ type BarterDetail = BarterWithItems & { events: BarterEvent[] };
 const BARTER_INCLUDE = {
   items: true,
   productRequests: { orderBy: { id: 'asc' } },
+  // AS NOTAS do faturamento vão junto pelo mesmo motivo dos pedidos: elas são
+  // ESTADO. "Esta permuta já tem nota?" é o que a fila do faturista pergunta, e
+  // o que a cédula precisa saber para poder ser emitida.
+  //
+  // O ARQUIVO vem por `select`, e sem o `content`: os bytes do PDF não podem
+  // viajar numa listagem de cinquenta permutas para desenhar cinquenta linhas de
+  // tabela. Quem quer o arquivo pede o arquivo (ver `invoiceFile`).
+  invoices: {
+    orderBy: { id: 'asc' },
+    include: { file: { select: FILE_META } },
+  },
 } as const satisfies Prisma.BarterInclude;
 
 /**
@@ -122,10 +267,13 @@ const BARTER_DETAIL_INCLUDE = {
   events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] },
 } as const satisfies Prisma.BarterInclude;
 
-/** A cédula com as lavouras e os donos delas — a forma como ela é lida e salva. */
+/** A cédula com as lavouras, os donos delas e os anexos. */
 type CprWithAreas = BarterCpr & {
   areas: (CprArea & { owners: CprAreaOwner[] })[];
   guarantors: CprGuarantor[];
+  scrFile: FileMeta | null;
+  signedFile: FileMeta | null;
+  registryFile: FileMeta | null;
 };
 
 /** O `include` da cédula, escrito uma vez: leitura e sugestão leem o mesmo. */
@@ -135,18 +283,53 @@ const CPR_INCLUDE = {
     include: { owners: { orderBy: { position: 'asc' } } },
   },
   guarantors: { orderBy: { position: 'asc' } },
+  // OS ANEXOS sem os bytes, pelo mesmo motivo das notas: a mesa da cédula é uma
+  // tela de formulário, e não o download do anexo.
+  scrFile: { select: FILE_META },
+  signedFile: { select: FILE_META },
+  registryFile: { select: FILE_META },
 } as const;
 
 /**
+ * OS TRÊS ANEXOS DA CÉDULA, pela coluna que guarda cada um.
+ *
+ * Eles entram em momentos diferentes e por mãos diferentes — o SCR antes da
+ * emissão, a cédula assinada no ato de assinar, a via do cartório no registro ou
+ * depois dele —, mas a mecânica de guardar é a mesma. Ver `attachToCpr`.
+ */
+type CprAttachmentColumn = 'scrFileId' | 'signedFileId' | 'registryFileId';
+
+/** Como cada anexo é chamado numa frase de recusa, em pt-BR. */
+const CPR_ATTACHMENT_LABEL: Record<CprAttachmentColumn, string> = {
+  scrFileId: 'o SCR do produtor anexado',
+  signedFileId: 'a cédula assinada anexada',
+  registryFileId: 'o comprovante do registro anexado',
+};
+
+/**
  * A MESA DA CÉDULA: o rascunho, o que a permuta já responde, quem é a credora e
- * o que ainda falta. É o que a tela do faturista precisa para desenhar o
- * formulário inteiro numa requisição só.
+ * o que ainda falta. É o que a tela precisa para desenhar o formulário inteiro
+ * numa requisição só.
+ *
+ * ELA SERVE A TRÊS PESSOAS, e é por isso que `gaps` continua sendo uma lista de
+ * frases e não um mapa de campos: o consultor a lê para saber o que preencher, o
+ * emissor para saber se dá para emitir, e o admin para saber a quem cobrar.
  */
 interface CprDesk {
   cpr: CprWithAreas | null;
   known: CprKnown;
   creditor: Creditor;
   gaps: string[];
+  /**
+   * O RECORTE DO CONSULTOR — o que trava o encaminhamento ao gerente.
+   *
+   * Sai ao lado de `gaps` (que é a lista inteira, de todos os postos) porque
+   * responde outra pergunta: `gaps` é "falta o que para o documento sair", e
+   * esta é "falta o que para esta permuta andar". A tela do detalhe mostra o
+   * aviso com ela, e o portão do `forward` recusa com ela — a mesma função nos
+   * dois lugares, senão o aviso diz uma coisa e a recusa diz outra.
+   */
+  consultantGaps: string[];
   suggestion: ReturnType<typeof suggestFrom>;
 }
 
@@ -224,6 +407,8 @@ export class BartersService {
    *   responde por um time, e a permuta de outro time não é assunto dele;
    * - **o que chegou ao faturamento** (faturista): o próprio trecho da linha,
    *   e nada antes dele. Ver `bartersReadInvoicing` em policy.ts;
+   * - **o que chegou à emissão** (emissor): um degrau adiante do anterior — as
+   *   faturadas e o que já andou na cédula. Ver `bartersReadIssuance`;
    * - **as próprias** (consultor): as que ele registrou.
    *
    * A ordem das perguntas importa: ela vai do escopo mais largo ao mais
@@ -269,6 +454,9 @@ export class BartersService {
     if (can(user, CAPABILITY.bartersReadTeam)) return { managerId: user.id };
     if (can(user, CAPABILITY.bartersReadInvoicing)) {
       return { status: { in: lineFrom(BARTER_ACTION.invoice) } };
+    }
+    if (can(user, CAPABILITY.bartersReadIssuance)) {
+      return { status: { in: lineFrom(BARTER_ACTION.cprIssue) } };
     }
     return { consultantId: user.id };
   }
@@ -743,6 +931,19 @@ export class BartersService {
       );
     }
 
+    // A CÉDULA PREENCHIDA é o segundo portão do encaminhamento, e ele é novo.
+    //
+    // Ela é coletada AGORA, com o produtor ainda por perto, e não semanas
+    // depois — quando o emissor tenta gerar o título e descobre que falta a
+    // matrícula de uma lavoura que ninguém anotou, com a permuta já faturada e
+    // o insumo já retirado. O custo de voltar atrás cresce a cada posto da
+    // esteira, e o encaminhamento é o último momento em que ele é zero.
+    //
+    // SÓ AS PENDÊNCIAS DELE são cobradas (ver `consultantCprGaps`): a nota
+    // fiscal não existe antes do faturamento, o vencimento é da safra e o número
+    // da cédula é do emissor. Exigi-los aqui travaria a esteira num impossível.
+    await this.requireCprFilledBy(consultant, barter);
+
     // O DESTINATÁRIO. O cadastro do consultor exige um gerente, então isto só
     // acontece quando o gerente dele foi excluído depois — e nesse caso a
     // permuta seguiria endereçada a ninguém: ficaria em `sentToManager` para
@@ -774,6 +975,29 @@ export class BartersService {
         managerName: manager.fullName,
       },
       note,
+    );
+  }
+
+  /**
+   * A CÉDULA JÁ TEM O QUE É DO CONSULTOR? — ou o erro que lista o que falta.
+   *
+   * A mensagem nomeia as primeiras pendências e conta o resto, em vez de
+   * despejar as vinte de uma cédula em branco: quem lê isto num alerta precisa
+   * saber O QUE fazer, e uma parede de texto vira "deu erro". A lista inteira
+   * está na tela da cédula, que é onde ela se resolve — e é para lá que a frase
+   * manda ir.
+   */
+  private async requireCprFilledBy(consultant: User, barter: Barter): Promise<void> {
+    const cpr = await this.loadCpr(barter.id);
+    const missing = consultantCprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? []);
+    if (missing.length === 0) return;
+
+    const MOSTRADAS = 4;
+    const primeiras = missing.slice(0, MOSTRADAS).join(', ');
+    const resto = missing.length - MOSTRADAS;
+    throw new UnprocessableEntityException(
+      `Preencha a cédula (CPR) desta permuta antes de encaminhá-la ao gerente — ` +
+        `falta ${primeiras}${resto > 0 ? ` e mais ${resto} campo(s)` : ''}.`,
     );
   }
 
@@ -966,7 +1190,7 @@ export class BartersService {
   }
 
   /**
-   * O FATURAMENTO — o último posto da linha, e o mais simples de todos.
+   * O FATURAMENTO — o posto mais simples do fluxo, e o que produz as notas.
    *
    * O faturista não avalia nem devolve: ele recebe o que as etapas anteriores
    * produziram (o pedido, o parecer, a decisão — tudo na linha do tempo da
@@ -974,12 +1198,31 @@ export class BartersService {
    * tomar, e por isso o único portão é o estado: negada não fatura, e sem
    * decisão do comitê também não.
    *
-   * `invoiced` é fim de linha. Não existe "desfaturar" — corrigir faturamento é
-   * ato do sistema de nota fiscal, não deste; um botão aqui apagaria o rastro do
-   * que já saiu para fora.
+   * O SEGUNDO PORTÃO é a NOTA, e ele é novo: não se fatura sem ao menos uma nota
+   * anexada. A trava parece burocrática e não é — a CPR que vem em seguida cita
+   * a nota como ORIGEM DA DÍVIDA (cláusula VII), e uma permuta "faturada" sem
+   * nota nenhuma é um faturamento que não aconteceu no mundo, ou que aconteceu e
+   * não deixou prova. As duas coisas param a emissão do título alguns dias
+   * depois, e aí já é o emissor quem descobre — longe de quem pode resolver.
+   *
+   * O que ela NÃO faz é travar a correção: notas continuam podendo ser anexadas
+   * e removidas DEPOIS do faturamento (ver `attachInvoice`), porque nota
+   * cancelada e reemitida é rotina.
+   *
+   * `invoiced` não é mais fim de linha — o que vem depois é a emissão da cédula,
+   * com o emissor. Mas continua não existindo "desfaturar": corrigir faturamento
+   * é ato do sistema de nota fiscal, não deste; um botão aqui apagaria o rastro
+   * do que já saiu para fora.
    */
   async invoice(biller: User, code: string, dto: InvoiceBarterDto): Promise<BarterDetail> {
     const barter = await this.requireBarter(biller, code, BARTER_ACTION.invoice);
+
+    const invoices = await this.prisma.barterInvoice.count({ where: { barterId: barter.id } });
+    if (invoices === 0) {
+      throw new UnprocessableEntityException(
+        'Anexe ao menos uma nota fiscal antes de faturar — é ela que a cédula cita como origem da dívida',
+      );
+    }
 
     const note = dto.note?.trim() ? dto.note.trim() : null;
     const invoiced = await this.applyStep(
@@ -1002,9 +1245,136 @@ export class BartersService {
       targetType: 'barter',
       targetId: invoiced.id,
       targetLabel: invoiced.code,
-      detail: `faturada${invoiced.invoiceNote ? ` — ${summarize(invoiced.invoiceNote)}` : ''}`,
+      detail: `faturada com ${invoices} nota(s)${
+        invoiced.invoiceNote ? ` — ${summarize(invoiced.invoiceNote)}` : ''
+      }`,
     });
     return invoiced;
+  }
+
+  /* ── AS NOTAS DO FATURAMENTO ──────────────────────────────────────────── */
+
+  /**
+   * ANEXA UMA NOTA FISCAL à permuta — o número, o que ele tem ao lado, e o
+   * arquivo.
+   *
+   * SÃO VÁRIAS, e é o ponto: o produtor retira os insumos em mais de um
+   * carregamento, cada retirada sai com a sua nota, e a nota cancelada é
+   * reemitida. Enquanto o número foi um campo de texto dentro da cédula, a
+   * segunda nota não tinha onde entrar — e a cédula citava uma como origem de
+   * uma dívida formada por três.
+   *
+   * ANTES E DEPOIS do faturamento, de propósito. Antes porque a nota costuma
+   * sair primeiro e o faturamento é o carimbo que vem depois dela (`invoice` até
+   * exige que haja uma); depois porque nota cancelada e reemitida é rotina, e um
+   * sistema que só aceitasse anexo antes do ato empurraria a correção para fora
+   * dele. O portão é o ESCOPO: a permuta precisa estar no trecho do faturista.
+   *
+   * O ARQUIVO E A LINHA nascem na MESMA transação: um anexo gravado sem a nota
+   * seria lixo sem dono, e uma nota gravada sem o anexo é justamente o registro
+   * sem prova que este modelo existe para não haver.
+   */
+  async attachInvoice(
+    biller: User,
+    code: string,
+    dto: AttachInvoiceDto,
+    file: UploadedAttachment,
+  ): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(biller, code);
+    const contentType = this.requireAttachable(file);
+
+    const number = dto.number.trim();
+    await this.prisma.$transaction(async (tx) => {
+      const stored = await tx.barterFile.create({
+        data: this.fileDataOf(biller, file, contentType),
+      });
+      await tx.barterInvoice.create({
+        data: {
+          barterId: barter.id,
+          number,
+          series: dto.series?.trim() ?? '',
+          duplicateNumber: dto.duplicateNumber?.trim() ?? '',
+          issuedAt: dto.issuedAt ? new Date(dto.issuedAt) : null,
+          value: dto.value ?? 0,
+          note: dto.note?.trim() ? dto.note.trim() : null,
+          attachedBy: biller.fullName,
+          attachedById: biller.id,
+          fileId: stored.id,
+        },
+      });
+    });
+
+    await this.audit.record({
+      actor: biller,
+      action: AUDIT_ACTION.barterInvoiceAttached,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `nota fiscal ${number}${dto.series?.trim() ? `/${dto.series.trim()}` : ''} anexada (${file.originalname})`,
+    });
+    return this.findFor(biller, code);
+  }
+
+  /**
+   * REMOVE uma nota anexada — a que foi cancelada, ou a que subiu trocada.
+   *
+   * Existe porque o erro de anexo é o erro mais comum de todos, e o caminho
+   * alternativo seria pedir ao admin que apagasse a linha no banco. O arquivo vai
+   * junto (`Cascade` na coluna): ele não tem outra razão de existir.
+   *
+   * O que ela NÃO faz é desfaturar. Removida a última nota, a permuta continua
+   * faturada — e a cédula volta a ter a pendência da origem da dívida, que é a
+   * leitura certa: o ato aconteceu, e a prova dele está faltando.
+   */
+  async removeInvoice(biller: User, code: string, invoiceId: number): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(biller, code);
+
+    // Pelo ID DENTRO da permuta: um id de nota de outra permuta não encontra
+    // nada por aqui, e a mensagem é a de quem digitou um número que não existe.
+    const invoice = await this.prisma.barterInvoice.findFirst({
+      where: { id: invoiceId, barterId: barter.id },
+    });
+    if (!invoice) throw new NotFoundException('Esta permuta não tem a nota que você quer remover');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.barterInvoice.delete({ where: { id: invoice.id } });
+      // O arquivo é apagado DEPOIS da linha e não pelo `Cascade` do banco: o
+      // `onDelete: Cascade` mora do lado da nota (apagar o arquivo apaga a nota),
+      // e não o contrário. Aqui a ordem é a que o domínio quer.
+      if (invoice.fileId !== null) {
+        await tx.barterFile.delete({ where: { id: invoice.fileId } });
+      }
+    });
+
+    await this.audit.record({
+      actor: biller,
+      action: AUDIT_ACTION.barterInvoiceRemoved,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `nota fiscal ${invoice.number} removida`,
+    });
+    return this.findFor(biller, code);
+  }
+
+  /**
+   * O ARQUIVO de uma nota, com os bytes — a única leitura que os carrega.
+   *
+   * O escopo é o da PERMUTA (`findFor`), e não uma capacidade nova: quem alcança
+   * a permuta alcança os documentos dela. É a mesma porta do detalhe, e é o que
+   * permite ao emissor conferir a nota que a cédula cita sem que ninguém precise
+   * lhe mandar o PDF por e-mail.
+   */
+  async invoiceFile(viewer: User, code: string, invoiceId: number): Promise<StoredFile> {
+    const barter = await this.findFor(viewer, code);
+    const invoice = await this.prisma.barterInvoice.findFirst({
+      where: { id: invoiceId, barterId: barter.id },
+      include: { file: true },
+    });
+    if (!invoice?.file) {
+      throw new NotFoundException('Esta nota não tem arquivo anexado');
+    }
+    return invoice.file;
   }
 
   /* ── O DESVIO: o pedido de alteração e o caminho de volta ─────────────── */
@@ -1749,33 +2119,39 @@ export class BartersService {
     }
   }
 
+  /* ── A CÉDULA: o preenchimento do consultor e a emissão do emissor ────── */
+
   /**
-   * A MESA DA CÉDULA — tudo o que a tela do faturista precisa, de uma vez: o
-   * rascunho gravado, o que a permuta já responde, quem é a credora, a sugestão
-   * de preenchimento e o que ainda falta.
+   * A MESA DA CÉDULA — tudo o que a tela precisa, de uma vez: o rascunho
+   * gravado, o que a permuta já responde, quem é a credora, a sugestão de
+   * preenchimento e o que ainda falta.
    *
    * Numa requisição só, e de propósito: o formulário da CPR mistura as três
    * fontes do documento (ver cpr.ts), e montá-lo com uma chamada por fonte
    * deixaria a tela desenhar campos vazios enquanto a sugestão não chega — que é
    * exatamente o instante em que alguém começa a digitar o que já existia.
    *
-   * QUANDO ela pode ser preenchida: a permuta precisa estar dentro do alcance do
-   * faturista, e é `scopeFor` quem responde isso (aprovada ou já faturada, via
-   * `lineFrom(invoice)`). Repare que a cédula continua editável DEPOIS do
-   * faturamento — não é contradição com "não existe desfaturar": a permuta está
-   * fechada e continua fechada; o que se corrige aqui é um documento que ainda
-   * não foi emitido. O faturamento é o ato; a cédula é papel que vem depois.
+   * QUEM CHEGA AQUI são três papéis com perguntas diferentes, e a mesma resposta
+   * serve aos três: o CONSULTOR (preenche), o EMISSOR (confere e emite) e o
+   * ADMIN (lê a segunda via). O escopo de cada um é o da PERMUTA — uma permuta
+   * que não abre pelo código não abre a cédula —, e é `scopeFor` quem o
+   * responde. Duas regras de escopo para a mesma pergunta é uma a mais do que se
+   * mantém em dia.
+   *
+   * O CONSULTOR PREENCHE DESDE O RASCUNHO, e isso é deliberado: a qualificação
+   * do produtor e as matrículas das lavouras são o que ele traz da visita, e a
+   * permuta demora semanas para chegar ao faturamento. Coletar depois é coletar
+   * por telefone.
    */
-  async cprFor(biller: User, code: string): Promise<CprDesk> {
-    // O MESMO acesso do detalhe, e pela mesma porta: uma permuta que não abre
-    // pelo código não abre a cédula. Duas regras de escopo respondendo à mesma
-    // pergunta é uma a mais do que se mantém em dia — ver `requireBarter`.
-    const barter = await this.findFor(biller, code);
+  async cprFor(viewer: User, code: string): Promise<CprDesk> {
+    const barter = await this.findFor(viewer, code);
     const cpr = await this.loadCpr(barter.id);
 
     const producer = barter.producerId
       ? await this.prisma.producer.findUnique({ where: { id: barter.producerId } })
       : null;
+
+    const season = await this.seasonOf(barter);
 
     return {
       cpr,
@@ -1783,17 +2159,51 @@ export class BartersService {
         barter,
         producer?.document ?? '',
         cpr?.sackWeightKg ?? EMPTY_CPR.sackWeightKg,
+        season,
       ),
       // A credora vem do CADASTRO (ver creditor/), e é o serializer quem calcula
       // as pendências dela — assim a mesa da cédula e a tela de cadastro dizem
       // exatamente a mesma coisa sobre o que falta.
       creditor: await this.creditor.get(),
-      gaps: cprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? []),
+      gaps: cprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? [], this.cprContextOf(barter, season)),
+      consultantGaps: consultantCprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? []),
       // A sugestão só faz sentido enquanto NÃO há rascunho: depois que o
-      // faturista escreveu, o que está na tela é dele, e oferecer por cima o
+      // consultor escreveu, o que está na tela é dele, e oferecer por cima o
       // texto de uma cédula antiga é a maneira mais fácil de sobrescrever uma
       // correção que alguém acabou de fazer.
       suggestion: cpr ? {} : suggestFrom(producer, await this.previousCpr(barter.producerId)),
+    };
+  }
+
+  /**
+   * A SAFRA em que a permuta foi fechada — quem sabe o VENCIMENTO da cédula.
+   *
+   * Ela é lida pela versão (`versionCode`), e não pela safra aberta hoje, pelo
+   * mesmo motivo de tudo o mais nesta permuta: o acordo foi fechado naquela
+   * gestão, e a safra seguinte não reescreve o vencimento do que já foi
+   * combinado.
+   *
+   * `null` nas permutas anteriores ao lançamento por versões e nas cujas gestões
+   * sumiram do banco. Não é erro: `cprGaps` cobra o vencimento, e a frase manda
+   * acertá-lo no cadastro — que é onde ele se resolve.
+   */
+  private async seasonOf(barter: Barter): Promise<Season | null> {
+    if (!barter.versionCode) return null;
+    const version = await this.prisma.barterVersion.findUnique({
+      where: { code: barter.versionCode },
+      include: { season: true },
+    });
+    return version?.season ?? null;
+  }
+
+  /** O contexto que `cprGaps` precisa: as notas do faturamento e a safra. */
+  private cprContextOf(barter: BarterWithItems, season: Season | null): CprContext {
+    return {
+      invoices: barter.invoices.map((invoice) => ({
+        number: invoice.number,
+        fileId: invoice.fileId,
+      })),
+      seasonName: season?.name ?? '',
     };
   }
 
@@ -1809,22 +2219,41 @@ export class BartersService {
    * Ela é uma lista editada como um todo na tela (acrescenta-se a segunda área,
    * remove-se a que estava errada), e mesclar por posição faria "apaguei a
    * primeira" virar "editei a primeira e a segunda sumiu".
+   *
+   * DEPOIS DE EMITIDA, NÃO SE ESCREVE MAIS. Até a emissão a cédula é rascunho e
+   * se corrige à vontade; do ato do emissor em diante ela é um documento que
+   * existe no mundo, que alguém conferiu e assinou embaixo. Reescrevê-la por
+   * baixo faria a segunda via sair diferente da primeira — e é a primeira que
+   * está com o produtor.
    */
-  async saveCpr(biller: User, code: string, dto: SaveCprDto): Promise<CprDesk> {
-    const barter = await this.findFor(biller, code);
-    const { areas, guarantors, issuedAt, dueDate, ...fields } = dto;
+  async saveCpr(consultant: User, code: string, dto: SaveCprDto): Promise<CprDesk> {
+    const barter = await this.findFor(consultant, code);
+    this.requireCprWritable(barter);
+
+    const { areas, guarantors, issuedAt, scrConsultedAt, ...fields } = dto;
 
     // Datas chegam como texto ISO (é o que o DTO valida) e viram Date aqui. A
-    // ausência do campo e o `null` são coisas DIFERENTES: a primeira mantém o
-    // que está gravado, e a segunda... também — apagar um vencimento já escrito
-    // não é operação que um formulário de rascunho precise oferecer, e a
-    // maneira de corrigi-lo é escrever o certo por cima.
+    // ausência do campo mantém o que está gravado — apagar uma data já escrita
+    // não é operação que um formulário de rascunho precise oferecer, e a maneira
+    // de corrigi-la é escrever a certa por cima.
+    //
+    // O VENCIMENTO não vem do corpo: ele é da SAFRA, e o servidor o copia de lá.
+    // É a diferença entre um dado que a pessoa informa e um que ela herda — e
+    // era justamente essa confusão que fazia duas cédulas da mesma safra saírem
+    // com vencimentos diferentes.
+    const season = await this.seasonOf(barter);
     const dates = {
       ...(issuedAt ? { issuedAt: new Date(issuedAt) } : {}),
-      ...(dueDate ? { dueDate: new Date(dueDate) } : {}),
+      ...(scrConsultedAt ? { scrConsultedAt: new Date(scrConsultedAt) } : {}),
+      dueDate: season?.cprDueDate ?? null,
     };
 
-    const written = { ...fields, ...dates, filledBy: biller.fullName, filledById: biller.id };
+    const written = {
+      ...fields,
+      ...dates,
+      filledBy: consultant.fullName,
+      filledById: consultant.id,
+    };
 
     await this.prisma.$transaction(async (tx) => {
       const saved = await tx.barterCpr.upsert({
@@ -1874,9 +2303,9 @@ export class BartersService {
       }
     });
 
-    const desk = await this.cprFor(biller, code);
+    const desk = await this.cprFor(consultant, code);
     await this.audit.record({
-      actor: biller,
+      actor: consultant,
       action: AUDIT_ACTION.barterCprSaved,
       targetType: 'barter',
       targetId: barter.id,
@@ -1891,6 +2320,484 @@ export class BartersService {
         (desk.gaps.length === 0 ? 'completa' : `faltam ${desk.gaps.length} campo(s)`),
     });
     return desk;
+  }
+
+  /**
+   * A CÉDULA AINDA ACEITA ESCRITA? — ou seja, ela ainda não foi emitida.
+   *
+   * A pergunta é sobre o ESTADO DA PERMUTA, e não sobre um campo da cédula: quem
+   * guarda "esta cédula já saiu" é a esteira (`cprIssued` para a frente), e um
+   * segundo lugar dizendo a mesma coisa é um lugar a mais para divergir.
+   *
+   * A frase vem da máquina de estados pelo mesmo motivo de todas as outras: no
+   * dia em que houver uma etapa a mais entre a emissão e a assinatura, ela
+   * aparece escrita certa nas telas já instaladas.
+   */
+  private requireCprWritable(barter: Barter): void {
+    if (stageOf(barter.status) >= stageOf(BARTER_STATUS.cprIssued)) {
+      throw new UnprocessableEntityException(
+        `${BARTER_STEPS[BARTER_ACTION.cprIssue].done} — o documento não se reescreve depois de emitido`,
+      );
+    }
+  }
+
+  /**
+   * ANEXA O SCR do produtor à cédula — o relatório do Banco Central que diz
+   * quanto ele já deve, e a quem.
+   *
+   * Rota PRÓPRIA, e não um campo do formulário, porque um anexo de megabytes
+   * dentro do JSON faria cada salvamento de rascunho reenviá-lo. E porque ele é
+   * um ato à parte na prática: a consulta ao SCR é feita, o PDF é baixado, e
+   * então ele é juntado à cédula.
+   *
+   * `upsert` na cédula: anexar o SCR pode ser a PRIMEIRA coisa que alguém faz
+   * nesta permuta, e exigir que o formulário tenha sido salvo antes trocaria a
+   * ordem do trabalho por uma ordem do banco de dados.
+   *
+   * O SCR ANTERIOR é apagado quando um novo chega: ele é uma fotografia, e duas
+   * fotografias com datas diferentes penduradas na mesma cédula fariam alguém
+   * conferir a errada.
+   *
+   * DOIS POSTOS anexam — o consultor, que consulta o SCR, e o EMISSOR, que fica
+   * travado por ele na hora de emitir (ver a rota). O parâmetro se chama `actor`
+   * por isso: quem assina `filledBy` aqui é quem anexou, e nem sempre é o
+   * consultor.
+   */
+  async saveScr(actor: User, code: string, file: UploadedAttachment): Promise<CprDesk> {
+    const barter = await this.findFor(actor, code);
+    this.requireCprWritable(barter);
+
+    // `claimsFilling` porque anexar o SCR É preencher a cédula: ele é exigência
+    // dela (ver `cprGaps`), e quem o junta responde por ele.
+    await this.attachToCpr(actor, barter, file, 'scrFileId', { claimsFilling: true });
+
+    await this.audit.record({
+      actor,
+      action: AUDIT_ACTION.barterCprSaved,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `SCR do produtor anexado à CPR (${file.originalname})`,
+    });
+    return this.cprFor(actor, code);
+  }
+
+  /**
+   * O ARQUIVO DO SCR, com os bytes. Mesma porta do anexo da nota: quem alcança a
+   * permuta alcança os documentos dela — é assim que o emissor confere o SCR na
+   * hora de emitir, sem pedir o PDF a ninguém.
+   */
+  scrFile(viewer: User, code: string): Promise<StoredFile> {
+    return this.cprFileOf(viewer, code, 'scrFileId');
+  }
+
+  /**
+   * A EMISSÃO DA CÉDULA — o primeiro ato do emissor, e a CONFERÊNCIA do fluxo.
+   *
+   * É aqui que tudo o que os outros postos escreveram é lido contra o que o
+   * documento exige, e a cédula com lacuna NÃO SAI. A recusa não é um estado —
+   * o emissor não devolve a permuta a ninguém — e sim um 422 com a lista por
+   * extenso do que falta, cada item dizendo com quem ele se resolve (ver
+   * `cprGaps`): o RG é com o consultor, a nota é com o faturista, o vencimento é
+   * com quem cadastra a safra.
+   *
+   * A CREDORA entra na mesma conferência, e o motivo é o de sempre: um título
+   * sem a qualificação de quem cobra não é título. As duas listas continuam
+   * SEPARADAS na resposta, porque quem resolve cada uma é outra pessoa.
+   */
+  async issueCpr(emitter: User, code: string, dto: IssueCprDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(emitter, code, BARTER_ACTION.cprIssue);
+
+    // O NÚMERO, quando ele vem no ato. É a única escrita do emissor na cédula, e
+    // ela acontece ANTES da conferência de propósito: o número que ele acabou de
+    // informar precisa contar como preenchido, senão a emissão recusaria por
+    // uma pendência que o próprio pedido resolve.
+    const number = dto.number?.trim();
+    if (number) {
+      await this.prisma.barterCpr.upsert({
+        where: { barterId: barter.id },
+        create: { barterId: barter.id, number, filledBy: emitter.fullName, filledById: emitter.id },
+        update: { number },
+      });
+    }
+
+    const desk = await this.cprFor(emitter, code);
+    const missingCreditor = creditorGaps(desk.creditor);
+    if (desk.gaps.length > 0 || missingCreditor.length > 0) {
+      throw new UnprocessableEntityException(
+        `A cédula não pode ser emitida — ${[
+          ...(desk.gaps.length > 0 ? [`falta na cédula: ${desk.gaps.join(', ')}`] : []),
+          ...(missingCreditor.length > 0
+            ? [`falta na credora: ${missingCreditor.join(', ')}`]
+            : []),
+        ].join('; ')}`,
+      );
+    }
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const issued = await this.applyStep(
+      barter,
+      BARTER_ACTION.cprIssue,
+      emitter,
+      BARTER_STATUS.cprIssued,
+      {
+        cprEmittedBy: emitter.fullName,
+        cprEmittedById: emitter.id,
+        cprEmittedAt: new Date(),
+        cprEmissionNote: note,
+      },
+      note,
+    );
+
+    await this.audit.record({
+      actor: emitter,
+      action: AUDIT_ACTION.barterCprIssued,
+      targetType: 'barter',
+      targetId: issued.id,
+      targetLabel: issued.code,
+      detail: `CPR ${desk.cpr?.number || 'sem número'} emitida${note ? `: ${summarize(note)}` : ''}`,
+    });
+    return issued;
+  }
+
+  /**
+   * A COLETA DE ASSINATURAS concluída.
+   *
+   * O ato é o REGISTRO de um fato que aconteceu fora do sistema — o produtor
+   * assinou —, e por isso a data é informável: a assinatura é na fazenda, e o
+   * lançamento é no escritório, às vezes na segunda-feira seguinte. Ausente, ela
+   * vale hoje, que é o caso comum.
+   *
+   * O sistema não valida a assinatura e não a interpreta: ele guarda o PAPEL
+   * ASSINADO, quem o lançou e quando. Uma cédula assinada continua sendo um
+   * papel assinado, e é ele que vale.
+   *
+   * O ARQUIVO É OBRIGATÓRIO, e é a razão de esta rota ter virado `multipart`.
+   * "Assinada" sem o papel assinado era um estado afirmando um fato que o
+   * sistema não tinha como mostrar: a segunda via saía em branco, diferente da
+   * que está na mão do produtor, e o documento com as assinaturas morava no
+   * e-mail de alguém. O emissor lança este ato com o papel na mesa — é dele que
+   * o lançamento nasce.
+   */
+  async signCpr(
+    emitter: User,
+    code: string,
+    dto: SignCprDto,
+    file: UploadedAttachment,
+  ): Promise<BarterDetail> {
+    const barter = await this.requireBarter(emitter, code, BARTER_ACTION.cprSign);
+
+    // O ANEXO VAI ANTES DO PASSO, e a ordem é deliberada: se o passo recusar
+    // (outro aparelho assinou primeiro), o que fica gravado é a cédula assinada
+    // anexada — que é verdade. Na ordem inversa, a falha do anexo deixaria a
+    // permuta "assinada" sem o papel, que é exatamente o estado que esta
+    // mudança existe para não existir mais.
+    await this.attachToCpr(emitter, barter, file, 'signedFileId', { claimsFilling: false });
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const signed = await this.applyStep(
+      barter,
+      BARTER_ACTION.cprSign,
+      emitter,
+      BARTER_STATUS.cprSigned,
+      {
+        cprSignedAt: dto.signedAt ? new Date(dto.signedAt) : new Date(),
+        cprSignatureNote: note,
+      },
+      note,
+    );
+
+    await this.audit.record({
+      actor: emitter,
+      action: AUDIT_ACTION.barterCprSigned,
+      targetType: 'barter',
+      targetId: signed.id,
+      targetLabel: signed.code,
+      detail: `assinaturas colhidas (${file.originalname})${note ? `: ${summarize(note)}` : ''}`,
+    });
+    return signed;
+  }
+
+  /**
+   * O REGISTRO do título — o fim da linha.
+   *
+   * O NÚMERO é obrigatório (ver `RegisterCprDto`), e é a única obrigatoriedade
+   * do trecho do emissor: é ele que transforma "levamos ao cartório" em "está
+   * registrada". Sem ele, alguém teria de refazer a busca no cartório para
+   * descobrir se o registro existe — que é exatamente o trabalho que este campo
+   * evita para sempre.
+   *
+   * A VIA CARIMBADA é anexo OPCIONAL, e a diferença para a assinatura é a
+   * natureza do que se lança: lá o papel assinado É o fato, aqui o fato é o
+   * número do registro, que o campo obrigatório já afirma. Cartório que demora
+   * semanas para devolver a via não pode travar o fim da linha — e quando ela
+   * chegar, este ato já terá acontecido. Por isso ela também entra por
+   * `PUT /cpr/registry-file`, depois.
+   *
+   * Depois daqui não há próximo ato. O que vem é a colheita, e ela não é deste
+   * sistema.
+   */
+  async registerCpr(
+    emitter: User,
+    code: string,
+    dto: RegisterCprDto,
+    file?: UploadedAttachment,
+  ): Promise<BarterDetail> {
+    const barter = await this.requireBarter(emitter, code, BARTER_ACTION.cprRegister);
+
+    if (file) {
+      await this.attachToCpr(emitter, barter, file, 'registryFileId', { claimsFilling: false });
+    }
+
+    const registryNumber = dto.registryNumber.trim();
+    const place = dto.registryPlace?.trim() ? dto.registryPlace.trim() : null;
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+
+    // O TEXTO DO EVENTO é o registro por extenso, e não a observação: a linha do
+    // tempo é lida por quem quer saber sob que número a cédula foi registrada, e
+    // ele estaria só num campo do cadastro se a observação fosse o que vai ali.
+    const timeline = [
+      `Registro ${registryNumber}`,
+      ...(place ? [place] : []),
+      ...(note ? [note] : []),
+    ].join(' — ');
+
+    const registered = await this.applyStep(
+      barter,
+      BARTER_ACTION.cprRegister,
+      emitter,
+      BARTER_STATUS.cprRegistered,
+      {
+        cprRegisteredAt: dto.registeredAt ? new Date(dto.registeredAt) : new Date(),
+        cprRegistryNumber: registryNumber,
+        cprRegistryPlace: place,
+      },
+      timeline,
+    );
+
+    await this.audit.record({
+      actor: emitter,
+      action: AUDIT_ACTION.barterCprRegistered,
+      targetType: 'barter',
+      targetId: registered.id,
+      targetLabel: registered.code,
+      detail: `CPR registrada sob ${registryNumber}${place ? ` em ${place}` : ''}`,
+    });
+    return registered;
+  }
+
+  /* ── OS ANEXOS: o que vale como arquivo, e como ele é gravado ─────────── */
+
+  /**
+   * GRAVA UM ANEXO DA CÉDULA, trocando o que estava na mesma coluna.
+   *
+   * Os três anexos dela têm a mesma mecânica e donos diferentes: o SCR (a
+   * fotografia do endividamento), a cédula ASSINADA e a via carimbada pelo
+   * REGISTRO. Um método para os três porque a diferença entre eles não está em
+   * como se guarda um arquivo — está em QUANDO cada um pode entrar, e isso é
+   * decidido por quem chama.
+   *
+   * SEMPRE SUBSTITUI: cada coluna guarda UM documento, e dois arquivos
+   * pendurados na mesma cédula fariam alguém conferir o errado. O antigo sai
+   * DEPOIS de o novo estar no lugar — um instante em que a cédula esteja sem
+   * anexo nenhum é um instante em que ela parece pendente.
+   *
+   * `upsert` porque anexar pode ser a PRIMEIRA coisa que acontece nesta permuta
+   * (é o caso do SCR), e exigir que o formulário tenha sido salvo antes trocaria
+   * a ordem do trabalho por uma ordem do banco de dados.
+   *
+   * `claimsFilling` diz se quem anexa assume o `filledBy` da cédula. O SCR sim —
+   * ele é exigência do documento, e quem o junta responde por ele. A cédula
+   * assinada e o comprovante do registro NÃO: o emissor não preenche a cédula,
+   * ele junta o papel que voltou, e carimbá-lo como "último a preencher"
+   * apagaria da tela o nome de quem de fato a escreveu.
+   */
+  private async attachToCpr(
+    actor: User,
+    barter: Barter,
+    file: UploadedAttachment,
+    column: CprAttachmentColumn,
+    { claimsFilling }: { claimsFilling: boolean },
+  ): Promise<void> {
+    const contentType = this.requireAttachable(file);
+
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.barterCpr.findUnique({
+        where: { barterId: barter.id },
+        select: { id: true, scrFileId: true, signedFileId: true, registryFileId: true },
+      });
+
+      const stored = await tx.barterFile.create({
+        data: this.fileDataOf(actor, file, contentType),
+      });
+
+      // O vínculo é escrito por extenso, e não por chave calculada: o Prisma
+      // confere os campos do `data` em tempo de compilação, e uma coluna
+      // montada em string passaria batido até a primeira gravação em produção.
+      const link =
+        column === 'scrFileId'
+          ? { scrFileId: stored.id }
+          : column === 'signedFileId'
+            ? { signedFileId: stored.id }
+            : { registryFileId: stored.id };
+
+      if (!existing) {
+        await tx.barterCpr.create({
+          data: { barterId: barter.id, filledBy: actor.fullName, filledById: actor.id, ...link },
+        });
+        return;
+      }
+
+      await tx.barterCpr.update({
+        where: { id: existing.id },
+        data: {
+          ...link,
+          ...(claimsFilling ? { filledBy: actor.fullName, filledById: actor.id } : {}),
+        },
+      });
+
+      const previous = existing[column];
+      if (previous !== null) {
+        await tx.barterFile.delete({ where: { id: previous } });
+      }
+    });
+  }
+
+  /**
+   * O ARQUIVO de um anexo da cédula, com os bytes.
+   *
+   * Um método para os três pelo mesmo motivo de `attachToCpr`, e com a mesma
+   * porta de escopo do anexo da nota: quem alcança a permuta alcança os
+   * documentos dela. A recusa diz QUAL anexo falta — "não encontrado" numa tela
+   * com três botões de download não diz nada a quem clicou.
+   */
+  private async cprFileOf(
+    viewer: User,
+    code: string,
+    which: CprAttachmentColumn,
+  ): Promise<StoredFile> {
+    const barter = await this.findFor(viewer, code);
+    const cpr = await this.prisma.barterCpr.findUnique({
+      where: { barterId: barter.id },
+      include: { scrFile: true, signedFile: true, registryFile: true },
+    });
+
+    const found =
+      which === 'scrFileId'
+        ? cpr?.scrFile
+        : which === 'signedFileId'
+          ? cpr?.signedFile
+          : cpr?.registryFile;
+    if (!found) {
+      throw new NotFoundException(`Esta cédula ainda não tem ${CPR_ATTACHMENT_LABEL[which]}`);
+    }
+    return found;
+  }
+
+  /** A CÉDULA ASSINADA — o papel que voltou com as assinaturas. */
+  signedCprFile(viewer: User, code: string): Promise<StoredFile> {
+    return this.cprFileOf(viewer, code, 'signedFileId');
+  }
+
+  /** A VIA CARIMBADA pelo registro. */
+  cprRegistryFile(viewer: User, code: string): Promise<StoredFile> {
+    return this.cprFileOf(viewer, code, 'registryFileId');
+  }
+
+  /**
+   * A VIA CARIMBADA lançada DEPOIS do registro.
+   *
+   * Existe porque o cartório devolve quando devolve: o ato do registro acontece
+   * com o número em mãos, e a via carimbada chega semanas depois. Sem esta rota,
+   * o único jeito de juntá-la seria refazer um ato que não se refaz.
+   */
+  async saveCprRegistryFile(
+    emitter: User,
+    code: string,
+    file: UploadedAttachment,
+  ): Promise<CprDesk> {
+    const barter = await this.findFor(emitter, code);
+    if (!barter.cprRegisteredAt) {
+      throw new UnprocessableEntityException(
+        'O comprovante do registro só entra depois de a cédula ser registrada',
+      );
+    }
+
+    await this.attachToCpr(emitter, barter, file, 'registryFileId', { claimsFilling: false });
+
+    await this.audit.record({
+      actor: emitter,
+      action: AUDIT_ACTION.barterCprRegistered,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `comprovante do registro anexado (${file.originalname})`,
+    });
+    return this.cprFor(emitter, code);
+  }
+
+  /**
+   * ESTE ARQUIVO PODE SER ANEXADO? — tipo e tamanho, nesta ordem.
+   *
+   * O TAMANHO é conferido aqui além do multer porque as duas travas respondem a
+   * coisas diferentes: o multer corta a requisição (e devolve um erro de
+   * transporte, sem língua nenhuma), e esta diz à pessoa, em pt-BR, qual é o
+   * limite e quanto o arquivo dela tem. Uma sem a outra é ou uma recusa que
+   * ninguém entende, ou um upload de 40 MB recebido inteiro para ser recusado no
+   * fim.
+   *
+   * O TIPO vem do que o cliente declara, com a EXTENSÃO como segunda opinião
+   * quando ele não declara nada de útil (ver `attachmentTypeOf`). Não é trava de
+   * segurança — o conteúdo nunca é executado nem interpretado por este servidor,
+   * e sai como `attachment` —, é o que impede o engano honesto: a foto no lugar
+   * do PDF, o executável arrastado sem querer.
+   *
+   * Devolve o tipo RESOLVIDO, e é ele que vai para o banco: gravar
+   * `application/octet-stream` faria o download do PDF chegar como um arquivo
+   * que o navegador não sabe abrir, meses depois, sem ninguém entender por quê.
+   */
+  private requireAttachable(file: UploadedAttachment): string {
+    const type = attachmentTypeOf(file.originalname, file.mimetype);
+    if (type === null) {
+      throw new UnprocessableEntityException(
+        `Anexe um PDF, XML ou imagem — "${file.originalname}" veio como ${
+          file.mimetype || 'tipo desconhecido'
+        }`,
+      );
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1).replace('.', ',');
+      throw new UnprocessableEntityException(
+        `O anexo passa do limite: ${mb(file.size)} MB, e o máximo é ${mb(MAX_ATTACHMENT_BYTES)} MB`,
+      );
+    }
+    if (file.size === 0) {
+      throw new UnprocessableEntityException(`O arquivo "${file.originalname}" está vazio`);
+    }
+    return type;
+  }
+
+  /**
+   * A linha de `BarterFile` a partir do arquivo recebido.
+   *
+   * O `Buffer` do multer vira `Uint8Array` na cópia: os dois são a mesma coisa em
+   * memória, mas o `Buffer` do Node pode estar apoiado num `SharedArrayBuffer`, e
+   * o cliente do Prisma pede um `ArrayBuffer`. A cópia resolve isso sem
+   * asserção de tipo — que aqui esconderia a diferença em vez de desfazê-la.
+   */
+  private fileDataOf(
+    actor: User,
+    file: UploadedAttachment,
+    contentType: string,
+  ): Prisma.BarterFileCreateWithoutInvoiceInput {
+    return {
+      fileName: file.originalname,
+      contentType,
+      size: file.size,
+      content: Uint8Array.from(file.buffer),
+      uploadedBy: actor.fullName,
+      uploadedById: actor.id,
+    };
   }
 
   /** A cédula da permuta com as lavouras e os donos, na ordem do documento. */
@@ -1915,13 +2822,31 @@ export class BartersService {
     });
   }
 
-  /** O que a cédula tira da permuta — o item de grão é quem carrega os números. */
-  private knownOf(barter: BarterWithItems, document: string, sackWeightKg: number): CprKnown {
+  /**
+   * O que a cédula tira do registro — o item de grão carrega os números, a safra
+   * carrega o vencimento e o faturamento carrega as notas.
+   *
+   * As três fontes entram aqui porque todas as três são LEITURA para quem
+   * preenche a cédula: nenhuma delas é digitada no formulário, e cada uma tem
+   * outro dono.
+   */
+  private knownOf(
+    barter: BarterWithItems,
+    document: string,
+    sackWeightKg: number,
+    season: Season | null,
+  ): CprKnown {
     return knownFrom(
       barter,
       barter.items.find((item) => item.kind === 'grain'),
       document,
       sackWeightKg,
+      { name: season?.name ?? '', cprDueDate: season?.cprDueDate ?? null },
+      barter.invoices.map((invoice) => ({
+        number: invoice.number,
+        series: invoice.series,
+        duplicateNumber: invoice.duplicateNumber,
+      })),
     );
   }
 

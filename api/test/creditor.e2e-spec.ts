@@ -1,17 +1,29 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { ADMIN, COMITE, FATURISTA, GERENTE, JOAO, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  COMITE,
+  EMISSOR,
+  FATURISTA,
+  GERENTE,
+  JOAO,
+  createTestApp,
+  loginAs,
+  resetDb,
+} from './utils';
 
 /**
  * A CREDORA — o cadastro que dá o timbre aos documentos que a empresa emite.
  *
  * O que estas provas travam:
  *
- * 1. **dois donos, de propósito**: admin E faturista. É a única capacidade que o
+ * 1. **dois donos, de propósito**: admin E EMISSOR. É a única capacidade que o
  *    admin divide com um posto da linha, e a razão é que a credora não decide
  *    permuta nem concede acesso — é o cabeçalho do papel timbrado, e quem
- *    percebe o CNPJ errado é quem monta a cédula;
+ *    percebe o CNPJ errado é quem leva o título a registro. Ela já foi do
+ *    FATURISTA, e mudou de mãos junto com a cédula: o timbre segue quem emite o
+ *    papel, não quem emite a nota;
  * 2. **cadastro único**: rota no singular, sem `:id` e sem exclusão;
  * 3. **nunca 404**: a instalação nova abre com o formulário em branco, e não com
  *    uma tela de erro.
@@ -66,11 +78,11 @@ describe('Credora (e2e)', () => {
   });
 
   /**
-   * A DIVISÃO DA CANETA. O faturista escreve o cadastro junto com o admin — e
-   * este teste é o que impede a linha de sumir de policy.ts sem alguém notar.
+   * A DIVISÃO DA CANETA. O emissor escreve o cadastro junto com o admin — e este
+   * teste é o que impede a linha de sumir de policy.ts sem alguém notar.
    */
-  it('o faturista mantém o cadastro, junto com o admin', async () => {
-    const salvo = await save(await asUser(FATURISTA), {
+  it('o emissor mantém o cadastro, junto com o admin', async () => {
+    const salvo = await save(await asUser(EMISSOR), {
       name: 'agroBarter Cooperativa Agroindustrial Ltda.',
       cnpj: '98.765.432/0001-10',
       address: 'Avenida Colombo',
@@ -81,16 +93,20 @@ describe('Credora (e2e)', () => {
     expect(salvo.status).toBe(200);
     expect(salvo.body.data.cnpj).toBe('98.765.432/0001-10');
     // Com dois donos, "quem mexeu?" é pergunta que aparece — e a linha responde.
-    expect(salvo.body.data.updatedBy).toBe('Patrícia Lemos');
+    expect(salvo.body.data.updatedBy).toBe('Renata Bicudo');
   });
 
   /**
-   * Os OUTROS TRÊS não escrevem, e nem leem. O comitê decide permuta, o gerente
-   * opina sobre o time dele e o consultor registra — nenhum dos três emite
-   * documento em nome da empresa.
+   * Os OUTROS QUATRO não escrevem, e nem leem. O comitê decide permuta, o
+   * gerente opina sobre o time dele, o consultor registra e o FATURISTA fatura —
+   * nenhum dos quatro emite o título em nome da empresa.
+   *
+   * O faturista está nesta lista desde que a cédula saiu das mãos dele, e a
+   * presença dele aqui é o que trava a mudança: devolver-lhe `creditor.manage`
+   * quebra este teste.
    */
-  it('comitê, gerente e consultor não alcançam o cadastro', async () => {
-    for (const email of [COMITE, GERENTE, JOAO]) {
+  it('comitê, gerente, consultor e faturista não alcançam o cadastro', async () => {
+    for (const email of [COMITE, GERENTE, JOAO, FATURISTA]) {
       const leitura = await read(await asUser(email));
       expect([email, leitura.status]).toEqual([email, 403]);
 
@@ -155,7 +171,7 @@ describe('Credora (e2e)', () => {
    * e a credora é global.
    */
   it('mexer na credora deixa rastro na trilha', async () => {
-    await save(await asUser(FATURISTA), {
+    await save(await asUser(EMISSOR), {
       name: 'agroBarter Cooperativa Agroindustrial Ltda.',
       cnpj: '98.765.432/0001-10',
       city: 'Maringá/PR',
@@ -166,7 +182,7 @@ describe('Credora (e2e)', () => {
       .set('Authorization', await asUser(ADMIN));
 
     expect(trilha.status).toBe(200);
-    expect(trilha.body.data[0].actorName).toBe('Patrícia Lemos');
+    expect(trilha.body.data[0].actorName).toBe('Renata Bicudo');
     expect(trilha.body.data[0].detail).toContain('98.765.432/0001-10');
   });
 });

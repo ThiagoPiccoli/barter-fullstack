@@ -4,19 +4,22 @@ import {
   ADMIN,
   BACK_OFFICE,
   COMITE,
+  EMISSOR,
   FATURISTA,
   GERENTE,
   GERENTE_SUL,
   JOAO,
   SEED_PASSWORD,
   UNIT,
+  attachInvoice,
   createTestApp,
   loginAs,
   resetDb,
 } from './utils';
 
 /**
- * Papéis de RETAGUARDA (gerente, comitê, faturista) — o que cada um pode hoje.
+ * Papéis de RETAGUARDA (gerente, comitê, faturista, emissor) — o que cada um
+ * pode hoje.
  *
  * O contrato entre eles ainda vai ser desenhado; o que estes testes fixam é o
  * ponto de partida, que é justamente onde um RBAC costuma vazar: papel novo
@@ -244,9 +247,13 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
    * nenhum escreve a do outro.
    *
    * Este é o caso que segura a separação inteira. Ele varre a matriz completa —
-   * três papéis × três atos — em vez de testar só o caminho feliz de cada um,
-   * porque o erro que interessa não é "o comitê não consegue aprovar": é o
+   * quatro papéis × quatro atos — em vez de testar só o caminho feliz de cada
+   * um, porque o erro que interessa não é "o comitê não consegue aprovar": é o
    * faturista conseguindo, ou o gerente decidindo o próprio parecer.
+   *
+   * A EMISSÃO entrou na matriz quando a cédula virou etapa, e ela trouxe a
+   * pergunta nova que o desenho precisa travar: o faturista NÃO emite o título,
+   * e o emissor NÃO fatura. Era uma pessoa só fazendo as duas coisas.
    */
   it('cada posto da linha escreve o seu ato, e só o seu', async () => {
     const atos = {
@@ -265,16 +272,30 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
           .post('/api/v1/barters/PRM-2026-004/invoice')
           .set('Authorization', auth)
           .send({}),
+      // A EMISSÃO parte da PRM-2026-001, a única já faturada do dataset — e a
+      // única cuja cédula está completa, que é o que a emissão confere.
+      cprIssue: (auth: string) =>
+        request(app.getHttpServer())
+          .post('/api/v1/barters/PRM-2026-001/cpr/issue')
+          .set('Authorization', auth)
+          .send({}),
     };
 
-    // Quem pode cada ato — e, por consequência, quem NÃO pode os outros dois.
+    // Quem pode cada ato — e, por consequência, quem NÃO pode os outros três.
     const dono: Record<keyof typeof atos, string> = {
       opinion: GERENTE,
       review: COMITE,
       invoice: FATURISTA,
+      cprIssue: EMISSOR,
     };
 
     for (const ato of Object.keys(atos) as (keyof typeof atos)[]) {
+      // O FATURAMENTO agora exige a nota anexada — é ela que a cédula cita como
+      // origem da dívida. Sem isto, o dono do ato levaria 422 e o teste leria
+      // isso como "ele não pode", que é a conclusão errada sobre a regra certa.
+      if (ato === 'invoice') {
+        await attachInvoice(app, await asUser(FATURISTA), 'PRM-2026-004');
+      }
       for (const email of [...BACK_OFFICE, ADMIN]) {
         const response = await atos[ato](await asUser(email));
         // O ato do dono precisa PASSAR; o dos outros precisa levar 403 — e o

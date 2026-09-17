@@ -29,6 +29,33 @@ export const REQUIRED_CAPABILITIES_KEY = 'requiredCapabilities';
 export const RequireCapability = (...capabilities: Capability[]) =>
   SetMetadata(REQUIRED_CAPABILITIES_KEY, capabilities);
 
+export const ANY_CAPABILITY_KEY = 'anyCapability';
+
+/**
+ * Exige QUALQUER UMA das capacidades — a rota abre para quem tiver ao menos uma.
+ *
+ * É decorator PRÓPRIO, e não um parâmetro de [RequireCapability], porque os dois
+ * dizem coisas opostas: aquele exige TODAS (o guard recusa na primeira que
+ * faltar). Fazer o mesmo decorator significar "e" num lugar e "ou" noutro
+ * deixaria toda rota com duas capacidades ambígua na leitura — e a leitura é
+ * justamente o que o `@RequireCapability` existe para dar.
+ *
+ * O caso que o trouxe é o SCR da cédula: ele é anexado pelo CONSULTOR, que é
+ * quem o consulta, e também pelo EMISSOR — que é quem fica travado por ele na
+ * hora de emitir, e para quem "peça ao consultor e espere" seria a resposta
+ * errada com o produtor na sala. Anexar um documento não é escrever a cédula: o
+ * que o emissor não pode é mexer no que ele confere, e o SCR não é afirmação
+ * dele sobre o produtor — é o relatório do Banco Central, do jeito que veio.
+ *
+ * Use com parcimônia. Duas capacidades numa rota costumam significar que falta
+ * uma terceira, que descreve o que a rota faz — e é ela que devia estar em
+ * policy.ts. Aqui não: `cprFill` e `cprIssue` são postos diferentes agindo sobre
+ * o MESMO anexo, e inventar `cprScrAttach` criaria uma linha na tabela que
+ * ninguém consultaria para responder "quem preenche a cédula?".
+ */
+export const RequireAnyCapability = (...capabilities: Capability[]) =>
+  SetMetadata(ANY_CAPABILITY_KEY, capabilities);
+
 export const ANY_ROLE_KEY = 'anyRole';
 
 /**

@@ -226,14 +226,62 @@ class BarterRepository {
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// O FATURAMENTO da permuta aprovada — o último posto da linha.
+  /// O FATURAMENTO da permuta aprovada.
   ///
   /// Repare que não há status no corpo: o faturista não decide nada, ele fatura
-  /// o que o comitê aprovou. O servidor recusa (422) o que não estiver aprovado.
+  /// o que o comitê aprovou. O servidor recusa (422) o que não estiver aprovado
+  /// — e também o que ainda não tem NOTA anexada: é ela que a cédula cita como
+  /// origem da dívida, e faturar sem ela é faturar sem prova.
   Future<BarterModel> invoice(String code, String note) async {
     final data = await api.post('/barters/$code/invoice', body: {
       if (note.trim().isNotEmpty) 'note': note.trim(),
     });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// ANEXA UMA NOTA FISCAL — o arquivo e os dados dele, numa requisição só.
+  ///
+  /// `multipart`, e por isso os campos vão como TEXTO: o servidor os converte
+  /// (ver `AttachInvoiceDto`). Uma requisição só porque as duas metades não
+  /// fazem sentido separadas — o caminho de duas chamadas produziria notas sem
+  /// arquivo toda vez que a segunda falhasse.
+  ///
+  /// SÃO VÁRIAS por permuta: a retirada sai em mais de um carregamento, e a
+  /// nota cancelada é reemitida.
+  Future<BarterModel> attachInvoice(
+    String code, {
+    required String number,
+    required String filename,
+    required List<int> bytes,
+    String series = '',
+    String duplicateNumber = '',
+    DateTime? issuedAt,
+    double? value,
+    String note = '',
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/invoices',
+      filename: filename,
+      bytes: bytes,
+      fields: {
+        'number': number.trim(),
+        if (series.trim().isNotEmpty) 'series': series.trim(),
+        if (duplicateNumber.trim().isNotEmpty) 'duplicateNumber': duplicateNumber.trim(),
+        if (issuedAt != null) 'issuedAt': issuedAt.toUtc().toIso8601String(),
+        if (value != null && value > 0) 'value': '$value',
+        if (note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// REMOVE uma nota anexada — a cancelada, ou a que subiu trocada.
+  ///
+  /// Não desfatura: removida a última, a permuta continua faturada e a cédula
+  /// volta a ter a pendência da origem da dívida. O ato aconteceu; a prova dele
+  /// está faltando.
+  Future<BarterModel> removeInvoice(String code, String invoiceId) async {
+    final data = await api.delete('/barters/$code/invoices/$invoiceId');
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 
@@ -245,8 +293,9 @@ class BarterRepository {
   /// desenhar campos vazios enquanto a sugestão não chega — que é exatamente o
   /// instante em que alguém começa a digitar o que já existia.
   ///
-  /// É rota do FATURISTA (mesma capacidade do faturamento): a cédula é o
-  /// documento que o posto dele produz.
+  /// LER é de TRÊS papéis, com perguntas diferentes: o consultor (para
+  /// preencher), o emissor (para conferir e emitir) e o admin (para a segunda
+  /// via). Ver `Capability.bartersCprRead`.
   Future<CprDesk> cpr(String code) async {
     final data = await api.get('/barters/$code/cpr');
     return CprDesk.fromJson(data as Map<String, dynamic>);
@@ -261,6 +310,153 @@ class BarterRepository {
     final data = await api.put('/barters/$code/cpr', body: draft.toJson());
     return CprDesk.fromJson(data as Map<String, dynamic>);
   }
+
+  /// ANEXA O SCR DO PRODUTOR à cédula — o relatório do Banco Central que diz
+  /// quanto ele já deve, e a quem. É ANEXO OBRIGATÓRIO: sem ele a cédula não
+  /// pode ser emitida.
+  ///
+  /// Rota própria, e `multipart`, pelo mesmo motivo da nota: um anexo de
+  /// megabytes dentro do JSON do formulário faria cada salvamento de rascunho
+  /// reenviá-lo. `PUT` porque é UM — o SCR novo substitui o anterior, que é uma
+  /// fotografia vencida.
+  Future<CprDesk> saveScr(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/cpr/scr',
+      filename: filename,
+      bytes: bytes,
+      method: 'PUT',
+    );
+    return CprDesk.fromJson(data as Map<String, dynamic>);
+  }
+
+  /* ── A EMISSÃO: os três atos do emissor ────────────────────────────── */
+
+  /// EMITE a cédula — o ato que CONFERE.
+  ///
+  /// O corpo quase não tem nada de propósito: o emissor não escreve a cédula
+  /// (isso é do consultor) e não decide o negócio (isso é do comitê). O que ele
+  /// faz é ler contra o modelo o que os outros postos produziram, e o que tem
+  /// lacuna não sai — o servidor recusa (422) com a lista do que falta e com
+  /// quem cada coisa se resolve.
+  /// [number] é o NÚMERO DA CÉDULA, informado no ato. É a única coisa dela que o
+  /// emissor escreve, e escreve porque é a única que ele tem: a numeração vem de
+  /// fora do sistema (cartório, B3, controle da credora). Vazio quando a cédula
+  /// já o tem.
+  Future<BarterModel> issueCpr(String code, {String number = '', String note = ''}) async {
+    final data = await api.post('/barters/$code/cpr/issue', body: {
+      if (number.trim().isNotEmpty) 'number': number.trim(),
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A COLETA DE ASSINATURAS concluída — o lançamento de um fato de fora, COM O
+  /// PAPEL.
+  ///
+  /// [signedAt] existe para o lançamento atrasado, que é o caso real: o produtor
+  /// assinou na fazenda na quinta e o papel chegou ao escritório na segunda.
+  /// Ausente, vale hoje.
+  ///
+  /// A CÉDULA ASSINADA é obrigatória, e vai na MESMA requisição (`multipart`,
+  /// como a nota fiscal): "assinada" sem o papel assinado é um estado afirmando
+  /// o que ninguém consegue mostrar depois — e a segunda via sairia em branco,
+  /// diferente da que está na mão do produtor.
+  Future<BarterModel> signCpr(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+    DateTime? signedAt,
+    String note = '',
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/cpr/signatures',
+      filename: filename,
+      bytes: bytes,
+      fields: {
+        if (signedAt != null) 'signedAt': signedAt.toUtc().toIso8601String(),
+        if (note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O REGISTRO do título — o fim da linha.
+  ///
+  /// O NÚMERO é obrigatório: é ele que transforma "levamos ao cartório" em "está
+  /// registrada", e é o que se leva de volta ao cartório para pedir a certidão.
+  ///
+  /// A VIA CARIMBADA é OPCIONAL, e é a diferença para a assinatura: lá o papel é
+  /// o próprio fato, aqui o fato é o número, que já vai no corpo. Cartório que
+  /// demora a devolver a via não pode travar o fim da linha — ela entra depois,
+  /// por [saveCprRegistryFile]. Sem arquivo a chamada é JSON; com arquivo,
+  /// `multipart`, e os dois caminhos levam exatamente os mesmos campos.
+  Future<BarterModel> registerCpr(
+    String code, {
+    required String registryNumber,
+    String registryPlace = '',
+    DateTime? registeredAt,
+    String note = '',
+    String? filename,
+    List<int>? bytes,
+  }) async {
+    final fields = {
+      'registryNumber': registryNumber.trim(),
+      if (registryPlace.trim().isNotEmpty) 'registryPlace': registryPlace.trim(),
+      if (registeredAt != null) 'registeredAt': registeredAt.toUtc().toIso8601String(),
+      if (note.trim().isNotEmpty) 'note': note.trim(),
+    };
+    final data = filename == null || bytes == null
+        ? await api.post('/barters/$code/cpr/registration', body: fields)
+        : await api.upload(
+            '/barters/$code/cpr/registration',
+            filename: filename,
+            bytes: bytes,
+            fields: fields,
+          );
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A VIA CARIMBADA que chegou DEPOIS do ato do registro.
+  ///
+  /// `PUT` como o SCR, e pelo mesmo motivo: é UMA, e a nova substitui a
+  /// anterior. Sem esta rota, juntar a via que o cartório devolveu semanas
+  /// depois exigiria refazer um ato que não se refaz.
+  Future<CprDesk> saveCprRegistryFile(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/cpr/registry-file',
+      filename: filename,
+      bytes: bytes,
+      method: 'PUT',
+    );
+    return CprDesk.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O ENDEREÇO do arquivo de uma nota — para abrir no navegador ou baixar.
+  ///
+  /// É a URL, e não os bytes: o download atravessa o `Authorization`, e quem o
+  /// executa é a camada que sabe fazer isso em cada plataforma. Ver
+  /// [AppData.downloadBarterFile].
+  String invoiceFilePath(String code, String invoiceId) =>
+      '/barters/$code/invoices/$invoiceId/file';
+
+  /// O ENDEREÇO do arquivo do SCR. Ver [invoiceFilePath].
+  String scrFilePath(String code) => '/barters/$code/cpr/scr';
+
+  /// Os endereços dos dois documentos que voltaram de fora.
+  String signedCprPath(String code) => '/barters/$code/cpr/signed';
+  String cprRegistryFilePath(String code) => '/barters/$code/cpr/registry-file';
+
+  /// BAIXA um anexo (a nota ou o SCR), com o token da sessão.
+  Future<({List<int> bytes, String filename, String contentType})> download(String path) =>
+      api.download(path);
 
   /// O DETALHE de uma permuta — é ele que traz a LINHA DO TEMPO.
   ///

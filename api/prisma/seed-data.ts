@@ -24,6 +24,62 @@ import { normalizeName } from '../src/seasons/product-name';
 export const SEED_PASSWORD = 'demo-2026-agro';
 
 /**
+ * UM PDF DE UMA PÁGINA, montado à mão — o anexo de demonstração.
+ *
+ * Ele é um PDF DE VERDADE, e não bytes aleatórios com extensão `.pdf`: a nota
+ * fiscal e o SCR do dataset são baixáveis na tela, e um arquivo que o navegador
+ * recusa a abrir faria a demonstração parecer quebrada exatamente na parte que
+ * ela existe para mostrar.
+ *
+ * Escrito à mão pelo mesmo motivo do `.docx` da cédula (ver `cpr_docx.dart`, no
+ * app): a estrutura mínima de um PDF cabe em vinte linhas, e uma biblioteca de
+ * geração seria uma dependência de produção carregada para produzir um
+ * retângulo com uma frase — em um arquivo que só roda em demonstração.
+ *
+ * O `xref` é preenchido com a tabela de offsets calculada abaixo porque leitores
+ * exigentes a conferem; sem ela, parte deles abre o arquivo e parte reclama.
+ */
+function pdfDeMentira(titulo: string): Uint8Array<ArrayBuffer> {
+  const texto = titulo.replace(/[\\()]/g, '');
+  const objetos = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] ' +
+      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    null, // o fluxo de conteúdo, montado abaixo (ele precisa do próprio tamanho)
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  const conteudo = `BT /F1 18 Tf 72 760 Td (${texto}) Tj ET`;
+  objetos[3] = `<< /Length ${conteudo.length} >>\nstream\n${conteudo}\nendstream`;
+
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objetos.forEach((corpo, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${corpo}\nendobj\n`;
+  });
+
+  const inicioXref = pdf.length;
+  pdf += `xref\n0 ${objetos.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objetos.length + 1} /Root 1 0 R >>\nstartxref\n${inicioXref}\n%%EOF\n`;
+
+  // `latin1` e não `utf8`: os offsets do `xref` são contados em BYTES, e a conta
+  // acima usa o comprimento da string. Com uma codificação de tamanho variável,
+  // um acento no título deslocaria a tabela e o arquivo sairia corrompido.
+  //
+  // A cópia para um `Uint8Array` novo, e não o `Buffer` direto: o `Buffer` do
+  // Node pode estar apoiado num `SharedArrayBuffer`, e o cliente do Prisma pede
+  // um `ArrayBuffer`. É a mesma cópia de `fileDataOf`, no service.
+  const bytes = Buffer.from(pdf, 'latin1');
+  const content = new Uint8Array(bytes.length);
+  content.set(bytes);
+  return content;
+}
+
+/**
  * Dataset de demonstração — reproduz o mock original do app (mesmos números
  * das permutas PRM-2026-001..008). Senha de todos os usuários: SEED_PASSWORD.
  *
@@ -39,6 +95,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.creditor.deleteMany();
   await prisma.barterItem.deleteMany();
   await prisma.barterEvent.deleteMany();
+  // AS NOTAS antes dos ARQUIVOS: a nota aponta para o arquivo, e apagá-lo
+  // primeiro derrubaria o FK. A cédula já saiu acima, então o SCR também está
+  // livre quando os arquivos caem.
+  await prisma.barterInvoice.deleteMany();
+  await prisma.barterFile.deleteMany();
   // O pedido de fora do Barter vem DEPOIS do item, e não antes: o item aponta
   // para ele (`BarterItem.requestId`), e apagar o pedido primeiro esvaziaria
   // essa pista em vez de apagar a linha inteira.
@@ -194,6 +255,28 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     createdAt: at(2021, 8, 16),
   });
 
+  /**
+   * O EMISSOR — o posto que vem DEPOIS do faturamento: ele confere a cédula que
+   * o consultor preencheu, emite, colhe as assinaturas e a leva a registro.
+   *
+   * Ele entra no dataset pelo mesmo motivo de todos os outros: sem uma conta
+   * dele, a tela da emissão não abre em demonstração nenhuma — e o trecho novo
+   * da esteira (três estados) ficaria invisível justamente para quem precisa
+   * vê-lo funcionando.
+   *
+   * Vem DEPOIS do Gustavo, e não ao lado da Patrícia, pela mesma razão que ele
+   * veio por último: não deslocar os ids que os testes de provisionamento
+   * fixam.
+   */
+  const renata = await mkUser({
+    fullName: 'Renata Bicudo',
+    email: 'emissor@agrobarter.com.br',
+    role: ROLE.emitter,
+    phone: '(44) 99999-0014',
+    branch: 'Matriz',
+    createdAt: at(2022, 3, 7),
+  });
+
   /* ── Unidades de retirada ─────────────────────────────────────────── */
   //
   // Elas nascem dos textos que estavam em `branch`: o cadastro de unidade é a
@@ -244,6 +327,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await lotar(gustavo, filial34);
   await lotar(comite, matriz);
   await lotar(patricia, matriz);
+  await lotar(renata, matriz);
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
@@ -571,6 +655,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       status: 'closed',
       openedAt: at(2025, 12, 1),
       closedAt: at(2026, 3, 31),
+      // O VENCIMENTO DA CPR é da CULTURA, e é por isso que ele mora na safra:
+      // trigo vence em outubro, milho em setembro, soja em junho. Ver
+      // `Season.cprDueDate`. Meio-dia UTC pela mesma razão do `dueDate` da
+      // cédula, mais abaixo — é data de calendário, e sai impressa.
+      cprDueDate: at(2026, 10, 15, 12),
     },
   });
   const trigoVersion = await mkVersion({
@@ -596,6 +685,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       status: 'closed',
       openedAt: at(2026, 1, 15),
       closedAt: at(2026, 6, 30),
+      cprDueDate: at(2026, 9, 20, 12),
     },
   });
   const milhoVersion = await mkVersion({
@@ -620,6 +710,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       grainUnit: soja.unit,
       status: 'open',
       openedAt: at(2026, 1, 5),
+      // A soja vence na colheita dela — 30/06/2026 —, e TODA cédula desta safra
+      // vence no mesmo dia. Era aqui que o dataset mentia antes: cada cédula
+      // trazia o próprio vencimento digitado, e duas da mesma safra podiam
+      // discordar sem que nada no sistema percebesse.
+      cprDueDate: at(2026, 6, 30, 12),
     },
   });
   // A primeira tabela da soja viveu três dias: foi publicada com a cotação
@@ -1040,6 +1135,60 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   const faturada = await prisma.barter.findUniqueOrThrow({
     where: { code: 'PRM-2026-001' },
   });
+
+  // A NOTA FISCAL do faturamento, com o arquivo — a origem da dívida que a
+  // cédula cita (cláusula VII).
+  //
+  // Ela existe no dataset porque `invoice` passou a EXIGI-LA: não se fatura sem
+  // nota anexada, e a permuta já faturada precisa ser coerente com a regra que
+  // a produziria hoje. O arquivo é um PDF mínimo de verdade (ver `pdfDeMentira`)
+  // e não bytes aleatórios: ele é baixável na tela, e um anexo que o navegador
+  // não abre faria a demonstração parecer quebrada.
+  const notaFiscal = pdfDeMentira('NF 55.318');
+  const arquivoDaNota = await prisma.barterFile.create({
+    data: {
+      fileName: 'nf-55318-serie-1.pdf',
+      contentType: 'application/pdf',
+      size: notaFiscal.length,
+      content: notaFiscal,
+      uploadedBy: patricia.fullName,
+      uploadedById: patricia.id,
+      uploadedAt: at(2026, 1, 12, 10, 15),
+    },
+  });
+  await prisma.barterInvoice.create({
+    data: {
+      barterId: faturada.id,
+      number: '55.318',
+      series: '1',
+      duplicateNumber: '55.318-A',
+      issuedAt: at(2026, 1, 12, 10, 15),
+      value: 37_334.0,
+      attachedBy: patricia.fullName,
+      attachedById: patricia.id,
+      attachedAt: at(2026, 1, 12, 10, 15),
+      fileId: arquivoDaNota.id,
+    },
+  });
+
+  // O SCR do produtor — o relatório do Bacen que diz quanto ele já deve.
+  //
+  // Criado ANTES da cédula porque ela aponta para ele: é anexo obrigatório, e
+  // sem ele `cprGaps()` cobraria — o que deixaria a cédula "pronta" do dataset
+  // sem poder ser emitida, que é o oposto do que ela existe para mostrar.
+  const relatorioScr = pdfDeMentira('SCR Bacen');
+  const scrDoProdutor = await prisma.barterFile.create({
+    data: {
+      fileName: 'scr-antonio-carvalho-2026-01.pdf',
+      contentType: 'application/pdf',
+      size: relatorioScr.length,
+      content: relatorioScr,
+      uploadedBy: joao.fullName,
+      uploadedById: joao.id,
+      uploadedAt: at(2026, 1, 9, 14),
+    },
+  });
+
   await prisma.barterCpr.create({
     data: {
       barterId: faturada.id,
@@ -1093,14 +1242,26 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       maxImpurities: 1,
       oilContent: 18,
 
-      invoiceNumber: '55.318',
-      duplicateNumber: '55.318-A',
+      // A ORIGEM DA DÍVIDA não está mais aqui: o número da nota e o da
+      // duplicata são do FATURAMENTO, e moram em `BarterInvoice` — com o
+      // arquivo junto, e em lista, porque uma permuta sai em vários
+      // carregamentos. Ver a nota criada logo abaixo desta cédula.
+
+      // O SCR do produtor, anexado e datado. Ele é OBRIGATÓRIO para a cédula
+      // poder ser emitida (`cprGaps`), e é o que faltava para a demonstração
+      // mostrar a conferência do emissor acontecendo de verdade.
+      scrFileId: scrDoProdutor.id,
+      scrConsultedAt: at(2026, 1, 9, 14),
+
       // Com apólice, para a alínea "j" da cláusula XVIII aparecer no documento:
       // ela só existe quando há seguro, e uma cédula sem seguro não a imprime.
       insurancePolicy: 'AP-2026-778.412',
 
-      filledBy: patricia.fullName,
-      filledById: patricia.id,
+      // Quem preencheu é o CONSULTOR que registrou a permuta, e não mais o
+      // faturista: a qualificação do produtor, as matrículas das lavouras e o
+      // SCR são o que ele traz da visita. Ver `bartersCprFill` em policy.ts.
+      filledBy: joao.fullName,
+      filledById: joao.id,
 
       // DUAS lavouras, e não uma: a cláusula VI as enumera ("(i)… e (ii)…"), e
       // com uma só o documento nunca mostra a conjunção nem a segunda

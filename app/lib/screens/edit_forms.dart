@@ -468,6 +468,11 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 
   bool get _isBiller => widget.role == UserRole.biller;
 
+  /// O EMISSOR — o posto da cédula. Ele compartilha o formulário do faturista
+  /// (pessoa, unidade, sem gerente), e por isso a única coisa que o distingue na
+  /// tela é o rótulo e o rodapé que explica o que ele faz.
+  bool get _isEmitter => widget.role == UserRole.emitter;
+
   String get _roleLabel => widget.role.label;
 
   @override
@@ -537,6 +542,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.consultant => AppData.createConsultant(draft),
         UserRole.manager => AppData.createManager(draft),
         UserRole.biller => AppData.createBiller(draft),
+        UserRole.emitter => AppData.createEmitter(draft),
         UserRole.committee => AppData.createCommittee(draft),
         UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
       };
@@ -545,6 +551,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.consultant => AppData.updateConsultant(draft),
         UserRole.manager => AppData.updateManager(draft),
         UserRole.biller => AppData.updateBiller(draft),
+        UserRole.emitter => AppData.updateEmitter(draft),
         UserRole.committee => AppData.updateCommittee(draft),
         UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
       };
@@ -593,21 +600,24 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
           ? await AppData.resetCommitteePassword()
           : _isBiller
               ? await AppData.resetBillerPassword(user.id)
-              : await AppData.resetManagerPassword(user.id);
+              : _isEmitter
+                  ? await AppData.resetEmitterPassword(user.id)
+                  : await AppData.resetManagerPassword(user.id);
       if (mounted) await showProvisionalPassword(context, provisioned, isReset: true);
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
 
-  /// Exclusão de GERENTE e FATURISTA — as duas pessoas que este formulário
+  /// Exclusão de GERENTE, FATURISTA e EMISSOR — as pessoas que este formulário
   /// cadastra e que podem sair.
   ///
   /// No gerente o servidor RECUSA enquanto ele tiver consultores no time ou
   /// permutas esperando o parecer dele, e a mensagem diz qual dos dois falta — a
   /// tela só a exibe, em vez de repetir a regra aqui e arriscar divergir dela.
-  /// O faturista sai sem trava: o que ele faturou guarda o nome dele no próprio
-  /// registro, e a fila dele é o estado da permuta, não uma caixa de entrada.
+  /// O faturista e o emissor saem sem trava: o que eles assinaram guarda o nome
+  /// deles no próprio registro, e a fila dos dois é o estado da permuta, não uma
+  /// caixa de entrada.
   ///
   /// O COMITÊ não tem este botão, e nem rota: o cadastro é a ETAPA, e sem ele
   /// nenhuma permuta é decidida. Para tirar o acesso, redefine-se a senha.
@@ -620,9 +630,15 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
       name: user.name,
       barterCount: _isBiller
           ? AppData.barters.where((b) => b.invoicedBy == user.name).length
-          : AppData.barters.where((b) => b.managerId == user.id).length,
+          : _isEmitter
+              ? AppData.barters.where((b) => b.cprEmittedBy == user.name).length
+              : AppData.barters.where((b) => b.managerId == user.id).length,
       onConfirm: () async {
-        await (_isBiller ? AppData.deleteBiller(user.id) : AppData.deleteManager(user.id));
+        await switch (widget.role) {
+          UserRole.biller => AppData.deleteBiller(user.id),
+          UserRole.emitter => AppData.deleteEmitter(user.id),
+          _ => AppData.deleteManager(user.id),
+        };
         if (mounted) Navigator.pop(context);
       },
     );
@@ -646,9 +662,15 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               'parecer do gerente, e a decisão sai assinada pelo comitê. A ata (quem '
               'estava, o que foi acordado) vai na observação da decisão.',
         UserRole.biller =>
-          'O faturista fatura o que o comitê aprovou, a última etapa da permuta. A fila '
-              'dele não é pessoal: é o estado da permuta, e todos os faturistas veem a '
-              'mesma. Quem emitiu cada uma fica registrado na linha do tempo dela.',
+          'O faturista fatura o que o comitê aprovou e anexa as notas fiscais da permuta '
+              '— são várias, porque a retirada sai em mais de um carregamento. A fila dele '
+              'não é pessoal: é o estado da permuta, e todos os faturistas veem a mesma. '
+              'Quem faturou cada uma fica registrado na linha do tempo dela.',
+        UserRole.emitter =>
+          'O emissor pega a permuta FATURADA, confere a cédula que o consultor preencheu, '
+              'emite o título, colhe as assinaturas e o leva a registro. São três etapas '
+              'porque acontecem em dias diferentes, e é o status da permuta que diz em que '
+              'pé a CPR está. Sem um emissor cadastrado, toda permuta faturada para aí.',
         UserRole.admin => '',
       };
 

@@ -11,6 +11,7 @@ import {
   JOAO,
   UNIT,
   createTestApp,
+  forwardWithCpr,
   loginAs,
   resetDb,
 } from './utils';
@@ -66,10 +67,7 @@ describe('Barter — safra e versões (e2e)', () => {
       .send(permuta);
     const code = criada.body.data.code as string;
 
-    await http()
-      .post(`/api/v1/barters/${code}/forward`)
-      .set('Authorization', consultor)
-      .send({ note: 'Cliente antigo, pagou as três últimas safras em dia.' });
+    await forwardWithCpr(app, consultor, code);
     await http()
       .post(`/api/v1/barters/${code}/opinion`)
       .set('Authorization', await asUser(GERENTE))
@@ -162,12 +160,14 @@ describe('Barter — safra e versões (e2e)', () => {
    * retaguarda — que é quem enxerga R$ — só a alcança depois de encaminhada.
    * Nada aqui recalcula preço: o valor congelado é o do registro.
    */
-  const encaminhar = (code: string, auth: string) =>
-    http()
-      .post(`/api/v1/barters/${code}/forward`)
-      .set('Authorization', auth)
-      .send({ note: 'Cliente conhecido, área conferida.' })
-      .expect(200);
+  const encaminhar = async (code: string, auth: string) => {
+    // A CÉDULA vai junto: ela é pré-requisito do encaminhamento desde que a
+    // coleta passou a acontecer na visita, e não semanas depois. Aqui ela é
+    // preâmbulo — o que esta suíte testa é a safra e o congelamento do preço.
+    const encaminhada = await forwardWithCpr(app, auth, code, 'Cliente conhecido, área conferida.');
+    expect(encaminhada.status).toBe(200);
+    return encaminhada;
+  };
 
   it('a permuta nasce amarrada à versão vigente e congela o preço', async () => {
     const response = await http()

@@ -13,15 +13,31 @@
  * formulário:
  *
  * 1. A PERMUTA já sabe — e ninguém redigita. Nome do emitente, CPF, sacas,
- *    produto, preço da saca, valor total, safra. Sai em `knownFrom()`, e vai
- *    para a tela como leitura, não como campo: um número da cédula que discorde
- *    do registro é um título que cobra o que não foi acordado.
+ *    produto, preço da saca, valor total, safra, o VENCIMENTO (que é da safra,
+ *    porque muda conforme a cultura) e as NOTAS FISCAIS que o faturamento
+ *    produziu. Sai em `knownFrom()`, e vai para a tela como leitura, não como
+ *    campo: um número da cédula que discorde do registro é um título que cobra
+ *    o que não foi acordado.
  * 2. A CREDORA é CADASTRO (ver creditor/) — razão social, CNPJ, endereço,
  *    foro. Aparece em quatro cláusulas do modelo, três delas com a
  *    qualificação por inteiro, e é sempre a mesma empresa.
- * 3. O FATURISTA preenche o resto: a qualificação civil do emitente, as
- *    lavouras dadas em penhor, o padrão de qualidade do grão e os números da
- *    nota e da duplicata. É o que a tabela `BarterCpr` guarda.
+ * 3. O CONSULTOR preenche o resto: a qualificação civil do emitente, as
+ *    lavouras dadas em penhor, o padrão de qualidade do grão e o SCR do
+ *    produtor. É o que a tabela `BarterCpr` guarda, e quem CONFERE é o emissor,
+ *    na hora de gerar o documento.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * O QUE SAIU DA FONTE 3 E FOI PARA A 1, E POR QUÊ
+ *
+ * - o NÚMERO DA NOTA e o da DUPLICATA: eram digitados por quem não emitia a
+ *   nota, cabia um só, e o documento em si não existia em lugar nenhum. Agora
+ *   são `BarterInvoice` — lista, com o arquivo anexado, escritos pelo faturista;
+ * - o VENCIMENTO: era digitado cédula a cédula, sem nada que dissesse qual era a
+ *   data certa daquela cultura, e duas CPRs da mesma safra saíam diferentes.
+ *   Agora é `Season.cprDueDate`, acertado uma vez quando a safra abre.
+ *
+ * Os dois são o mesmo erro, corrigido do mesmo jeito: pedir a informação a quem
+ * a tem, e uma vez só.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * O QUE É DERIVADO, E POR QUE NÃO É CAMPO
@@ -37,7 +53,7 @@
  *   à coleta: digitá-los seria abrir a mesma porta pela qual o 367 entrou.
  */
 
-/** O que o faturista preencheu — o rascunho, com o vazio significando "falta". */
+/** O que o consultor preencheu — o rascunho, com o vazio significando "falta". */
 export interface CprDraft {
   number: string;
   issuedAt: Date;
@@ -66,8 +82,15 @@ export interface CprDraft {
   maxMoisture: number;
   maxImpurities: number;
   oilContent: number;
-  invoiceNumber: string;
-  duplicateNumber: string;
+  /**
+   * O SCR do produtor: o id do arquivo anexado e a data da consulta.
+   *
+   * É o ID, e não o conteúdo: aqui mora a REGRA, e a regra só precisa saber se
+   * o anexo existe. Ler os bytes para responder "falta o SCR?" seria carregar um
+   * PDF a cada abertura de tela.
+   */
+  scrFileId: number | null;
+  scrConsultedAt: Date | null;
   insurancePolicy: string | null;
 }
 
@@ -110,8 +133,8 @@ export const EMPTY_CPR: CprDraft = {
   maxMoisture: 0,
   maxImpurities: 0,
   oilContent: 0,
-  invoiceNumber: '',
-  duplicateNumber: '',
+  scrFileId: null,
+  scrConsultedAt: null,
   insurancePolicy: null,
 };
 
@@ -177,12 +200,58 @@ export function requiresSpouse(maritalStatus: string): boolean {
 }
 
 /**
+ * O CONTEXTO da cédula que não está no rascunho — o que os OUTROS postos
+ * produziram e que o documento exige.
+ *
+ * Existe porque a emissão confere a cédula inteira, e a cédula inteira não cabe
+ * mais numa tabela só: a nota fiscal é do faturista e o vencimento é da safra.
+ * Passá-los como contexto é o que permite a `cprGaps` continuar sendo a ÚNICA
+ * resposta a "dá para emitir?" — sem ele, a tela teria de somar esta lista com
+ * outras duas conferências feitas em outro lugar, e a primeira divergência entre
+ * elas seria um documento gerado com lacuna.
+ */
+/**
+ * DE QUEM É cada pendência da cédula.
+ *
+ * A lista é lida por quatro pessoas diferentes, e nenhuma delas resolve tudo: o
+ * consultor traz o que vem da visita, o faturista anexa a nota, o admin acerta o
+ * vencimento na safra e o emissor informa o número na hora de emitir. Sem o
+ * dono, "falta o vencimento" manda o consultor procurar um campo que não existe
+ * na tela dele.
+ *
+ * E o dono não serve só à frase: é ele que permite a MESMA regra responder a
+ * duas perguntas — "dá para emitir?" (todas) e "o consultor já fez a parte
+ * dele?" (só as dele, ver `consultantCprGaps`).
+ */
+export const CPR_GAP_OWNER = {
+  consultant: 'consultant',
+  biller: 'biller',
+  admin: 'admin',
+  emitter: 'emitter',
+} as const;
+
+export type CprGapOwner = (typeof CPR_GAP_OWNER)[keyof typeof CPR_GAP_OWNER];
+
+/** Uma pendência da cédula: o que falta, e com quem. */
+export interface CprGap {
+  label: string;
+  owner: CprGapOwner;
+}
+
+export interface CprContext {
+  /** As notas fiscais anexadas ao faturamento — a origem da dívida (cláusula VII). */
+  invoices: { number: string; fileId: number | null }[];
+  /** A safra em que a permuta foi fechada, para endereçar a pendência do vencimento. */
+  seasonName: string;
+}
+
+/**
  * O QUE AINDA FALTA para a cédula poder ser emitida — em pt-BR, na ordem em que
  * o documento pede.
  *
- * É uma LISTA e não um booleano porque a resposta útil ao faturista é "falta o
- * RG e a matrícula da segunda lavoura", e não "incompleta". O servidor escreve
- * as frases pelo mesmo motivo de `statusLabel` e `waitingFor`: a regra do que a
+ * É uma LISTA e não um booleano porque a resposta útil é "falta o RG e a
+ * matrícula da segunda lavoura", e não "incompleta". O servidor escreve as
+ * frases pelo mesmo motivo de `statusLabel` e `waitingFor`: a regra do que a
  * cédula exige mora aqui, e uma exigência nova aparece nas telas já instaladas
  * sem uma segunda cópia em Dart.
  *
@@ -190,18 +259,63 @@ export function requiresSpouse(maritalStatus: string): boolean {
  * diferentes, de propósito: o DTO diz se o que chegou é aceitável para gravar
  * (um rascunho pela metade é), e isto diz se o que está gravado é suficiente
  * para gerar o documento (não é, até acabar).
+ *
+ * ELA É LIDA POR TRÊS PESSOAS DIFERENTES, e por isso cada frase diz ONDE a
+ * pendência se resolve: o consultor preenche, o faturista anexa a nota, o admin
+ * acerta o vencimento da safra. "Falta o vencimento" mandaria o consultor
+ * procurar um campo que não existe na tela dele.
  */
-export function cprGaps(cpr: CprDraft, areas: CprAreaDraft[]): string[] {
-  const gaps: string[] = [];
-  const text = (value: string | null, label: string) => {
-    if (!value?.trim()) gaps.push(label);
+export function cprGaps(cpr: CprDraft, areas: CprAreaDraft[], context: CprContext): string[] {
+  return cprGapsOf(cpr, areas, context).map((gap) => gap.label);
+}
+
+/**
+ * O MESMO QUE FALTA, dito com o DONO de cada pendência.
+ *
+ * Ele existe porque a lista passou a ser lida em DOIS momentos com perguntas
+ * diferentes:
+ *
+ * - na EMISSÃO, "dá para gerar o documento?" — e aí tudo conta, seja de quem
+ *   for;
+ * - no ENCAMINHAMENTO ao gerente, "o consultor já fez a parte dele?" — e aí só
+ *   conta o que é DELE. Cobrar a nota fiscal de quem vai encaminhar uma permuta
+ *   que nem foi decidida seria pedir um documento que ainda não existe, e
+ *   travar a esteira inteira num impossível.
+ *
+ * O dono não é enfeite da frase: é o que permite a mesma regra servir às duas
+ * perguntas sem uma segunda lista escrita à mão em outro arquivo — que
+ * divergiria desta no primeiro campo novo.
+ */
+export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprContext): CprGap[] {
+  const gaps: CprGap[] = [];
+  const of = (owner: CprGapOwner) => (value: string | null, label: string) => {
+    if (!value?.trim()) gaps.push({ label, owner });
   };
-  const number = (value: number, label: string) => {
-    if (!(value > 0)) gaps.push(label);
+  const numberOf = (owner: CprGapOwner) => (value: number, label: string) => {
+    if (!(value > 0)) gaps.push({ label, owner });
   };
 
-  text(cpr.number, 'número da CPR');
-  if (!cpr.dueDate) gaps.push('data de vencimento');
+  const text = of(CPR_GAP_OWNER.consultant);
+  const number = numberOf(CPR_GAP_OWNER.consultant);
+
+  // O NÚMERO DA CÉDULA é do EMISSOR, e não de quem a preenche.
+  //
+  // A numeração da CPR é da emissão em papel e costuma vir de fora deste
+  // sistema — cartório, B3, controle interno da credora. O consultor não a tem
+  // quando visita a fazenda, e cobrá-la dele no encaminhamento travaria a
+  // esteira num número que só existe semanas depois. Quem o informa é o emissor,
+  // no ato de emitir (ver `IssueCprDto`).
+  of(CPR_GAP_OWNER.emitter)(cpr.number, 'número da CPR');
+  // O VENCIMENTO é da safra (ele muda conforme a cultura), e a frase diz isso:
+  // quem lê esta lista não tem campo de vencimento em tela nenhuma.
+  if (!cpr.dueDate) {
+    gaps.push({
+      owner: CPR_GAP_OWNER.admin,
+      label: `vencimento da CPR (defina-o na safra${
+        context.seasonName ? ` ${context.seasonName}` : ''
+      }, no cadastro do Barter)`,
+    });
+  }
 
   text(cpr.emitterNationality, 'nacionalidade do emitente');
   text(cpr.emitterMaritalStatus, 'estado civil do emitente');
@@ -234,14 +348,43 @@ export function cprGaps(cpr: CprDraft, areas: CprAreaDraft[]): string[] {
   number(cpr.maxImpurities, 'impurezas máximas (%)');
   number(cpr.oilContent, 'teor de óleo (%)');
 
-  text(cpr.invoiceNumber, 'número da nota fiscal');
-  text(cpr.duplicateNumber, 'número da duplicata');
+  // O SCR É OBRIGATÓRIO, e é o único anexo que esta função cobra.
+  //
+  // Uma CPR é concessão de crédito, e o SCR é o que diz quanto o produtor já
+  // deve e a quem. Emitir sem ele é conceder no escuro — e é a única exigência
+  // desta lista que não vem do modelo do documento, mas da decisão de não
+  // assinar um título sem olhar o endividamento de quem o emite.
+  if (!cpr.scrFileId) {
+    gaps.push({
+      owner: CPR_GAP_OWNER.consultant,
+      label: 'o SCR do produtor (anexo obrigatório, com o consultor)',
+    });
+  }
+
+  // A ORIGEM DA DÍVIDA (cláusula VII) é a nota que o faturamento emitiu. Ela não
+  // é mais um número digitado aqui: a frase endereça a pendência ao faturista,
+  // que é quem tem a nota na mão.
+  const withFile = context.invoices.filter((invoice) => invoice.fileId !== null);
+  if (context.invoices.length === 0) {
+    gaps.push({
+      owner: CPR_GAP_OWNER.biller,
+      label: 'ao menos uma nota fiscal do faturamento (com o faturista)',
+    });
+  } else if (withFile.length === 0) {
+    gaps.push({
+      owner: CPR_GAP_OWNER.biller,
+      label: 'o arquivo de ao menos uma nota fiscal (com o faturista)',
+    });
+  }
 
   // Sem lavoura não há penhor: as cláusulas V "b" e VI descrevem a garantia
   // pela MATRÍCULA do imóvel, e uma cédula que não diz sobre o que recai o
   // penhor não tem garantia nenhuma — tem uma promessa.
   if (areas.length === 0) {
-    gaps.push('ao menos uma lavoura (a garantia do penhor)');
+    gaps.push({
+      owner: CPR_GAP_OWNER.consultant,
+      label: 'ao menos uma lavoura (a garantia do penhor)',
+    });
   }
   areas.forEach((area, index) => {
     const which = `${index + 1}ª lavoura`;
@@ -252,7 +395,7 @@ export function cprGaps(cpr: CprDraft, areas: CprAreaDraft[]): string[] {
     text(area.registryBook, `livro do registro da ${which}`);
     text(area.registryDistrict, `comarca da ${which}`);
     if (area.owners.length === 0) {
-      gaps.push(`proprietário da ${which}`);
+      gaps.push({ owner: CPR_GAP_OWNER.consultant, label: `proprietário da ${which}` });
     }
     area.owners.forEach((owner, position) => {
       const who = `${position + 1}º proprietário da ${which}`;
@@ -264,12 +407,53 @@ export function cprGaps(cpr: CprDraft, areas: CprAreaDraft[]): string[] {
   return gaps;
 }
 
+/**
+ * O QUE FALTA AO CONSULTOR — a parte da cédula que é dele, e só ela.
+ *
+ * É o que o ENCAMINHAMENTO ao gerente exige: a cédula é preenchida logo depois
+ * de a permuta ser montada, com o produtor ainda por perto, e não semanas
+ * depois, quando alguém tenta emitir o título e descobre que falta a matrícula
+ * de uma lavoura que ninguém anotou.
+ *
+ * A lista é SÓ A DELE de propósito. Cobrar a nota fiscal de quem vai encaminhar
+ * uma permuta que nem foi decidida seria exigir um documento que ainda não
+ * existe — e travaria a esteira num impossível. Pelo mesmo motivo ficam de fora
+ * o vencimento (do admin, na safra) e o número da cédula (do emissor, na
+ * emissão).
+ *
+ * O CONTEXTO é vazio aqui porque nenhuma pendência do consultor depende dele:
+ * as dele são o que ele digita e anexa.
+ */
+export function consultantCprGaps(cpr: CprDraft, areas: CprAreaDraft[]): string[] {
+  return cprGapsOf(cpr, areas, { invoices: [], seasonName: '' })
+    .filter((gap) => gap.owner === CPR_GAP_OWNER.consultant)
+    .map((gap) => gap.label);
+}
+
 /** A parte da permuta que entra na cédula sem passar por formulário nenhum. */
 export interface CprKnown {
   barterCode: string;
   emitterName: string;
   emitterDocument: string;
   grainName: string;
+  /**
+   * O VENCIMENTO da entrega — da SAFRA, e não da cédula.
+   *
+   * Ele está aqui, entre o que ninguém digita, porque essa é a correção: o
+   * vencimento muda conforme a CULTURA e vale para a safra inteira. `null`
+   * enquanto a safra não o tiver acertado, e aí `cprGaps` cobra dizendo onde.
+   */
+  dueDate: Date | null;
+  /** O nome da safra — é ele que endereça a pendência do vencimento. */
+  seasonName: string;
+  /**
+   * AS NOTAS FISCAIS do faturamento — a origem da dívida (cláusula VII).
+   *
+   * Leitura, como o resto daqui: quem as emite é o faturista, e redigitar o
+   * número dentro da cédula era exatamente o erro que criou a versão anterior
+   * deste arquivo.
+   */
+  invoices: CprInvoiceRef[];
   /** Sacas do grão de pagamento — a quantidade da cláusula III e a do penhor. */
   sacks: number;
   /** `sacas × peso da saca`: o "[QUANTIDADE] kg" da cláusula III. */
@@ -290,6 +474,13 @@ export interface CprKnown {
   pickupUnit: string;
 }
 
+/** UMA NOTA do faturamento, como a cédula a cita: número, série e duplicata. */
+export interface CprInvoiceRef {
+  number: string;
+  series: string;
+  duplicateNumber: string;
+}
+
 /**
  * O que a cédula tira do registro. Recebe o peso da saca porque ele é o único
  * número desta lista que a permuta NÃO tem: a permuta conta sacas, e a cédula
@@ -297,12 +488,18 @@ export interface CprKnown {
  *
  * Os quilos são arredondados a duas casas pelo mesmo motivo de `roundQuantity`:
  * é um número que vai impresso, e a impressão não pode discordar do cálculo.
+ *
+ * A SAFRA e as NOTAS entram por parâmetro pelo mesmo motivo do peso da saca:
+ * elas não estão na permuta. A primeira é do cadastro do Barter (é ela que diz o
+ * vencimento da cultura) e as segundas são o que o faturamento produziu.
  */
 export function knownFrom(
   barter: { code: string; producerName: string; versionCode: string; unitName: string },
   grainItem: { productName: string; quantity: number; unitValue: number } | undefined,
   producerDocument: string,
   sackWeightKg: number,
+  season: { name: string; cprDueDate: Date | null },
+  invoices: CprInvoiceRef[],
 ): CprKnown {
   const sacks = grainItem?.quantity ?? 0;
   const sackPrice = grainItem?.unitValue ?? 0;
@@ -311,6 +508,9 @@ export function knownFrom(
     emitterName: barter.producerName,
     emitterDocument: producerDocument,
     grainName: grainItem?.productName ?? '',
+    dueDate: season.cprDueDate,
+    seasonName: season.name,
+    invoices,
     sacks,
     quantityKg: Math.round(sacks * sackWeightKg * 100) / 100,
     sackPrice,
@@ -332,7 +532,7 @@ export function knownFrom(
  *
  * A fonte é a ÚLTIMA CÉDULA do mesmo produtor, e não o cadastro dele: quem
  * escreve o cadastro é o admin (`producers.manage`), e resolver a repetição
- * dando ao faturista a caneta do cadastro trocaria um incômodo por uma mudança
+ * dando ao consultor a caneta do cadastro trocaria um incômodo por uma mudança
  * de quem pode alterar cliente. O cadastro entra só onde ele já sabe a resposta
  * (o município), como sugestão.
  *
@@ -340,6 +540,11 @@ export function knownFrom(
  * e quem decide usá-la é quem assina embaixo. Copiar o estado civil de uma
  * cédula de dois anos atrás por conta própria escreveria "casado" sobre um
  * divórcio.
+ *
+ * O SCR NÃO É SUGERIDO, e é a exceção mais importante desta lista: ele é uma
+ * fotografia com data, e a da safra passada não diz nada sobre o endividamento
+ * de hoje — que é a única coisa que ele existe para dizer. Reaproveitá-lo faria
+ * a pendência sumir da tela com um documento vencido no lugar dela.
  */
 export function suggestFrom(
   producer: { city: string } | null,

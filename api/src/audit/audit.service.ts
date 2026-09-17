@@ -91,11 +91,40 @@ export const AUDIT_ACTION = {
    */
   barterCprSaved: 'barter.cpr-saved',
   /**
+   * A EMISSÃO DA CÉDULA, a coleta de assinaturas e o registro — os três atos do
+   * emissor.
+   *
+   * Eles entram pelo critério dos outros (o efeito, não o esforço), e o primeiro
+   * com uma razão só dele: emitir é a CONFERÊNCIA. É o ato que afirma que o
+   * título está correto — que o RG é daquela pessoa, que a matrícula é daquela
+   * lavoura, que a nota existe. Quando um título for questionado, "quem conferiu
+   * e em que dia?" é a primeira pergunta, e ela precisa de resposta fora do
+   * registro da permuta.
+   *
+   * O REGISTRO entra porque é o momento em que a garantia passa a valer contra
+   * terceiros, e porque o número dele é o que se leva ao cartório para pedir a
+   * certidão. A assinatura, por estar entre os dois.
+   */
+  barterCprIssued: 'barter.cpr-issued',
+  barterCprSigned: 'barter.cpr-signed',
+  barterCprRegistered: 'barter.cpr-registered',
+  /**
+   * AS NOTAS FISCAIS anexadas ao faturamento — e as removidas.
+   *
+   * A REMOÇÃO é o motivo deste par existir. Anexar é rotina; tirar a nota de uma
+   * permuta faturada apaga a prova do faturamento, e a cédula que a cita como
+   * origem da dívida passa a apontar para o vazio. É um ato pequeno com efeito
+   * sobre um documento executável, que é exatamente o perfil do que esta trilha
+   * guarda.
+   */
+  barterInvoiceAttached: 'barter.invoice-attached',
+  barterInvoiceRemoved: 'barter.invoice-removed',
+  /**
    * O CADASTRO DA CREDORA. É a parte da cédula que identifica QUEM cobra, e um
    * CNPJ trocado aqui vale para todas as emitidas dali em diante.
    *
    * A linha do tempo da permuta não alcança isto — ela é do registro, e a
-   * credora é global —, e o cadastro tem DOIS donos (admin e faturista), o que
+   * credora é global —, e o cadastro tem DOIS donos (admin e emissor), o que
    * torna "quem mudou o CNPJ?" uma pergunta que aparece de verdade.
    */
   creditorUpdated: 'creditor.updated',
@@ -119,6 +148,12 @@ export const AUDIT_ACTION = {
   // valem tanto quanto aprovar uma permuta, e pelo mesmo motivo — é dinheiro.
   seasonOpened: 'season.opened',
   seasonClosed: 'season.closed',
+  /**
+   * O VENCIMENTO DA CPR da safra. Entra na trilha porque ele vale para TODAS as
+   * cédulas da safra: mudá-lo antecipa ou adia a entrega de cada produtor que
+   * ainda não teve o título emitido, num campo que ninguém mais confere depois.
+   */
+  seasonCprDueDateSet: 'season.cpr-due-date-set',
   versionPublished: 'barter.version-published',
   versionPriceChanged: 'barter.price-changed',
   versionClosed: 'barter.version-closed',

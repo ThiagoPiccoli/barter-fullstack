@@ -74,6 +74,17 @@ export const CAPABILITY = {
    * `barters/barter-workflow.ts`, que é onde o caminho da permuta mora.
    */
   bartersReadInvoicing: 'barters.readInvoicing',
+  /**
+   * Enxergar as permutas QUE CHEGARAM À EMISSÃO DA CÉDULA — as faturadas e as
+   * que já andaram na emissão.
+   *
+   * É o escopo do EMISSOR, e é o mais estreito de todos: um degrau adiante do
+   * faturista. Pelo mesmo desenho de `bartersReadInvoicing` — quem responde
+   * quais estados são esses é `lineFrom(cprIssue)`, e não uma lista escrita à
+   * mão —, e pelo mesmo motivo: a negociação que ainda está no comitê não é
+   * trabalho de quem leva um título a cartório.
+   */
+  bartersReadIssuance: 'barters.readIssuance',
   /** Registrar permuta (ato do consultor dono da carteira). */
   bartersRegister: 'barters.register',
   /**
@@ -155,24 +166,66 @@ export const CAPABILITY = {
    */
   bartersReview: 'barters.review',
   /**
-   * FATURAR a permuta aprovada — o último posto da linha.
+   * FATURAR a permuta aprovada e ANEXAR as notas fiscais que saíram dela.
    *
    * É a etapa mais simples do fluxo de propósito: o faturista não avalia nada,
    * não devolve para trás e não escolhe. Ele recebe o que as etapas anteriores
    * produziram e fatura o que foi APROVADO — o estado é quem lhe entrega o
    * trabalho, e é por isso que ele não precisa de nenhuma capacidade de decisão.
+   *
+   * As NOTAS andam junto com o ato, e não numa capacidade própria: a nota é o
+   * que o faturamento produz, e são VÁRIAS (a permuta sai em mais de um
+   * carregamento, e cada retirada gera a sua). Anexá-las é a parte do ato que
+   * deixa prova — a cédula cita a nota como origem da dívida (cláusula VII), e
+   * enquanto ela era um número digitado à mão na cédula, por outra pessoa, o
+   * documento afirmava um vínculo que ninguém conferia.
    */
   bartersInvoice: 'barters.invoice',
   /**
-   * LER a mesa da cédula e gerar o documento — sem preenchê-la e sem faturar.
+   * PREENCHER as informações da cédula — a qualificação do emitente, as lavouras
+   * em penhor, o padrão do grão e o SCR do produtor.
    *
-   * Ela existe porque VER a cédula e ESCREVER nela deixaram de ser a mesma
-   * pergunta. Preencher continua sendo do posto que fatura: é ele quem apura a
-   * matrícula do imóvel e responde pelo que o título afirma, e `bartersInvoice`
-   * segue guardando o `PUT`. Mas o documento de uma permuta já faturada é
-   * registro da operação, e o admin — que já enxerga a operação inteira por
-   * `bartersReadAll` e já responde pelo timbre por `creditorManage` — precisava
-   * pedir a alguém uma segunda via daquilo que ele mesmo administra.
+   * É do CONSULTOR, e essa é a correção de rumo mais importante deste arquivo.
+   * A cédula era preenchida por quem fatura, com o argumento de que o posto que
+   * emite documento para fora é o mesmo que emite a nota. O argumento não se
+   * sustentou na prática: nada do que a cédula pede está na mesa do faturista.
+   * A matrícula da lavoura, o nome do cônjuge, quem é o dono do imóvel
+   * arrendado, o SCR do produtor — tudo isso quem tem é quem visita a fazenda.
+   * O faturista os obtinha por telefone, do consultor, e os digitava; cada
+   * intermediação dessas é um RG com um dígito trocado dentro de um título
+   * executável.
+   *
+   * Agora a informação nasce onde ela existe: o consultor a coleta junto com a
+   * permuta, e ela é CONFERIDA na emissão (ver `bartersCprIssue`). É a mesma
+   * divisão do parecer — quem conhece o cliente escreve, e outro posto decide.
+   */
+  bartersCprFill: 'barters.cprFill',
+  /**
+   * EMITIR a cédula, colher as ASSINATURAS e REGISTRÁ-LA — o posto do emissor.
+   *
+   * Uma capacidade só para os três atos, e de propósito: eles são o mesmo
+   * ofício, praticado pela mesma pessoa, sobre o mesmo documento. O que os
+   * separa é o TEMPO — a cédula é gerada hoje, assinada quando o produtor vem à
+   * cidade, registrada quando o cartório responde —, e é por isso que cada um é
+   * uma etapa própria da esteira, com estado próprio. Quem guarda essa ordem é
+   * `barters/barter-workflow.ts`, e não esta tabela.
+   *
+   * A EMISSÃO é o momento da conferência: o emissor lê o que o consultor
+   * preencheu contra o que o documento exige, e a cédula com lacuna não sai (ver
+   * `cprGaps`). É a única coisa que ele recusa — ele não devolve a permuta nem
+   * decide negócio; ele diz que o papel ainda não está pronto.
+   */
+  bartersCprIssue: 'barters.cprIssue',
+  /**
+   * LER a mesa da cédula e gerar o documento — sem preenchê-la e sem emiti-la.
+   *
+   * Ela existe porque VER a cédula e ESCREVER nela não são a mesma pergunta.
+   * Escrever é de quem coleta a informação (`bartersCprFill`, o consultor);
+   * emitir é de quem responde pelo título (`bartersCprIssue`, o emissor). Mas o
+   * documento de uma permuta já faturada é registro da operação, e o admin — que
+   * já enxerga a operação inteira por `bartersReadAll` e já responde pelo timbre
+   * por `creditorManage` — precisava pedir a alguém uma segunda via daquilo que
+   * ele mesmo administra.
    *
    * O par com `creditorManage` é de propósito: as duas dizem que o admin
    * alcança o PAPEL que a empresa emite, sem por isso alcançar o ATO que o
@@ -184,11 +237,15 @@ export const CAPABILITY = {
    * que ela emite (razão social, CNPJ, endereço da sede e foro eleito).
    *
    * É a única capacidade que o admin DIVIDE com um posto da linha: ela é do
-   * admin **e** do faturista, e de propósito. Ela não decide permuta nem
-   * concede acesso — é o cabeçalho do papel timbrado. Quem percebe que o CNPJ
-   * saiu com um dígito trocado é quem monta a cédula, e mandá-lo abrir chamado
+   * admin **e** do emissor, e de propósito. Ela não decide permuta nem concede
+   * acesso — é o cabeçalho do papel timbrado. Quem percebe que o CNPJ saiu com
+   * um dígito trocado é quem leva o título a registro, e mandá-lo abrir chamado
    * com o admin para corrigir o próprio timbre trocaria um campo de texto por
    * um processo.
+   *
+   * Ela era do FATURISTA por esse mesmo raciocínio, enquanto era ele quem
+   * montava a cédula. Mudou de mãos junto com o documento: o timbre segue quem
+   * emite o papel, não quem emite a nota.
    *
    * Ela é SEPARADA de `usersManage` pelo mesmo motivo de `unitsManage`: um dia
    * alguém vai poder corrigir o endereço da sede sem poder criar contas, e é
@@ -239,11 +296,12 @@ export const CAPABILITIES = Object.values(CAPABILITY) as Capability[];
  * compila até alguém escrever, aqui, o que ele pode — que é exatamente a
  * decisão que não pode passar batida.
  *
- * Os TRÊS POSTOS da linha de produção estão escritos abaixo, um por papel:
- * o gerente dá o parecer técnico, o comitê decide e o faturista fatura. Cada um
- * escreve UMA coisa, e nenhum escreve a do outro — é o que faz a etapa ter dono.
- * A ordem em que elas acontecem não está aqui: quem guarda o caminho é
- * `barters/barter-workflow.ts`, e esta tabela só responde quem pode agir.
+ * Os QUATRO POSTOS da linha de produção estão escritos abaixo, um por papel: o
+ * gerente dá o parecer técnico, o comitê decide, o faturista fatura e o emissor
+ * emite a cédula. Cada um escreve UMA coisa, e nenhum escreve a do outro — é o
+ * que faz a etapa ter dono. A ordem em que elas acontecem não está aqui: quem
+ * guarda o caminho é `barters/barter-workflow.ts`, e esta tabela só responde
+ * quem pode agir.
  *
  * Repare no que o admin PERDEU: `bartersReview`. Ele administra o sistema e
  * enxerga tudo, mas não decide permuta — ver o comentário da capacidade.
@@ -302,25 +360,45 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   // não deu e a permuta que o comitê ainda não decidiu não são trabalho dele, e
   // uma negociação em aberto não precisa passar pela tela de quem emite a nota.
   // Ver `bartersReadInvoicing`.
-  // `creditorManage` é a exceção ao parágrafo acima, e a única: o faturista
-  // mantém o cadastro da CREDORA junto com o admin. Não é decisão de negócio
-  // nem concessão de acesso — é o timbre dos documentos que ele emite, e quem
-  // vê o CNPJ errado é quem monta a cédula.
+  //
+  // Repare no que ele PERDEU: a cédula. Preenchê-la foi para o consultor, que é
+  // quem tem a matrícula da lavoura na mão; emiti-la foi para o emissor, que
+  // responde pelo título; e `creditorManage` foi junto com o documento, porque
+  // o timbre segue quem emite o papel. O que ficou com ele é o próprio ofício —
+  // faturar e anexar as notas que saíram da permuta.
   [ROLE.biller]: [
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadInvoicing,
     CAPABILITY.bartersInvoice,
-    // Quem preenche também lê: o `GET` da mesa da cédula passou a pedir esta
-    // capacidade, e sem ela o faturista perderia a própria tela.
+    CAPABILITY.pricesRead,
+    CAPABILITY.bartersInvestmentPerHa,
+  ],
+  // O EMISSOR é o posto seguinte, e o último: ele confere a cédula que o
+  // consultor preencheu, emite, colhe as assinaturas e a registra.
+  //
+  // Ele LÊ a cédula (`bartersCprRead`) e não a escreve: a informação é de quem
+  // visita a lavoura. O que ele pode dizer é que o papel não está pronto — e é
+  // `bartersCprIssue` quem lhe dá isso.
+  [ROLE.emitter]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadIssuance,
+    CAPABILITY.bartersCprIssue,
     CAPABILITY.bartersCprRead,
+    // O TIMBRE do documento que ele leva a registro. Ver `creditorManage`.
     CAPABILITY.creditorManage,
     CAPABILITY.pricesRead,
     CAPABILITY.bartersInvestmentPerHa,
   ],
+  // O CONSULTOR ganhou a cédula. Ele já era quem conhecia o produtor; agora o
+  // que ele sabe sobre a lavoura entra no sistema em vez de sair por telefone.
   [ROLE.consultant]: [
     CAPABILITY.bartersRegister,
     CAPABILITY.bartersChangeRequest,
     CAPABILITY.bartersProductRequest,
+    CAPABILITY.bartersCprFill,
+    // Quem preenche também lê: o `GET` da mesa da cédula pede esta capacidade, e
+    // sem ela o consultor não teria a própria tela.
+    CAPABILITY.bartersCprRead,
   ],
 };
 

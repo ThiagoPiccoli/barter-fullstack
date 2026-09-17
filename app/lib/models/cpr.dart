@@ -1,24 +1,33 @@
-/// A CÉDULA DE PRODUTO RURAL (CPR) — o documento que o faturista monta a partir
-/// de uma permuta faturável.
+/// A CÉDULA DE PRODUTO RURAL (CPR) — o documento que o CONSULTOR preenche e o
+/// EMISSOR confere e emite.
 ///
 /// O documento tem TRÊS FONTES, e a divisão é o que explica este arquivo
 /// inteiro (a mesma de `api/src/barters/cpr.ts`):
 ///
-/// 1. o que a PERMUTA já sabe — emitente, sacas, produto, preço, valor, safra.
-///    Vem em [CprKnown], resolvido pelo servidor, e a tela mostra como LEITURA:
-///    um número na cédula que discorde do registro é um título cobrando o que
-///    não foi acordado;
+/// 1. o que a PERMUTA já sabe — emitente, sacas, produto, preço, valor, safra,
+///    o VENCIMENTO (que é da safra, porque muda conforme a cultura) e as NOTAS
+///    FISCAIS do faturamento. Vem em [CprKnown], resolvido pelo servidor, e a
+///    tela mostra como LEITURA: um número na cédula que discorde do registro é
+///    um título cobrando o que não foi acordado;
 /// 2. quem é a CREDORA — [CprCreditor], configuração da instalação. Aparece
 ///    em quatro cláusulas do documento e é sempre a mesma empresa;
-/// 3. o que o FATURISTA preenche — [CprDraft]: a qualificação civil do
-///    emitente, as lavouras dadas em penhor, o padrão do grão e os números da
-///    nota e da duplicata.
+/// 3. o que o CONSULTOR preenche — [CprDraft]: a qualificação civil do
+///    emitente, as lavouras dadas em penhor, o padrão do grão e o SCR do
+///    produtor.
+///
+/// O QUE MUDOU DE LADO, e por quê: o número da nota e o da duplicata eram
+/// campos do formulário, digitados por quem não emitia a nota, e cabia uma só;
+/// o vencimento era digitado cédula a cédula, sem nada que dissesse qual era a
+/// data certa daquela cultura. Os dois viraram leitura — a informação passou a
+/// ser pedida a quem a tem, e uma vez só.
 ///
 /// Nada aqui calcula nada. Os quilos, o valor total e o que ainda falta chegam
 /// prontos do servidor pelo mesmo motivo de `statusLabel` e `waitingFor`: a
 /// regra do que a cédula exige mora num lugar só, e uma exigência nova aparece
 /// nas telas já instaladas sem versão nova do app.
 library;
+
+import 'models.dart' show BarterFileModel;
 
 double _asDouble(Object? value) => (value as num?)?.toDouble() ?? 0;
 
@@ -27,12 +36,48 @@ DateTime? _asDateOrNull(Object? value) =>
 
 String _asText(Object? value) => (value ?? '').toString();
 
+/// UMA NOTA do faturamento, como a cédula a cita: número, série e duplicata.
+///
+/// É LEITURA, e chega dentro de [CprKnown]: quem as emite é o faturista, e
+/// redigitar o número dentro do formulário da cédula era exatamente o erro que
+/// esta versão corrige.
+class CprInvoiceRef {
+  final String number;
+  final String series;
+  final String duplicateNumber;
+
+  const CprInvoiceRef({this.number = '', this.series = '', this.duplicateNumber = ''});
+
+  factory CprInvoiceRef.fromJson(Map<String, dynamic> json) => CprInvoiceRef(
+        number: _asText(json['number']),
+        series: _asText(json['series']),
+        duplicateNumber: _asText(json['duplicateNumber']),
+      );
+
+  /// "55.318/1" — o número com a série, quando ela existe.
+  String get label => series.isEmpty ? number : '$number/$series';
+}
+
 /// A parte que a permuta responde e ninguém digita.
 class CprKnown {
   final String barterCode;
   final String emitterName;
   final String emitterDocument;
   final String grainName;
+
+  /// O VENCIMENTO da entrega — da SAFRA, e não da cédula.
+  ///
+  /// Ele está aqui, entre o que ninguém digita, porque essa é a correção: o
+  /// vencimento muda conforme a CULTURA e vale para a safra inteira. Null
+  /// enquanto o admin não o acertou, e aí a pendência aparece em [CprDesk.gaps]
+  /// dizendo onde ela se resolve.
+  final DateTime? dueDate;
+
+  /// O nome da safra — é ele que endereça a pendência do vencimento.
+  final String seasonName;
+
+  /// AS NOTAS FISCAIS do faturamento — a origem da dívida (cláusula VII).
+  final List<CprInvoiceRef> invoices;
 
   /// Sacas do grão — a quantidade da cláusula III e a do penhor (cláusula VI).
   final double sacks;
@@ -58,6 +103,9 @@ class CprKnown {
     this.emitterName = '',
     this.emitterDocument = '',
     this.grainName = '',
+    this.dueDate,
+    this.seasonName = '',
+    this.invoices = const [],
     this.sacks = 0,
     this.quantityKg = 0,
     this.sackPrice = 0,
@@ -71,6 +119,12 @@ class CprKnown {
         emitterName: _asText(json['emitterName']),
         emitterDocument: _asText(json['emitterDocument']),
         grainName: _asText(json['grainName']),
+        dueDate: _asDateOrNull(json['dueDate']),
+        seasonName: _asText(json['seasonName']),
+        invoices: ((json['invoices'] as List?) ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(CprInvoiceRef.fromJson)
+            .toList(),
         sacks: _asDouble(json['sacks']),
         quantityKg: _asDouble(json['quantityKg']),
         sackPrice: _asDouble(json['sackPrice']),
@@ -83,9 +137,10 @@ class CprKnown {
 /// A empresa que recebe o grão, como o documento a nomeia — o CADASTRO dela.
 ///
 /// Ela aparece em quatro cláusulas da CPR e é sempre a mesma, então não é do
-/// formulário da cédula: é cadastro, mantido pelo admin **ou pelo faturista**
-/// (ver `Capability.creditorManage`). O faturista está aí de propósito — quem
-/// percebe que o CNPJ saiu com um dígito trocado é quem monta a cédula.
+/// formulário da cédula: é cadastro, mantido pelo admin **ou pelo EMISSOR**
+/// (ver `Capability.creditorManage`). O emissor está aí de propósito — quem
+/// percebe que o CNPJ saiu com um dígito trocado é quem leva o título a
+/// registro.
 class CprCreditor {
   final String name;
   final String cnpj;
@@ -390,16 +445,21 @@ class CprGuarantor {
       );
 }
 
-/// O RASCUNHO da cédula — o que o faturista preencheu até agora.
+/// O RASCUNHO da cédula — o que o CONSULTOR preencheu até agora.
 ///
-/// Ele é salvável pela metade de propósito: a qualificação o faturista tem na
-/// mão quando pega o documento, o número da nota só existe depois de ela ser
-/// emitida, e a matrícula da lavoura costuma vir por e-mail no dia seguinte. O
-/// vazio aqui significa "ainda não preenchido", e quem diz o que falta é o
-/// servidor, em [CprDesk.gaps].
+/// Ele é salvável pela metade de propósito: a qualificação o consultor tem da
+/// visita, a matrícula da lavoura costuma vir por e-mail do produtor no dia
+/// seguinte e o SCR sai depois da consulta. O vazio aqui significa "ainda não
+/// preenchido", e quem diz o que falta é o servidor, em [CprDesk.gaps].
 class CprDraft {
   final String number;
   final DateTime? issuedAt;
+
+  /// O VENCIMENTO gravado na cédula — copiado da SAFRA pelo servidor a cada
+  /// gravação, até a emissão congelá-lo.
+  ///
+  /// Ele é LEITURA aqui: não vai no `toJson` e não tem campo na tela. Quem o
+  /// acerta é o admin, no cadastro da safra — ver [CprKnown.dueDate].
   final DateTime? dueDate;
 
   final String emitterNationality;
@@ -453,14 +513,34 @@ class CprDraft {
   final double maxImpurities;
   final double oilContent;
 
-  final String invoiceNumber;
-  final String duplicateNumber;
+  /// O SCR DO PRODUTOR — o relatório do Banco Central, anexado à cédula.
+  ///
+  /// OBRIGATÓRIO: uma CPR é crédito, e o SCR é o que diz quanto o produtor já
+  /// deve e a quem. Ele sobe por rota própria (`PUT /barters/:code/cpr/scr`),
+  /// e não dentro deste formulário: um anexo de megabytes no JSON faria cada
+  /// salvamento de rascunho reenviá-lo.
+  final BarterFileModel? scrFile;
+
+  /// A DATA DA CONSULTA do SCR — o relatório tem validade curta na prática, e
+  /// "está anexado" não responde "de quando?".
+  final DateTime? scrConsultedAt;
+
+  /// OS DOIS DOCUMENTOS QUE VOLTAM DE FORA: a cédula com as assinaturas e a via
+  /// carimbada pelo registro.
+  ///
+  /// Eles não são campos deste formulário — sobem com os ATOS do emissor
+  /// (assinar e registrar), e ficam aqui só para a tela poder mostrá-los e
+  /// baixá-los. O assinado é obrigatório no ato; o do registro, não (o cartório
+  /// devolve a via quando devolve, e o número já prova o registro).
+  final BarterFileModel? signedFile;
+  final BarterFileModel? registryFile;
+
   final String insurancePolicy;
 
   final List<CprArea> areas;
 
-  /// Quem mexeu por último, e quando. Dois faturistas dividem a fila, e "isto
-  /// está como eu deixei?" é a primeira pergunta de quem reabre um rascunho.
+  /// Quem mexeu por último, e quando. "Isto está como eu deixei?" é a primeira
+  /// pergunta de quem reabre um rascunho.
   final String filledBy;
   final DateTime? updatedAt;
 
@@ -493,8 +573,10 @@ class CprDraft {
     this.maxMoisture = 0,
     this.maxImpurities = 0,
     this.oilContent = 0,
-    this.invoiceNumber = '',
-    this.duplicateNumber = '',
+    this.scrFile,
+    this.scrConsultedAt,
+    this.signedFile,
+    this.registryFile,
     this.insurancePolicy = '',
     this.areas = const [],
     this.filledBy = '',
@@ -541,8 +623,16 @@ class CprDraft {
         maxMoisture: _asDouble(json['maxMoisture']),
         maxImpurities: _asDouble(json['maxImpurities']),
         oilContent: _asDouble(json['oilContent']),
-        invoiceNumber: _asText(json['invoiceNumber']),
-        duplicateNumber: _asText(json['duplicateNumber']),
+        scrFile: json['scrFile'] == null
+            ? null
+            : BarterFileModel.fromJson((json['scrFile'] as Map).cast<String, dynamic>()),
+        scrConsultedAt: _asDateOrNull(json['scrConsultedAt']),
+        signedFile: json['signedFile'] == null
+            ? null
+            : BarterFileModel.fromJson((json['signedFile'] as Map).cast<String, dynamic>()),
+        registryFile: json['registryFile'] == null
+            ? null
+            : BarterFileModel.fromJson((json['registryFile'] as Map).cast<String, dynamic>()),
         insurancePolicy: _asText(json['insurancePolicy']),
         areas: ((json['areas'] as List?) ?? const [])
             .cast<Map<String, dynamic>>()
@@ -557,10 +647,15 @@ class CprDraft {
   ///
   /// `filledBy` e `updatedAt` não vão: quem preencheu é quem está com a sessão
   /// aberta, e o servidor não pergunta isso ao cliente.
+  /// O corpo do `PUT`. Sem `dueDate` e sem os números das notas: os dois são
+  /// LEITURA agora — o vencimento é da safra e as notas são do faturamento. O
+  /// servidor os descarta se vierem, e mandá-los daqui seria a tela pedindo o
+  /// que ela não deveria saber escrever.
   Map<String, dynamic> toJson() => {
         'number': number.trim(),
         if (issuedAt != null) 'issuedAt': issuedAt!.toUtc().toIso8601String(),
-        if (dueDate != null) 'dueDate': dueDate!.toUtc().toIso8601String(),
+        if (scrConsultedAt != null)
+          'scrConsultedAt': scrConsultedAt!.toUtc().toIso8601String(),
         'emitterNationality': emitterNationality.trim(),
         'emitterMaritalStatus': emitterMaritalStatus.trim(),
         'emitterProfession': emitterProfession.trim(),
@@ -586,8 +681,6 @@ class CprDraft {
         'maxMoisture': maxMoisture,
         'maxImpurities': maxImpurities,
         'oilContent': oilContent,
-        'invoiceNumber': invoiceNumber.trim(),
-        'duplicateNumber': duplicateNumber.trim(),
         'insurancePolicy': insurancePolicy.trim(),
         'areas': areas.map((a) => a.toJson()).toList(),
       };
@@ -601,10 +694,12 @@ class CprDraft {
   factory CprDraft.fromSuggestion(Map<String, dynamic> suggestion) =>
       CprDraft.fromJson(suggestion);
 
+  /// O `copyWith` NÃO tem `dueDate`, e a ausência é a regra: o vencimento é da
+  /// SAFRA, escrito pelo servidor. A tela não tem campo para ele, e um parâmetro
+  /// aqui seria a porta pela qual ele voltaria a ser digitado.
   CprDraft copyWith({
     String? number,
     DateTime? issuedAt,
-    DateTime? dueDate,
     String? emitterNationality,
     String? emitterMaritalStatus,
     String? emitterProfession,
@@ -630,15 +725,14 @@ class CprDraft {
     double? maxMoisture,
     double? maxImpurities,
     double? oilContent,
-    String? invoiceNumber,
-    String? duplicateNumber,
+    DateTime? scrConsultedAt,
     String? insurancePolicy,
     List<CprArea>? areas,
   }) =>
       CprDraft(
         number: number ?? this.number,
         issuedAt: issuedAt ?? this.issuedAt,
-        dueDate: dueDate ?? this.dueDate,
+        dueDate: dueDate,
         emitterNationality: emitterNationality ?? this.emitterNationality,
         emitterMaritalStatus: emitterMaritalStatus ?? this.emitterMaritalStatus,
         emitterProfession: emitterProfession ?? this.emitterProfession,
@@ -664,8 +758,14 @@ class CprDraft {
         maxMoisture: maxMoisture ?? this.maxMoisture,
         maxImpurities: maxImpurities ?? this.maxImpurities,
         oilContent: oilContent ?? this.oilContent,
-        invoiceNumber: invoiceNumber ?? this.invoiceNumber,
-        duplicateNumber: duplicateNumber ?? this.duplicateNumber,
+        // OS ANEXOS e a data da consulta atravessam o `copyWith`: o formulário
+        // os mostra, mas quem os escreve são as rotas de upload e os atos do
+        // emissor. Perdê-los aqui faria o SCR sumir da tela a cada tecla
+        // digitada em outro campo.
+        scrFile: scrFile,
+        scrConsultedAt: scrConsultedAt ?? this.scrConsultedAt,
+        signedFile: signedFile,
+        registryFile: registryFile,
         insurancePolicy: insurancePolicy ?? this.insurancePolicy,
         areas: areas ?? this.areas,
         filledBy: filledBy,
@@ -685,7 +785,13 @@ class CprDraft {
   }
 }
 
-/// A MESA DA CÉDULA: tudo o que a tela do faturista precisa, numa resposta só.
+/// A MESA DA CÉDULA: tudo o que a tela precisa, numa resposta só.
+///
+/// Ela serve a TRÊS pessoas — o consultor (que preenche), o emissor (que
+/// confere e emite) e o admin (que tira a segunda via) —, e é por isso que
+/// [gaps] continua sendo uma lista de frases e não um mapa de campos: cada uma
+/// diz ONDE a pendência se resolve, porque quem a lê nem sempre é quem a
+/// resolve.
 class CprDesk {
   /// O rascunho gravado. Null quando ninguém começou a preencher.
   final CprDraft? cpr;
@@ -695,13 +801,26 @@ class CprDesk {
   /// O que falta CONFIGURAR (a credora) e o que falta PREENCHER (a cédula).
   ///
   /// São listas separadas porque quem resolve cada uma é outra pessoa: a
-  /// segunda é do faturista, ali mesmo; a primeira é de quem administra o
-  /// servidor. Somadas, a tela mandaria o faturista procurar um campo de CNPJ
+  /// segunda é do consultor, ali mesmo; a primeira é de quem administra o
+  /// servidor. Somadas, a tela mandaria o consultor procurar um campo de CNPJ
   /// que não existe no formulário dele.
   final List<String> creditorGaps;
   final List<String> gaps;
 
+  /// O RECORTE DO CONSULTOR — o que trava o encaminhamento ao gerente.
+  ///
+  /// É subconjunto de [gaps], e existe separado porque responde outra pergunta:
+  /// [gaps] é "falta o que para o documento sair" (a pergunta do emissor), e
+  /// esta é "falta o que para esta permuta andar" (a do consultor). O aviso do
+  /// detalhe se desenha com ela, e o servidor recusa o encaminhamento com ela
+  /// — a mesma lista nos dois lugares, senão o aviso promete o que a recusa
+  /// desmente.
+  final List<String> consultantGaps;
+
   final bool complete;
+
+  /// Esta cédula deixa a permuta ser encaminhada?
+  bool get readyToForward => consultantGaps.isEmpty;
 
   /// A sugestão de preenchimento, vinda da última cédula do mesmo produtor.
   /// Vazia quando já existe rascunho.
@@ -713,6 +832,7 @@ class CprDesk {
     this.creditor = const CprCreditor(),
     this.creditorGaps = const [],
     this.gaps = const [],
+    this.consultantGaps = const [],
     this.complete = false,
     this.suggestion,
   });
@@ -728,6 +848,7 @@ class CprDesk {
           CprCreditor.fromJson((json['creditor'] as Map?)?.cast<String, dynamic>() ?? const {}),
       creditorGaps: ((json['creditorGaps'] as List?) ?? const []).map((g) => '$g').toList(),
       gaps: ((json['gaps'] as List?) ?? const []).map((g) => '$g').toList(),
+      consultantGaps: ((json['consultantGaps'] as List?) ?? const []).map((g) => '$g').toList(),
       complete: json['complete'] == true,
       suggestion: suggestion.isEmpty ? null : CprDraft.fromSuggestion(suggestion),
     );
@@ -736,7 +857,8 @@ class CprDesk {
   /// O rascunho com que a tela ABRE: o gravado, ou a sugestão, ou o vazio.
   ///
   /// A data de emissão de uma cédula que ainda não existe é HOJE — é a resposta
-  /// certa na esmagadora maioria das vezes, e é editável nas outras.
+  /// certa na esmagadora maioria das vezes, e é editável nas outras. O
+  /// VENCIMENTO não entra aqui: ele vem da safra, em [CprKnown.dueDate].
   CprDraft get startingPoint {
     if (cpr != null) return cpr!;
     final base = (suggestion ?? const CprDraft()).copyWith(issuedAt: DateTime.now());

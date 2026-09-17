@@ -14,7 +14,7 @@ import 'package:agrobarter_app/services/cpr_docx.dart';
 /// Word recusa abrir na mão de quem ia assinar.
 void main() {
   final desk = CprDesk(
-    known: const CprKnown(
+    known: CprKnown(
       barterCode: 'PRM-2026-014',
       emitterName: 'João da Silva & Filhos',
       emitterDocument: 'CPF 123.456.789-00',
@@ -24,6 +24,15 @@ void main() {
       sackPrice: 128.5,
       totalValue: 56540,
       versionCode: 'S2026.02',
+      // O VENCIMENTO e as NOTAS entram aqui — entre o que ninguém digita — e
+      // não no rascunho: o primeiro é da SAFRA (ele muda conforme a cultura) e
+      // as segundas são do FATURAMENTO. Os dois eram campos de formulário
+      // preenchidos por quem não tinha a informação.
+      dueDate: DateTime.utc(2026, 6, 30, 12),
+      seasonName: 'Soja 2026',
+      invoices: const [
+        CprInvoiceRef(number: '00012345', series: '1', duplicateNumber: '12345-A'),
+      ],
       pickupUnit: 'Filial 02',
     ),
     creditor: const CprCreditor(
@@ -37,7 +46,6 @@ void main() {
     cpr: CprDraft(
       number: 'CPR-2026-014',
       issuedAt: DateTime(2026, 5, 12),
-      dueDate: DateTime(2026, 6, 30),
       emitterNationality: 'brasileiro',
       emitterMaritalStatus: 'casado',
       emitterProfession: 'produtor rural',
@@ -54,8 +62,6 @@ void main() {
       maxMoisture: 14,
       maxImpurities: 1,
       oilContent: 18,
-      invoiceNumber: '00012345',
-      duplicateNumber: '12345-A',
       areas: const [
         CprArea(
           locality: 'Água Boa',

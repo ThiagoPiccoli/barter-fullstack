@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
@@ -9,6 +11,7 @@ import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_screen.dart';
 import 'cpr_form_screen.dart';
+import 'invoicing_screen.dart';
 
 class BarterDetailScreen extends StatefulWidget {
   final BarterModel barter;
@@ -85,30 +88,47 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
     }
   }
 
-  /// Abre o FATURAMENTO desta permuta — que é a tela da cédula.
+  /// Abre o FATURAMENTO desta permuta — as notas fiscais e o ato de faturar.
   ///
-  /// A mesma tela para os dois estados, e é a decisão de desenho: faturar é
-  /// preencher a cédula e carimbar. Enquanto a permuta espera faturamento, o
-  /// ato principal lá dentro é *Faturar*; depois de faturada, é gerar o
-  /// documento de novo — a cédula continua editável.
-  void _openCpr() =>
+  /// Ela deixou de ser a tela da cédula, e a separação é a mudança inteira: o
+  /// faturista anexa as notas e carimba; a cédula é do consultor (que a
+  /// preenche) e do emissor (que a confere e emite).
+  void _openInvoicing() =>
       openInvoicing(context, _barter, onInvoiced: (updated) => setState(() => _barter = updated));
 
-  /// O faturista alcança a MESA da cédula daqui?
-  ///
-  /// Nos dois estados do trecho dele: a aprovada (a coleta não espera a nota) e
-  /// a já faturada (a cédula é papel que vem depois do ato).
-  bool get _canOpenCpr => AppData.can(Capability.bartersInvoice) && _barter.wasApproved;
+  /// Abre a MESA DA CÉDULA — o formulário para quem preenche, a conferência
+  /// para quem emite, o documento para quem só lê.
+  void _openCpr() =>
+      openCprDesk(context, _barter, onChanged: (updated) => setState(() => _barter = updated));
 
-  /// E quem só LÊ a cédula — o admin — alcança o DOCUMENTO?
+  /// O FATURISTA alcança a mesa dele daqui?
   ///
-  /// A pergunta é outra, e por isso a capacidade é outra: [_canOpenCpr] abre a
-  /// mesa de trabalho (com rascunho, matrícula e o ato de faturar); esta entrega
-  /// o arquivo do que já está preenchido. Quem tem as duas usa a primeira — a
-  /// mesa também gera o documento, e dois caminhos para o mesmo .docx na mesma
-  /// tela seria um a mais.
-  bool get _canGenerateCpr =>
-      !_canOpenCpr && AppData.can(Capability.bartersCprRead) && _barter.wasApproved;
+  /// Nos dois estados do trecho: a aprovada (o ato) e a já faturada (as notas
+  /// continuam editáveis — nota cancelada é reemitida).
+  bool get _canOpenInvoicing => AppData.can(Capability.bartersInvoice) && _barter.wasApproved;
+
+  /// E a CÉDULA — quem a alcança daqui?
+  ///
+  /// Três papéis, com perguntas diferentes: o consultor que a preenche, o
+  /// emissor que a confere e emite, e o admin que tira a segunda via. Quem
+  /// responde quem é cada um é o servidor (`barters.cprRead`), e a tela só
+  /// pergunta.
+  ///
+  /// O RASCUNHO fica de fora para quem só lê: uma cédula que ninguém começou não
+  /// tem segunda via. Para quem PREENCHE ela abre desde o início — é a razão
+  /// prática da mudança de dono, e a permuta demora semanas para ser faturada.
+  ///
+  /// O RASCUNHO NÃO PODE FICAR DE FORA PARA QUEM PREENCHE, e isto já esteve
+  /// errado aqui: enquanto a condição do consultor era `!isDraft`, a permuta
+  /// ficava presa num beco — o botão da cédula só aparecia depois de sair do
+  /// rascunho, e só se sai do rascunho encaminhando, que é o que exige a cédula.
+  bool get _canOpenCpr =>
+      AppData.can(Capability.bartersCprRead) &&
+      (AppData.can(Capability.bartersCprFill) || _barter.wasApproved);
+
+  /// Quem EMITE a cédula, e a permuta está no trecho dele?
+  bool get _canIssueCpr =>
+      AppData.can(Capability.bartersCprIssue) && _barter.wasInvoiced && !_barter.isCprRegistered;
 
   @override
   Widget build(BuildContext context) {
@@ -117,27 +137,23 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
       appBar: AppBar(
         title: Text(_barter.id),
         actions: [
-          // A CÉDULA vem PRIMEIRO para quem fatura, e com ícone próprio.
-          //
-          // O comprovante da permuta continua ao lado, mas ele não é o
-          // documento do posto do faturista: o dele é a CPR. Enquanto os dois
-          // dividiam o mesmo ícone de PDF, chegar à cédula exigia rolar a tela
-          // inteira até um botão no fim — procurar, para fazer a coisa que se
-          // veio fazer.
+          // A CÉDULA vem primeiro para quem a preenche ou a emite, e com ícone
+          // próprio. Enquanto ela e o comprovante dividiam o mesmo ícone de PDF,
+          // chegar até ela exigia rolar a tela inteira até um botão no fim —
+          // procurar, para fazer a coisa que se veio fazer.
           if (_canOpenCpr)
             IconButton(
               icon: const Icon(Icons.description_outlined),
               tooltip: 'Cédula de Produto Rural (CPR)',
               onPressed: _openCpr,
             ),
-          // A SEGUNDA VIA, para quem lê a cédula sem preenchê-la. Mesmo lugar
-          // na barra, porque é o mesmo documento — o que muda é o que se pode
-          // fazer com ele depois de aberto.
-          if (_canGenerateCpr)
+          // AS NOTAS, para quem fatura. Ícone próprio pelo mesmo motivo: o
+          // documento do posto do faturista é a nota fiscal.
+          if (_canOpenInvoicing)
             IconButton(
-              icon: const Icon(Icons.description_outlined),
-              tooltip: 'Gerar cédula (CPR) em Word',
-              onPressed: () => generateCprDocument(context, _barter),
+              icon: const Icon(Icons.receipt_long_outlined),
+              tooltip: 'Notas fiscais e faturamento',
+              onPressed: _openInvoicing,
             ),
           IconButton(
             icon: const Icon(Icons.picture_as_pdf_outlined),
@@ -241,6 +257,31 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                 _InfoRow(label: 'Faturada por', value: _barter.invoicedBy!),
                 if (_barter.invoicedAt != null)
                   _InfoRow(label: 'Faturada em', value: _formatDate(_barter.invoicedAt!)),
+                // AS NOTAS resumidas: a contagem, e não a lista. Quem quer os
+                // números abre a tela do faturamento, onde elas têm o arquivo
+                // ao lado — aqui a pergunta é "esta permuta tem prova?".
+                if (_barter.invoices.isNotEmpty)
+                  _InfoRow(
+                    label: 'Notas fiscais',
+                    value: _barter.invoices.map((n) => n.label).join(', '),
+                  ),
+              ],
+              // A EMISSÃO DA CÉDULA — as três marcas do emissor, cada uma
+              // aparecendo no dia em que ela acontece. Elas ficam aqui, e não só
+              // na linha do tempo, porque "em que pé está a CPR?" é a pergunta
+              // que a operação faz sobre a entrega, e a resposta não pode
+              // depender de rolar até o histórico.
+              if (_barter.cprEmittedBy != null) ...[
+                _InfoRow(label: 'CPR emitida por', value: _barter.cprEmittedBy!),
+                if (_barter.cprEmittedAt != null)
+                  _InfoRow(label: 'CPR emitida em', value: _formatDate(_barter.cprEmittedAt!)),
+              ],
+              if (_barter.cprSignedAt != null)
+                _InfoRow(label: 'CPR assinada em', value: _formatDate(_barter.cprSignedAt!)),
+              if (_barter.cprRegistryNumber != null) ...[
+                _InfoRow(label: 'Registro da CPR', value: _barter.cprRegistryNumber!),
+                if (_barter.cprRegistryPlace != null && _barter.cprRegistryPlace!.isNotEmpty)
+                  _InfoRow(label: 'Registrada em', value: _barter.cprRegistryPlace!),
               ],
               // A RESSALVA não entra aqui: ela tem bloco próprio, acima
               // dos itens, porque é a única linha da tela que pede AÇÃO de
@@ -258,6 +299,18 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                   label: 'Observação do faturamento',
                   text: _barter.invoiceNote!,
                   icon: Icons.receipt_long_outlined,
+                ),
+              if (_barter.cprEmissionNote != null && _barter.cprEmissionNote!.isNotEmpty)
+                _NoteBlock(
+                  label: 'Observação da emissão',
+                  text: _barter.cprEmissionNote!,
+                  icon: Icons.description_outlined,
+                ),
+              if (_barter.cprSignatureNote != null && _barter.cprSignatureNote!.isNotEmpty)
+                _NoteBlock(
+                  label: 'Coleta de assinaturas',
+                  text: _barter.cprSignatureNote!,
+                  icon: Icons.draw_outlined,
                 ),
             ],
           ),
@@ -582,8 +635,9 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
         ),
       ),
 
-    // O FATURAMENTO — o último posto. Uma ação só, porque a etapa é uma
-    // só: o faturista não decide nada, ele fatura o que foi aprovado.
+    // O FATURAMENTO — as notas fiscais e o carimbo. Uma ação só, porque a
+    // etapa é uma só: o faturista não decide nada, ele fatura o que foi
+    // aprovado e anexa a prova disso.
     if (AppData.can(Capability.bartersInvoice) && _barter.awaitsInvoice)
       DetailBlock.side(
         Column(
@@ -599,14 +653,15 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Aprovada pelo comitê${_barter.hasDecision ? ' por ${_barter.reviewedBy}' : ''}.',
+              'Aprovada pelo comitê${_barter.hasDecision ? ' por ${_barter.reviewedBy}' : ''}. '
+              '${_barter.invoices.isEmpty ? 'Anexe a nota fiscal para faturar.' : '${_barter.invoices.length} nota(s) anexada(s).'}',
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
             const SizedBox(height: 12),
             ElevatedButton.icon(
-              onPressed: _openCpr,
+              onPressed: _openInvoicing,
               icon: const Icon(Icons.receipt_long_outlined),
-              label: const Text('Faturar Permuta'),
+              label: const Text('Notas e Faturamento'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.invoiced,
                 padding: const EdgeInsets.symmetric(vertical: 14),
@@ -616,37 +671,80 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
         ),
       ),
 
-    // A CÉDULA (CPR) — o documento que o posto do faturamento produz.
-    //
-    // Ela aparece nos DOIS estados do trecho do faturista: na aprovada,
-    // porque a coleta dos dados não precisa esperar a nota sair; e na já
-    // faturada, porque a cédula é papel que vem depois do ato — corrigir
-    // uma matrícula nela não desfatura nada.
-    // Enquanto ela ESPERA faturamento este botão não aparece — o de
-    // "Faturar Permuta" acima leva ao mesmo lugar, e dois botões para a
-    // mesma tela é um a mais.
-    if (_canOpenCpr && !_barter.awaitsInvoice)
+    // AS NOTAS de uma permuta já faturada: elas continuam editáveis, porque
+    // nota cancelada é reemitida. Contorno, e não botão cheio — o ato do
+    // posto já foi praticado.
+    if (_canOpenInvoicing && !_barter.awaitsInvoice)
       DetailBlock.side(
-        ElevatedButton.icon(
-          onPressed: _openCpr,
-          icon: const Icon(Icons.description_outlined),
-          label: const Text('Cédula de Produto Rural (CPR)'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.invoiced,
+        OutlinedButton.icon(
+          onPressed: _openInvoicing,
+          icon: const Icon(Icons.receipt_long_outlined),
+          label: Text('Notas Fiscais (${_barter.invoices.length})'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.invoiced,
+            side: BorderSide(color: AppColors.invoiced),
             padding: const EdgeInsets.symmetric(vertical: 14),
           ),
         ),
       ),
 
-    // A SEGUNDA VIA de quem administra: o mesmo documento, sem a mesa.
-    // Contorno em vez de preenchido — não é ação de posto nesta permuta, é
-    // uma cópia do papel.
-    if (_canGenerateCpr)
+    // A EMISSÃO DA CÉDULA — o posto do EMISSOR, e o bloco que diz qual dos
+    // três atos é o da vez. Botão cheio porque é ação de posto: a permuta
+    // está parada esperando ele.
+    if (_canIssueCpr)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Emissão da CPR',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _barter.awaitsCprIssue
+                  ? 'Faturada por ${_barter.invoicedBy ?? ''}. Confira a cédula que o '
+                      'consultor preencheu e emita o título.'
+                  : _barter.awaitsSignatures
+                      ? 'Emitida por ${_barter.cprEmittedBy ?? ''}. Falta a coleta de '
+                          'assinaturas.'
+                      : 'Assinada. Falta o registro — é ele que faz a garantia valer '
+                          'contra terceiros.',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: _openCpr,
+              icon: const Icon(Icons.description_outlined),
+              label: Text(_barter.awaitsCprIssue
+                  ? 'Conferir e Emitir CPR'
+                  : _barter.awaitsSignatures
+                      ? 'Registrar Assinaturas'
+                      : 'Registrar Cédula'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.invoiced,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ],
+        ),
+      ),
+
+    // A CÉDULA para quem NÃO tem ato nela agora: o consultor que a preenche
+    // (ou já preencheu) e o admin que tira a segunda via. Contorno, pelo
+    // mesmo critério — não é ação de posto nesta permuta.
+    if (_canOpenCpr && !_canIssueCpr)
       DetailBlock.side(
         OutlinedButton.icon(
-          onPressed: () => generateCprDocument(context, _barter),
+          onPressed: _openCpr,
           icon: const Icon(Icons.description_outlined),
-          label: const Text('Gerar Cédula (CPR)'),
+          label: Text(AppData.can(Capability.bartersCprFill) && !_barter.isCprIssued
+              ? 'Preencher a Cédula (CPR)'
+              : 'Cédula de Produto Rural (CPR)'),
           style: OutlinedButton.styleFrom(
             foregroundColor: AppColors.invoiced,
             side: BorderSide(color: AppColors.invoiced),
@@ -814,6 +912,44 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
   /// respostas: gravou, virou o novo "salvo".
   late String _saved = widget.barter.consultantNote ?? '';
 
+  /// O QUE FALTA NA CÉDULA para esta permuta poder ser encaminhada.
+  ///
+  /// Vem de [CprDesk.consultantGaps] — a mesma lista com que o servidor recusa
+  /// o encaminhamento —, e por isso o aviso daqui nunca diverge da recusa de lá.
+  ///
+  /// `null` é "ainda não sei": a consulta está no ar, ou falhou. E não saber NÃO
+  /// desliga o botão. O portão de verdade é o do servidor, e travar a esteira
+  /// porque uma consulta de aviso não voltou transformaria um problema de rede
+  /// numa permuta que ninguém consegue encaminhar.
+  List<String>? _cprGaps;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCprGaps();
+  }
+
+  /// Busca as pendências da cédula. Silenciosa nos dois sentidos: não mostra
+  /// "carregando" (é informação de apoio, não o assunto da tela) e engole o erro
+  /// (ver [_cprGaps]).
+  Future<void> _loadCprGaps() async {
+    try {
+      final desk = await AppData.barterCpr(widget.barter.id);
+      if (mounted) setState(() => _cprGaps = desk.consultantGaps);
+    } catch (_) {
+      if (mounted) setState(() => _cprGaps = null);
+    }
+  }
+
+  /// A cédula está travando o encaminhamento?
+  bool get _cprBlocks => (_cprGaps ?? const []).isNotEmpty;
+
+  /// Abre a mesa da cédula e, na volta, confere de novo o que falta.
+  Future<void> _openCpr() async {
+    await openCprDesk(context, widget.barter, onChanged: widget.onChanged);
+    await _loadCprGaps();
+  }
+
   @override
   void dispose() {
     _note.dispose();
@@ -877,8 +1013,9 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
       builder: (ctx) => AlertDialog(
         title: const Text('Encaminhar ao gerente'),
         content: Text(
-          'A permuta ${widget.barter.id} vai para o gerente com o seu parecer. '
-          'Depois disso, o parecer não pode mais ser alterado.',
+          'A permuta ${widget.barter.id} vai para o gerente com o seu parecer e '
+          'com a cédula (CPR) que você preencheu. Depois disso, o parecer não '
+          'pode mais ser alterado.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
@@ -906,6 +1043,34 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _forwarding = false);
+      // A CÉDULA FALTANDO não é um erro qualquer: é trabalho a fazer, e ele tem
+      // uma tela. Mostrar só a mensagem deixaria a pessoa lendo uma lista de
+      // campos sem saber onde preenchê-los — então a recusa vira um convite.
+      //
+      // CHEGAR AQUI é a exceção, e não o caminho: o cartão de pendências acima
+      // desliga o botão antes disso. Quem cai aqui é quem tinha a tela aberta
+      // enquanto a cédula mudou do outro lado — e aí a lista local está velha,
+      // e o certo é refazê-la com o que o servidor acabou de dizer.
+      if (e.message.contains('cédula')) {
+        unawaited(_loadCprGaps());
+        // A ANTERIOR SAI antes de esta entrar. Sem isso elas se ENFILEIRAM: cada
+        // tentativa põe mais oito segundos de faixa vermelha na fila, e três
+        // cliques cobrem o rodapé da tela por meio minuto — que foi como este
+        // aviso passou a parecer permanente.
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(e.message),
+            backgroundColor: AppColors.denied,
+            duration: const Duration(seconds: 8),
+            action: SnackBarAction(
+              label: 'Preencher',
+              textColor: Colors.white,
+              onPressed: _openCpr,
+            ),
+          ));
+        return;
+      }
       showErrorSnack(context, e);
     }
   }
@@ -962,6 +1127,18 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
               filled: true,
             ),
           ),
+          // A CÉDULA, antes dos botões e não depois da recusa.
+          //
+          // Ela entrou na esteira como pré-requisito do encaminhamento, e um
+          // pré-requisito que só se descobre clicando é uma armadilha: a pessoa
+          // escreve o parecer, clica em *Encaminhar* e leva de volta uma lista
+          // de catorze campos. Aqui ela está visível desde que a tela abre, com
+          // o botão que a resolve dentro do próprio aviso.
+          if (_cprBlocks) ...[
+            const SizedBox(height: 4),
+            _CprGapsCard(gaps: _cprGaps!, onFill: _busy ? null : _openCpr),
+            const SizedBox(height: 12),
+          ],
           Row(
             children: [
               Expanded(
@@ -983,7 +1160,7 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
               const SizedBox(width: 12),
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed: _busy || !_enough ? null : _forward,
+                  onPressed: _busy || !_enough || _cprBlocks ? null : _forward,
                   icon: _forwarding
                       ? SizedBox(
                           width: 16,
@@ -1026,6 +1203,99 @@ class _ConsultantDraftCardState extends State<_ConsultantDraftCard> {
               foregroundColor: AppColors.primary,
               side: BorderSide(color: AppColors.primary),
               padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// O AVISO DE CÉDULA INCOMPLETA, dentro do rascunho do consultor.
+///
+/// Ele é ÂMBAR e não vermelho porque não é uma recusa: é trabalho que falta, com
+/// o botão que o resolve ao lado. O vermelho é do que deu errado — e não deu
+/// nada errado em preencher uma cédula pela metade, que é como ela passa a maior
+/// parte do tempo (a matrícula chega por e-mail, o SCR sai depois da consulta).
+///
+/// A LISTA SAI RESUMIDA, na mesma forma da recusa do servidor: as primeiras e a
+/// contagem do resto. Catorze frases empilhadas num cartão de aviso viram um
+/// muro que ninguém lê, e o lugar de ver a lista inteira é o formulário, onde
+/// cada uma fica ao lado do campo que a resolve.
+class _CprGapsCard extends StatelessWidget {
+  final List<String> gaps;
+
+  /// `null` enquanto outro ato do cartão está no ar — abrir a cédula no meio de
+  /// um encaminhamento deixaria a resposta dele chegar numa tela que saiu.
+  final VoidCallback? onFill;
+
+  const _CprGapsCard({required this.gaps, required this.onFill});
+
+  /// Quantas pendências cabem numa frase antes de ela virar um parágrafo. É o
+  /// mesmo número da recusa do servidor, de propósito: as duas frases falam da
+  /// mesma cédula, e quem vê as duas não deveria ver duas listas diferentes.
+  static const int _shown = 4;
+
+  String get _summary {
+    final first = gaps.take(_shown).join(', ');
+    final rest = gaps.length - _shown;
+    return rest > 0 ? '$first e mais $rest campo(s)' : first;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.pendingBg,
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.pending.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.description_outlined, size: 18, color: AppColors.pending),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Cédula (CPR) incompleta',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          // O QUE FALTA e POR QUE ISSO IMPORTA, nesta ordem. Sem a segunda
+          // frase, o aviso parece uma sugestão — e o botão desligado logo
+          // abaixo, um defeito.
+          Text(
+            'Falta $_summary.',
+            style: TextStyle(fontSize: 12, color: AppColors.textDark),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'O gerente só recebe a permuta com a cédula preenchida.',
+            style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onFill,
+              icon: const Icon(Icons.edit_document, size: 18),
+              label: const Text('Preencher a cédula'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.textDark,
+                side: BorderSide(color: AppColors.pending),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
             ),
           ),
         ],

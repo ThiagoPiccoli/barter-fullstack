@@ -10,7 +10,7 @@ import 'package:agrobarter_app/services/cpr_text.dart';
 /// uma cláusula precisa poder ser conferido linha a linha.
 void main() {
   final desk = CprDesk(
-    known: const CprKnown(
+    known: CprKnown(
       barterCode: 'PRM-2026-014',
       emitterName: 'João da Silva',
       emitterDocument: 'CPF 123.456.789-00',
@@ -20,6 +20,15 @@ void main() {
       sackPrice: 128.5,
       totalValue: 56540,
       versionCode: 'S2026.02',
+      // O VENCIMENTO e as NOTAS entram aqui — entre o que ninguém digita — e
+      // não no rascunho: o primeiro é da SAFRA (ele muda conforme a cultura) e
+      // as segundas são do FATURAMENTO. Os dois eram campos de formulário
+      // preenchidos por quem não tinha a informação.
+      dueDate: DateTime.utc(2026, 6, 30, 12),
+      seasonName: 'Soja 2026',
+      invoices: const [
+        CprInvoiceRef(number: '00012345', series: '1', duplicateNumber: '12345-A'),
+      ],
     ),
     creditor: const CprCreditor(
       name: 'Cooperativa Exemplo Ltda.',
@@ -33,7 +42,6 @@ void main() {
     cpr: CprDraft(
       number: 'CPR-2026-014',
       issuedAt: DateTime(2026, 5, 12),
-      dueDate: DateTime(2026, 6, 30),
       emitterNationality: 'brasileiro',
       emitterMaritalStatus: 'casado',
       emitterProfession: 'produtor rural',
@@ -51,8 +59,6 @@ void main() {
       maxMoisture: 14,
       maxImpurities: 1,
       oilContent: 18,
-      invoiceNumber: '00012345',
-      duplicateNumber: '12345-A',
       deliveryPlace: 'Filial 02 — Granel Santa Tecla',
       areas: const [
         CprArea(
@@ -168,8 +174,67 @@ void main() {
     });
   });
 
-  test('a origem da dívida amarra a cédula à nota e à duplicata', () {
-    expect(textoDe(desk), contains('Referente NF 00012345 e DUP 12345-A'));
+  /// A ORIGEM DA DÍVIDA (cláusula VII) amarra a cédula ao faturamento que a
+  /// originou — e as notas vêm de lá, não de um campo digitado aqui.
+  group('a origem da dívida', () {
+    test('a nota e a duplicata saem do faturamento, com a série', () {
+      expect(textoDe(desk), contains('Referente à NF 00012345/1 e DUP 12345-A'));
+    });
+
+    /// SÃO VÁRIAS, e o texto as enumera. É o que o modelo antigo não conseguia
+    /// dizer: a cédula guardava UM número de nota, e a permuta que saiu em três
+    /// carregamentos citava um terço da própria dívida.
+    test('duas notas saem enumeradas, e as duplicatas juntas', () {
+      final duas = CprDesk(
+        known: CprKnown(
+          barterCode: desk.known.barterCode,
+          emitterName: desk.known.emitterName,
+          emitterDocument: desk.known.emitterDocument,
+          grainName: desk.known.grainName,
+          sacks: desk.known.sacks,
+          quantityKg: desk.known.quantityKg,
+          sackPrice: desk.known.sackPrice,
+          totalValue: desk.known.totalValue,
+          versionCode: desk.known.versionCode,
+          dueDate: desk.known.dueDate,
+          seasonName: desk.known.seasonName,
+          invoices: const [
+            CprInvoiceRef(number: '00012345', series: '1', duplicateNumber: '12345-A'),
+            CprInvoiceRef(number: '00012346', series: '1', duplicateNumber: '12346-A'),
+          ],
+        ),
+        creditor: desk.creditor,
+        cpr: desk.cpr,
+        complete: true,
+      );
+      expect(
+        textoDe(duas),
+        contains('Referente às NFs 00012345/1, 00012346/1 e DUPs 12345-A, 12346-A.'),
+      );
+    });
+
+    /// SEM NOTA a frase SOME, em vez de sair com o espaço em branco: uma cédula
+    /// assim não é emitida (o servidor a recusa), e um "Referente NF ____"
+    /// impresso seria pior do que a ausência.
+    test('sem nota nenhuma, a frase não é impressa', () {
+      final semNota = CprDesk(
+        known: const CprKnown(grainName: 'Soja', sacks: 440),
+        creditor: desk.creditor,
+        cpr: desk.cpr,
+      );
+      final texto = textoDe(semNota);
+      expect(texto, contains('VII – DA ORIGEM E DEPÓSITO'));
+      expect(texto, isNot(contains('Referente')));
+    });
+  });
+
+  /// O VENCIMENTO vem da SAFRA, e sai em DUAS cláusulas do documento — a IV e a
+  /// IX. Ele era digitado cédula a cédula, sem nada que dissesse qual era a data
+  /// certa daquela cultura.
+  test('o vencimento da safra sai nas duas cláusulas que o citam', () {
+    final texto = textoDe(desk);
+    expect(texto, contains('IV – VENCIMENTO: 30/06/2026'));
+    expect(texto, contains('parcela única, com vencimento em 30/06/2026.'));
   });
 
   /// O LOCAL DA ENTREGA é campo próprio: a planilha de proposta nomeia a filial,

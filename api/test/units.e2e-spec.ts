@@ -8,6 +8,7 @@ import {
   JOAO,
   UNIT,
   createTestApp,
+  fillCpr,
   loginAs,
   resetDb,
 } from './utils';
@@ -224,6 +225,10 @@ describe('Unidades (e2e)', () => {
     expect(criada.body.data.managerName).toBeNull();
 
     const code = criada.body.data.code as string;
+    // A CÉDULA antes do encaminhamento: ela passou a ser pré-requisito, e a
+    // unidade de retirada não tem nada a ver com isso — o que este caso testa é
+    // o roteamento do parecer, e a cédula é só o caminho até lá.
+    await fillCpr(app, await asUser(JOAO), code);
     const encaminhada = await request(app.getHttpServer())
       .post(`/api/v1/barters/${code}/forward`)
       .set('Authorization', await asUser(JOAO))

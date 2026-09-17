@@ -8,6 +8,7 @@ import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
+import 'invoicing_screen.dart';
 import 'barter_screen.dart';
 import 'send_simulation.dart';
 
@@ -70,10 +71,21 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// se o app não carregou. "Todas" sai junto — com duas etapas, ela seria a
   /// soma das duas que estão ao lado.
   ///
+  /// O EMISSOR tem o recorte mais estreito, um degrau adiante: a faturada (a
+  /// fila dele) e a CÉDULA, que junta os três degraus do documento numa aba só
+  /// — "em que pé está a CPR?" é uma pergunta única, e três abas com duas
+  /// permutas cada dividiriam a fila em pedaços que ele leria juntos.
+  ///
   /// Quem decide o recorte continua sendo o servidor; esta lista só evita
   /// desenhar o que ele não vai responder.
-  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadInvoicing)
-      ? const [BarterStatus.approved, BarterStatus.invoiced]
+  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadIssuance)
+      ? const [BarterStatus.invoiced, BarterStatus.cprIssued]
+      : AppData.can(Capability.bartersReadInvoicing)
+      // O FATURISTA ganhou "Concluídas" pelo mesmo motivo de quem acompanha, e
+      // com um agravante: o escopo dele no servidor (`lineFrom(invoice)`) traz
+      // as permutas até o registro, e sem esta aba a registrada não caía em
+      // nenhuma das duas — sumia da tela, sem "Todas" para recolhê-la.
+      ? const [BarterStatus.approved, BarterStatus.invoiced, BarterStatus.cprRegistered]
       : [
           null,
           // O RASCUNHO abre a lista de quem registra, e só a dele: é o único
@@ -89,8 +101,23 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           BarterStatus.pending,
           BarterStatus.approved,
           BarterStatus.invoiced,
+          // CONCLUÍDAS fecha a linha, e é o que faltava para ela ter FIM na
+          // tela de quem acompanha: enquanto a última aba era a faturada, a
+          // permuta registrada (que acabou) e a que espera assinatura (que não
+          // acabou) caíam no mesmo lugar, e "o que ainda está em pé?" não tinha
+          // resposta sem abrir uma por uma.
+          BarterStatus.cprRegistered,
           BarterStatus.denied,
         ];
+
+  /// Esta pessoa TRABALHA na emissão, ou só ACOMPANHA?
+  ///
+  /// É a diferença entre "A emitir CPR" e "No emissor", e ela não é de palavra:
+  /// para o emissor, a aba é a FILA DELE e mostra só o degrau em que ele age;
+  /// para quem acompanha (admin, comitê, gerente, consultor), a pergunta é
+  /// "onde está a permuta?", e a resposta é o TRECHO inteiro do emissor —
+  /// emitida e assinada ainda estão com ele.
+  bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance);
 
   String _tabLabel(BarterStatus? status) => switch (status) {
         null => 'Todas',
@@ -98,7 +125,14 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
         BarterStatus.sentToManager => 'No gerente',
         BarterStatus.pending => 'No comitê',
         BarterStatus.approved || BarterStatus.approvedWithConditions => 'A faturar',
-        BarterStatus.invoiced => 'Faturadas',
+        BarterStatus.invoiced => _worksIssuance ? 'A emitir CPR' : 'No emissor',
+        // Os degraus intermediários da cédula sob UMA aba: para quem varre a
+        // lista, "em que pé está a CPR?" é uma pergunta só, e abas com duas
+        // permutas cada dividiriam a fila do emissor em pedaços que ele leria
+        // juntos de qualquer jeito.
+        BarterStatus.cprIssued || BarterStatus.cprSigned => 'Cédula',
+        // A REGISTRADA sai dessa aba: ela não é "em que pé está", é o fim.
+        BarterStatus.cprRegistered => 'Concluídas',
         BarterStatus.denied => 'Negadas',
       };
 
@@ -174,10 +208,23 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// aba por estado daria ao faturista duas filas para o mesmo trabalho, e a
   /// ressalva (que ele precisa ver) ficaria escondida na segunda. O que
   /// distingue as duas é o SELO do cartão, que é onde a exigência aparece.
-  bool _inTab(BarterModel barter, BarterStatus tab) =>
-      tab == BarterStatus.approved
-          ? barter.awaitsInvoice
-          : barter.status == tab;
+  /// A CÉDULA é o outro caso, pelo mesmo raciocínio: os degraus intermediários
+  /// do documento (emitida, assinada) são UMA aba. Eles não são filas
+  /// diferentes — são o andamento do mesmo papel, e o selo do cartão é onde o
+  /// pé de cada um aparece.
+  ///
+  /// "NO EMISSOR" é o trecho inteiro, e não o degrau: para quem acompanha, a
+  /// permuta emitida e a assinada continuam na mesa dele, e listar só a faturada
+  /// responderia "onde está?" com um terço da fila. Para o EMISSOR a mesma aba é
+  /// exata — é a fila dele, e o que já andou está na aba ao lado. Ver
+  /// [_worksIssuance].
+  bool _inTab(BarterModel barter, BarterStatus tab) => switch (tab) {
+        BarterStatus.approved => barter.awaitsInvoice,
+        BarterStatus.invoiced when !_worksIssuance =>
+          barter.wasInvoiced && !barter.isCprRegistered,
+        BarterStatus.cprIssued => barter.isCprIssued,
+        _ => barter.status == tab,
+      };
 
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
@@ -604,6 +651,27 @@ class _BarterCard extends StatelessWidget {
                         openInvoicing(context, barter, onInvoiced: (_) => onChanged()),
                     icon: const Icon(Icons.receipt_long_outlined, size: 16),
                     label: const Text('Faturar', style: TextStyle(fontSize: 13)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.invoiced,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+              ],
+              // O ATO DO EMISSOR, direto do cartão. O rótulo é genérico de
+              // propósito — qual dos três atos é o da vez depende do estado, e
+              // quem resolve isso é a própria tela da cédula.
+              if (AppData.can(Capability.bartersCprIssue) &&
+                  !barter.isCprRegistered &&
+                  barter.wasInvoiced) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () =>
+                        openCprDesk(context, barter, onChanged: (_) => onChanged()),
+                    icon: const Icon(Icons.description_outlined, size: 16),
+                    label: const Text('Abrir cédula', style: TextStyle(fontSize: 13)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.invoiced,
                       padding: const EdgeInsets.symmetric(vertical: 10),

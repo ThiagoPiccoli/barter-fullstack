@@ -7,7 +7,13 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { User } from '@prisma/client';
-import { ANY_ROLE_KEY, IS_PUBLIC_KEY, REQUIRED_CAPABILITIES_KEY, ROLES_KEY } from './decorators';
+import {
+  ANY_CAPABILITY_KEY,
+  ANY_ROLE_KEY,
+  IS_PUBLIC_KEY,
+  REQUIRED_CAPABILITIES_KEY,
+  ROLES_KEY,
+} from './decorators';
 import { can, rolesWith, type Capability } from './policy';
 import { ROLE_LABELS, type Role } from './roles';
 
@@ -40,6 +46,14 @@ export class AccessGuard implements CanActivate {
       return this.checkCapabilities(context, capabilities);
     }
 
+    // QUALQUER UMA das listadas — ver `RequireAnyCapability`. A ordem importa:
+    // ela vem depois do "todas" porque as duas marcas são excludentes, e uma
+    // rota que trouxesse as duas está errada de qualquer jeito.
+    const anyOf = this.metadata<Capability[]>(context, ANY_CAPABILITY_KEY);
+    if (anyOf?.length) {
+      return this.checkAnyCapability(context, anyOf);
+    }
+
     const roles = this.metadata<Role[]>(context, ROLES_KEY);
     if (roles?.length) {
       return this.checkRoles(context, roles);
@@ -67,6 +81,18 @@ export class AccessGuard implements CanActivate {
     const missing = required.find((capability) => !user || !can(user, capability));
     if (!missing) return true;
     throw new ForbiddenException(this.denialMessage(rolesWith(missing)));
+  }
+
+  /**
+   * Basta UMA das capacidades. A recusa lista os papéis de TODAS elas, porque é
+   * a resposta útil: quem bate na porta precisa saber a quem pedir, e a porta
+   * tem mais de uma chave.
+   */
+  private checkAnyCapability(context: ExecutionContext, allowed: Capability[]): boolean {
+    const user = this.userOf(context);
+    if (user && allowed.some((capability) => can(user, capability))) return true;
+    const papéis = [...new Set(allowed.flatMap((capability) => rolesWith(capability)))];
+    throw new ForbiddenException(this.denialMessage(papéis));
   }
 
   private checkRoles(context: ExecutionContext, allowed: Role[]): boolean {

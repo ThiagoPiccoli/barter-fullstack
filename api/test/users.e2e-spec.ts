@@ -5,6 +5,7 @@ import {
   ADMIN,
   BACK_OFFICE,
   COMITE,
+  EMISSOR,
   JOAO,
   MANAGER,
   UNIT,
@@ -42,6 +43,11 @@ describe('Usuários — uma rota por papel (e2e)', () => {
     { path: 'consultants', role: 'consultant', seedId: 2 }, // João
     { path: 'managers', role: 'manager', seedId: 7 }, // Beatriz
     { path: 'billers', role: 'biller', seedId: 9 }, // Patrícia
+    // O EMISSOR entra na mesma varredura que os outros três, e é o teste mais
+    // barato do papel novo: uma linha aqui exercita listar, criar com o papel da
+    // ROTA, ignorar `role` no corpo, não alcançar papel alheio, entrar com a
+    // provisória, trocá-la e ter as sessões derrubadas no reset.
+    { path: 'emitters', role: 'emitter', seedId: 11 }, // Renata
   ];
 
   /** O id da conta do comitê no seed — o alvo "de papel alheio" das outras rotas. */
@@ -379,5 +385,38 @@ describe('Usuários — uma rota por papel (e2e)', () => {
         .set('Authorization', auth)
         .expect(404);
     });
+  });
+
+  /**
+   * EXCLUIR O EMISSOR não trava em nada, e as cédulas que ele emitiu continuam
+   * assinadas com o nome dele.
+   *
+   * É a mesma regra do faturista, e ela vale pelo mesmo motivo: o que ele fez
+   * está gravado em TEXTO no registro da permuta (`cprEmittedBy`), e a fila dele
+   * é o ESTADO da permuta, não uma caixa de entrada pessoal. O gerente é o único
+   * que trava, porque a permuta é endereçada a ele.
+   */
+  it('o emissor sai sem trava, e a cédula que ele emitiu continua assinada', async () => {
+    const auth = await admin();
+    const emissor = await asUser(EMISSOR);
+
+    // A PRM-2026-001 vem faturada e com a cédula completa no seed: ela emite.
+    const emitida = await request(app.getHttpServer())
+      .post('/api/v1/barters/PRM-2026-001/cpr/issue')
+      .set('Authorization', emissor)
+      .send({});
+    expect(emitida.status).toBe(200);
+    expect(emitida.body.data.cprEmittedBy).toBe('Renata Bicudo');
+
+    const excluido = await request(app.getHttpServer())
+      .delete('/api/v1/emitters/11')
+      .set('Authorization', auth);
+    expect(excluido.status).toBe(204);
+
+    // O NOME sobrevive à conta: é snapshot em texto, como `invoicedBy`.
+    const depois = await request(app.getHttpServer())
+      .get('/api/v1/barters/PRM-2026-001')
+      .set('Authorization', auth);
+    expect(depois.body.data.cprEmittedBy).toBe('Renata Bicudo');
   });
 });

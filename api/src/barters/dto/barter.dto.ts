@@ -4,6 +4,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
+  IsDateString,
   IsIn,
   IsInt,
   IsNumber,
@@ -11,6 +12,7 @@ import {
   IsPositive,
   IsString,
   MaxLength,
+  Min,
   MinLength,
   ValidateIf,
   ValidateNested,
@@ -214,6 +216,58 @@ export class InvoiceBarterDto {
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  note?: string;
+}
+
+/**
+ * UMA NOTA FISCAL anexada ao faturamento — os dados que vêm junto com o arquivo.
+ *
+ * Ela chega por `multipart/form-data`, e por isso TODO CAMPO CHEGA COMO TEXTO:
+ * `value` leva `@Type(() => Number)` para virar número antes da validação, e
+ * `issuedAt` continua sendo texto ISO como nas outras datas do sistema. Sem o
+ * `@Type`, `@IsNumber` recusaria "1234.50" — um formulário correto recusado por
+ * uma diferença de transporte.
+ *
+ * O NÚMERO é o único obrigatório. Série, duplicata, data e valor são o que a
+ * nota tem, e nem toda operação preenche os quatro: há praça que não usa série,
+ * e venda que não gera duplicata. O ARQUIVO é obrigatório e não está aqui — ele
+ * é o corpo do upload, e quem o cobra é o controller.
+ */
+export class AttachInvoiceDto {
+  // A mensagem nas três conferências, pelo mesmo motivo de `RegisterCprDto`:
+  // com o campo ausente elas falham juntas.
+  @IsString({ message: 'Informe o número da nota fiscal' })
+  @MinLength(1, { message: 'Informe o número da nota fiscal' })
+  @MaxLength(60, { message: 'Informe o número da nota fiscal (até 60 caracteres)' })
+  number!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  series?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  duplicateNumber?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'Data de emissão da nota inválida' })
+  issuedAt?: string;
+
+  /**
+   * O valor DA NOTA, que pode não ser o total da permuta: retirada parcial é
+   * justamente o caso em que há mais de uma.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'O valor da nota precisa ser um número' })
+  @Min(0)
+  value?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
   note?: string;
 }
 

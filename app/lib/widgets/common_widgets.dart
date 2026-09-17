@@ -45,6 +45,22 @@ void showErrorOn(ScaffoldMessengerState? messenger, String message) {
     ));
 }
 
+/// A MESMA SnackBar, sem o vermelho: o aviso de um desfecho que não deu errado.
+///
+/// Existe porque nem todo recado é uma falha, e pintá-los todos de vermelho
+/// gasta a única cor que precisa significar alguma coisa. "A permuta continua
+/// como rascunho" é um fato do fluxo — quem o lê não precisa se alarmar, precisa
+/// saber onde a permuta ficou.
+void showInfoOn(ScaffoldMessengerState? messenger, String message) {
+  messenger
+    ?..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Text(message),
+      behavior: SnackBarBehavior.floating,
+      duration: const Duration(seconds: 6),
+    ));
+}
+
 /// Formata um valor monetário no padrão brasileiro: R$ 1.234,56
 String formatCurrency(double v) {
   final s = v.toStringAsFixed(2);
@@ -182,6 +198,33 @@ class StatusBadge extends StatelessWidget {
         fg = AppColors.invoiced;
         icon = Icons.receipt_long_outlined;
         label = 'Faturada';
+        break;
+      // O TRECHO DA CÉDULA — três selos, um por ato do emissor.
+      //
+      // Eles compartilham a cor do faturamento de propósito: para quem passa os
+      // olhos na lista, o que mudou entre `invoiced` e `cprRegistered` é o
+      // PROGRESSO dentro da mesma fase final, e uma cor nova a cada degrau faria
+      // a tela parecer ter quatro desfechos onde há um.
+      case BarterStatus.cprIssued:
+        bg = AppColors.invoicedBg;
+        fg = AppColors.invoiced;
+        icon = Icons.description_outlined;
+        label = 'CPR emitida';
+        break;
+      case BarterStatus.cprSigned:
+        bg = AppColors.invoicedBg;
+        fg = AppColors.invoiced;
+        icon = Icons.draw_outlined;
+        label = 'CPR assinada';
+        break;
+      // O REGISTRO é o único que ganha a cor da aprovação: ele é o fim da linha
+      // do lado bom, e o selo precisa dizer "acabou" para quem está varrendo a
+      // lista atrás do que ainda falta.
+      case BarterStatus.cprRegistered:
+        bg = AppColors.approvedBg;
+        fg = AppColors.approved;
+        icon = Icons.verified_rounded;
+        label = 'CPR registrada';
         break;
     }
     return Container(
@@ -714,7 +757,12 @@ Color statusColor(BarterStatus s) {
     case BarterStatus.draft:
       return AppColors.draft;
     case BarterStatus.invoiced:
+    case BarterStatus.cprIssued:
+    case BarterStatus.cprSigned:
       return AppColors.invoiced;
+    // O registro é o fim da linha do lado bom — ver o selo em [StatusBadge].
+    case BarterStatus.cprRegistered:
+      return AppColors.approved;
   }
 }
 

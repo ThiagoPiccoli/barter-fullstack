@@ -20,12 +20,13 @@ import 'edit_forms.dart';
 /// PRÓPRIA EMPRESA, como ela se identifica nos documentos que emite. Ela vem por
 /// último porque é a única que não participa do caminho de uma permuta; ela é o
 /// timbre do papel em que o caminho termina.
-enum _Registry { producers, consultants, managers, committee, billers, units, creditor }
+enum _Registry { producers, consultants, managers, committee, billers, emitters, units, creditor }
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
-/// (quem registra permuta), GERENTES (quem dá o parecer), COMITÊ (quem decide),
-/// FATURISTAS (quem fatura) e UNIDADES (os locais de retirada), com busca em
-/// cada lista.
+/// (quem registra permuta e preenche a cédula), GERENTES (quem dá o parecer),
+/// COMITÊ (quem decide), FATURISTAS (quem fatura e anexa as notas), EMISSORES
+/// (quem emite a cédula, colhe as assinaturas e a registra) e UNIDADES (os
+/// locais de retirada), com busca em cada lista.
 ///
 /// O COMITÊ é o único segmento que não é uma lista: ele é uma reunião, e o
 /// cadastro é um só (ver CommitteeRepository). Ou ele existe — e o segmento
@@ -67,6 +68,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           _Registry.managers => const EditStaffScreen(role: UserRole.manager),
           _Registry.committee => const EditStaffScreen(role: UserRole.committee),
           _Registry.billers => const EditStaffScreen(role: UserRole.biller),
+          _Registry.emitters => const EditStaffScreen(role: UserRole.emitter),
           _Registry.units => const EditUnitScreen(),
           // A credora não tem "novo": ela é uma só, e o formulário dela é a
           // própria aba. O FAB some neste segmento — ver `showFab`.
@@ -110,6 +112,13 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             b.branch.toLowerCase().contains(q) ||
             b.email.toLowerCase().contains(q))
         .toList();
+    final emitters = AppData.emitters
+        .where((e) =>
+            q.isEmpty ||
+            e.name.toLowerCase().contains(q) ||
+            e.branch.toLowerCase().contains(q) ||
+            e.email.toLowerCase().contains(q))
+        .toList();
     final units = AppData.units
         .where((u) =>
             q.isEmpty ||
@@ -145,6 +154,15 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           'Buscar faturista, unidade ou e-mail...',
           '${billers.length} faturista(s)',
           'Novo faturista',
+        ),
+      // SEM EMISSOR, toda permuta faturada para em "a emitir a CPR" — e é a
+      // contagem zerada aqui que conta isso ao admin antes de alguém reclamar.
+      _Registry.emitters => (
+          'Buscar emissor, unidade ou e-mail...',
+          emitters.isEmpty
+              ? 'nenhum emissor — as cédulas não saem sem um'
+              : '${emitters.length} emissor(es)',
+          'Novo emissor',
         ),
       _Registry.units => (
           'Buscar unidade ou cidade...',
@@ -190,6 +208,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                   _Registry.managers: AppData.managers.length,
                   _Registry.committee: AppData.committee == null ? 0 : 1,
                   _Registry.billers: AppData.billers.length,
+                  _Registry.emitters: AppData.emitters.length,
                   _Registry.units: AppData.units.length,
                   // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
                   // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
@@ -229,6 +248,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 _Registry.managers => _buildManagerList(managers),
                 _Registry.committee => _buildCommittee(),
                 _Registry.billers => _buildBillerList(billers),
+                _Registry.emitters => _buildEmitterList(emitters),
                 _Registry.units => _buildUnitList(units),
                 _Registry.creditor => const CreditorScreen(embedded: true),
               },
@@ -450,6 +470,45 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     );
   }
 
+  /// Os EMISSORES — o posto da cédula.
+  ///
+  /// O cartão conta quantas CPRs cada um emitiu, que é a medida do trabalho
+  /// dele: o faturista mede em notas, o emissor em títulos.
+  Widget _buildEmitterList(List<UserModel> list) {
+    if (list.isEmpty) {
+      return const _EmptyState(label: 'Nenhum emissor cadastrado');
+    }
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_emissores'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final e = list[i];
+        final emitidas = AppData.barters.where((p) => p.cprEmittedBy == e.name).length;
+        return _PersonCard(
+          initials: e.avatarInitials,
+          name: e.name,
+          subtitle: e.branch,
+          accent: AppColors.invoiced,
+          badgeIcon: Icons.description,
+          chips: [
+            if (emitidas > 0)
+              _StatChip(label: '$emitidas CPR(s) emitida(s)', color: AppColors.invoiced),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditStaffScreen(user: e, role: UserRole.emitter),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
   /// As UNIDADES de retirada. O cartão mostra quantas permutas são retiradas em
   /// cada uma — que é a leitura de logística da lista, e a única pergunta que
   /// ela responde: a unidade não tem dono nem participa da revisão.
@@ -519,6 +578,7 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.managers: ('Gerentes', Icons.assignment_ind),
     _Registry.committee: ('Comitê', Icons.groups_2),
     _Registry.billers: ('Faturistas', Icons.receipt_long),
+    _Registry.emitters: ('Emissores', Icons.description),
     _Registry.units: ('Unidades', Icons.store),
     _Registry.creditor: ('Empresa', Icons.domain),
   };
@@ -533,6 +593,7 @@ class _SegmentedToggle extends StatelessWidget {
         _Registry.managers => AppColors.atManager,
         _Registry.committee => AppColors.pending,
         _Registry.billers => AppColors.invoiced,
+        _Registry.emitters => AppColors.invoiced,
         _Registry.units => AppColors.primaryMedium,
         _Registry.creditor => AppColors.textMedium,
       };

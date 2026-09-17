@@ -5,6 +5,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Put,
   UnprocessableEntityException,
   UploadedFile,
   UseInterceptors,
@@ -14,7 +15,12 @@ import type { User } from '@prisma/client';
 import { CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterVersionJson, toSeasonJson } from '../common/serializers';
-import { ImportVersionDto, OpenSeasonDto, PublishVersionDto } from './dto/season.dto';
+import {
+  ImportVersionDto,
+  OpenSeasonDto,
+  PublishVersionDto,
+  SeasonCprDueDateDto,
+} from './dto/season.dto';
 import { SeasonsService } from './seasons.service';
 
 /**
@@ -44,6 +50,30 @@ export class SeasonsController {
   @RequireCapability(CAPABILITY.barterManage)
   async store(@CurrentUser() admin: User, @Body() dto: OpenSeasonDto) {
     return toSeasonJson(await this.seasons.open(admin, dto), admin);
+  }
+
+  /**
+   * O VENCIMENTO DA CPR desta safra — a data em que a entrega do grão vence.
+   *
+   * É a única coisa da safra que se edita depois de aberta, e tem rota própria
+   * por isso: um `PUT /seasons/:code` genérico abriria a porta para reescrever o
+   * grão e o ano, que é o que as permutas já fechadas apontam.
+   *
+   * Ela vale para TODAS as cédulas da safra, e é a resposta ao problema que a
+   * criou: o vencimento muda conforme a cultura, e enquanto foi digitado cédula
+   * a cédula, duas CPRs da mesma safra saíam com datas diferentes.
+   */
+  @Put(':code/cpr-due-date')
+  @RequireCapability(CAPABILITY.barterManage)
+  async setCprDueDate(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Body() dto: SeasonCprDueDateDto,
+  ) {
+    return toSeasonJson(
+      await this.seasons.setCprDueDate(admin, code, new Date(dto.cprDueDate)),
+      admin,
+    );
   }
 
   /** Encerra a safra e a versão vigente dela. */

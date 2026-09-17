@@ -77,6 +77,22 @@ describe('Pedido de alteração da permuta', () => {
   /** O que saiu para fora não volta: a nota se corrige onde ela foi emitida. */
   it('a faturada não aceita pedido', () => {
     expect(changeRequestRefusal(barterIn(BARTER_STATUS.invoiced))).toContain('faturada');
+    // E DO FATURAMENTO EM DIANTE, não só nele. A conferência é pelo DEGRAU da
+    // esteira porque a comparação por estado envelheceu mal: quando a emissão
+    // da cédula virou etapa, três estados passaram a existir depois de
+    // `invoiced` — e todos escapavam por aqui. Uma permuta com o TÍTULO JÁ
+    // EMITIDO aceitava pedido de alteração, e o admin podia devolvê-la a
+    // rascunho com o papel na mão do produtor.
+    for (const depois of [
+      BARTER_STATUS.cprIssued,
+      BARTER_STATUS.cprSigned,
+      BARTER_STATUS.cprRegistered,
+    ]) {
+      expect(changeRequestRefusal(barterIn(depois))).toContain('faturada');
+    }
+    // A NEGADA continua passando, e é de propósito: refazer a permuta negada é
+    // justamente para o que este caminho serve. Ela está FORA da esteira.
+    expect(changeRequestRefusal(barterIn(BARTER_STATUS.denied))).toBeNull();
   });
 
   /**

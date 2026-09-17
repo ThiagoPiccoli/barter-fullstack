@@ -81,6 +81,38 @@ export class OpenSeasonDto {
   @IsOptional()
   @Matches(/^[A-Za-z]{1,2}$/, { message: 'A letra da safra deve ter 1 ou 2 letras' })
   letter?: string;
+
+  /**
+   * O VENCIMENTO DA CPR desta safra — a data em que a entrega do grão vence.
+   *
+   * Opcional na abertura porque a safra costuma abrir antes de a data estar
+   * acertada, e travar a abertura por causa dela empurraria o admin a chutar um
+   * dia. Enquanto ela faltar, nenhuma cédula da safra pode ser emitida, e
+   * `cprGaps()` diz isso com o recado endereçado a quem pode resolver. Ver
+   * `SeasonCprDueDateDto`, que é por onde ela se acerta depois.
+   */
+  @IsOptional()
+  @IsDateString({}, { message: 'Vencimento da CPR inválido' })
+  cprDueDate?: string;
+}
+
+/**
+ * O VENCIMENTO DA CPR de uma safra, acertado depois da abertura.
+ *
+ * Rota própria porque a safra ABERTA não se edita de resto: o grão, o ano e o
+ * código dela são o que as permutas já fechadas apontam, e um `PUT` genérico de
+ * safra abriria a porta para mexer neles. Esta data é a única coisa da safra que
+ * muda legitimamente depois — ela é decisão comercial, e a colheita se antecipa
+ * ou atrasa.
+ *
+ * O QUE ELA NÃO FAZ é reescrever cédula emitida: `dueDate` é copiado para a
+ * cédula a cada gravação e congela na emissão (ver `saveCpr`). Mudar a data aqui
+ * vale para as cédulas que ainda não saíram, que é a leitura certa — o título
+ * que já está com o produtor diz o que diz.
+ */
+export class SeasonCprDueDateDto {
+  @IsDateString({}, { message: 'Vencimento da CPR inválido' })
+  cprDueDate!: string;
 }
 
 /** Uma linha da tabela de valores quando a versão é publicada por JSON. */

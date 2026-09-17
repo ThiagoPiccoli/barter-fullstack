@@ -16,8 +16,21 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _emailCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+
+  /// O foco da SENHA, para o Enter do e-mail cair nela. Sem ele, o teclado do
+  /// celular não teria para onde mandar o "próximo" e o dedo voltaria à tela.
+  final _passFocus = FocusNode();
+
   bool _obscure = true;
   bool _loading = false;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passCtrl.dispose();
+    _passFocus.dispose();
+    super.dispose();
+  }
 
   /// Autentica na API e carrega todos os dados da sessão (catálogo, carteira,
   /// permutas). Erros chegam com mensagem legível via [ApiException].
@@ -114,9 +127,16 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: TextStyle(fontSize: 13, color: AppColors.textMedium),
                     ),
                     const SizedBox(height: 24),
+                    // O ENTER ATRAVESSA O FORMULÁRIO: do e-mail para a senha, da
+                    // senha para dentro. Digitar login e senha e ter de largar o
+                    // teclado para caçar o botão é atrito em cima da ação que
+                    // todo mundo faz todo dia, e várias vezes por dia.
                     TextField(
                       controller: _emailCtrl,
                       keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      autofocus: true,
+                      onSubmitted: (_) => _passFocus.requestFocus(),
                       decoration: InputDecoration(
                         labelText: 'E-mail',
                         prefixIcon: const Icon(Icons.email_outlined),
@@ -126,7 +146,16 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 16),
                     TextField(
                       controller: _passCtrl,
+                      focusNode: _passFocus,
                       obscureText: _obscure,
+                      textInputAction: TextInputAction.done,
+                      // A trava do `_loading` é a MESMA do botão: o Enter é outro
+                      // caminho para o mesmo ato, e não um atalho que escapa das
+                      // regras dele. Sem ela, dois Enters em sequência mandariam
+                      // dois logins.
+                      onSubmitted: (_) {
+                        if (!_loading) _login();
+                      },
                       decoration: InputDecoration(
                         labelText: 'Senha',
                         prefixIcon: const Icon(Icons.lock_outlined),

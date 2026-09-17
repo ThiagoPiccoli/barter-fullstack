@@ -115,7 +115,9 @@ class CprText {
         'III – QUANTIDADE DE PRODUTO:',
         '$quantidade, limpa e seca, tipo indústria, em grão.',
       ),
-      CprParagraph('IV – VENCIMENTO:', _data(cpr.dueDate)),
+      // O VENCIMENTO vem da SAFRA — ele muda conforme a cultura, e vale para
+      // todas as cédulas dela. `known` é onde o servidor o resolve.
+      CprParagraph('IV – VENCIMENTO:', _data(known.dueDate)),
       CprParagraph(
         '',
         '${_aos(cpr.issuedAt)}, entregarei, por esta CÉDULA DE PRODUTO RURAL, a '
@@ -185,8 +187,8 @@ class CprText {
         'VII – DA ORIGEM E DEPÓSITO:',
         'A presente cédula é emitida em garantia de pagamento do valor devido pelo '
             'emitente ao credor, referente a troca de insumos, cujo o preço bruto '
-            'considerado da ${known.grainName} foi de $precoSaca. Referente NF '
-            '${cpr.invoiceNumber} e DUP ${cpr.duplicateNumber}. Em consequência do penhor '
+            'considerado da ${known.grainName} foi de $precoSaca. ${_notas(known.invoices)} '
+            'Em consequência do penhor '
             'agrícola, ${known.emitterName} assume a condição de Fiel '
             'Depositário das ${_num(known.sacks)} (${extensoDecimal(known.sacks)}) sacas '
             'de ${known.grainName}, tipo indústria, sem qualquer remuneração, correndo as '
@@ -207,7 +209,7 @@ class CprText {
       CprParagraph(
         'IX – FORMA E CONDIÇÃO DE LIQUIDAÇÃO:',
         'A presente Cédula de Produto Rural é confeccionada para pagamento em parcela '
-            'única, com vencimento em ${_data(cpr.dueDate)}.',
+            'única, com vencimento em ${_data(known.dueDate)}.',
       ),
       const CprParagraph(
         'X – INADIMPLEMENTO:',
@@ -557,6 +559,29 @@ class CprText {
   static String _porExtensoData(DateTime? data) {
     if (data == null) return '____ de ________ de ____';
     return '${data.day} de ${_meses[data.month]} de ${data.year}';
+  }
+
+  /// AS NOTAS FISCAIS que originaram a dívida (cláusula VII), como o documento
+  /// as cita.
+  ///
+  /// São VÁRIAS, e o texto as enumera: a permuta sai em mais de um
+  /// carregamento, e o modelo antigo citava uma só porque a cédula guardava um
+  /// número de nota e um de duplicata, digitados à mão. As duplicatas entram na
+  /// mesma frase, e só as que existem — nem toda venda gera uma.
+  ///
+  /// Sem nota nenhuma a frase SOME em vez de sair com o espaço em branco: uma
+  /// cédula assim não é emitida (`cprGaps` a recusa), e um "Referente NF ____"
+  /// impresso seria pior do que a ausência.
+  static String _notas(List<CprInvoiceRef> notas) {
+    if (notas.isEmpty) return '';
+    final numeros = notas.map((n) => n.label).join(', ');
+    final duplicatas =
+        notas.where((n) => n.duplicateNumber.isNotEmpty).map((n) => n.duplicateNumber).join(', ');
+    final plural = notas.length > 1;
+    return duplicatas.isEmpty
+        ? 'Referente ${plural ? 'às NFs' : 'à NF'} $numeros.'
+        : 'Referente ${plural ? 'às NFs' : 'à NF'} $numeros e '
+            '${duplicatas.contains(',') ? 'DUPs' : 'DUP'} $duplicatas.';
   }
 
   static String _data(DateTime? data) => data == null

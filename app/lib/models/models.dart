@@ -16,6 +16,16 @@ enum UserRole {
   manager('manager', 'Gerente'),
   committee('committee', 'Comitê'),
   biller('biller', 'Faturista'),
+
+  /// EMISSOR — o posto que vem depois do faturamento: ele confere a cédula que
+  /// o consultor preencheu, emite o título, colhe as assinaturas e o registra.
+  ///
+  /// Ele nasceu de uma correção: a CPR era do faturista, e não é. Faturar é
+  /// emitir nota; emitir CPR é pôr em circulação um título de crédito, que é
+  /// conferido, assinado por gente e levado a registro. Enquanto foram um posto
+  /// só, o segundo acontecia "junto com" o primeiro — sem etapa, sem prazo e sem
+  /// quem responda por ele.
+  emitter('emitter', 'Emissor'),
   consultant('consultant', 'Consultor');
 
   /// Valor gravado no banco e trafegado no JSON.
@@ -57,16 +67,34 @@ class Capability {
   /// DECIDIR a permuta: aprovar ou negar (comitê).
   static const bartersReview = 'barters.review';
 
-  /// FATURAR a permuta aprovada (faturista).
+  /// FATURAR a permuta aprovada e ANEXAR as notas fiscais dela (faturista).
+  ///
+  /// As notas andam junto com o ato, e não numa capacidade própria: a nota é o
+  /// que o faturamento produz, e são várias — a permuta sai em mais de um
+  /// carregamento, e cada retirada gera a sua.
   static const bartersInvoice = 'barters.invoice';
 
-  /// LER a mesa da cédula e gerar o documento — sem preenchê-la e sem faturar.
+  /// PREENCHER as informações da cédula — a qualificação do emitente, as
+  /// lavouras em penhor, o padrão do grão e o SCR do produtor (CONSULTOR).
   ///
-  /// É do faturista **e do admin**. O faturista a tem porque preenche; o admin,
-  /// porque a cédula de uma permuta faturada é registro da operação que ele
-  /// administra, e pedir segunda via a outra pessoa não fazia sentido. O ATO
-  /// continua sendo de quem fatura — ver `bartersInvoice` e a rota `PUT
-  /// /barters/:code/cpr`, que não mudou de dono.
+  /// Era do faturista, e mudou de dono: nada do que a cédula pede está na mesa
+  /// de quem fatura. A matrícula do imóvel, o nome do cônjuge, quem é o dono da
+  /// área arrendada e o SCR são o que se traz da visita à fazenda.
+  static const bartersCprFill = 'barters.cprFill';
+
+  /// EMITIR a cédula, colher as ASSINATURAS e REGISTRÁ-LA (emissor).
+  ///
+  /// Uma capacidade para os três atos porque eles são o mesmo ofício, sobre o
+  /// mesmo documento. O que os separa é o TEMPO — a cédula é gerada hoje,
+  /// assinada quando o produtor vem à cidade, registrada quando o cartório
+  /// responde —, e é por isso que cada um é uma etapa própria da esteira.
+  static const bartersCprIssue = 'barters.cprIssue';
+
+  /// LER a mesa da cédula e gerar o documento — sem preenchê-la e sem emiti-la.
+  ///
+  /// É de TRÊS papéis, com perguntas diferentes: o consultor (para preencher),
+  /// o emissor (para conferir e emitir) e o admin (para a segunda via do que a
+  /// operação dele emitiu). O faturista NÃO a tem: o que ele produz é a nota.
   static const bartersCprRead = 'barters.cprRead';
 
   /// Registrar permuta (consultor).
@@ -108,15 +136,24 @@ class Capability {
   /// participa.
   static const bartersReadInvoicing = 'barters.readInvoicing';
 
+  /// Enxergar só o que CHEGOU À EMISSÃO — o escopo do emissor, um degrau
+  /// adiante do faturista.
+  ///
+  /// A tela pergunta por ela pelo mesmo motivo de [bartersReadInvoicing]: sem
+  /// isto, o emissor abriria abas de etapas das quais não participa e um painel
+  /// contando permutas que o servidor responde vazias.
+  static const bartersReadIssuance = 'barters.readIssuance';
+
   /// Ver valores em R$ — todo mundo menos o consultor.
   static const pricesRead = 'prices.read';
 
   /// Manter o cadastro da CREDORA — a razão social, o CNPJ, o endereço e o foro
   /// que saem nos documentos que a empresa emite.
   ///
-  /// É do admin **e do faturista**, e é a única que os dois dividem: a credora
+  /// É do admin **e do EMISSOR**, e é a única que os dois dividem: a credora
   /// não decide permuta nem concede acesso — é o timbre do papel, e quem
-  /// percebe o CNPJ errado é quem monta a cédula.
+  /// percebe o CNPJ errado é quem leva o título a registro. Ela já foi do
+  /// faturista, e mudou de mãos junto com a cédula.
   static const creditorManage = 'creditor.manage';
 
   const Capability._();
@@ -420,6 +457,15 @@ enum BarterStatus {
   approvedWithConditions,
   denied,
   invoiced,
+
+  /// O TRECHO DA CÉDULA — três estados, um por ato do EMISSOR.
+  ///
+  /// `invoiced` deixou de ser o fim da linha quando a emissão virou etapa: uma
+  /// permuta faturada ainda deve o título que formaliza a entrega, e enquanto
+  /// isso não tinha estado, ela aparecia como concluída com a cédula por emitir.
+  cprIssued,
+  cprSigned,
+  cprRegistered,
 }
 
 /// Status vindo do servidor, tolerante ao desconhecido.
@@ -965,11 +1011,36 @@ class BarterModel {
   final String? reviewNote;
   final String? reviewedBy;
 
-  /// O FATURAMENTO — o último posto da linha. Null enquanto ela não foi
-  /// faturada, que é o que [isInvoiced] lê.
+  /// O FATURAMENTO. Null enquanto ela não foi faturada, que é o que
+  /// [isInvoiced] lê.
   final String? invoicedBy;
   final DateTime? invoicedAt;
   final String? invoiceNote;
+
+  /// AS NOTAS FISCAIS anexadas ao faturamento — o que o posto do faturista
+  /// produz, e a origem da dívida que a cédula afirma.
+  ///
+  /// São VÁRIAS: a permuta sai em mais de um carregamento, cada retirada gera a
+  /// sua, e a cancelada é reemitida. Elas vêm na LISTAGEM também, como os
+  /// pedidos de produto, porque são ESTADO — "esta permuta já tem nota?" é o que
+  /// a fila do faturista pergunta.
+  final List<BarterInvoiceModel> invoices;
+
+  /// A EMISSÃO DA CÉDULA — os três atos do emissor, cada um null até acontecer.
+  ///
+  /// É essa diferença que a tela lê para saber em que pé a CPR está, do mesmo
+  /// jeito que [managerNote] diz se o parecer saiu.
+  final String? cprEmittedBy;
+  final DateTime? cprEmittedAt;
+  final String? cprEmissionNote;
+  final DateTime? cprSignedAt;
+  final String? cprSignatureNote;
+  final DateTime? cprRegisteredAt;
+
+  /// O NÚMERO do registro — o que se leva ao cartório para pedir a certidão.
+  /// Sem ele, "registrada" seria uma afirmação sem como ser conferida.
+  final String? cprRegistryNumber;
+  final String? cprRegistryPlace;
 
   /// O PEDIDO DE ALTERAÇÃO — o único caminho de volta que a permuta tem.
   ///
@@ -1059,6 +1130,15 @@ class BarterModel {
     this.invoicedBy,
     this.invoicedAt,
     this.invoiceNote,
+    this.invoices = const [],
+    this.cprEmittedBy,
+    this.cprEmittedAt,
+    this.cprEmissionNote,
+    this.cprSignedAt,
+    this.cprSignatureNote,
+    this.cprRegisteredAt,
+    this.cprRegistryNumber,
+    this.cprRegistryPlace,
     this.changeRequestStatus,
     this.changeRequestNote,
     this.changeRequestBy,
@@ -1113,6 +1193,18 @@ class BarterModel {
       invoicedBy: json['invoicedBy'] as String?,
       invoicedAt: _asDateOrNull(json['invoicedAt']),
       invoiceNote: json['invoiceNote'] as String?,
+      invoices: ((json['invoices'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(BarterInvoiceModel.fromJson)
+          .toList(),
+      cprEmittedBy: json['cprEmittedBy'] as String?,
+      cprEmittedAt: _asDateOrNull(json['cprEmittedAt']),
+      cprEmissionNote: json['cprEmissionNote'] as String?,
+      cprSignedAt: _asDateOrNull(json['cprSignedAt']),
+      cprSignatureNote: json['cprSignatureNote'] as String?,
+      cprRegisteredAt: _asDateOrNull(json['cprRegisteredAt']),
+      cprRegistryNumber: json['cprRegistryNumber'] as String?,
+      cprRegistryPlace: json['cprRegistryPlace'] as String?,
       changeRequestStatus: json['changeRequestStatus'] as String?,
       changeRequestNote: json['changeRequestNote'] as String?,
       changeRequestBy: json['changeRequestBy'] as String?,
@@ -1278,16 +1370,45 @@ class BarterModel {
   /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote].
   bool get hasConditions => status == BarterStatus.approvedWithConditions;
 
-  /// Já foi faturada: fim da linha.
+  /// Já foi faturada — e aí ela passa ao EMISSOR, que emite a cédula.
+  ///
+  /// Não é mais fim de linha: [awaitsCprIssue] é o que a tela do emissor lê.
   bool get isInvoiced => status == BarterStatus.invoiced;
 
-  /// FOI APROVADA pelo comitê — inclusive se já foi faturada.
+  /* ── A cédula: o trecho do emissor ────────────────────────────────── */
+
+  /// Faturada e ESPERANDO a emissão da cédula — a fila do emissor.
+  bool get awaitsCprIssue => status == BarterStatus.invoiced;
+
+  /// A cédula saiu e espera as ASSINATURAS.
+  bool get awaitsSignatures => status == BarterStatus.cprIssued;
+
+  /// Assinada, esperando o REGISTRO — a garantia ainda não vale contra
+  /// terceiros, que é justamente o que precisa aparecer numa lista.
+  bool get awaitsRegistration => status == BarterStatus.cprSigned;
+
+  /// A cédula foi REGISTRADA: o fim da linha, agora de verdade.
+  bool get isCprRegistered => status == BarterStatus.cprRegistered;
+
+  /// A cédula já foi emitida? — inclusive se já foi assinada ou registrada.
+  ///
+  /// É o que separa o RASCUNHO do DOCUMENTO: até a emissão o consultor corrige
+  /// à vontade; daí em diante o papel existe no mundo e não se reescreve.
+  bool get isCprIssued => awaitsSignatures || awaitsRegistration || isCprRegistered;
+
+  /// O FATURAMENTO já aconteceu — inclusive se a cédula já andou depois dele.
+  ///
+  /// É a pergunta de quem conta o que saiu ("quanto já foi faturado?"), e não
+  /// `status == invoiced`: emitir a cédula não desfaz o faturamento.
+  bool get wasInvoiced => isInvoiced || isCprIssued;
+
+  /// FOI APROVADA pelo comitê — inclusive se já foi faturada ou emitida.
   ///
   /// É esta a pergunta dos painéis ("quanto já foi fechado?"), e não
   /// `status == approved`: faturar não desfaz a aprovação. Enquanto os totais
   /// olhavam um estado só, a permuta sumia da conta no dia em que a nota saía —
   /// o negócio mais consolidado que existe fazia a barra andar para trás.
-  bool get wasApproved => awaitsInvoice || isInvoiced;
+  bool get wasApproved => awaitsInvoice || wasInvoiced;
 
   /// A decisão do comitê já foi tomada? (aprovada, negada ou já faturada).
   bool get hasDecision => reviewedBy != null && reviewedBy!.isNotEmpty;
@@ -1330,7 +1451,7 @@ class BarterModel {
       userId != null &&
       consultantId == userId &&
       !isDraft &&
-      !isInvoiced &&
+      !wasInvoiced &&
       !hasOpenChangeRequest;
 
   /* ── O pedido de fora do Barter ───────────────────────────────────── */
@@ -1384,6 +1505,109 @@ class BarterModel {
   }
 }
 
+/// UM ARQUIVO ANEXADO — a nota fiscal do faturamento e o SCR do produtor.
+///
+/// Ele chega SEM os bytes, e é de propósito: o conteúdo se baixa por rota
+/// própria, e uma listagem de cinquenta permutas não pode carregar cinquenta
+/// PDFs para desenhar uma tabela.
+class BarterFileModel {
+  final String id;
+  final String fileName;
+  final String contentType;
+
+  /// O tamanho em bytes — é o servidor quem o guarda, para a tela dizer
+  /// "2,4 MB" sem ler o arquivo.
+  final int size;
+
+  final String uploadedBy;
+  final DateTime? uploadedAt;
+
+  const BarterFileModel({
+    this.id = '',
+    this.fileName = '',
+    this.contentType = '',
+    this.size = 0,
+    this.uploadedBy = '',
+    this.uploadedAt,
+  });
+
+  factory BarterFileModel.fromJson(Map<String, dynamic> json) => BarterFileModel(
+        id: _asId(json['id']),
+        fileName: (json['fileName'] ?? '') as String,
+        contentType: (json['contentType'] ?? '') as String,
+        size: (json['size'] as num?)?.toInt() ?? 0,
+        uploadedBy: (json['uploadedBy'] ?? '') as String,
+        uploadedAt: _asDateOrNull(json['uploadedAt']),
+      );
+
+  /// O tamanho como se lê. KB abaixo de um mega — um DANFE tem 80 KB, e
+  /// "0,1 MB" esconde a diferença entre ele e um anexo de trinta páginas.
+  String get sizeLabel {
+    if (size < 1024) return '$size B';
+    if (size < 1024 * 1024) return '${(size / 1024).round()} KB';
+    return '${(size / 1024 / 1024).toStringAsFixed(1).replaceAll('.', ',')} MB';
+  }
+}
+
+/// UMA NOTA FISCAL do faturamento, com o arquivo dela.
+///
+/// Ela era um par de campos de texto DENTRO da cédula, digitado por quem não
+/// emitia a nota — e cabia uma só. Agora é lista, com o documento junto: a
+/// permuta sai em mais de um carregamento, cada retirada gera a sua nota, e a
+/// cancelada é reemitida.
+class BarterInvoiceModel {
+  final String id;
+  final String number;
+  final String series;
+
+  /// A DUPLICATA que a nota originou, quando há. A cédula a cita ao lado da
+  /// nota — as duas são documento do faturamento, não da negociação.
+  final String duplicateNumber;
+
+  final DateTime? issuedAt;
+  final double value;
+  final String? note;
+
+  final String attachedBy;
+  final DateTime? attachedAt;
+
+  /// O anexo. Null só nas notas HERDADAS do campo de texto que ficava dentro da
+  /// cédula — a tela as mostra como pendentes de arquivo em vez de escondê-las.
+  final BarterFileModel? file;
+
+  const BarterInvoiceModel({
+    this.id = '',
+    this.number = '',
+    this.series = '',
+    this.duplicateNumber = '',
+    this.issuedAt,
+    this.value = 0,
+    this.note,
+    this.attachedBy = '',
+    this.attachedAt,
+    this.file,
+  });
+
+  factory BarterInvoiceModel.fromJson(Map<String, dynamic> json) => BarterInvoiceModel(
+        id: _asId(json['id']),
+        number: (json['number'] ?? '') as String,
+        series: (json['series'] ?? '') as String,
+        duplicateNumber: (json['duplicateNumber'] ?? '') as String,
+        issuedAt: _asDateOrNull(json['issuedAt']),
+        value: _asDouble(json['value']),
+        note: json['note'] as String?,
+        attachedBy: (json['attachedBy'] ?? '') as String,
+        attachedAt: _asDateOrNull(json['attachedAt']),
+        file: json['file'] == null
+            ? null
+            : BarterFileModel.fromJson((json['file'] as Map).cast<String, dynamic>()),
+      );
+
+  /// "NF 55.318/1" — o jeito como a operação se refere a ela. A série só entra
+  /// quando existe: há praça que não a usa, e "55.318/" seria ruído.
+  String get label => series.isEmpty ? 'NF $number' : 'NF $number/$series';
+}
+
 /// O rótulo LOCAL de um estado da permuta.
 ///
 /// Ele sustenta [BarterModel.statusLabel] quando a resposta não traz o rótulo do
@@ -1405,8 +1629,16 @@ String barterStatusLabel(BarterStatus status) {
       return 'Aprovada com ressalva, a faturar';
     case BarterStatus.denied:
       return 'Negada';
+    // "Faturada" sozinho dizia que tinha acabado. O rótulo agora diz o que
+    // falta, que é o que muda a leitura de quem passa os olhos numa lista.
     case BarterStatus.invoiced:
-      return 'Faturada';
+      return 'Faturada, a emitir a CPR';
+    case BarterStatus.cprIssued:
+      return 'CPR emitida, a assinar';
+    case BarterStatus.cprSigned:
+      return 'CPR assinada, a registrar';
+    case BarterStatus.cprRegistered:
+      return 'CPR registrada';
   }
 }
 

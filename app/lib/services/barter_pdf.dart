@@ -243,6 +243,14 @@ class BarterPdf {
       case BarterStatus.draft:
         color = _c(AppColors.draftBg);
         break;
+      // O trecho da CÉDULA divide a cor do faturamento — ver [StatusBadge].
+      case BarterStatus.cprIssued:
+      case BarterStatus.cprSigned:
+        color = _c(AppColors.invoicedBg);
+        break;
+      case BarterStatus.cprRegistered:
+        color = _c(AppColors.approvedBg);
+        break;
       case BarterStatus.invoiced:
         color = _c(AppColors.invoicedBg);
         break;

@@ -54,6 +54,7 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333       # emulador Android
 | Gerente  | gerente@agrobarter.com.br       | demo-2026-agro |
 | Comitê   | comite@agrobarter.com.br        | demo-2026-agro |
 | Faturista | faturista@agrobarter.com.br    | demo-2026-agro |
+| Emissor  | emissor@agrobarter.com.br       | demo-2026-agro |
 
 > O acesso do **Comitê** é do órgão, não de uma pessoa: é uma reunião, e quem
 > participa entra com o mesmo login.
@@ -71,10 +72,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 221 testes de unidade (matemática, máquina de estados, desvio e pedido de fora do Barter, senha, sessão, políticas, cédula)
-cd api && npm run test:e2e  # 300 testes funcionais da API (auth, escopo, fluxo, cédula, credora, contrato de erro)
+cd api && npm test          # 230 testes de unidade (matemática, máquina de estados, desvio e pedido de fora do Barter, senha, sessão, políticas, cédula)
+cd api && npm run test:e2e  # 324 testes funcionais da API (auth, escopo, fluxo, notas do faturamento, cédula e emissão, credora, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura
-cd app && flutter test      # 221 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
+cd app && flutter test      # 234 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -125,12 +126,17 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   tipado). Detalhes em `api/README.md`.
 - **O comitê é um ÓRGÃO, não uma pessoa**: ele é uma reunião, e o cadastro dele é
   um só (`/committee`, no singular, sem exclusão) — quem participa entra com o
-  mesmo acesso, e a decisão sai assinada pelo comitê. Consultor, gerente e
-  faturista continuam sendo pessoas, cada um com a sua conta. Detalhes em
-  `api/README.md`.
+  mesmo acesso, e a decisão sai assinada pelo comitê. Consultor, gerente,
+  faturista e emissor continuam sendo pessoas, cada um com a sua conta. Detalhes
+  em `api/README.md`.
 - **A permuta tem uma linha de produção, e ela mora no servidor**: gerente →
-  comitê → faturista. O gerente escreve o parecer técnico, o **comitê** decide
-  (aprova ou nega) e o **faturista** fatura o que foi aprovado. O admin
+  comitê → faturista → **emissor**. O gerente escreve o parecer técnico, o
+  **comitê** decide (aprova ou nega), o **faturista** fatura o que foi aprovado e
+  anexa as notas fiscais, e o **emissor** confere a cédula, emite o título, colhe
+  as assinaturas e o leva a registro. Faturar não é mais o fim da linha: uma
+  permuta faturada ainda deve o título que formaliza a entrega, e enquanto a
+  emissão não teve etapa ela aparecia como concluída com a cédula pela metade. O
+  admin
   administra o sistema e **não decide permuta** — quem concede o acesso não pode
   ser quem decide o negócio. O caminho inteiro (estados, transições e o que
   responder a quem chega fora de hora) está em `api/src/barters/barter-workflow.ts`,
@@ -161,17 +167,22 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   pergunta feita dos dois lados — e a segunda é a que o produtor faz ao
   consultor. Quem monta a lista é a máquina de estados (`progressOf`), pelo mesmo
   motivo das capacidades: uma etapa nova aparece nas telas já instaladas. Permuta
-  negada marca o faturamento como `halted`, e não como pendente — ela não vai ser
-  faturada, e uma tela de acompanhamento não pode prometer um passo que ninguém
-  vai dar.
-- **A CPR é montada pelo faturista, e o documento é derivado**: a permuta
-  registra o negócio; a **Cédula de Produto Rural** o formaliza como título. O
-  que a permuta já sabe (emitente, sacas, produto, preço, valor, safra) não é
-  campo de formulário; o que falta — a qualificação civil do emitente, as
-  lavouras em penhor, o padrão do grão, NF e duplicata — é preenchido pelo
-  faturista, aos pedaços, e quem diz o que ainda falta é o servidor. A
-  **credora** é cadastro à parte (`/creditor`), mantido pelo admin *e* pelo
-  faturista: é o timbre do papel, não decisão de negócio. Os **extensos** são
+  negada marca o faturamento e os três degraus da cédula como `halted`, e não
+  como pendentes — ela não vai ser faturada nem virar título, e uma tela de
+  acompanhamento não pode prometer passos que ninguém vai dar.
+- **A CPR tem três mãos, e o documento é derivado**: a permuta registra o
+  negócio; a **Cédula de Produto Rural** o formaliza como título. O **consultor**
+  preenche (a qualificação civil do emitente, as lavouras em penhor, o padrão do
+  grão e o **SCR do produtor**, que é anexo obrigatório) — é ele quem visita a
+  fazenda, e pedir isso a quem fatura significava obter tudo por telefone e
+  digitar; o **emissor** confere e emite, e cédula com lacuna não sai; o **admin**
+  tira a segunda via. O que a permuta já sabe não é campo de formulário — e isso
+  cresceu: o **vencimento** agora é da SAFRA (ele muda conforme a cultura, e vale
+  para todas as cédulas dela) e os **números das notas** vêm do faturamento, em
+  lista e com o arquivo junto. Quem diz o que ainda falta é o servidor, e cada
+  pendência diz com quem ela se resolve. A **credora** é cadastro à parte
+  (`/creditor`), mantido pelo admin *e* pelo **emissor**: é o timbre do papel,
+  não decisão de negócio. Os **extensos** são
   gerados a partir dos números, nunca digitados — o modelo que originou tudo
   trazia "367 (quatrocentos e quarenta) sacas". O documento sai em **.docx**, e
   não em PDF, porque a cédula ainda passa pelo jurídico e pelo cartório antes de

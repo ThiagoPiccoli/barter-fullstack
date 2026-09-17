@@ -8,10 +8,11 @@ import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
+import 'invoicing_screen.dart';
 import 'barters_screen.dart';
 import 'creditor_screen.dart';
 
-/// Casa dos papéis de RETAGUARDA — gerente, comitê e faturista.
+/// Casa dos papéis de RETAGUARDA — gerente, comitê, faturista e EMISSOR.
 ///
 /// Os três são POSTOS da mesma linha de produção, e é por isso que continuam
 /// numa tela só: o que muda entre eles é a fila que pede ação e a palavra da
@@ -54,7 +55,8 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
   @override
   Widget build(BuildContext context) {
     // O que espera AÇÃO DE QUEM ESTÁ OLHANDO — o parecer do gerente, a decisão
-    // do comitê, o faturamento do faturista. Vira o número do selo na navegação:
+    // do comitê, o faturamento do faturista, a cédula do emissor. Vira o número
+    // do selo na navegação:
     // o trabalho precisa se anunciar de qualquer aba, e não só quando a pessoa
     // pensa em ir procurar.
     final post = _Post.of(widget.user);
@@ -86,11 +88,11 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
 /// O atalho para o cadastro da EMPRESA (a credora), no painel de quem o mantém.
 ///
 /// Ele carrega o cadastro ao aparecer, e não usa cache, porque o dono é
-/// compartilhado: admin e faturista escrevem a mesma linha, e uma cópia em
+/// compartilhado: admin e emissor escrevem a mesma linha, e uma cópia em
 /// memória mostraria a versão de quem abriu o app primeiro.
 ///
 /// Quando falta alguma coisa, o cartão DIZ o quê. É a mesma lista que a tela da
-/// cédula mostra, do mesmo lugar — o faturista não deveria descobrir que o CNPJ
+/// cédula mostra, do mesmo lugar — o emissor não deveria descobrir que o CNPJ
 /// está faltando só ao montar a décima cédula do dia.
 class _CreditorTile extends StatefulWidget {
   const _CreditorTile();
@@ -307,6 +309,39 @@ class _Post {
             openInvoicing(context, barter, onInvoiced: (_) => onChanged()),
         emptyTitle: 'Nada a faturar',
         emptyText: 'Nenhuma permuta aprovada esperando faturamento. Puxe para atualizar.',
+      );
+    }
+
+    // O EMISSOR — o posto que vem depois do faturamento.
+    //
+    // A fila dele tem os TRÊS degraus da cédula, e não só o primeiro: emitir,
+    // colher assinaturas e registrar acontecem em dias diferentes, e uma fila
+    // que mostrasse só "a emitir" esconderia dele as cédulas assinadas paradas
+    // esperando cartório — que é justamente o que estava invisível enquanto este
+    // posto não existia.
+    if (user.can(Capability.bartersCprIssue)) {
+      return _Post(
+        queue: AppData.issuanceQueue,
+        color: AppColors.invoiced,
+        surface: AppColors.invoicedBg,
+        icon: Icons.description_outlined,
+        headline: (count) => count == 1
+            ? '1 cédula em aberto'
+            : '$count cédulas em aberto',
+        // O número que dá tamanho ao trabalho dele é o que já foi REGISTRADO:
+        // é o fim da linha, e o único estado em que a garantia vale contra
+        // terceiros.
+        followStatus: BarterStatus.cprRegistered,
+        followLabel: 'Registradas',
+        followIcon: Icons.verified_outlined,
+        followColor: AppColors.approved,
+        actionLabel: 'Abrir cédula',
+        actionIcon: Icons.description_outlined,
+        onAction: (context, barter, onChanged) =>
+            openCprDesk(context, barter, onChanged: (_) => onChanged()),
+        emptyTitle: 'Nenhuma cédula em aberto',
+        emptyText: 'Nada faturado esperando emissão, assinatura ou registro. '
+            'Puxe para atualizar.',
       );
     }
 

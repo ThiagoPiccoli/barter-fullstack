@@ -110,7 +110,8 @@ curl -X POST http://localhost:3333/api/v1/barters \
 | **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo; administra, não decide) |
 | Gerente | `gerente@agrobarter.com.br` | — (o time dele; dá o parecer técnico) |
 | Comitê | `comite@agrobarter.com.br` | — (o ÓRGÃO, um acesso só; **decide** as permutas) |
-| Faturista | `faturista@agrobarter.com.br` | — (só o que chegou ao faturamento; **fatura** as aprovadas) |
+| Faturista | `faturista@agrobarter.com.br` | — (só o que chegou ao faturamento; **fatura** e anexa as notas) |
+| Emissor | `emissor@agrobarter.com.br` | — (só o que chegou à emissão; **emite** a CPR, colhe assinaturas e registra) |
 | Consultor | `joao.silva@agrobarter.com.br` | Antônio Carvalho, Sebastião Ramos |
 | Consultor | `ana.ferreira@agrobarter.com.br` | Helena Prado, Cláudia Nunes |
 | Consultor | `roberto.souza@agrobarter.com.br` | Joaquim Tavares |
@@ -120,8 +121,9 @@ curl -X POST http://localhost:3333/api/v1/barters \
 Além disso, o dataset traz **9 produtos** (4 grãos + 5 insumos, cada um com 7
 meses de histórico de preço), **3 categorias** de insumo com regras de mínimo, e
 **8 permutas** espalhadas pela linha inteira — duas na mesa do gerente, uma no
-comitê, três aprovadas esperando faturamento, uma negada e uma já faturada.
-Nenhuma tela do fluxo abre vazia, e cada permuta vem com a linha do tempo dela.
+comitê, três aprovadas esperando faturamento, uma negada e uma já faturada (com
+a nota fiscal anexada e a cédula completa, pronta na mesa do emissor). Nenhuma
+tela do fluxo abre vazia, e cada permuta vem com a linha do tempo dela.
 
 ---
 
@@ -167,14 +169,21 @@ São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts
 - **committee (comitê)** — **decide**: aprova ou nega, lendo o pedido do
   consultor e o parecer do gerente. É a única instância que decide, e é um
   ÓRGÃO: uma reunião, com um cadastro só (ver "O comitê é um cadastro só").
-- **biller (faturista)** — **fatura** o que foi aprovado. É o último posto da
-  linha, e o mais simples: ele não avalia e não devolve. Enxerga só o trecho
-  dele — aprovadas e faturadas (`barters.readInvoicing`); o que ainda está no
-  gerente ou no comitê não aparece para ele.
-- Cada um dos três escreve UMA coisa, e nenhum escreve a do outro — a matriz
+- **biller (faturista)** — **fatura** o que foi aprovado e **anexa as notas
+  fiscais** (são várias: a permuta sai em mais de um carregamento). Ele não
+  avalia e não devolve. Enxerga só o trecho dele (`barters.readInvoicing`); o
+  que ainda está no gerente ou no comitê não aparece para ele.
+- **emitter (emissor)** — o posto DEPOIS do faturamento: **confere** a cédula que
+  o consultor preencheu, **emite** o título, lança a **coleta de assinaturas** e
+  o **registro**. São três atos e três estados porque acontecem em dias
+  diferentes. É o escopo mais estreito de todos (`barters.readIssuance`), um
+  degrau adiante do faturista.
+- Cada um dos quatro escreve UMA coisa, e nenhum escreve a do outro — a matriz
   inteira é varrida em [`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts).
-- **consultant (consultor)** — loga no app e registra permutas **apenas para os
-  produtores que atende**. A carteira é compartilhável: consultores dividem
+- **consultant (consultor)** — loga no app, registra permutas **apenas para os
+  produtores que atende** e **preenche a cédula** delas: a matrícula da lavoura,
+  o nome do cônjuge, o dono da área arrendada e o SCR do produtor são o que ele
+  traz da visita à fazenda. A carteira é compartilhável: consultores dividem
   região, e o mesmo produtor pode ser atendido por vários — mas nenhum deles vê
   os produtores que não atende. Quem monta a lista é o admin.
 - **produtor** — não loga: é um cadastro designado pelo consultor nas permutas.
@@ -186,17 +195,19 @@ sem política é recusada. Quem tem cada capacidade está numa tabela só,
 tabela para decidir o escopo por linha (carteira própria × operação inteira).
 
 Atos sensíveis deixam rastro em `GET /audit-logs`: provisionar, editar, resetar
-senha, excluir usuário, decidir e faturar permuta. Cada permuta ainda tem a
+senha, excluir usuário, decidir e faturar permuta, anexar e remover nota,
+preencher a cédula, emitir, assinar e registrar o título. Cada permuta ainda tem a
 PRÓPRIA linha do tempo (ver abaixo) — são trilhas diferentes de propósito.
 
 Não há signup público: **usuário é provisionado pelo admin**, cada papel pela
-sua rota — `POST /consultants`, `/managers`, `/billers` e `/committee`. O papel
+sua rota — `POST /consultants`, `/managers`, `/billers`, `/emitters` e
+`/committee`. O papel
 vem da ROTA, nunca do corpo, e cada rota só enxerga e altera o próprio papel
 (papel alheio responde 404).
 
 ### O comitê é um cadastro só
 
-As três primeiras rotas cadastram PESSOAS e são plurais. A do comitê é
+As quatro primeiras rotas cadastram PESSOAS e são plurais. A do comitê é
 **singular**, e a diferença é de domínio: o comitê é uma **reunião**. Quem decide
 a permuta não é o fulano do comitê — é o comitê reunido.
 
@@ -340,6 +351,7 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | GET/POST/PUT | `/committee` | admin | O comitê — **um cadastro só** (ver abaixo) |
 | POST | `/committee/reset-password` | admin | Nova senha da conta do comitê |
 | GET/POST/PUT/DELETE | `/billers[/:id]` | admin | Faturistas |
+| GET/POST/PUT/DELETE | `/emitters[/:id]` | admin | Emissores — sem um, toda permuta faturada para em "a emitir a CPR" |
 | POST | `/<papel>/:id/reset-password` | admin | Nova senha provisória; encerra as sessões dele |
 | GET | `/audit-logs` | admin | Trilha de auditoria (`?action=`, `?targetType=`); só leitura |
 | GET | `/barters` | autenticado | Escopado por papel (`?status=`) |
@@ -347,7 +359,19 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | POST | `/barters` | consultor | Registra permuta (ver regras abaixo) |
 | POST | `/barters/:code/opinion` | gerente | Parecer técnico (move para o comitê) |
 | POST | `/barters/:code/review` | comitê | Aprova/nega, com observação |
-| POST | `/barters/:code/invoice` | faturista | Fatura a aprovada — fim da linha |
+| POST | `/barters/:code/invoice` | faturista | Fatura a aprovada — só com nota anexada |
+| POST | `/barters/:code/invoices` | faturista | Anexa uma nota fiscal (multipart: arquivo + número, série, duplicata, data, valor) |
+| DELETE | `/barters/:code/invoices/:id` | faturista | Remove a nota; o arquivo vai junto, e a permuta continua faturada |
+| GET | `/barters/:code/invoices/:id/file` | escopado | Baixa o arquivo da nota |
+| GET/PUT | `/barters/:code/cpr` | consultor (escrita), emissor e admin (leitura) | A mesa da cédula |
+| PUT/GET | `/barters/:code/cpr/scr` | consultor e emissor (escrita), admin (leitura) | O SCR do produtor — anexo obrigatório |
+| POST | `/barters/:code/cpr/issue` | emissor | **Emite** a cédula: confere e gera. Com lacuna, 422 com a lista |
+| POST | `/barters/:code/cpr/signatures` | emissor | Lança as assinaturas (multipart) — a **cédula assinada** é obrigatória |
+| POST | `/barters/:code/cpr/registration` | emissor | Lança o registro, com o número (obrigatório); a via carimbada é opcional |
+| PUT | `/barters/:code/cpr/registry-file` | emissor | A via carimbada que o cartório devolveu depois do ato |
+| GET | `/barters/:code/cpr/signed` | consultor, emissor e admin | Baixa a cédula assinada |
+| GET | `/barters/:code/cpr/registry-file` | consultor, emissor e admin | Baixa a via registrada |
+| PUT | `/seasons/:code/cpr-due-date` | admin | O vencimento da CPR daquela safra — ele muda conforme a cultura |
 | POST | `/barters/:code/change-request` | consultor | Pede alteração da permuta que já saiu da mão dele |
 | POST | `/barters/:code/change-request/decision` | admin | Libera (volta a rascunho) ou recusa o pedido |
 | POST | `/barters/:code/change-request/prices` | admin | Atende o pedido no VALOR: corrige os itens, recalcula as sacas, a permuta fica onde está |
@@ -390,21 +414,31 @@ Uma permuta atravessa **três postos** antes de virar nota, e cada posto tem um
 dono e uma pergunta:
 
 ```
-                    ┌──────────┐
-(registro)          │ invoiced │  fim da linha
-    │               └──────────┘
-    ▼                     ▲
-sentToManager ──▶ pending ──▶ approved ──▶ (fatura)
- (gerente)       (comitê)    (faturista)
-                    │
-                    └──▶ denied   (fim da linha)
+(registro)
+    │
+    ▼
+sentToManager ──▶ pending ──▶ approved ──▶ invoiced ──▶ cprIssued ──▶
+ (gerente)       (comitê)    (faturista)  (emissor)     (emissor)
+                    │                                        │
+                    └──▶ denied   (fim da linha)             ▼
+                                              cprSigned ──▶ cprRegistered
+                                              (emissor)      (fim da linha)
 ```
 
 | Posto | Quem | O que faz | Rota |
 |---|---|---|---|
 | 1 | **gerente** do consultor | Escreve o **parecer técnico**. Não decide. | `POST /barters/:code/opinion` |
 | 2 | **comitê** | **Decide**: lê o pedido e o parecer, aprova ou nega. | `POST /barters/:code/review` |
-| 3 | **faturista** | **Fatura** o que foi aprovado. Não avalia, não devolve. | `POST /barters/:code/invoice` |
+| 3 | **faturista** | **Fatura** o que foi aprovado e anexa as notas. Não avalia, não devolve. | `POST /barters/:code/invoice` |
+| 4 | **emissor** | **Confere e emite** a cédula. É a única recusa do fluxo: com lacuna, ela não sai. | `POST /barters/:code/cpr/issue` |
+| 5 | **emissor** | Lança a **coleta de assinaturas**, anexando a cédula assinada. | `POST /barters/:code/cpr/signatures` |
+| 6 | **emissor** | Lança o **registro**, com o número. Fim da linha. | `POST /barters/:code/cpr/registration` |
+
+**Faturar deixou de ser o fim da linha**, e é a correção mais importante desta
+versão: uma permuta faturada ainda deve o título que formaliza a entrega. Enquanto
+a emissão da CPR não teve etapa, ela acontecia "junto com" o faturamento — sem
+prazo, sem estado e sem quem respondesse por ela —, e uma permuta parada com a
+cédula pela metade aparecia como concluída.
 
 O caminho inteiro mora em um arquivo só,
 [`src/barters/barter-workflow.ts`](src/barters/barter-workflow.ts): os estados,
@@ -449,7 +483,10 @@ detalhe (`GET /barters/:code`) devolve a linha do tempo pronta:
   { "action": "register", "fromStatus": null,            "toStatus": "sentToManager", "actorName": "João Silva",       "actorRoleLabel": "Consultor" },
   { "action": "opinion",  "fromStatus": "sentToManager", "toStatus": "pending",       "actorName": "Beatriz Nogueira", "actorRoleLabel": "Gerente", "note": "Estoque conferido…" },
   { "action": "review",   "fromStatus": "pending",       "toStatus": "approved",      "actorName": "Comitê de Permutas", "actorRoleLabel": "Comitê" },
-  { "action": "invoice",  "fromStatus": "approved",      "toStatus": "invoiced",      "actorName": "Patrícia Lemos",   "actorRoleLabel": "Faturista" }
+  { "action": "invoice",  "fromStatus": "approved",      "toStatus": "invoiced",      "actorName": "Patrícia Lemos",   "actorRoleLabel": "Faturista" },
+  { "action": "cprIssue", "fromStatus": "invoiced",      "toStatus": "cprIssued",     "actorName": "Renata Bicudo",    "actorRoleLabel": "Emissor" },
+  { "action": "cprSign",  "fromStatus": "cprIssued",     "toStatus": "cprSigned",     "actorName": "Renata Bicudo",    "actorRoleLabel": "Emissor", "note": "Emitente e cônjuge…" },
+  { "action": "cprRegister", "fromStatus": "cprSigned",  "toStatus": "cprRegistered", "actorName": "Renata Bicudo",    "actorRoleLabel": "Emissor", "note": "Registro R-4 / 18.442 — CRI Maringá/PR" }
 ]
 ```
 
@@ -461,7 +498,8 @@ São **duas trilhas**, e a diferença é deliberada:
 - `BarterEvent` responde *"por onde esta permuta passou"*: é parte do documento,
   quem enxerga a permuta enxerga a história dela, e ele é transacional.
 
-É essa segunda que o faturista recebe pronta das etapas anteriores — e é ela que
+É essa segunda que o faturista e o emissor recebem prontas das etapas anteriores
+— e é ela que
 mantém o parecer do gerente visível depois que a decisão o sucede, porque os
 campos da permuta são sobrescritos e os eventos não. A listagem **não** carrega
 histórico: lista mostra estado, não trajetória.

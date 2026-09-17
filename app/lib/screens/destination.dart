@@ -22,6 +22,10 @@ Widget destinationFor(UserModel user) {
     case UserRole.manager:
     case UserRole.committee:
     case UserRole.biller:
+    // O EMISSOR é retaguarda como os outros três: ele tem uma fila (as permutas
+    // faturadas esperando a cédula) e age sobre ela. A tela é a mesma porque a
+    // pergunta é a mesma — o que muda é o escopo, e quem o define é o servidor.
+    case UserRole.emitter:
       return BackOfficeMainScreen(user: user);
     case UserRole.consultant:
       return ConsultantMainScreen(consultant: user);

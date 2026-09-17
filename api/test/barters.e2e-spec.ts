@@ -11,7 +11,9 @@ import {
   MANAGER,
   ROBERTO,
   UNIT,
+  attachInvoice,
   createTestApp,
+  fillCpr,
   loginAs,
   resetDb,
 } from './utils';
@@ -59,11 +61,17 @@ describe('Barters (e2e)', () => {
    * ninguém. Os casos que falam do gerente para a frente precisam dizer, em
    * algum lugar, que alguém a mandou — e este helper é esse lugar.
    */
-  const encaminhar = (code: string, auth: string, note = PARECER_DO_CONSULTOR) =>
-    request(app.getHttpServer())
+  /// A CÉDULA vai junto porque ela é PRÉ-REQUISITO do encaminhamento: a coleta
+  /// acontece na visita, com o produtor por perto, e não semanas depois. Para os
+  /// casos daqui para baixo ela é preâmbulo — quem testa o portão em si é
+  /// "a cédula é pré-requisito do encaminhamento", mais abaixo.
+  const encaminhar = async (code: string, auth: string, note = PARECER_DO_CONSULTOR) => {
+    await fillCpr(app, auth, code);
+    return request(app.getHttpServer())
       .post(`/api/v1/barters/${code}/forward`)
       .set('Authorization', auth)
       .send({ note });
+  };
 
   /** Registra e encaminha numa tacada — o fluxo completo do consultor. */
   const registrarEEncaminhar = async (email: string, payload: object = validPayload) => {
@@ -141,7 +149,7 @@ describe('Barters (e2e)', () => {
     // A retaguarda só a alcança depois de encaminhada: rascunho é do dono (ver
     // `scopeFor`). Encaminhar não recalcula nada — o valor congelado no registro
     // é o que ela lê.
-    await encaminhar(barter.code as string, await asUser(JOAO)).expect(200);
+    expect((await encaminhar(barter.code as string, await asUser(JOAO))).status).toBe(200);
     const daRetaguarda = await request(app.getHttpServer())
       .get(`/api/v1/barters/${barter.code}`)
       .set('Authorization', await asUser(ADMIN));
@@ -307,7 +315,9 @@ describe('Barters (e2e)', () => {
     expect(response.status).toBe(201);
     // O preço GRAVADO é o do banco, e é a retaguarda que o lê de volta — para o
     // consultor a permuta continua sem R$ nenhum.
-    await encaminhar(response.body.data.code as string, await asUser(JOAO)).expect(200);
+    expect((await encaminhar(response.body.data.code as string, await asUser(JOAO))).status).toBe(
+      200,
+    );
     const registrada = await request(app.getHttpServer())
       .get(`/api/v1/barters/${response.body.data.code}`)
       .set('Authorization', await asUser(ADMIN));
@@ -693,7 +703,9 @@ describe('Barters (e2e)', () => {
       const inteiro = await salvar(PARECER_DO_CONSULTOR);
       expect(inteiro.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
 
-      // E encaminhar sem repetir o texto usa o que está salvo.
+      // E encaminhar sem repetir o texto usa o que está salvo. (A cédula é o
+      // outro pré-requisito, e vai antes — ela não é o assunto deste caso.)
+      await fillCpr(app, joao, code);
       const enviada = await request(app.getHttpServer())
         .post(`/api/v1/barters/${code}/forward`)
         .set('Authorization', joao)
@@ -701,6 +713,94 @@ describe('Barters (e2e)', () => {
       expect(enviada.status).toBe(200);
       expect(enviada.body.data.status).toBe('sentToManager');
       expect(enviada.body.data.consultantNote).toBe(PARECER_DO_CONSULTOR);
+    });
+
+    /**
+     * A CÉDULA É PRÉ-REQUISITO DO ENCAMINHAMENTO — o portão novo.
+     *
+     * Ela é coletada AGORA, com o produtor ainda por perto, e não semanas
+     * depois: o emissor descobrindo que falta a matrícula de uma lavoura com a
+     * permuta já faturada e o insumo já retirado é o caso que este portão existe
+     * para não acontecer. O custo de voltar atrás cresce a cada posto, e o
+     * encaminhamento é o último momento em que ele é zero.
+     *
+     * SÓ AS PENDÊNCIAS DO CONSULTOR são cobradas: a nota fiscal não existe antes
+     * do faturamento, o vencimento é da safra e o número da cédula é do emissor.
+     * Exigi-los aqui travaria a esteira num impossível — e é essa metade que o
+     * segundo caso prova.
+     */
+    it('a cédula é pré-requisito do encaminhamento', async () => {
+      const code = await rascunho();
+      const joao = await asUser(JOAO);
+
+      const semCedula = await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/forward`)
+        .set('Authorization', joao)
+        .send({ note: PARECER_DO_CONSULTOR });
+      expect(semCedula.status).toBe(422);
+      expect(semCedula.body.message).toContain('Preencha a cédula');
+      // A frase NOMEIA o que falta, e conta o resto: uma parede com as vinte
+      // pendências de uma cédula em branco vira "deu erro" na leitura.
+      expect(semCedula.body.message).toContain('RG do emitente');
+      expect(semCedula.body.message).toContain('e mais');
+
+      // E ela CONTINUA rascunho: o ato não aconteceu.
+      const parada = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}`)
+        .set('Authorization', joao);
+      expect(parada.body.data.status).toBe('draft');
+
+      // A MESA DIZ A MESMA COISA, e é assim que a tela avisa ANTES do clique: o
+      // que trava o encaminhamento sai em `consultantGaps`, e o que a recusa
+      // nomeia veio de lá. Duas listas para a mesma cédula seria um aviso
+      // prometendo o que a recusa desmente.
+      const mesa = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}/cpr`)
+        .set('Authorization', joao);
+      expect(mesa.body.data.consultantGaps).toContain('RG do emitente');
+      for (const pendencia of mesa.body.data.consultantGaps) {
+        expect(mesa.body.data.gaps).toContain(pendencia);
+      }
+
+      await fillCpr(app, joao, code);
+      const enviada = await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/forward`)
+        .set('Authorization', joao)
+        .send({ note: PARECER_DO_CONSULTOR });
+      expect(enviada.status).toBe(200);
+      expect(enviada.body.data.status).toBe('sentToManager');
+    });
+
+    /**
+     * O PORTÃO COBRA SÓ O QUE É DO CONSULTOR.
+     *
+     * É a metade que impede a regra de virar um impossível: no encaminhamento
+     * não existe nota fiscal (a permuta nem foi decidida), o vencimento é da
+     * safra e o número da cédula só aparece na emissão. Se qualquer um deles
+     * entrasse na conta, nenhuma permuta sairia do rascunho.
+     */
+    it('o encaminhamento não cobra o que é de outro posto', async () => {
+      const code = await rascunho();
+      const joao = await asUser(JOAO);
+      await fillCpr(app, joao, code);
+
+      // A cédula tem o que é do consultor, e MESMO ASSIM está incompleta para
+      // emitir: faltam a nota e o número. Ela encaminha do mesmo jeito.
+      const mesa = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${code}/cpr`)
+        .set('Authorization', joao);
+      expect(mesa.body.data.complete).toBe(false);
+      expect(mesa.body.data.gaps.join(' ')).toContain('nota fiscal');
+      expect(mesa.body.data.gaps.join(' ')).toContain('número da CPR');
+      // E a lista DELE está vazia — é ela que a tela lê para ligar o botão de
+      // encaminhar, e não `gaps`, que continua cheio do que é de outro posto.
+      expect(mesa.body.data.consultantGaps).toEqual([]);
+
+      const enviada = await request(app.getHttpServer())
+        .post(`/api/v1/barters/${code}/forward`)
+        .set('Authorization', joao)
+        .send({ note: PARECER_DO_CONSULTOR });
+      expect(enviada.status).toBe(200);
     });
 
     /**
@@ -757,7 +857,7 @@ describe('Barters (e2e)', () => {
     it('depois de encaminhada, o parecer do consultor fecha', async () => {
       const code = await rascunho();
       const joao = await asUser(JOAO);
-      await encaminhar(code, joao).expect(200);
+      expect((await encaminhar(code, joao)).status).toBe(200);
 
       const reescrita = await request(app.getHttpServer())
         .put(`/api/v1/barters/${code}/note`)
@@ -949,10 +1049,12 @@ describe('Barters (e2e)', () => {
       ).find((step) => step.action === 'review');
       expect(passoDaDecisão?.outcomeLabel).toBe('Aprovada com ressalva');
 
-      // O faturista a alcança e a fatura.
+      // O faturista a alcança, anexa a nota e a fatura.
+      const faturista = await asUser(FATURISTA);
+      await attachInvoice(app, faturista, 'PRM-2026-002');
       const faturada = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-002/invoice')
-        .set('Authorization', await asUser(FATURISTA))
+        .set('Authorization', faturista)
         .send({});
       expect(faturada.status).toBe(200);
       expect(faturada.body.data.status).toBe('invoiced');
@@ -1011,7 +1113,7 @@ describe('Barters (e2e)', () => {
       expect(lista.body.data).toHaveLength(8);
     });
 
-    it('a permuta aprovada é faturada pelo faturista, e aí acabou a linha', async () => {
+    it('a permuta aprovada é faturada pelo faturista, e aí ela passa ao emissor', async () => {
       await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-002/review')
         .set('Authorization', await asUser(COMITE))
@@ -1019,6 +1121,24 @@ describe('Barters (e2e)', () => {
         .expect(200);
 
       const faturista = await asUser(FATURISTA);
+
+      // SEM NOTA NÃO SE FATURA. A trava é nova, e ela existe porque a cédula
+      // cita a nota como origem da dívida: uma permuta "faturada" sem nota
+      // nenhuma é um faturamento que não aconteceu, ou que não deixou prova — e
+      // as duas coisas só apareceriam dias depois, na mesa do emissor.
+      const semNota = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-002/invoice')
+        .set('Authorization', faturista)
+        .send({ note: 'Nota emitida em 12/05.' });
+      expect(semNota.status).toBe(422);
+      expect(semNota.body.message).toContain('nota fiscal');
+
+      const anexo = await attachInvoice(app, faturista, 'PRM-2026-002');
+      expect(anexo.status).toBe(200);
+      expect(anexo.body.data.invoices).toHaveLength(1);
+      expect(anexo.body.data.invoices[0].number).toBe('55.318');
+      expect(anexo.body.data.invoices[0].file.fileName).toBe('nota.pdf');
+
       const faturada = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-002/invoice')
         .set('Authorization', faturista)
@@ -1029,9 +1149,12 @@ describe('Barters (e2e)', () => {
       expect(faturada.body.data.invoicedBy).toBe('Patrícia Lemos');
       expect(faturada.body.data.invoicedAt).toBeTruthy();
       expect(faturada.body.data.invoiceNote).toBe('Nota emitida em 12/05.');
-      // Fim de linha: ninguém mais está com ela, e não há próximo ato.
-      expect(faturada.body.data.waitingFor).toBeNull();
-      expect(faturada.body.data.nextAction).toBeNull();
+      // NÃO é mais fim de linha: a permuta faturada ainda deve o título, e
+      // quem está com ela agora é o EMISSOR. Era aqui que o fluxo antigo
+      // afirmava que o trabalho tinha acabado.
+      expect(faturada.body.data.waitingFor).toBe('emitter');
+      expect(faturada.body.data.nextAction).toBe('cprIssue');
+      expect(faturada.body.data.statusLabel).toBe('Faturada, a emitir a CPR');
 
       const denovo = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-002/invoice')
@@ -1420,8 +1543,8 @@ describe('Barters (e2e)', () => {
       return response.body.data.steps as Step[];
     };
 
-    it('a permuta recém-enviada já mostra as quatro etapas, e quem falta', async () => {
-      // PRM-2026-005 está na mesa do gerente: um evento, quatro etapas.
+    it('a permuta recém-enviada já mostra as OITO etapas, e quem falta', async () => {
+      // PRM-2026-005 está na mesa do gerente: dois eventos, oito etapas.
       const steps = await stepsOf('PRM-2026-005', JOAO);
 
       expect(steps.map((s) => [s.action, s.state])).toEqual([
@@ -1430,6 +1553,13 @@ describe('Barters (e2e)', () => {
         ['opinion', 'current'],
         ['review', 'ahead'],
         ['invoice', 'ahead'],
+        // O TRECHO DA CÉDULA aparece desde o primeiro dia, e é a diferença
+        // entre uma checklist e uma linha do tempo: a emissão do título não
+        // surge do nada depois do faturamento — ela estava prevista o tempo
+        // todo, e o consultor pode dizer isso ao produtor.
+        ['cprIssue', 'ahead'],
+        ['cprSign', 'ahead'],
+        ['cprRegister', 'ahead'],
       ]);
       expect(steps.map((s) => s.label)).toEqual([
         'Registro do consultor',
@@ -1437,6 +1567,9 @@ describe('Barters (e2e)', () => {
         'Parecer do gerente',
         'Decisão do comitê',
         'Faturamento',
+        'Emissão da CPR',
+        'Coleta de assinaturas',
+        'Registro da CPR',
       ]);
 
       // A etapa cumprida vem ASSINADA (do evento); as que ainda vêm, não têm
@@ -1447,25 +1580,41 @@ describe('Barters (e2e)', () => {
       expect(steps[3].actorName).toBeNull();
       expect(steps[3].roleLabel).toBe('Comitê');
       expect(steps[4].roleLabel).toBe('Faturista');
+      expect(steps[5].roleLabel).toBe('Emissor');
 
       // E a etapa de agora diz o que espera, com o nome de quem está com ela.
       expect(steps[2].stateNote).toBe('Esta permuta aguarda o parecer do gerente Beatriz Nogueira');
       expect(steps.filter((s) => s.stateNote !== null)).toHaveLength(1);
     });
 
-    it('a permuta faturada tem a esteira inteira cumprida, e a decisão assinada', async () => {
+    it('a permuta faturada ainda DEVE a cédula — e o andamento diz isso', async () => {
       const steps = await stepsOf('PRM-2026-001', FATURISTA);
 
-      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done', 'done']);
-      expect(steps.every((s) => s.actorName !== null)).toBe(true);
+      // Cinco cumpridas e TRÊS pela frente. Era aqui que a esteira antiga
+      // mentia: ela mostrava cinco `done` e dava a permuta por concluída, com o
+      // título que formaliza a entrega ainda por emitir.
+      expect(steps.map((s) => s.state)).toEqual([
+        'done',
+        'done',
+        'done',
+        'done',
+        'done',
+        'current',
+        'ahead',
+        'ahead',
+      ]);
+      expect(steps.slice(0, 5).every((s) => s.actorName !== null)).toBe(true);
       // O texto de cada etapa vem do EVENTO, que não é sobrescrito pela etapa
-      // seguinte — é o que o faturista lê das etapas anteriores.
+      // seguinte — é o que os postos seguintes leem das etapas anteriores.
       expect(steps[1].note).toContain('Cliente de cinco safras');
       expect(steps[2].note).toContain('Volume compatível');
       // A decisão diz para que lado foi, e continua dizendo depois do
       // faturamento: a permuta está em `invoiced`, e a decisão foi "Aprovada".
       expect(steps[3].outcomeLabel).toBe('Aprovada');
       expect(steps[4].outcomeLabel).toBeNull();
+      // E a etapa de agora diz com quem ela está.
+      expect(steps[5].stateNote).toBe('Esta permuta aguarda a emissão da cédula');
+      expect(steps[5].roleLabel).toBe('Emissor');
     });
 
     /**
@@ -1483,12 +1632,22 @@ describe('Barters (e2e)', () => {
       // A RESPOSTA DO ATO já traz o andamento novo — a tela que acabou de negar
       // não pode continuar mostrando a permuta esperando decisão.
       const steps = decisão.body.data.steps as Step[];
-      expect(steps.map((s) => s.state)).toEqual(['done', 'done', 'done', 'done', 'halted']);
+      expect(steps.map((s) => s.state)).toEqual([
+        'done',
+        'done',
+        'done',
+        'done',
+        'halted',
+        'halted',
+        'halted',
+        'halted',
+      ]);
       expect(steps[3].outcomeLabel).toBe('Negada');
       expect(steps[3].note).toBe('Fora da política de risco desta safra.');
-      // E a etapa que não vem DIZ que não vem, em vez de ficar muda — muda, ela
-      // se leria como "ainda falta faturar".
+      // E as etapas que não vêm DIZEM que não vêm, em vez de ficar mudas —
+      // mudas, elas se leriam como "ainda falta faturar e emitir a cédula".
       expect(steps[4].stateNote).toBe('Não acontece: a permuta foi negada');
+      expect(steps[7].stateNote).toBe('Não acontece: a permuta foi negada');
       expect(steps[4].actorName).toBeNull();
     });
 

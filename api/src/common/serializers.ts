@@ -15,6 +15,7 @@ import type {
   Barter,
   BarterCpr,
   BarterEvent,
+  BarterInvoice,
   BarterItem,
   BarterProductRequest,
   BarterVersion,
@@ -344,6 +345,10 @@ export function toSeasonJson(
     status: season.status,
     openedAt: season.openedAt,
     closedAt: season.closedAt,
+    // O VENCIMENTO DA CPR desta safra. Ele é da CULTURA, e não da cédula: todas
+    // as CPRs da safra vencem no mesmo dia. `null` enquanto o admin não o
+    // acertou — e aí nenhuma cédula da safra pode ser emitida.
+    cprDueDate: season.cprDueDate,
     // O viewer atravessa: sem ele a lente cai no padrão fechado e a safra sairia
     // sem valor nenhum — inclusive para quem tem barterManage, que é o único
     // papel que chega a estas rotas.
@@ -647,11 +652,57 @@ function grainPriceOf(barter: { items?: BarterItem[] }): number {
   return barter.items?.find((item) => item.kind === 'grain')?.unitValue ?? 0;
 }
 
+/**
+ * UMA NOTA FISCAL do faturamento, com o anexo dela.
+ *
+ * O arquivo sai como METADADO — nome, tipo, tamanho, quem anexou —, e nunca com
+ * o conteúdo: os bytes têm rota própria. `file` null é a nota herdada do campo
+ * de texto que ficava dentro da cédula (ver a migration), e a tela a mostra como
+ * pendente de anexo em vez de escondê-la.
+ */
+function toBarterInvoiceJson(invoice: BarterInvoice & { file?: BarterFileMeta | null }) {
+  return {
+    id: invoice.id,
+    number: invoice.number,
+    series: invoice.series,
+    duplicateNumber: invoice.duplicateNumber,
+    issuedAt: invoice.issuedAt,
+    value: invoice.value,
+    note: invoice.note,
+    attachedBy: invoice.attachedBy,
+    attachedAt: invoice.attachedAt,
+    file: invoice.file ? toBarterFileJson(invoice.file) : null,
+  };
+}
+
+/** O anexo sem os bytes — a forma como ele aparece em toda resposta que não é download. */
+function toBarterFileJson(file: BarterFileMeta) {
+  return {
+    id: file.id,
+    fileName: file.fileName,
+    contentType: file.contentType,
+    size: file.size,
+    uploadedBy: file.uploadedBy,
+    uploadedAt: file.uploadedAt,
+  };
+}
+
+/** O que um anexo carrega fora dos bytes. */
+type BarterFileMeta = {
+  id: number;
+  fileName: string;
+  contentType: string;
+  size: number;
+  uploadedBy: string;
+  uploadedAt: Date;
+};
+
 export function toBarterJson(
   barter: Barter & {
     items?: BarterItem[];
     events?: BarterEvent[];
     productRequests?: BarterProductRequest[];
+    invoices?: (BarterInvoice & { file?: BarterFileMeta | null })[];
   },
   viewer?: Pick<User, 'role'>,
 ) {
@@ -702,10 +753,29 @@ export function toBarterJson(
     reviewNote: barter.reviewNote,
     reviewedBy: barter.reviewedBy,
     reviewedAt: barter.reviewedAt,
-    // O FATURAMENTO — o último posto. Null enquanto ela não foi faturada.
+    // O FATURAMENTO. Null enquanto ela não foi faturada.
     invoicedBy: barter.invoicedBy,
     invoicedAt: barter.invoicedAt,
     invoiceNote: barter.invoiceNote,
+    // AS NOTAS FISCAIS anexadas, com o arquivo de cada uma (sem os bytes: o
+    // conteúdo se baixa em `GET /barters/:code/invoices/:id/file`).
+    //
+    // Vão na LISTAGEM também, como os pedidos de produto, porque são ESTADO: a
+    // fila do faturista precisa distinguir a permuta aprovada sem nota nenhuma
+    // da que já tem as três dela. `undefined` quando a resposta não as carrega —
+    // o app distingue "não veio" de "não tem".
+    invoices: barter.invoices?.map(toBarterInvoiceJson),
+    // A EMISSÃO DA CÉDULA — os três atos do emissor, cada um null até acontecer.
+    // É essa diferença que a tela lê para saber em que pé a CPR está, do mesmo
+    // jeito que `managerNote` diz se o parecer saiu.
+    cprEmittedBy: barter.cprEmittedBy,
+    cprEmittedAt: barter.cprEmittedAt,
+    cprEmissionNote: barter.cprEmissionNote,
+    cprSignedAt: barter.cprSignedAt,
+    cprSignatureNote: barter.cprSignatureNote,
+    cprRegisteredAt: barter.cprRegisteredAt,
+    cprRegistryNumber: barter.cprRegistryNumber,
+    cprRegistryPlace: barter.cprRegistryPlace,
     // O PEDIDO DE ALTERAÇÃO em aberto (ou a recusa do último), com o texto dos
     // dois lados. Ver `barters/change-request.ts`.
     //
@@ -779,17 +849,18 @@ export function toCreditorJson(creditor: Creditor) {
 }
 
 /**
- * A MESA DA CÉDULA — o contrato da tela do faturista.
+ * A MESA DA CÉDULA — o contrato da tela de quem preenche e de quem emite.
  *
  * Ela sai em quatro blocos, e a divisão é a informação principal desta resposta:
  * quem preenche o quê. `known` é o que a permuta já respondeu e ninguém digita;
- * `creditor` é configuração da instalação; `cpr` é o rascunho do faturista; e
+ * `creditor` é configuração da instalação; `cpr` é o rascunho do consultor; e
  * `gaps` é o que falta para o documento poder ser gerado.
  *
- * `gaps` e `creditorGaps` são listas separadas porque quem resolve cada uma é
- * outra pessoa: a primeira é do faturista, ali mesmo; a segunda é de quem
- * administra o servidor. Somadas, a tela mandaria o faturista procurar um campo
- * de CNPJ que não existe no formulário dele.
+ * AS LISTAS DE PENDÊNCIA SAEM SEPARADAS porque quem resolve cada uma é outra
+ * pessoa: `consultantGaps` é do consultor, ali mesmo; `creditorGaps` é de quem
+ * administra o servidor; e `gaps` é a soma de tudo, que é o que o emissor lê
+ * antes de emitir. Uma lista só mandaria o consultor procurar um campo de CNPJ
+ * que não existe no formulário dele.
  *
  * `suggestion` vem vazio quando já existe rascunho — ver `cprFor`.
  */
@@ -798,11 +869,15 @@ export function toCprJson(desk: {
     | (BarterCpr & {
         areas: (CprArea & { owners: CprAreaOwner[] })[];
         guarantors: CprGuarantor[];
+        scrFile?: BarterFileMeta | null;
+        signedFile?: BarterFileMeta | null;
+        registryFile?: BarterFileMeta | null;
       })
     | null;
   known: unknown;
   creditor: Creditor;
   gaps: string[];
+  consultantGaps: string[];
   suggestion: unknown;
 }) {
   const creditor = toCreditorJson(desk.creditor);
@@ -812,6 +887,12 @@ export function toCprJson(desk: {
     creditor,
     creditorGaps: creditor.gaps,
     gaps: desk.gaps,
+    // O QUE TRAVA O ENCAMINHAMENTO, separado do resto pelo mesmo motivo de
+    // `creditorGaps`: é o recorte de um posto só. A tela do detalhe avisa o
+    // consultor com esta lista antes de ele tentar encaminhar — mostrar `gaps`
+    // ali mandaria ele procurar o número da CPR, que é do emissor, e a nota
+    // fiscal, que é do faturista, num formulário onde nenhum dos dois existe.
+    consultantGaps: desk.consultantGaps,
     // `complete` é derivado de `gaps` e vai junto porque é a pergunta que a
     // LISTA faz (um selo "CPR pronta" no cartão), enquanto a lista é a pergunta
     // que o FORMULÁRIO faz. Calculá-lo no cliente seria a mesma regra escrita
@@ -826,6 +907,9 @@ function toCprDraftJson(
   cpr: BarterCpr & {
     areas: (CprArea & { owners: CprAreaOwner[] })[];
     guarantors: CprGuarantor[];
+    scrFile?: BarterFileMeta | null;
+    signedFile?: BarterFileMeta | null;
+    registryFile?: BarterFileMeta | null;
   },
 ) {
   return {
@@ -858,8 +942,17 @@ function toCprDraftJson(
     maxMoisture: cpr.maxMoisture,
     maxImpurities: cpr.maxImpurities,
     oilContent: cpr.oilContent,
-    invoiceNumber: cpr.invoiceNumber,
-    duplicateNumber: cpr.duplicateNumber,
+    // O SCR do produtor: o anexo (sem os bytes) e a data da consulta. O número
+    // da nota e o da duplicata NÃO estão mais aqui — eles são do faturamento, e
+    // saem em `known.invoices`.
+    scrFile: cpr.scrFile ? toBarterFileJson(cpr.scrFile) : null,
+    scrConsultedAt: cpr.scrConsultedAt,
+    // OS DOIS DOCUMENTOS QUE VOLTAM DE FORA: a cédula assinada e a via carimbada
+    // pelo registro. Saem aqui, ao lado do SCR, porque são anexos da CÉDULA —
+    // as DATAS dos dois atos ficam na permuta (`cprSignedAt`,
+    // `cprRegisteredAt`), que é onde o andamento mora.
+    signedFile: cpr.signedFile ? toBarterFileJson(cpr.signedFile) : null,
+    registryFile: cpr.registryFile ? toBarterFileJson(cpr.registryFile) : null,
     insurancePolicy: cpr.insurancePolicy,
     // Quem mexeu por último e quando. É o par que uma cédula editável precisa
     // mostrar: dois faturistas dividem a fila, e "isto aqui está como eu deixei?"

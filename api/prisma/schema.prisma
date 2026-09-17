@@ -1,9 +1,9 @@
 // Schema do Barter — permuta de grãos por insumos.
 //
 // Observações de domínio:
-// - Os "enums" são String: role admin|consultant|manager|committee|biller,
-//   type grain|input, kind grain|input, status sentToManager|pending|approved|
-//   denied|invoiced,
+// - Os "enums" são String: role admin|consultant|manager|committee|biller|
+//   emitter, type grain|input, kind grain|input, status sentToManager|pending|
+//   approved|denied|invoiced|cprIssued|cprSigned|cprRegistered,
 //   ruleType none|percentOfTotal|valuePerHa. São String de propósito, e não
 //   `enum` do Postgres — a validação mora nos DTOs (`@IsIn`) e um valor novo
 //   não pede migration nem deploy coordenado entre banco e aplicação.
@@ -18,9 +18,10 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Usuário que loga no app: admin (administra o sistema), gerente, comitê e
-/// faturista (os três postos da linha de análise) ou consultant (registra
-/// permutas para a própria carteira). Produtor NÃO é usuário.
+/// Usuário que loga no app: admin (administra o sistema), gerente, comitê,
+/// faturista e emissor (os quatro postos da retaguarda) ou consultant (registra
+/// permutas para a própria carteira e preenche a cédula). Produtor NÃO é
+/// usuário.
 model User {
   id        Int      @id @default(autoincrement())
   fullName  String
@@ -342,6 +343,24 @@ model Season {
   openedAt  DateTime @default(now())
   closedAt  DateTime?
 
+  /// O VENCIMENTO DA CPR desta safra — a data em que a entrega do grão vence.
+  ///
+  /// Ele mora AQUI, e não na cédula, porque não é dado da cédula: o vencimento
+  /// muda conforme a CULTURA, e a safra é justamente "a cultura, neste ano"
+  /// (ver `grainName`). A soja vence na colheita dela, o milho safrinha na
+  /// dele, e todas as cédulas de uma mesma safra vencem no mesmo dia — é uma
+  /// decisão comercial tomada uma vez, quando a safra abre.
+  ///
+  /// Enquanto ele foi um campo do formulário, quem o digitava era o faturista,
+  /// cédula por cédula, sem nada que dissesse qual era a data certa daquela
+  /// cultura. Duas cédulas da mesma safra saíam com vencimentos diferentes, e a
+  /// única maneira de descobrir era comparar os papéis.
+  ///
+  /// Nulável porque a safra pode ser aberta antes de a data estar acertada — e
+  /// aí `cprGaps()` cobra, com o recado endereçado a quem pode resolver (o
+  /// admin, no cadastro da safra), e não ao consultor, que não tem esse campo.
+  cprDueDate DateTime?
+
   versions BarterVersion[]
 }
 
@@ -452,11 +471,14 @@ model PriceHistoryEntry {
 /// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
 /// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
 ///
-/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de quatro postos:
+/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de cinco postos:
 ///
-///     draft → sentToManager → pending → approved              → invoiced
+///     draft → sentToManager → pending → approved              → invoiced →
 ///  (consultor)  (gerente)    (comitê)   approvedWithConditions  (faturista)
 ///                                ↘ denied
+///
+///     → cprIssued → cprSigned → cprRegistered
+///        (emissor)   (emissor)    (emissor)
 ///
 /// `draft` é onde ela nasce: o consultor a montou, e ela ainda é DELE — não está
 /// na mesa de ninguém e nenhuma fila da retaguarda a enxerga. Escrito o parecer
@@ -464,7 +486,10 @@ model PriceHistoryEntry {
 /// técnico. Daí ela vai ao COMITÊ (`pending`), que lê o pedido e os dois
 /// pareceres e decide — é a única instância que aprova, aprova com ressalva ou
 /// nega. Aprovada (com ou sem ressalva), ela cai na fila do FATURISTA, que
-/// fatura (`invoiced`) e encerra a linha.
+/// fatura e anexa as notas (`invoiced`). Aí começa o trecho do EMISSOR: ele
+/// confere a cédula que o consultor preencheu e a emite (`cprIssued`), colhe as
+/// assinaturas (`cprSigned`) e a leva a registro (`cprRegistered`), que é o fim
+/// da linha.
 ///
 /// Quem guarda esse caminho — quem move o quê, de onde para onde, e o que
 /// responder a quem chega fora de hora — é `src/barters/barter-workflow.ts`. O
@@ -593,17 +618,50 @@ model Barter {
   reviewedById Int?
   reviewedAt   DateTime?
 
-  /// O FATURAMENTO — o último posto da linha, e o único que mexe com dinheiro
-  /// para fora.
+  /// O FATURAMENTO — o posto que mexe com dinheiro para fora.
   ///
   /// Os campos são os mesmos da decisão, de propósito: quem fez, quando, e o que
   /// anotou. O faturista não avalia e não devolve — ele só carimba o que o comitê
   /// aprovou —, então não há aqui nenhum campo de "resultado": ou a permuta foi
   /// faturada, e estas colunas dizem por quem, ou ela não foi.
+  ///
+  /// O QUE ELE PRODUZ são as notas, e elas são lista à parte (`invoices`): uma
+  /// permuta sai em mais de um carregamento, e cada retirada gera a sua.
   invoicedBy   String?
   invoicedById Int?
   invoicedAt   DateTime?
   invoiceNote  String?
+
+  /// A EMISSÃO DA CÉDULA — os três atos do emissor, cada um com a sua marca.
+  ///
+  /// Eles moram na PERMUTA, e não em `BarterCpr`, pelo mesmo motivo de
+  /// `invoicedBy` e `reviewedBy` morarem aqui: são as assinaturas das ETAPAS, e
+  /// etapa é da esteira. A cédula guarda o CONTEÚDO do documento (quem é o
+  /// emitente, que lavoura é a garantia); a permuta guarda por onde ela andou.
+  ///
+  /// `cprEmittedBy` é snapshot em texto pelo mesmo motivo dos outros: a
+  /// conferência continua assinada depois que a conta for excluída. E não há
+  /// campo de "resultado" em nenhum dos três — a recusa da emissão não é um
+  /// estado, é um 422 com a lista do que falta (ver `cprGaps`): o emissor não
+  /// devolve a permuta, ele diz que o papel ainda não está pronto.
+  cprEmittedBy   String?
+  cprEmittedById Int?
+  cprEmittedAt   DateTime?
+  cprEmissionNote String?
+
+  /// A COLETA DE ASSINATURAS: quando ela se completou e o que houve nela (quem
+  /// assinou, se faltou o cônjuge, se foi por assinatura eletrônica).
+  cprSignedAt   DateTime?
+  cprSignatureNote String?
+
+  /// O REGISTRO do título — a data, onde ele foi registrado e sob que número.
+  ///
+  /// O PROTOCOLO é obrigatório no ato (ver `RegisterCprDto`), e é o que
+  /// diferencia "levamos ao cartório" de "está registrado": sem número, não há
+  /// como provar o registro nem como pedir a certidão depois.
+  cprRegisteredAt   DateTime?
+  cprRegistryNumber String?
+  cprRegistryPlace  String?
 
   /// O PEDIDO DE ALTERAÇÃO — o único caminho de VOLTA da esteira, e ele tem
   /// dono nas duas pontas: pede o consultor que registrou, decide o admin.
@@ -657,9 +715,20 @@ model Barter {
   /// diferentes convivem sem nenhuma relação entre si.
   productRequests BarterProductRequest[]
 
-  /// A CÉDULA DE PRODUTO RURAL desta permuta, quando o faturista já começou a
-  /// preenchê-la. Uma só, e opcional: a permuta existe e anda sem CPR — ela é o
-  /// documento que o faturamento produz, não um requisito do fluxo.
+  /// AS NOTAS FISCAIS desta permuta — o que o faturamento produziu, com o
+  /// arquivo de cada uma anexado.
+  ///
+  /// LISTA, e não um número de nota na permuta, porque a operação é assim: o
+  /// produtor retira os insumos em mais de um carregamento, cada retirada sai
+  /// com a sua nota, e às vezes uma delas é cancelada e reemitida. Enquanto o
+  /// número foi um campo de texto (e era, dentro da cédula), a segunda nota não
+  /// tinha onde entrar — e a cédula citava uma só como origem de uma dívida
+  /// formada por três.
+  invoices BarterInvoice[]
+
+  /// A CÉDULA DE PRODUTO RURAL desta permuta, quando o consultor já começou a
+  /// preenchê-la. Uma só, e opcional: a permuta existe e anda sem CPR até o
+  /// faturamento — é a EMISSÃO que a exige, não o registro.
   cpr BarterCpr?
 
   @@index([versionId])
@@ -867,6 +936,116 @@ model BarterProductRequest {
   @@index([barterId])
 }
 
+/// UM ARQUIVO ANEXADO ao registro — hoje a nota fiscal do faturamento e o SCR
+/// do produtor.
+///
+/// O CONTEÚDO fica no banco, e essa é uma escolha, não uma falta de opção. Os
+/// dois anexos são pequenos (um DANFE em PDF, um relatório do Bacen de duas
+/// páginas), são POUCOS por permuta e são PROVA: eles precisam existir enquanto
+/// o título existir. Guardá-los aqui os põe dentro do mesmo backup, da mesma
+/// transação e do mesmo controle de acesso do resto — um bucket exigiria
+/// credencial, ciclo de vida próprio e uma segunda resposta para "quem pode ler
+/// este arquivo?", que é justamente a pergunta que já tem dono aqui (o escopo da
+/// permuta).
+///
+/// O TAMANHO é travado na entrada (ver MAX_ATTACHMENT_BYTES em barters.service),
+/// e não no banco: o limite é sobre a requisição, que é onde ele dói.
+///
+/// É TABELA À PARTE, e não colunas dentro da nota, porque `Bytes` numa tabela
+/// consultada em lista viria junto em toda leitura — a listagem de permutas
+/// carregaria megabytes de PDF para desenhar uma linha de tabela. Aqui o
+/// conteúdo só é lido por quem pede o arquivo.
+model BarterFile {
+  id Int @id @default(autoincrement())
+
+  /// O nome COM QUE O ARQUIVO CHEGOU. É o que a tela mostra e o que o download
+  /// devolve — quem anexou reconhece o próprio arquivo pelo nome que deu a ele.
+  fileName String
+
+  /// O tipo declarado (`application/pdf`, `image/jpeg`…). Guardado porque é o
+  /// que o download precisa devolver: sem ele, o navegador baixa um arquivo que
+  /// não sabe abrir.
+  contentType String
+
+  /// O tamanho em bytes, guardado para a tela não precisar ler o conteúdo só
+  /// para dizer "2,4 MB" numa lista.
+  size Int
+
+  content Bytes
+
+  /// Quem anexou, congelado em texto pelo mesmo motivo de `Barter.invoicedBy`.
+  uploadedBy   String
+  uploadedById Int?
+  uploadedAt   DateTime @default(now())
+
+  /// Os donos possíveis de um arquivo hoje. São relações 1-1 (o `@unique` mora
+  /// do lado de lá), e um arquivo tem no máximo uma delas: ele é a nota fiscal,
+  /// ou o SCR, ou a cédula assinada, ou o comprovante do registro.
+  ///
+  /// As relações da cédula são NOMEADAS porque são três para o mesmo modelo, e
+  /// sem nome o Prisma não teria como saber qual coluna é qual.
+  invoice     BarterInvoice?
+  cprScr      BarterCpr?     @relation("CprScr")
+  cprSigned   BarterCpr?     @relation("CprSigned")
+  cprRegistry BarterCpr?     @relation("CprRegistry")
+}
+
+/// UMA NOTA FISCAL do faturamento desta permuta, com o arquivo dela.
+///
+/// Ela é o que o posto do faturista PRODUZ, e é a origem da dívida que a cédula
+/// afirma (cláusula VII). Enquanto o número da nota foi um campo de texto dentro
+/// da CPR, três coisas estavam erradas ao mesmo tempo: quem o digitava não era
+/// quem emitia a nota, só cabia UMA, e não havia o documento — só o número.
+///
+/// A CHAVE do mundo real é número + série, e ela não é única aqui de propósito:
+/// a unicidade da nota fiscal é do emissor dela (a empresa, perante o fisco), e
+/// não deste sistema. Uma trava aqui recusaria, por exemplo, a nota reemitida
+/// com o mesmo número em outra série — e o erro apareceria como "não foi
+/// possível anexar", sem dizer por quê.
+model BarterInvoice {
+  id       Int    @id @default(autoincrement())
+  barterId Int
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O número e a série, como saem no documento. Texto, e não inteiro: nota
+  /// fiscal tem zero à esquerda, e perdê-los faria a busca no sistema fiscal
+  /// não encontrar nada.
+  number String
+  series String @default("")
+
+  /// A DUPLICATA que a nota originou, quando há. A cédula a cita ao lado da
+  /// nota, e ela é da mesma natureza — documento do faturamento, não da
+  /// negociação. Opcional: nem toda venda gera duplicata.
+  duplicateNumber String @default("")
+
+  /// Quando a nota foi emitida e por quanto. O valor é o DA NOTA, e pode não
+  /// bater com o total da permuta — é o que acontece quando a retirada é
+  /// parcial, que é justamente o caso em que há mais de uma.
+  issuedAt DateTime?
+  value    Float     @default(0)
+
+  /// O que o faturista tem a dizer sobre esta nota (retirada parcial, nota de
+  /// devolução, remessa). Opcional — a maioria não tem o que explicar.
+  note String?
+
+  /// O ARQUIVO. Anexá-lo É o ato — a rota que cria a nota exige o arquivo, e um
+  /// registro sem documento seria de novo o número solto que este modelo existe
+  /// para substituir.
+  ///
+  /// A coluna é nulável mesmo assim, e por um motivo só: as notas HERDADAS do
+  /// campo de texto que ficava dentro da cédula não têm arquivo nenhum (ver a
+  /// migration). Recusá-las apagaria um número que alguém digitou; aceitá-las
+  /// sem arquivo deixa a pendência visível na tela de quem pode resolvê-la.
+  fileId Int?        @unique
+  file   BarterFile? @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  attachedBy   String
+  attachedById Int?
+  attachedAt   DateTime @default(now())
+
+  @@index([barterId])
+}
+
 /// A CREDORA — a empresa que recebe o grão, como os documentos a nomeiam.
 ///
 /// A CPR nomeia duas partes: o EMITENTE (o produtor, que muda a cada cédula) e a
@@ -925,27 +1104,44 @@ model Creditor {
 /// O QUE FALTA é o que uma cédula exige e uma permuta não: a qualificação civil
 /// do emitente (a lei pede nacionalidade, estado civil, profissão, RG e endereço
 /// completo), as matrículas das lavouras dadas em penhor, os padrões de
-/// qualidade do grão e os números da nota e da duplicata que originaram a
-/// dívida. É ISSO que esta tabela guarda, e é isso que o faturista preenche.
+/// qualidade do grão e o SCR do produtor. É ISSO que esta tabela guarda, e é
+/// isso que o CONSULTOR preenche.
 ///
-/// É do FATURISTA porque é o posto que emite documento para fora — o mesmo
-/// motivo pelo qual a nota fiscal é dele. O consultor monta a negociação, o
-/// comitê decide, e quem transforma o acordo em título é quem fatura.
+/// É DO CONSULTOR, e isso mudou de dono. Era do faturista, pelo argumento de que
+/// o posto que emite documento para fora é o mesmo que emite a nota — e o
+/// argumento não se sustentou: nada do que a cédula pede está na mesa de quem
+/// fatura. A matrícula do imóvel, o nome do cônjuge, quem é o dono da área
+/// arrendada, o SCR — quem tem isso é quem visita a fazenda. O faturista obtinha
+/// tudo por telefone e digitava, e cada intermediação dessas é um RG com um
+/// dígito trocado dentro de um título executável.
+///
+/// QUEM CONFERE é o EMISSOR, na hora de gerar (ver `bartersCprIssue`). É a mesma
+/// divisão do parecer: quem conhece o cliente escreve, outro posto responde pelo
+/// documento.
+///
+/// O QUE NÃO ESTÁ MAIS AQUI, e por quê:
+///
+/// - o NÚMERO DA NOTA e o da DUPLICATA: eles são do faturamento, e agora moram
+///   em `BarterInvoice` — com o arquivo junto, e em lista, porque são várias;
+/// - o VENCIMENTO: ele muda conforme a CULTURA e é o mesmo para a safra inteira
+///   (ver `Season.cprDueDate`). `dueDate` continua abaixo, mas quem o escreve é
+///   o servidor, copiando-o da safra — ele é o congelamento, não o campo.
 ///
 /// UMA POR PERMUTA (`barterId @unique`): a CPR é o título daquela entrega, e
 /// duas cédulas sobre o mesmo grão seriam duas cobranças do mesmo produto.
 ///
 /// Nada aqui é snapshot. Ao contrário do resto da permuta, estes campos são um
-/// RASCUNHO até o documento sair: o faturista digita, confere, corrige o RG que
+/// RASCUNHO até o documento sair: o consultor digita, confere, corrige o RG que
 /// veio errado. O congelamento acontece no documento emitido, e não na linha —
 /// é a diferença entre o que ainda se está escrevendo e o que já foi assinado.
 ///
 /// E porque é rascunho, ele é SALVÁVEL PELA METADE. O vazio (`""`, `0`, `null`)
 /// significa "ainda não preenchido", e quem diz o que falta é `cprGaps()`, em
 /// cpr.ts — não o banco, e não a validação de entrada. Exigir a cédula inteira
-/// numa tacada só obrigaria o faturista a esperar o número da nota para poder
-/// gravar a qualificação que ele tem na mão agora, e o rascunho ficaria num
-/// papel ao lado do computador, que é onde ele estava antes deste formulário.
+/// numa tacada só obrigaria o consultor a esperar a matrícula que o produtor vai
+/// mandar amanhã para poder gravar a qualificação que ele tem na mão agora, e o
+/// rascunho ficaria num papel ao lado do computador, que é onde ele estava antes
+/// deste formulário.
 model BarterCpr {
   id       Int    @id @default(autoincrement())
   barterId Int    @unique
@@ -958,11 +1154,20 @@ model BarterCpr {
 
   /// A data da EMISSÃO ("Aos [DIA] dias do mês de [MÊS] de [ANO]") e o
   /// VENCIMENTO da entrega. São diferentes da data da permuta de propósito: a
-  /// cédula é emitida quando o faturista a monta, e vence na colheita.
+  /// cédula é emitida quando o emissor a gera, e vence na colheita.
   ///
-  /// O vencimento é nulável porque é DADO DA NEGOCIAÇÃO que pode faltar no
-  /// rascunho; a emissão nasce com o dia em que o rascunho foi aberto, que é a
-  /// resposta certa na esmagadora maioria das vezes e é editável nas outras.
+  /// `issuedAt` nasce com o dia em que o rascunho foi aberto, que é a resposta
+  /// certa na esmagadora maioria das vezes e é editável nas outras.
+  ///
+  /// `dueDate` NÃO É CAMPO DE FORMULÁRIO, e essa é a correção: ele é copiado de
+  /// `Season.cprDueDate` — o vencimento daquela CULTURA — a cada gravação, até a
+  /// cédula ser emitida. Depois disso ele congela, como tudo o que já foi
+  /// assinado. Enquanto foi digitado cédula a cédula, duas CPRs da mesma safra
+  /// saíam com vencimentos diferentes e ninguém tinha como saber qual estava
+  /// certa.
+  ///
+  /// Nulável porque a safra pode ainda não ter a data acertada — e aí
+  /// `cprGaps()` cobra, dizendo onde ela se resolve.
   issuedAt DateTime  @default(now())
   dueDate  DateTime?
 
@@ -1051,11 +1256,51 @@ model BarterCpr {
   maxImpurities Float  @default(0)
   oilContent    Float  @default(0)
 
-  /// A ORIGEM DA DÍVIDA (cláusula VII): a troca de insumos já faturada. A nota e
-  /// a duplicata são o que amarra a cédula ao faturamento que a originou — sem
-  /// elas o título flutua, e é justamente esse vínculo que a cláusula afirma.
-  invoiceNumber   String @default("")
-  duplicateNumber String @default("")
+  /// O SCR DO PRODUTOR — o relatório do Sistema de Informações de Créditos do
+  /// Banco Central, anexado à cédula. OBRIGATÓRIO.
+  ///
+  /// Ele é a fotografia do endividamento de quem vai emitir o título: quanto o
+  /// produtor já deve, a quem, e em que situação. Uma CPR é crédito, e conceder
+  /// crédito sem olhar o SCR é conceder no escuro — por isso ele é exigência de
+  /// `cprGaps()` e não um anexo "quando houver".
+  ///
+  /// É ARQUIVO e não campo: o SCR é um documento emitido pelo Bacen, com data, e
+  /// o que vale é o papel. Transcrever números dele para campos criaria uma
+  /// segunda versão da informação, mais nova em aparência e sem autoridade
+  /// nenhuma.
+  ///
+  /// `SetNull` no arquivo: apagar o anexo não pode apagar a cédula — o efeito
+  /// certo é a cédula voltar a ter uma pendência, que é o que `cprGaps()` dirá.
+  scrFileId Int?        @unique
+  scrFile   BarterFile? @relation("CprScr", fields: [scrFileId], references: [id], onDelete: SetNull)
+
+  /// A CÉDULA ASSINADA e o COMPROVANTE DO REGISTRO — os dois documentos que
+  /// VOLTAM de fora depois que o título sai daqui.
+  ///
+  /// O sistema gera a cédula em branco e a devolve ao mundo; o que volta é papel
+  /// com assinatura e, depois, com o carimbo do registro. Enquanto eles não
+  /// tinham onde ficar, a permuta dizia "assinada" e "registrada" sem ter como
+  /// provar nenhuma das duas — o documento morava no e-mail de alguém, e a
+  /// segunda via saía do sistema em branco, diferente da que está com o
+  /// produtor.
+  ///
+  /// O ASSINADO é obrigatório no ato de assinar e o do REGISTRO não é: o
+  /// primeiro é a própria coisa que se está lançando (não há "assinada" sem o
+  /// papel assinado), e o segundo é prova de um fato que o `cprRegistryNumber`
+  /// já afirma — cartório que demora a devolver a via carimbada não pode travar
+  /// o fim da linha.
+  ///
+  /// `SetNull` nos dois, como no SCR: apagar o arquivo não pode apagar a cédula.
+  signedFileId Int?        @unique
+  signedFile   BarterFile? @relation("CprSigned", fields: [signedFileId], references: [id], onDelete: SetNull)
+
+  registryFileId Int?        @unique
+  registryFile   BarterFile? @relation("CprRegistry", fields: [registryFileId], references: [id], onDelete: SetNull)
+
+  /// A DATA DA CONSULTA do SCR — o relatório tem validade curta na prática, e
+  /// "o SCR está anexado" não responde "de quando?". Opcional no rascunho, como
+  /// o resto.
+  scrConsultedAt DateTime?
 
   /// A apólice do seguro agrícola embutido (cláusula XVIII, "j"). Opcional: nem
   /// toda permuta leva seguro contratado.

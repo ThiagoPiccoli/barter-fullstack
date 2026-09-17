@@ -19,6 +19,7 @@ import '../services/barter_pdf.dart';
 import '../services/simulation_check.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'cpr_form_screen.dart';
 
 /// Encaminha [simulation] ao gerente do consultor. Devolve `true` quando a
 /// permuta foi registrada.
@@ -101,7 +102,25 @@ Future<bool> sendSimulationToManager(
 
   if (result.isSent) {
     onChanged?.call();
-    await _showSent(context, result);
+    // A CÉDULA É O PASSO SEGUINTE, e o fluxo emenda nele.
+    //
+    // Ela virou pré-requisito do encaminhamento, e o que o consultor precisa
+    // para preenchê-la é o que ele acabou de levantar na visita: a qualificação
+    // do produtor, as matrículas das lavouras, o nome do cônjuge. Mandá-lo
+    // fechar este diálogo, achar a permuta na lista e abrir a mesa da cédula
+    // seria pedir para ele voltar amanhã ao que está na mão dele agora.
+    if (await _showSent(context, result) && context.mounted) {
+      await openCprDesk(context, result.barter!);
+      // E O ENCAMINHAMENTO QUE A CÉDULA TINHA BARRADO acontece agora.
+      //
+      // Quem chega aqui pediu *Encaminhar* e ouviu que faltava a cédula. Sem
+      // esta volta, ele preencheria o documento e a permuta continuaria parada
+      // no rascunho dele — o mesmo desfecho de não ter preenchido, três telas
+      // depois.
+      if (context.mounted && choice.forward && result.isSentButNotForwarded) {
+        await _forwardAfterCpr(context, result.barter!, choice.note, onChanged);
+      }
+    }
     return true;
   }
   if (result.isUncertain) {
@@ -349,10 +368,81 @@ Future<_SendChoice?> _confirmSend(
   );
 }
 
-Future<void> _showSent(BuildContext context, SendResult result) {
+/// RETOMA O ENCAMINHAMENTO depois que a cédula foi preenchida.
+///
+/// Ele PERGUNTA antes de encaminhar, e não emenda sozinho: encaminhar não tem
+/// volta, e entre o pedido e agora o consultor passou por um formulário inteiro
+/// — pode ter descoberto ali que falta a matrícula de uma lavoura e querer
+/// segurar a permuta. O pedido de antes é intenção, não procuração.
+///
+/// E ele CONFERE antes de perguntar: oferecer um encaminhamento que o servidor
+/// vai recusar é a armadilha que este caminho todo existe para desarmar.
+Future<void> _forwardAfterCpr(
+  BuildContext context,
+  BarterModel barter,
+  String note,
+  VoidCallback? onChanged,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+
+  final CprDesk desk;
+  try {
+    desk = await AppData.barterCpr(barter.id);
+  } on ApiException {
+    // Não deu para conferir. Calar é melhor do que oferecer no escuro: a
+    // permuta está registrada, e o botão do detalhe continua lá.
+    return;
+  }
+  if (!context.mounted) return;
+
+  if (!desk.readyToForward) {
+    showInfoOn(
+      messenger,
+      'A cédula ainda tem pendências. A permuta ${barter.id} continua com você, '
+      'como rascunho — encaminhe pelo detalhe quando ela estiver completa.',
+    );
+    return;
+  }
+
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Icon(Icons.send_outlined, color: AppColors.atManager, size: 40),
+      title: const Text('Encaminhar agora?'),
+      content: Text(
+        'A cédula de ${barter.id} está preenchida. '
+        'Ela pode ir para ${barter.managerLabel} com o seu parecer.',
+        textAlign: TextAlign.center,
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Depois')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Encaminhar')),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+
+  try {
+    final forwarded = await AppData.forwardBarter(barter.id, note);
+    onChanged?.call();
+    showInfoOn(messenger, 'Permuta ${barter.id} encaminhada a ${forwarded.managerLabel}.');
+  } on ApiException catch (e) {
+    showErrorOn(messenger, '${e.message} A permuta continua com você, como rascunho.');
+  }
+}
+
+/// O DESFECHO DO ENVIO. Devolve `true` quando o consultor quer emendar na
+/// cédula — ver a chamada, em [sendSimulationToManager].
+Future<bool> _showSent(BuildContext context, SendResult result) async {
   final barter = result.barter!;
   final producer = AppData.producerById(barter.producerId);
-  return showDialog(
+
+  // A CÉDULA SÓ É OFERECIDA A QUEM A PREENCHE e sobre permuta que parou no
+  // rascunho. Encaminhada, ela já passou pelo portão do servidor — a cédula
+  // está completa, e oferecer o formulário ali seria oferecer trabalho feito.
+  final offerCpr = AppData.can(Capability.bartersCprFill) && barter.isDraft;
+
+  final answer = await showDialog<bool>(
     context: context,
     barrierDismissible: false,
     builder: (ctx) => AlertDialog(
@@ -391,12 +481,40 @@ Future<void> _showSent(BuildContext context, SendResult result) {
           // cabeça de quem a guardou.
           Text(
             barter.isDraft
-                ? 'Está com você, como rascunho. Escreva o parecer e encaminhe '
-                    'ao gerente quando estiver pronto.'
+                ? 'Está com você, como rascunho. Preencha a cédula (CPR) e o '
+                    'parecer para poder encaminhá-la ao gerente.'
                 : 'Está com ${barter.managerLabel}, esperando o parecer técnico.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.textMedium),
           ),
+          // A PERMUTA ENTROU E NÃO FOI ENCAMINHADA — e o motivo aparece.
+          //
+          // O caso comum é a cédula: encaminhar exige a CPR preenchida, e quem
+          // envia a simulação sem tê-la feito para no rascunho. Enquanto isso
+          // era engolido, a tela dizia "guardada" sem dizer por quê — e o
+          // consultor descobriria dias depois, pelo gerente que nunca recebeu
+          // nada.
+          if (result.notForwardedReason != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.pendingBg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.pending.withValues(alpha: 0.35)),
+              ),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.info_outline, size: 17, color: AppColors.pending),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Ela NÃO foi encaminhada: ${result.notForwardedReason}',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.35),
+                  ),
+                ),
+              ]),
+            ),
+          ],
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(10),
@@ -432,10 +550,23 @@ Future<void> _showSent(BuildContext context, SendResult result) {
             icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
             label: const Text('Gerar PDF'),
           ),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        // *DEPOIS* continua existindo, e não é gentileza: a cédula pede coisas
+        // que nem sempre estão na mão na hora (a matrícula costuma vir por
+        // e-mail no dia seguinte), e um diálogo com saída única obrigaria o
+        // consultor a abrir um formulário que ele vai fechar em branco.
+        if (offerCpr) ...[
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Depois')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.edit_document, size: 18),
+            label: const Text('Preencher a cédula'),
+          ),
+        ] else
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('OK')),
       ],
     ),
   );
+  return answer ?? false;
 }
 
 /// O DESFECHO INCERTO: o envio saiu, a resposta não voltou, e a conferência

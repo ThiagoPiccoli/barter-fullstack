@@ -19,23 +19,38 @@ import { ROLE, type Role } from '../common/roles';
  *         ▼                                  └───────────┬──────────────┘
  *      draft ──encaminha──▶ sentToManager ──parecer──▶ pending
  *   (consultor)              (gerente)                (comitê)
- *                                                        │  ├─aprova──▶ approved ──fatura──▶ invoiced
- *                                                        │  └─ressalva─▶ approvedWithConditions ──┘
- *                                                        └──nega──▶ denied  (fim da linha)
+ *                                                        │  ├─aprova──▶ approved ──┐
+ *                                                        │  └─ressalva─▶ approv…s ─┤
+ *                                                        └──nega──▶ denied         │
+ *                                                            (fim da linha)        │
+ *                     ┌───────────────────────────────────────────────────────────-┘
+ *                     ▼
+ *                  invoiced ──emite──▶ cprIssued ──assinaturas──▶ cprSigned ──registra──▶ cprRegistered
+ *                 (faturista)             (emissor)                (emissor)              (emissor, fim)
  *
  * Cada posto tem UM dono e UMA pergunta:
  *
- * - **consultor**: monta a negociação e escreve o PARECER dele sobre o próprio
- *   cliente. Enquanto ele não encaminha, a permuta é rascunho e não está na mesa
- *   de ninguém — ver `draft`;
+ * - **consultor**: monta a negociação, escreve o PARECER dele sobre o próprio
+ *   cliente e PREENCHE a cédula. Enquanto ele não encaminha, a permuta é
+ *   rascunho e não está na mesa de ninguém — ver `draft`;
  * - **gerente**: conhece o produtor e a negociação — escreve o parecer técnico.
  *   Não decide;
  * - **comitê**: lê o pedido do consultor, o parecer dele e o parecer do gerente,
  *   e DECIDE. É a única instância que aprova, aprova COM RESSALVA ou nega. O
  *   admin não decide — ele administra o sistema, e um administrador que também
  *   aprova é a mesma pessoa concedendo o acesso e usando-o;
- * - **faturista**: recebe o que as etapas anteriores produziram e FATURA. Só
- *   alcança o que foi aprovado (com ou sem ressalva), e é o fim da linha.
+ * - **faturista**: recebe o que as etapas anteriores produziram, FATURA e anexa
+ *   as notas fiscais que saíram da permuta. Não avalia e não devolve;
+ * - **emissor**: pega a permuta faturada, CONFERE a cédula que o consultor
+ *   preencheu, EMITE, colhe as ASSINATURAS e a leva a REGISTRO. São três atos, e
+ *   três estados, porque eles acontecem em dias diferentes — e "a CPR está em
+ *   que pé?" é a pergunta que a operação faz o tempo todo sobre a entrega.
+ *
+ * POR QUE A CÉDULA É UM TRECHO E NÃO UM CAMPO: enquanto ela foi "o que o
+ * faturista preenche junto com o faturamento", a emissão não tinha etapa, não
+ * tinha prazo e não tinha dono. Uma permuta faturada ficava parada com a cédula
+ * pela metade e nada no sistema dizia isso — a linha terminava em `invoiced` e
+ * afirmava que o trabalho tinha acabado. Ele não tinha: faltava o título.
  *
  * O que este arquivo NÃO decide: quem é o gerente DESTA permuta (é o do
  * consultor, gravado no envio) nem qualquer alçada por valor. Isso é política
@@ -90,8 +105,44 @@ export const BARTER_STATUS = {
   approvedWithConditions: 'approvedWithConditions',
   /** Negada pelo comitê. Fim da linha: não fatura e não volta. */
   denied: 'denied',
-  /** Faturada. Fim da linha do lado bom. */
+  /**
+   * Faturada, com as notas anexadas — e na mesa do EMISSOR, esperando a cédula.
+   *
+   * Deixou de ser fim de linha quando a emissão da CPR virou etapa. A permuta
+   * faturada não está pronta: falta o título que formaliza a entrega do grão, e
+   * até ele existir a empresa tem uma nota emitida sem a garantia que a
+   * acompanha. Chamar isso de "concluída" era a afirmação errada mais cara do
+   * fluxo antigo.
+   */
   invoiced: 'invoiced',
+  /**
+   * CÉDULA EMITIDA — conferida pelo emissor e gerada. Esperando as assinaturas.
+   *
+   * A emissão é o momento da CONFERÊNCIA: o emissor lê contra o modelo o que o
+   * consultor preencheu, e o que tem lacuna não sai (ver `cprGaps`). Depois
+   * dela, o documento existe no mundo e o que falta é gente assinar.
+   */
+  cprIssued: 'cprIssued',
+  /**
+   * CÉDULA ASSINADA pelo emitente (e pelo cônjuge, e pelos avalistas quando
+   * houver). Esperando o REGISTRO.
+   *
+   * Estado próprio, e não um campo dentro da emissão, porque a distância entre
+   * assinar e registrar é de dias e o dono dela é outro escritório: a
+   * assinatura acontece quando o produtor vem à cidade, e o registro quando o
+   * cartório (ou a B3) responde. Uma cédula assinada e não registrada é uma
+   * garantia que ainda não vale contra terceiros — exatamente o tipo de coisa
+   * que precisa aparecer numa lista, e não ser descoberta na conversa.
+   */
+  cprSigned: 'cprSigned',
+  /**
+   * CÉDULA REGISTRADA. Fim da linha do lado bom — agora sim.
+   *
+   * A permuta foi acordada, analisada, decidida, faturada e o título está
+   * registrado. Não há próximo ato: o que vem depois é a colheita, e ela não é
+   * deste sistema.
+   */
+  cprRegistered: 'cprRegistered',
 } as const;
 
 export type BarterStatus = (typeof BARTER_STATUS)[keyof typeof BARTER_STATUS];
@@ -115,6 +166,13 @@ export const BARTER_LINE = [
   [BARTER_STATUS.pending],
   [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions],
   [BARTER_STATUS.invoiced],
+  // O TRECHO DA CÉDULA — três degraus, um por ato do emissor. Eles são degraus
+  // separados, e não um só com três estados, porque a esteira é o que responde
+  // cedo/tarde: registrar uma cédula que ainda não foi assinada precisa receber
+  // "ela aguarda a coleta de assinaturas", e não um "não pode" genérico.
+  [BARTER_STATUS.cprIssued],
+  [BARTER_STATUS.cprSigned],
+  [BARTER_STATUS.cprRegistered],
 ] as const satisfies readonly (readonly BarterStatus[])[];
 
 /** Em que DEGRAU da esteira este estado está — `-1` fora dela (só `denied`). */
@@ -133,7 +191,12 @@ export const BARTER_STATUS_LABELS: Record<BarterStatus, string> = {
   [BARTER_STATUS.approved]: 'Aprovada, a faturar',
   [BARTER_STATUS.approvedWithConditions]: 'Aprovada com ressalva, a faturar',
   [BARTER_STATUS.denied]: 'Negada',
-  [BARTER_STATUS.invoiced]: 'Faturada',
+  // "Faturada" sozinho dizia que tinha acabado. O rótulo agora diz o que falta,
+  // que é o que muda a leitura de quem passa os olhos numa lista de cinquenta.
+  [BARTER_STATUS.invoiced]: 'Faturada, a emitir a CPR',
+  [BARTER_STATUS.cprIssued]: 'CPR emitida, a assinar',
+  [BARTER_STATUS.cprSigned]: 'CPR assinada, a registrar',
+  [BARTER_STATUS.cprRegistered]: 'CPR registrada',
 };
 
 /**
@@ -153,7 +216,12 @@ export const BARTER_HOLDER: Record<BarterStatus, Role | null> = {
   [BARTER_STATUS.approved]: ROLE.biller,
   [BARTER_STATUS.approvedWithConditions]: ROLE.biller,
   [BARTER_STATUS.denied]: null,
-  [BARTER_STATUS.invoiced]: null,
+  // A permuta faturada está com o EMISSOR, e os três degraus da cédula também:
+  // emitir, colher assinatura e registrar são atos do mesmo posto.
+  [BARTER_STATUS.invoiced]: ROLE.emitter,
+  [BARTER_STATUS.cprIssued]: ROLE.emitter,
+  [BARTER_STATUS.cprSigned]: ROLE.emitter,
+  [BARTER_STATUS.cprRegistered]: null,
 };
 
 /** Os atos que movem uma permuta. `register` é a entrada: cria em vez de mover. */
@@ -163,6 +231,12 @@ export const BARTER_ACTION = {
   opinion: 'opinion',
   review: 'review',
   invoice: 'invoice',
+  /** A EMISSÃO da cédula — a conferência do emissor, e o documento gerado. */
+  cprIssue: 'cprIssue',
+  /** A COLETA DE ASSINATURAS do emitente (e de quem mais assine com ele). */
+  cprSign: 'cprSign',
+  /** O REGISTRO do título — em cartório ou na B3, conforme a operação. */
+  cprRegister: 'cprRegister',
 } as const;
 
 export type BarterAction = (typeof BARTER_ACTION)[keyof typeof BARTER_ACTION];
@@ -292,6 +366,42 @@ export const BARTER_STEPS: Record<BarterAction, WorkflowStep> = {
     label: 'Faturamento',
     waiting: () => 'Esta permuta aguarda o faturamento',
     done: 'Esta permuta já foi faturada',
+  },
+  /**
+   * A EMISSÃO DA CÉDULA — o primeiro ato do emissor, e o único que CONFERE.
+   *
+   * Ela parte de `invoiced` porque a cédula cita a nota como origem da dívida
+   * (cláusula VII): emitir um título antes de a mercadoria sair afirmaria uma
+   * dívida que ainda não nasceu. O preenchimento, esse não espera — o consultor
+   * coleta a qualificação e as matrículas desde o rascunho, e é exatamente por
+   * isso que a conferência aqui é rápida.
+   */
+  [BARTER_ACTION.cprIssue]: {
+    action: BARTER_ACTION.cprIssue,
+    from: [BARTER_STATUS.invoiced],
+    to: [BARTER_STATUS.cprIssued],
+    capability: CAPABILITY.bartersCprIssue,
+    label: 'Emissão da CPR',
+    waiting: () => 'Esta permuta aguarda a emissão da cédula',
+    done: 'A cédula desta permuta já foi emitida',
+  },
+  [BARTER_ACTION.cprSign]: {
+    action: BARTER_ACTION.cprSign,
+    from: [BARTER_STATUS.cprIssued],
+    to: [BARTER_STATUS.cprSigned],
+    capability: CAPABILITY.bartersCprIssue,
+    label: 'Coleta de assinaturas',
+    waiting: () => 'A cédula desta permuta aguarda a coleta de assinaturas',
+    done: 'A cédula desta permuta já foi assinada',
+  },
+  [BARTER_ACTION.cprRegister]: {
+    action: BARTER_ACTION.cprRegister,
+    from: [BARTER_STATUS.cprSigned],
+    to: [BARTER_STATUS.cprRegistered],
+    capability: CAPABILITY.bartersCprIssue,
+    label: 'Registro da CPR',
+    waiting: () => 'A cédula desta permuta aguarda o registro',
+    done: 'A cédula desta permuta já foi registrada',
   },
 };
 

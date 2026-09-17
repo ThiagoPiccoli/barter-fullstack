@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Param,
@@ -8,13 +9,25 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UnprocessableEntityException,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import type { User } from '@prisma/client';
-import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
+import {
+  AnyRole,
+  CurrentUser,
+  RequireAnyCapability,
+  RequireCapability,
+} from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterJson, toBarterVersionJson, toCprJson } from '../common/serializers';
-import { BartersService } from './barters.service';
+import { BartersService, MAX_ATTACHMENT_BYTES, type StoredFile } from './barters.service';
 import {
+  AttachInvoiceDto,
   BarterOpinionDto,
   ChangeBarterPricesDto,
   CreateBarterDto,
@@ -29,7 +42,45 @@ import {
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
-import { SaveCprDto } from './dto/cpr.dto';
+import { IssueCprDto, RegisterCprDto, SaveCprDto, SignCprDto } from './dto/cpr.dto';
+
+/**
+ * O UPLOAD de um anexo, configurado em um lugar só.
+ *
+ * `FileInterceptor` em MEMÓRIA (o padrão do multer sem `storage`): o arquivo
+ * chega inteiro na RAM e vai direto para o banco, sem passar por disco. É a
+ * mesma escolha da carga da lista de preços (ver seasons.controller.ts), e pelo
+ * mesmo motivo — um arquivo temporário em disco é um arquivo que alguém precisa
+ * lembrar de apagar.
+ *
+ * O LIMITE é o do service, e não um número solto aqui: quem sabe quanto pesa um
+ * anexo aceitável é o domínio. Ele corta a requisição antes de o corpo inteiro
+ * ser recebido; o service confere de novo, e é ELE quem escreve a frase que a
+ * pessoa lê (ver `requireAttachable`).
+ */
+const ATTACHMENT_UPLOAD = FileInterceptor('file', {
+  limits: { fileSize: MAX_ATTACHMENT_BYTES },
+});
+
+/**
+ * Entrega um arquivo guardado como ANEXO (`attachment`), e não inline.
+ *
+ * `attachment` de propósito: o navegador salva em vez de abrir. Estes arquivos
+ * chegaram de fora — quem os enviou foi um usuário —, e abri-los dentro da
+ * origem da aplicação é o que transforma um XML enviado por alguém numa página
+ * servida pelo nosso domínio. O nome do arquivo vai entre aspas e com as aspas
+ * de dentro removidas, que é o que impede um nome de arquivo malicioso de
+ * quebrar o cabeçalho.
+ */
+function sendFile(response: Response, file: StoredFile): void {
+  response.setHeader('Content-Type', file.contentType);
+  response.setHeader('Content-Length', String(file.size));
+  response.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${file.fileName.replace(/["\\\r\n]/g, '')}"`,
+  );
+  response.end(Buffer.from(file.content));
+}
 
 @Controller('barters')
 export class BartersController {
@@ -304,23 +355,78 @@ export class BartersController {
   }
 
   /**
-   * A CÉDULA DE PRODUTO RURAL desta permuta — o que a tela do faturista precisa
-   * para montar o formulário: o rascunho, o que a permuta já responde, a
-   * credora configurada e o que ainda falta.
+   * ANEXA UMA NOTA FISCAL — o arquivo e os dados dele, numa requisição só.
    *
-   * As duas rotas ANDAVAM sob a mesma capacidade do faturamento, com o
-   * argumento de que a cédula é o documento que o posto do faturista produz —
-   * o mesmo motivo pelo qual a nota fiscal é dele. O argumento continua de pé
-   * para ESCREVER, e é por isso que o `PUT` não se mexeu: quem apura a
-   * matrícula do imóvel e responde pelo que o título afirma é quem fatura.
+   * `multipart/form-data`, e por isso os campos chegam como texto (ver
+   * `AttachInvoiceDto`). Uma requisição só, e não "cria a nota e depois sobe o
+   * arquivo": as duas metades não fazem sentido separadas, e o caminho de duas
+   * chamadas produziria notas sem arquivo toda vez que a segunda falhasse.
    *
-   * O que se separou foi LER. A segunda via de uma cédula já emitida é registro
-   * da operação, e o admin — que enxerga a operação inteira e responde pelo
-   * timbre dela — precisava pedir a outra pessoa uma cópia do papel que ele
-   * mesmo administra. Ver `bartersCprRead`.
+   * `POST` numa COLEÇÃO porque são VÁRIAS: a permuta sai em mais de um
+   * carregamento, e cada retirada gera a sua nota.
+   */
+  @Post(':code/invoices')
+  @RequireCapability(CAPABILITY.bartersInvoice)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  @HttpCode(200)
+  async attachInvoice(
+    @CurrentUser() biller: User,
+    @Param('code') code: string,
+    @Body() dto: AttachInvoiceDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    // A ausência do arquivo é conferida AQUI, e não no DTO: ele não vem no corpo
+    // JSON, e nenhum decorator de class-validator o alcança. A frase diz o nome
+    // do campo porque quem lê esta recusa é quem está montando a chamada.
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o arquivo da nota fiscal (campo "file")');
+    }
+    return toBarterJson(await this.bartersService.attachInvoice(biller, code, dto, file), biller);
+  }
+
+  /**
+   * REMOVE uma nota anexada — a cancelada, ou a que subiu trocada.
    *
-   * O escopo não afrouxou junto: `cprFor` abre a permuta por `findFor`, a mesma
-   * porta do detalhe. Quem não alcança a permuta continua sem alcançar a cédula.
+   * Pelo id DENTRO da permuta, como o pedido de produto: um id de nota de outra
+   * permuta não encontra nada por aqui.
+   */
+  @Delete(':code/invoices/:id')
+  @RequireCapability(CAPABILITY.bartersInvoice)
+  async removeInvoice(
+    @CurrentUser() biller: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return toBarterJson(await this.bartersService.removeInvoice(biller, code, id), biller);
+  }
+
+  /**
+   * O ARQUIVO de uma nota — a única resposta deste controller que não é JSON.
+   *
+   * `@AnyRole` com escopo no service, como o detalhe da permuta: quem alcança a
+   * permuta alcança os documentos dela. É o que permite ao emissor conferir a
+   * nota que a cédula cita sem pedir o PDF a ninguém.
+   */
+  @Get(':code/invoices/:id/file')
+  @AnyRole()
+  async invoiceFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.invoiceFile(viewer, code, id));
+  }
+
+  /**
+   * A CÉDULA DE PRODUTO RURAL desta permuta — o rascunho, o que a permuta já
+   * responde, a credora configurada e o que ainda falta.
+   *
+   * TRÊS PAPÉIS chegam aqui, com perguntas diferentes: o CONSULTOR (para
+   * preencher), o EMISSOR (para conferir e emitir) e o ADMIN (para a segunda
+   * via). `bartersCprRead` é o portão dos três, e o escopo continua sendo o da
+   * PERMUTA — `cprFor` abre pela mesma porta do detalhe, e quem não alcança a
+   * permuta não alcança a cédula.
    */
   @Get(':code/cpr')
   @RequireCapability(CAPABILITY.bartersCprRead)
@@ -331,13 +437,176 @@ export class BartersController {
   /**
    * Grava o preenchimento da cédula — inteiro ou pela metade.
    *
+   * É DO CONSULTOR, e essa é a mudança de dono desta versão. A cédula era
+   * preenchida por quem fatura, e nada do que ela pede está na mesa do
+   * faturista: a matrícula do imóvel, o nome do cônjuge, o dono da área
+   * arrendada e o SCR são o que se traz da visita à fazenda. Ver
+   * `bartersCprFill` em policy.ts.
+   *
    * `PUT`, e não `PATCH`, porque é o formulário inteiro que a tela devolve; que
    * um campo ausente preserve o valor gravado é decisão do service (ver
    * `saveCpr`), e é o que permite salvar sem ter tudo em mãos.
    */
   @Put(':code/cpr')
-  @RequireCapability(CAPABILITY.bartersInvoice)
-  async saveCpr(@CurrentUser() biller: User, @Param('code') code: string, @Body() dto: SaveCprDto) {
-    return toCprJson(await this.bartersService.saveCpr(biller, code, dto));
+  @RequireCapability(CAPABILITY.bartersCprFill)
+  async saveCpr(
+    @CurrentUser() consultant: User,
+    @Param('code') code: string,
+    @Body() dto: SaveCprDto,
+  ) {
+    return toCprJson(await this.bartersService.saveCpr(consultant, code, dto));
+  }
+
+  /**
+   * O SCR DO PRODUTOR anexado à cédula — obrigatório para ela poder ser emitida.
+   *
+   * Rota própria, e `multipart`, pelo mesmo motivo da nota: um anexo de
+   * megabytes dentro do JSON do formulário faria cada salvamento de rascunho
+   * reenviá-lo. `PUT` porque é UM — o SCR novo substitui o anterior, que é uma
+   * fotografia vencida.
+   *
+   * DOIS POSTOS anexam, e é a única escrita da cédula assim. O CONSULTOR porque
+   * é ele quem consulta o SCR; e o EMISSOR porque é ele quem fica TRAVADO por
+   * ele — a cédula não sai sem o anexo, e "peça ao consultor e espere" é a
+   * resposta errada com o produtor sentado na frente. Anexar não é escrever a
+   * cédula: o que o emissor não pode é mexer no que ele confere, e o SCR não é
+   * afirmação dele sobre o produtor — é o relatório do Banco Central, do jeito
+   * que veio.
+   */
+  @Put(':code/cpr/scr')
+  @RequireAnyCapability(CAPABILITY.bartersCprFill, CAPABILITY.bartersCprIssue)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  async saveScr(
+    @CurrentUser() actor: User,
+    @Param('code') code: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o arquivo do SCR (campo "file")');
+    }
+    return toCprJson(await this.bartersService.saveScr(actor, code, file));
+  }
+
+  /** O arquivo do SCR. Mesma porta do anexo da nota — ver `invoiceFile`. */
+  @Get(':code/cpr/scr')
+  @RequireCapability(CAPABILITY.bartersCprRead)
+  async scrFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.scrFile(viewer, code));
+  }
+
+  /* ── A EMISSÃO: os três atos do emissor ──────────────────────────────── */
+
+  /**
+   * EMITE a cédula — o ato que CONFERE.
+   *
+   * O corpo quase não tem nada de propósito: o emissor não escreve a cédula e
+   * não decide o negócio. O que ele faz é ler o que os outros postos produziram
+   * contra o que o documento exige, e o que tem lacuna não sai — a recusa é um
+   * 422 com a lista por extenso, cada item dizendo com quem ele se resolve.
+   */
+  @Post(':code/cpr/issue')
+  @RequireCapability(CAPABILITY.bartersCprIssue)
+  @HttpCode(200)
+  async issueCpr(
+    @CurrentUser() emitter: User,
+    @Param('code') code: string,
+    @Body() dto: IssueCprDto,
+  ) {
+    return toBarterJson(await this.bartersService.issueCpr(emitter, code, dto), emitter);
+  }
+
+  /**
+   * A COLETA DE ASSINATURAS concluída — o lançamento de um fato de fora, COM O
+   * PAPEL.
+   *
+   * `multipart/form-data` como a nota fiscal, e por isso os campos chegam como
+   * texto. Uma requisição só, e não "assine e depois suba o arquivo": as duas
+   * metades não fazem sentido separadas — "assinada" sem o papel assinado é um
+   * estado afirmando o que o sistema não tem como mostrar.
+   */
+  @Post(':code/cpr/signatures')
+  @RequireCapability(CAPABILITY.bartersCprIssue)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  @HttpCode(200)
+  async signCpr(
+    @CurrentUser() emitter: User,
+    @Param('code') code: string,
+    @Body() dto: SignCprDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    // Conferido AQUI, e não no DTO: o arquivo não vem no corpo, e nenhum
+    // decorator de class-validator o alcança. Ver `attachInvoice`.
+    if (!file) {
+      throw new UnprocessableEntityException(
+        'Anexe a cédula assinada (campo "file") para lançar as assinaturas',
+      );
+    }
+    return toBarterJson(await this.bartersService.signCpr(emitter, code, dto, file), emitter);
+  }
+
+  /**
+   * O REGISTRO do título, com o número — o fim da linha.
+   *
+   * O arquivo é OPCIONAL aqui: o que prova o registro é o número, e o cartório
+   * devolve a via carimbada quando devolve. Ela entra depois por
+   * `PUT :code/cpr/registry-file`.
+   */
+  @Post(':code/cpr/registration')
+  @RequireCapability(CAPABILITY.bartersCprIssue)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  @HttpCode(200)
+  async registerCpr(
+    @CurrentUser() emitter: User,
+    @Param('code') code: string,
+    @Body() dto: RegisterCprDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    return toBarterJson(await this.bartersService.registerCpr(emitter, code, dto, file), emitter);
+  }
+
+  /** A VIA CARIMBADA que chegou depois do ato. Ver `saveCprRegistryFile`. */
+  @Put(':code/cpr/registry-file')
+  @RequireCapability(CAPABILITY.bartersCprIssue)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  async saveCprRegistryFile(
+    @CurrentUser() emitter: User,
+    @Param('code') code: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o comprovante do registro (campo "file")');
+    }
+    return toCprJson(await this.bartersService.saveCprRegistryFile(emitter, code, file));
+  }
+
+  /**
+   * OS ARQUIVOS da cédula — a assinada e a do registro.
+   *
+   * Mesma porta do SCR e do anexo da nota: `bartersCprRead`, com o escopo da
+   * permuta no service. É o que permite ao admin tirar a segunda via da cédula
+   * assinada sem pedir o PDF ao emissor.
+   */
+  @Get(':code/cpr/signed')
+  @RequireCapability(CAPABILITY.bartersCprRead)
+  async signedCprFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.signedCprFile(viewer, code));
+  }
+
+  @Get(':code/cpr/registry-file')
+  @RequireCapability(CAPABILITY.bartersCprRead)
+  async cprRegistryFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.cprRegistryFile(viewer, code));
   }
 }

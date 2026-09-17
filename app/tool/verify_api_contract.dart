@@ -291,10 +291,10 @@ Future<void> _run() async {
   await consultants.delete(second.consultant.id);
   check('consultores de verificação removidos', true);
 
-  /* ── Faturista (pessoa) e comitê (órgão) ──────────────────────────── */
-  // Os dois últimos postos da linha, e as DUAS FORMAS de cadastro que o app
-  // precisa saber distinguir: o faturista é uma pessoa entre várias, e o comitê
-  // é um cadastro só — sem lista, sem id e sem exclusão.
+  /* ── Faturista, emissor (pessoas) e comitê (órgão) ────────────────── */
+  // Os três últimos postos da linha, e as DUAS FORMAS de cadastro que o app
+  // precisa saber distinguir: faturista e emissor são pessoas entre várias, e o
+  // comitê é um cadastro só — sem lista, sem id e sem exclusão.
   const billers = StaffRepository('/billers');
   final biller = await billers.create(UserModel(
     id: '',
@@ -314,6 +314,29 @@ Future<void> _run() async {
       biller.consultant.branch);
   await billers.delete(biller.consultant.id);
   check('faturista de verificação removido', true);
+
+  // O EMISSOR — o posto da cédula, e a rota mais nova do provisionamento. Ele
+  // entra nesta verificação pelo mesmo motivo dos outros: sem um emissor
+  // cadastrado, toda permuta faturada para em "a emitir a CPR".
+  const emitters = StaffRepository('/emitters');
+  final emitter = await emitters.create(UserModel(
+    id: '',
+    name: 'Emissor de Verificação',
+    email: 'emissor.$email',
+    phone: '',
+    unitId: units.first.id,
+    branch: units.first.name,
+    role: UserRole.emitter,
+    avatarInitials: 'EV',
+    createdAt: DateTime.now(),
+  ));
+  check('emissor nasce emissor, com senha de primeira entrada',
+      emitter.consultant.role == UserRole.emitter &&
+          emitter.provisionalPassword.isNotEmpty &&
+          emitter.consultant.mustChangePassword,
+      emitter.consultant.branch);
+  await emitters.delete(emitter.consultant.id);
+  check('emissor de verificação removido', true);
 
   final committee = CommitteeRepository();
   final existing = await committee.find();

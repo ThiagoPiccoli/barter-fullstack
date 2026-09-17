@@ -10,19 +10,19 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
 /**
- * O PREENCHIMENTO DA CÉDULA pelo faturista.
+ * O PREENCHIMENTO DA CÉDULA pelo consultor.
  *
  * TUDO É OPCIONAL, e isso é a decisão de desenho deste arquivo: a cédula é
- * montada aos pedaços. A qualificação do emitente o faturista tem quando pega o
- * documento na mão; o número da nota só existe depois de ela ser emitida; a
- * matrícula da lavoura costuma vir por e-mail do produtor no dia seguinte.
- * Exigir tudo de uma vez faria o formulário recusar exatamente o estado em que o
- * trabalho passa a maior parte do tempo, e o rascunho voltaria para o papel ao
- * lado do computador.
+ * montada aos pedaços. A qualificação do emitente o consultor tem da visita; a
+ * matrícula da lavoura costuma vir por e-mail do produtor no dia seguinte; o SCR
+ * sai depois da consulta. Exigir tudo de uma vez faria o formulário recusar
+ * exatamente o estado em que o trabalho passa a maior parte do tempo, e o
+ * rascunho voltaria para o papel ao lado do computador.
  *
  * Quem responde "está completa?" é `cprGaps()`, em cpr.ts, sobre o que está
  * GRAVADO — a pergunta é outra e o momento é outro. Este DTO só diz se o que
@@ -33,10 +33,10 @@ import {
  * - nada da CREDORA (razão social, CNPJ, endereço, foro): é configuração da
  *   instalação, e digitá-la a cada cédula é digitar o CNPJ do próprio
  *   empregador trezentas vezes;
- * - nada que a PERMUTA já sabe (sacas, produto, preço, valor total, emitente):
- *   o `whitelist` do ValidationPipe descarta se vier, e é para descartar mesmo —
- *   um valor de cédula que discorde do registro é um título cobrando o que não
- *   foi acordado;
+ * - nada que a PERMUTA já sabe (sacas, produto, preço, valor total, emitente, o
+ *   vencimento da safra e os números das notas fiscais): o `whitelist` do
+ *   ValidationPipe descarta se vier, e é para descartar mesmo — um valor de
+ *   cédula que discorde do registro é um título cobrando o que não foi acordado;
  * - nenhum EXTENSO: eles são a escrita do número ao lado, e pertencem à geração
  *   do documento. O modelo recebido mostra por quê — ele traz "367 (quatrocentos
  *   e quarenta) sacas", com o algarismo e o extenso discordando.
@@ -144,14 +144,18 @@ export class SaveCprDto {
   @MaxLength(60)
   number?: string;
 
-  /** Emissão ("Aos [DIA] dias do mês de…") e vencimento da entrega. */
+  /**
+   * A EMISSÃO ("Aos [DIA] dias do mês de…").
+   *
+   * O VENCIMENTO não está aqui, e a ausência é a regra: ele muda conforme a
+   * CULTURA e vale para a safra inteira (ver `Season.cprDueDate`). Quem o
+   * escreve na cédula é o servidor, copiando-o da safra a cada gravação até a
+   * emissão. Um campo aqui devolveria o problema que ele resolve — duas cédulas
+   * da mesma safra vencendo em dias diferentes, sem como saber qual está certa.
+   */
   @IsOptional()
   @IsDateString({}, { message: 'Data de emissão inválida' })
   issuedAt?: string;
-
-  @IsOptional()
-  @IsDateString({}, { message: 'Data de vencimento inválida' })
-  dueDate?: string;
 
   // ── Qualificação civil do emitente ───────────────────────────────────────
   // O que a lei exige de quem emite título e o cadastro de produtor não guarda.
@@ -312,17 +316,19 @@ export class SaveCprDto {
   @Max(100, { message: 'O teor de óleo é um percentual (0 a 100)' })
   oilContent?: number;
 
-  // ── Origem da dívida e seguro ────────────────────────────────────────────
+  // ── O SCR do produtor ────────────────────────────────────────────────────
+  //
+  // O ARQUIVO não entra aqui: ele sobe por rota própria (`PUT
+  // /barters/:code/cpr/scr`, multipart), porque um anexo de dois megabytes
+  // dentro de um JSON de formulário faria cada salvamento de rascunho
+  // reenviá-lo. O que este campo guarda é a DATA da consulta — o SCR é uma
+  // fotografia, e "está anexado" não responde "de quando?".
 
   @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  invoiceNumber?: string;
+  @IsDateString({}, { message: 'Data da consulta ao SCR inválida' })
+  scrConsultedAt?: string;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  duplicateNumber?: string;
+  // ── Seguro ───────────────────────────────────────────────────────────────
 
   /** Apólice do seguro embutido (cláusula XVIII, "j"). Nem toda permuta tem. */
   @IsOptional()
@@ -336,7 +342,7 @@ export class SaveCprDto {
    * A lista INTEIRA, sempre: mandar `areas` substitui as que estavam lá.
    *
    * É o formato de um formulário de lista, e não de uma API de coleção — o
-   * faturista edita a lavoura na tela e salva a cédula, e ele não deveria ter
+   * consultor edita a lavoura na tela e salva a cédula, e ele não deveria ter
    * de excluir a segunda área por uma chamada separada. Omitir o campo mantém
    * as lavouras como estão, que é o que um salvamento parcial precisa.
    */
@@ -357,4 +363,113 @@ export class SaveCprDto {
   @ValidateNested({ each: true })
   @Type(() => CprGuarantorDto)
   guarantors?: CprGuarantorDto[];
+}
+
+/* ── A EMISSÃO: os três atos do emissor ─────────────────────────────────── */
+
+/**
+ * A EMISSÃO da cédula — a conferência do emissor, e o documento gerado.
+ *
+ * Ela quase não tem corpo, e é o certo: o emissor não escreve a cédula (isso é
+ * do consultor) e não decide o negócio (isso é do comitê). O que ele faz é
+ * conferir e gerar — e quem diz se dá para gerar é `cprGaps()`, sobre o que está
+ * gravado, não um campo deste DTO.
+ *
+ * A observação existe para o caso que foge: a cédula saiu em papel timbrado
+ * antigo, o produtor pediu duas vias, a conferência achou um detalhe que não
+ * trava a emissão mas merece ficar escrito.
+ */
+export class IssueCprDto {
+  /**
+   * O NÚMERO DA CÉDULA, informado no ato de emitir.
+   *
+   * Ele é a ÚNICA coisa da cédula que o emissor escreve, e escreve porque é a
+   * única que ele tem: a numeração da CPR é da emissão em papel e vem de fora
+   * deste sistema — cartório, B3, controle interno da credora. O consultor não a
+   * conhece quando visita a fazenda, e cobrá-la dele no encaminhamento travaria
+   * a esteira num número que só existe semanas depois.
+   *
+   * OPCIONAL aqui porque a cédula pode já tê-lo (a credora numera em bloco, e
+   * alguém adiantou). O que não pode é EMITIR sem número — quem cobra isso é
+   * `cprGaps()`, sobre o que ficou gravado, e não este campo.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  number?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/**
+ * A COLETA DE ASSINATURAS concluída.
+ *
+ * `signedAt` é opcional e vale HOJE quando ausente — a assinatura costuma ser
+ * registrada no dia, e pedir a data de novo seria pedir que alguém confirme o
+ * calendário. Ela existe para o lançamento atrasado, que é o caso real: o
+ * produtor assinou na fazenda na quinta e o papel chegou ao escritório na
+ * segunda.
+ *
+ * A observação é onde se diz QUEM assinou — o emitente, o cônjuge, os avalistas
+ * — e como (presencial, eletrônica). Ela é opcional porque a assinatura completa
+ * é o caso normal e não tem o que explicar.
+ */
+/**
+ * O lançamento das ASSINATURAS. Chega por `multipart/form-data`, ao lado da
+ * cédula assinada — por isso todos os campos são texto, como no `AttachInvoiceDto`.
+ */
+export class SignCprDto {
+  @IsOptional()
+  @IsDateString({}, { message: 'Data da assinatura inválida' })
+  signedAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/**
+ * O REGISTRO do título.
+ *
+ * O NÚMERO é OBRIGATÓRIO, e é a única obrigatoriedade do trecho do emissor: sem
+ * ele, "registrada" seria uma afirmação sem como ser conferida — e é justamente
+ * nesse estado que a garantia passa a valer contra terceiros. Com o número, a
+ * certidão se pede; sem ele, alguém vai ter de refazer a busca no cartório para
+ * descobrir se o registro existe mesmo.
+ *
+ * O LUGAR é opcional porque quase sempre é o mesmo (a comarca do imóvel, ou a
+ * B3), e ele já aparece na cédula pela matrícula da lavoura. Ele existe para a
+ * exceção — registro em comarca diferente da que o documento cita.
+ */
+/**
+ * O REGISTRO do título. Também `multipart` — a via carimbada pode vir junto,
+ * quando o cartório já a devolveu. Ver `registerCpr`.
+ */
+export class RegisterCprDto {
+  // A MENSAGEM em todas as três conferências, e não só no mínimo: com o campo
+  // ausente elas falham juntas, e quem lê a recusa precisa entender o que falta
+  // seja qual for a que chegar até a tela. É a mesma escolha do motivo da
+  // decisão do comitê (ver `ReviewBarterDto`).
+  @IsString({ message: 'Informe o número do registro da cédula' })
+  @MinLength(1, { message: 'Informe o número do registro da cédula' })
+  @MaxLength(80, { message: 'Informe o número do registro da cédula (até 80 caracteres)' })
+  registryNumber!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  registryPlace?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'Data do registro inválida' })
+  registeredAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
