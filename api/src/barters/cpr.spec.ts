@@ -1,9 +1,11 @@
 import {
   EMPTY_CPR,
+  NO_PLEDGE,
   consultantCprGaps,
   cprGaps,
   cprGapsOf,
   knownFrom,
+  pledgeReadingOf,
   requiresSpouse,
   suggestFrom,
 } from './cpr';
@@ -60,6 +62,10 @@ describe('CPR — o que falta para a cédula sair', () => {
   const contexto = (): CprContext => ({
     invoices: [{ number: '55.318', fileId: 42 }],
     seasonName: 'Soja 2026',
+    // O PENHOR do caso resolvido: 900 sacas a 60 sc/ha com 20% de margem pedem
+    // 18 ha, e a lavoura de `area()` tem 45,5. Os testes que são SOBRE o penhor
+    // mexem nestes números na chamada, como fazem com as notas e a safra.
+    pledge: { sacks: 900, yieldPerHa: 60, marginPercent: 20 },
   });
 
   it('cédula preenchida com uma lavoura não tem pendência', () => {
@@ -71,7 +77,12 @@ describe('CPR — o que falta para a cédula sair', () => {
     expect(gaps).toContain('número da CPR');
     expect(gaps).toContain('RG do emitente');
     expect(gaps).toContain('local da entrega');
-    expect(gaps).toContain('ao menos uma lavoura (a garantia do penhor)');
+    // A frase da lavoura JÁ TRAZ O TAMANHO quando a permuta é dimensionada: sem
+    // matrícula nenhuma anotada, o que o consultor precisa saber é quanta área ir
+    // buscar, e não que a soma de zero lavouras dá zero.
+    expect(gaps).toContain(
+      'ao menos uma lavoura (a garantia do penhor — esta permuta exige 18,00 ha)',
+    );
 
     // O que a PROPOSTA pede e a cédula NÃO imprime não é cobrado aqui: cobrar
     // CNH, filiação ou avalista travaria a geração de um documento que não os
@@ -91,10 +102,23 @@ describe('CPR — o que falta para a cédula sair', () => {
    * promete um grão e não garante nada. Por isso a ausência de lavoura é
    * pendência, e não uma lista vazia aceitável.
    */
-  it('sem lavoura não há garantia — e isso é dito', () => {
+  it('sem lavoura não há garantia — e isso é dito, com o tamanho dela', () => {
     expect(cprGaps(filled(), [], contexto())).toEqual([
-      'ao menos uma lavoura (a garantia do penhor)',
+      'ao menos uma lavoura (a garantia do penhor — esta permuta exige 18,00 ha)',
     ]);
+  });
+
+  /**
+   * UMA PENDÊNCIA SÓ quando não há lavoura nenhuma.
+   *
+   * "Falta lavoura" e "faltam 18,00 ha dos 18,00 ha exigidos" são a mesma
+   * informação dita duas vezes, e a segunda é uma conta que ninguém precisa ler
+   * para entender que não há nada ali. A lacuna quantificada só aparece quando já
+   * existe matrícula anotada — que é quando ela responde algo novo.
+   */
+  it('a lavoura ausente não gera também a pendência de área', () => {
+    const gaps = cprGaps(filled(), [], contexto());
+    expect(gaps.filter((gap) => gap.includes('penhor'))).toHaveLength(1);
   });
 
   it('a pendência da lavoura diz DE QUAL lavoura se trata', () => {
@@ -334,10 +358,20 @@ describe('CPR — a sugestão de preenchimento', () => {
  */
 describe('CPR — de quem é cada pendência', () => {
   const vazia = { ...EMPTY_CPR };
+  /**
+   * A permuta FORA da regra do penhor — as anteriores ao dimensionamento.
+   *
+   * Estes testes são sobre DE QUEM é cada pendência, e não sobre quanta área ela
+   * exige; usar uma permuta dimensionada acrescentaria a lacuna do penhor a todos
+   * eles e nenhum continuaria falando do que se propõe a falar. Ver `NO_PLEDGE`.
+   */
+  const SEM_PENHOR = NO_PLEDGE;
 
   it('a cédula em branco cobra o consultor, e não só ele', () => {
     const donos = new Set(
-      cprGapsOf(vazia, [], { invoices: [], seasonName: 'Soja 2026' }).map((g) => g.owner),
+      cprGapsOf(vazia, [], { invoices: [], seasonName: 'Soja 2026', pledge: SEM_PENHOR }).map(
+        (g) => g.owner,
+      ),
     );
     expect(donos).toEqual(new Set(['consultant', 'biller', 'admin', 'emitter']));
   });
@@ -349,7 +383,11 @@ describe('CPR — de quem é cada pendência', () => {
    * Cobrá-la dele pararia toda permuta num número que só existe semanas depois.
    */
   it('o número da cédula é do emissor, e o vencimento é do admin', () => {
-    const gaps = cprGapsOf(vazia, [], { invoices: [], seasonName: 'Soja 2026' });
+    const gaps = cprGapsOf(vazia, [], {
+      invoices: [],
+      seasonName: 'Soja 2026',
+      pledge: SEM_PENHOR,
+    });
     const donoDe = (trecho: string) => gaps.find((g) => g.label.includes(trecho))?.owner;
 
     expect(donoDe('número da CPR')).toBe('emitter');
@@ -365,7 +403,7 @@ describe('CPR — de quem é cada pendência', () => {
    * pronta ainda está INCOMPLETA para emitir — e encaminha do mesmo jeito.
    */
   it('a lista do consultor não inclui o de ninguém mais', () => {
-    const dele = consultantCprGaps(vazia, []);
+    const dele = consultantCprGaps(vazia, [], SEM_PENHOR);
     expect(dele.join(' ')).toContain('RG do emitente');
     expect(dele.join(' ')).toContain('SCR do produtor');
     expect(dele.join(' ')).not.toContain('nota fiscal');
@@ -401,10 +439,14 @@ describe('CPR — de quem é cada pendência', () => {
       owners: [{ name: 'Antônio Pereira', document: '111.222.333-44' }],
     };
 
-    expect(consultantCprGaps(preenchida, [lavoura])).toEqual([]);
+    expect(consultantCprGaps(preenchida, [lavoura], SEM_PENHOR)).toEqual([]);
     // E a cédula continua SEM PODER SER EMITIDA — o que falta é dos outros.
     expect(
-      cprGaps(preenchida, [lavoura], { invoices: [], seasonName: 'Soja 2026' }).length,
+      cprGaps(preenchida, [lavoura], {
+        invoices: [],
+        seasonName: 'Soja 2026',
+        pledge: SEM_PENHOR,
+      }).length,
     ).toBeGreaterThan(0);
   });
 });
@@ -443,5 +485,115 @@ describe('o tipo do anexo', () => {
     // e o que ele diz não serve. A extensão só é consultada quando o cabeçalho
     // não diz nada.
     expect(attachmentTypeOf('nota.pdf', 'text/html')).toBeNull();
+  });
+});
+
+/**
+ * O PENHOR DIMENSIONADO — a exigência que transformou "tem lavoura?" em "tem
+ * lavoura suficiente?".
+ *
+ * A regra antiga (`areas.length === 0`) respondia se existia garantia e não
+ * respondia de quanto: uma permuta de 3.000 sacas passava com uma matrícula de
+ * 4 ha anotada. Estes testes guardam as três decisões que a nova tomou — de onde
+ * sai a exigência, de quem ela é, e quando ela NÃO se aplica.
+ */
+describe('CPR — a área do penhor', () => {
+  const lavoura = (areaHa: number, registryNumber = '12.345'): CprAreaDraft => ({
+    locality: 'Água Boa',
+    city: 'Maringá/PR',
+    areaHa,
+    withinLargerArea: false,
+    registryNumber,
+    registryBook: '2-RG',
+    registryDistrict: 'Maringá/PR',
+    owners: [{ name: 'Antônio Pereira', document: '111.222.333-44' }],
+  });
+
+  /** A permuta do exemplo: 1.200 sacas, 60 sc/ha, 20% de margem → 24 ha. */
+  const penhor = { sacks: 1200, yieldPerHa: 60, marginPercent: 20 };
+
+  const faltaDe = (areas: CprAreaDraft[]): string | undefined =>
+    consultantCprGaps(EMPTY_CPR, areas, penhor).find((gap) => gap.includes('área de penhor'));
+
+  it('a lavoura menor que o exigido vira pendência, com os três números', () => {
+    expect(faltaDe([lavoura(10)])).toBe(
+      'área de penhor insuficiente: faltam 14,00 ha (a permuta exige 24,00 ha e as lavouras somam 10,00 ha)',
+    );
+  });
+
+  /**
+   * N MATRÍCULAS FECHAM A ÁREA, que é o caso que motivou a feature: o produtor
+   * planta em quantos pedaços plantar, e o penhor soma todos.
+   */
+  it('várias matrículas somam para fechar a área', () => {
+    expect(faltaDe([lavoura(10, '12.345'), lavoura(9, '67.890')])).toContain('faltam 5,00 ha');
+    expect(
+      faltaDe([lavoura(10, '12.345'), lavoura(9, '67.890'), lavoura(5, '11.111')]),
+    ).toBeUndefined();
+  });
+
+  /**
+   * A FOLGA DE UM CENTÉSIMO existe para o consultor que digitou exatamente a
+   * área pedida: `12,5 + 11,5` dá 23,999999999999996 em ponto flutuante, e sem
+   * a tolerância ele levaria uma recusa por um metro quadrado que não existe.
+   */
+  it('a área exata passa, apesar do ponto flutuante', () => {
+    expect(faltaDe([lavoura(12.5), lavoura(11.5, '67.890')])).toBeUndefined();
+    // E um décimo a menos continua faltando: a folga é de um centésimo, e não
+    // uma licença para arredondar a garantia.
+    expect(faltaDe([lavoura(12.5), lavoura(11.4, '67.890')])).toContain('faltam 0,10 ha');
+  });
+
+  /** A pendência é do CONSULTOR: é ele que soma matrículas, e é ele que trava. */
+  it('a pendência do penhor é do consultor', () => {
+    const gaps = cprGapsOf(EMPTY_CPR, [lavoura(10)], {
+      invoices: [],
+      seasonName: 'Soja 2026',
+      pledge: penhor,
+    });
+    expect(gaps.find((g) => g.label.includes('área de penhor'))?.owner).toBe('consultant');
+  });
+
+  /**
+   * A PERMUTA ANTERIOR À REGRA não é cobrada, e este é o teste que impede a
+   * migration de travar a emissão de tudo o que já estava aprovado.
+   *
+   * `yieldPerHa` 0 é a marca do legado (ver `CprPledge`), e ela isenta a
+   * exigência de ÁREA — não a de EXISTIR lavoura, que é anterior a tudo isto e
+   * continua valendo para todo mundo.
+   */
+  it('permuta anterior ao dimensionamento não é cobrada de área — mas continua devendo lavoura', () => {
+    expect(consultantCprGaps(EMPTY_CPR, [lavoura(1)], NO_PLEDGE).join(' ')).not.toContain(
+      'área de penhor',
+    );
+    expect(consultantCprGaps(EMPTY_CPR, [], NO_PLEDGE).join(' ')).toContain('ao menos uma lavoura');
+  });
+
+  /**
+   * AS SACAS MUDAM DEPOIS DO REGISTRO — deferir um produto de fora do Barter
+   * recalcula a linha do grão —, e é por isso que a área exigida se recalcula a
+   * cada leitura em vez de ficar gravada. O penhor que bastava ontem pode não
+   * bastar hoje, e a conferência tem de dizer isso.
+   */
+  it('mais sacas exigem mais área, com as mesmas lavouras', () => {
+    const areas = [lavoura(24)];
+    expect(consultantCprGaps(EMPTY_CPR, areas, penhor).join(' ')).not.toContain('área de penhor');
+    expect(consultantCprGaps(EMPTY_CPR, areas, { ...penhor, sacks: 1500 }).join(' ')).toContain(
+      'faltam 6,00 ha',
+    );
+  });
+
+  /** O placar que a tela desenha, com a exigência já cumprida. */
+  it('a leitura do penhor sobrevive à exigência cumprida', () => {
+    const cumprido = pledgeReadingOf(penhor, [lavoura(30)]);
+    expect(cumprido).toEqual({
+      applies: true,
+      requiredAreaHa: 24,
+      pledgedAreaHa: 30,
+      shortfallHa: 0,
+    });
+    // Fora da regra, o placar diz que não se aplica em vez de afirmar zero
+    // hectare exigido — que é o que a tela leria como "não precisa de garantia".
+    expect(pledgeReadingOf(NO_PLEDGE, [lavoura(30)]).applies).toBe(false);
   });
 });

@@ -156,6 +156,16 @@ class Capability {
   /// faturista, e mudou de mãos junto com a cédula.
   static const creditorManage = 'creditor.manage';
 
+  /// Definir a MARGEM DE SEGURANÇA DO PENHOR — a folga de área que a empresa
+  /// exige além da que a produção estimada justifica.
+  ///
+  /// SEPARADA de [creditorManage], e é por isso que ela existe: aquela é do
+  /// admin **e do emissor**, porque é o timbre do papel. Esta decide quanta terra
+  /// a empresa exige em garantia de tudo o que for registrado dali em diante — e
+  /// é só do ADMIN. A tela da credora é a mesma para os dois; o campo da margem
+  /// é o único que o emissor não vê.
+  static const pledgePolicyManage = 'pledge.policy';
+
   const Capability._();
 }
 
@@ -964,6 +974,25 @@ class BarterModel {
   final TaxRegime taxRegime;
   final double taxRate;
 
+  /// O PENHOR — quanta área de lavoura esta permuta precisa dar em garantia, e
+  /// as duas taxas que produziram esse número.
+  ///
+  /// [pledgeAreaHa] é `(sacas ÷ [pledgeYield]) × (1 + [pledgeMarginPercent]%)`,
+  /// calculada pelo SERVIDOR — o app não refaz a conta pelo mesmo motivo de não
+  /// refazer a da cédula: as sacas mudam quando um produto de fora do Barter é
+  /// deferido, e duas contas divergiriam no primeiro arredondamento.
+  ///
+  /// As DUAS TAXAS vêm junto, e não só o resultado, porque "por que 34 ha?" é a
+  /// primeira pergunta de quem lê o número — e o lançamento do Barter, onde a
+  /// resposta mora, é tela que o consultor não abre.
+  ///
+  /// Zero nos três quando a resposta não os trouxe (a listagem não carrega os
+  /// itens) ou quando a permuta é anterior ao dimensionamento. Ver [hasPledge],
+  /// que é o que as telas leem antes de mostrar qualquer um deles.
+  final double pledgeAreaHa;
+  final double pledgeYield;
+  final double pledgeMarginPercent;
+
   final DateTime createdAt;
   final DateTime? updatedAt;
 
@@ -1115,6 +1144,9 @@ class BarterModel {
     required this.inputs,
     this.taxRegime = TaxRegime.comercializacao,
     this.taxRate = 0,
+    this.pledgeAreaHa = 0,
+    this.pledgeYield = 0,
+    this.pledgeMarginPercent = 0,
     required this.createdAt,
     this.updatedAt,
     this.managerId = '',
@@ -1178,6 +1210,9 @@ class BarterModel {
           .toList(),
       taxRegime: taxRegimeFrom(json['taxRegime']),
       taxRate: _asDouble(json['taxRate']),
+      pledgeAreaHa: _asDouble(json['pledgeAreaHa']),
+      pledgeYield: _asDouble(json['pledgeYield']),
+      pledgeMarginPercent: _asDouble(json['pledgeMarginPercent']),
       createdAt: _asDate(json['createdAt']),
       updatedAt: _asDateOrNull(json['reviewedAt']),
       managerId: _asId(json['managerId']),
@@ -1257,6 +1292,27 @@ class BarterModel {
   /// O mesmo imposto medido em SACAS do grão de pagamento — a unidade do
   /// consultor, que não enxerga R$ em lugar nenhum do app.
   double get taxInSacks => taxAmountOf(totalGrainQty, taxRate);
+
+  /// Esta permuta tem área de penhor dimensionada?
+  ///
+  /// Falso nas anteriores à regra e nas respostas que não trouxeram os itens —
+  /// e nos dois casos a tela CALA em vez de mostrar "0 ha exigidos", que é o
+  /// que alguém leria como "esta permuta não precisa de garantia".
+  bool get hasPledge => pledgeAreaHa > 0;
+
+  /// A área do penhor como se lê ("24,00 ha").
+  String get pledgeAreaLabel => '${pledgeAreaHa.toStringAsFixed(2).replaceAll('.', ',')} ha';
+
+  /// DE ONDE SAIU O NÚMERO, em uma linha ("produção estimada de 60 sc/ha + 20%
+  /// de margem"). É a resposta a "por que essa área?", que é o que todo mundo
+  /// pergunta antes de aceitar a exigência — e o lançamento do Barter, onde ela
+  /// mora, é tela que o consultor não abre.
+  String get pledgeBasisLabel {
+    final base = 'produção estimada de ${pledgeYield.toStringAsFixed(0)} sc/ha';
+    return pledgeMarginPercent > 0
+        ? '$base + ${pledgeMarginPercent.toStringAsFixed(0)}% de margem de segurança'
+        : base;
+  }
 
   /// A alíquota como se lê (ex.: "1,63%").
   String get taxRateLabel => '${taxRate.toStringAsFixed(2).replaceAll('.', ',')}%';
@@ -1971,6 +2027,19 @@ class BarterVersionModel {
   /// responde nas duas lentes.
   final double grainPrice;
 
+  /// A PRODUTIVIDADE ESTIMADA da cultura (sc/ha) — a taxa que converte as sacas
+  /// da permuta na ÁREA DE LAVOURA que precisa garanti-las.
+  ///
+  /// Ao contrário de [grainPrice], ela vai para TODO MUNDO, inclusive para quem
+  /// não vê R$: é sacas por hectare, e não moeda. É a outra metade da conversão
+  /// que o preço da saca começa, e é o que explica ao consultor por que a
+  /// permuta dele exige a área que exige.
+  ///
+  /// Zero é a versão anterior ao campo — e nela o servidor RECUSA permuta nova,
+  /// porque sem a taxa não há como dimensionar o penhor. A tela do admin lê este
+  /// zero para mostrar o Barter vigente e travado.
+  final double estimatedYield;
+
   /// Esta versão chegou com os valores em R$?
   ///
   /// É a LENTE DE VALOR da API vista do lado de cá: quem tem `prices.read`
@@ -2036,6 +2105,7 @@ class BarterVersionModel {
     this.endsAt,
     this.closedAt,
     this.closedBy,
+    this.estimatedYield = 0,
     this.closeOnGoal = false,
     this.sourceFile,
     this.note,
@@ -2057,6 +2127,7 @@ class BarterVersionModel {
       grainName: (json['grainName'] ?? '') as String,
       grainUnit: (json['grainUnit'] ?? '') as String,
       grainPrice: _asDouble(json['grainPrice']),
+      estimatedYield: _asDouble(json['estimatedYield']),
       showsCurrency: json['grainPrice'] != null,
       status: (json['status'] ?? 'closed') as String,
       isOpen: json['isOpen'] == true,

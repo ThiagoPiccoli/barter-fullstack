@@ -387,6 +387,30 @@ model BarterVersion {
   /// insumos em sacas. É digitado pelo admin ao publicar, não vem da planilha.
   grainPrice Float
 
+  /// A PRODUTIVIDADE ESTIMADA da cultura nesta versão, em sacas por hectare — a
+  /// taxa que converte as sacas da permuta em HECTARES a penhorar.
+  ///
+  /// Ela é a outra metade da conversão que `grainPrice` começa: o preço da saca
+  /// leva o custo dos insumos a sacas, e a produtividade leva as sacas à área de
+  /// lavoura que precisa nascer para pagá-las. É por isso que ela mora AQUI, ao
+  /// lado dele, e não na safra: as duas são decisão comercial do admin, tomadas
+  /// no mesmo ato, e revisáveis pelo mesmo mecanismo — publicar a próxima versão
+  /// não reescreve o que já foi acordado nesta.
+  ///
+  /// (O `cprDueDate` foi para a SAFRA pelo motivo oposto, e a distinção é o que
+  /// separa os dois: o vencimento é um FATO do calendário da cultura; a
+  /// produtividade é a estimativa que a empresa ADOTA para medir risco. Fato é
+  /// da safra, política é da versão.)
+  ///
+  /// OBRIGATÓRIA na publicação (ver `PublishVersionDto`), e por isso o `0` só
+  /// existe nas versões anteriores a este campo. Enquanto ela for 0, `POST
+  /// /barters` recusa: sem produtividade não há área exigida, e uma permuta que
+  /// passasse sem ela entraria na esteira sem garantia dimensionada — que é
+  /// exatamente o que o penhor existe para impedir. Ver
+  /// `VersionEstimatedYieldDto`, que é por onde ela se acerta numa versão já
+  /// publicada.
+  estimatedYield Float @default(0)
+
   startsAt DateTime  @default(now())
   endsAt   DateTime?
 
@@ -535,6 +559,36 @@ model Barter {
   /// 0 nas permutas anteriores a este campo: sem área registrada não há sc/ha, e
   /// a leitura devolve `null` em vez de dividir por zero e afirmar um número.
   producerAreaHa Float @default(0)
+
+  /// O PENHOR desta permuta — as duas taxas com que a área de garantia foi
+  /// dimensionada, congeladas no registro.
+  ///
+  /// `pledgeYield` é a produtividade estimada (sc/ha) da versão em que ela nasceu
+  /// e `pledgeMarginPercent` é a margem de segurança da credora naquele dia.
+  /// Juntas com as sacas do item de grão, elas produzem a área exigida:
+  ///
+  ///     área exigida = (sacas ÷ pledgeYield) × (1 + pledgeMarginPercent / 100)
+  ///
+  /// SÃO SNAPSHOT pelo mesmo motivo de `taxRate` e `producerAreaHa`: as duas
+  /// mudam (a versão seguinte revê a produtividade, a diretoria revê a margem), e
+  /// lidas na hora de conferir fariam uma permuta já encaminhada passar a exigir
+  /// mais área do que as lavouras que alguém já anotou — sem que nada nela
+  /// tivesse mudado.
+  ///
+  /// A ÁREA EXIGIDA NÃO É COLUNA, e isso é deliberado: ela é derivada, como os
+  /// quilos e o valor total da cédula. As SACAS mudam depois do registro — deferir
+  /// um produto de fora do Barter recalcula a linha do grão (ver `repriceGrain`)
+  /// —, e uma área exigida gravada continuaria dizendo o número da semana
+  /// passada num campo que parece atual.
+  ///
+  /// `pledgeYield` 0 é a MARCA DAS PERMUTAS ANTERIORES À REGRA, e é o que as
+  /// isenta: a partir deste campo, `POST /barters` recusa versão sem
+  /// produtividade, então toda permuta nova nasce com ela preenchida. Zero não é
+  /// "sem produtividade", é "nasceu antes de o penhor ser dimensionado" — e
+  /// cobrar área dessas travaria a emissão de títulos já aprovados por causa de
+  /// uma regra que não existia quando eles foram fechados.
+  pledgeYield          Float @default(0)
+  pledgeMarginPercent  Float @default(0)
 
   status String @default("draft")
 
@@ -1083,6 +1137,28 @@ model Creditor {
   /// isso o vazio vale como `city` na leitura —, mas é escolha contratual, e há
   /// credora que elege outra.
   forum String @default("")
+
+  /// A MARGEM DE SEGURANÇA DO PENHOR (%) — quanto a mais de área a credora exige
+  /// além da que a produção estimada justifica.
+  ///
+  /// A área estimada (`sacas ÷ produtividade`) é o que a lavoura precisa ter se
+  /// tudo correr bem. Como nem tudo corre bem — quebra de safra, sinistro, uma
+  /// produtividade que veio otimista —, a empresa penhora uma folga por cima
+  /// dela. Zero é uma resposta legítima: é a credora que decide não exigir folga
+  /// nenhuma, e por isso este campo não entra em `creditorGaps()`.
+  ///
+  /// NÃO É A RESERVA LEGAL, e o nome é escolhido para não confundir os dois. A
+  /// reserva legal é do Código Florestal: o percentual do IMÓVEL que tem de ficar
+  /// em vegetação nativa (20% no Sul/Sudeste, 35% ou 80% na Amazônia). Ela é
+  /// atributo de cada matrícula, imposta por lei, e o efeito dela é o oposto —
+  /// diz que parte da área registrada NÃO é plantável. Esta aqui é apetite de
+  /// risco da credora, muda quando a diretoria muda de ideia, e vale para todas
+  /// as matrículas igualmente.
+  ///
+  /// Mora na CREDORA porque é política da empresa, e não da safra: a folga que se
+  /// exige de um produtor é a mesma que se exige de todos, e ela não muda porque
+  /// o fornecedor republicou a tabela de preços.
+  pledgeMarginPercent Float @default(0)
 
   updatedAt DateTime @updatedAt
 

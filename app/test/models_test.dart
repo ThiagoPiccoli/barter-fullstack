@@ -493,6 +493,52 @@ void main() {
     });
   });
 
+  /// O PENHOR — a área de lavoura que a permuta exige em garantia.
+  ///
+  /// O app NÃO calcula a área: ela chega pronta do servidor, porque depende das
+  /// sacas (que mudam quando um produto de fora do Barter é deferido) e de duas
+  /// taxas congeladas no registro. O que estas provas travam é o outro lado —
+  /// que o app saiba distinguir "não exige garantia" de "esta permuta é anterior
+  /// à regra", e que a frase que explica o número não minta sobre a conta.
+  group('o penhor da permuta', () {
+    test('a área e as taxas chegam prontas do servidor', () {
+      final barter = BarterModel.fromJson({
+        ...barterJson(),
+        'pledgeAreaHa': 24.0,
+        'pledgeYield': 60.0,
+        'pledgeMarginPercent': 20.0,
+      });
+
+      expect(barter.hasPledge, isTrue);
+      expect(barter.pledgeAreaLabel, '24,00 ha');
+      expect(barter.pledgeBasisLabel, 'produção estimada de 60 sc/ha + 20% de margem de segurança');
+    });
+
+    /// SEM MARGEM, a frase não inventa um "+ 0%": zero é a credora dizendo que
+    /// não exige folga, e escrever isso por extenso faria parecer que houve um
+    /// acréscimo de nada.
+    test('sem margem, a explicação fala só da produção estimada', () {
+      final barter = BarterModel.fromJson({
+        ...barterJson(),
+        'pledgeAreaHa': 20.0,
+        'pledgeYield': 60.0,
+        'pledgeMarginPercent': 0.0,
+      });
+
+      expect(barter.pledgeBasisLabel, 'produção estimada de 60 sc/ha');
+    });
+
+    /// A PERMUTA ANTERIOR À REGRA — e a resposta da tela a ela é CALAR.
+    ///
+    /// É o mesmo caso da permuta sem alíquota registrada: mostrar "0,00 ha" seria
+    /// o app afirmando que esta permuta não precisa de garantia nenhuma, que é o
+    /// oposto do que a ausência significa. Vale também para a LISTAGEM, que não
+    /// carrega os itens e por isso não traz o bloco.
+    test('permuta sem penhor dimensionado não mostra área nenhuma', () {
+      expect(BarterModel.fromJson(barterJson()).hasPledge, isFalse);
+    });
+  });
+
   group('BarterVersionModel', () {
     test('lê a versão vigente com a tabela de valores', () {
       final version = BarterVersionModel.fromJson(versionJson());

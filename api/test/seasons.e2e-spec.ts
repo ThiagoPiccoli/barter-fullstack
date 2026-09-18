@@ -82,6 +82,7 @@ describe('Barter — safra e versões (e2e)', () => {
   /** Tabela mínima para publicar uma versão nova pelo corpo da requisição. */
   const tabela = (price: number) => ({
     grainPrice: 150,
+    estimatedYield: 60,
     prices: [
       { productId: 5, price },
       { productId: 6, price: 18.9 },
@@ -263,6 +264,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .set('Authorization', admin)
         .send({
           grainPrice: 150,
+          estimatedYield: 60,
           prices: insumos.map((produto, i) => ({ productId: produto.id, price: 10 + i })),
         });
 
@@ -281,6 +283,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .set('Authorization', await asUser(ADMIN))
         .send({
           grainPrice: 150,
+          estimatedYield: 60,
           prices: [
             { productId: 5, price: 100 },
             { productId: 6, price: 18.9 },
@@ -733,6 +736,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
         .field('grainPrice', '152,50')
+        .field('estimatedYield', '60')
         .attach('file', arquivo, 'tabela-setembro.xlsx');
 
       expect(response.status).toBe(201);
@@ -771,6 +775,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach('file', arquivo, 'tabela.xlsx')
         .expect(201);
 
@@ -794,6 +799,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', admin)
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach('file', arquivo, 'tabela.xlsx')
         .expect(201);
 
@@ -812,6 +818,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', admin)
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach(
           'file',
           await planilha([['B-1', 'INOCULANTE SEM PISTA', '', 'INOCULANTES', 95]]),
@@ -833,6 +840,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach('file', arquivo, 'tabela.xlsx');
 
       expect(response.status).toBe(422);
@@ -850,6 +858,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach('file', Buffer.from('nome;preco'), 'tabela.csv');
 
       expect(response.status).toBe(422);
@@ -879,6 +888,7 @@ describe('Barter — safra e versões (e2e)', () => {
           .post('/api/v1/seasons/S2026/versions/import')
           .set('Authorization', await asUser(ADMIN))
           .field('grainPrice', '150')
+          .field('estimatedYield', '60')
           .field('endsAt', '2020-01-01T00:00:00.000Z')
           .attach('file', await fantasma(), 'tabela.xlsx');
 
@@ -896,6 +906,7 @@ describe('Barter — safra e versões (e2e)', () => {
           .post('/api/v1/seasons/S2026/versions/import')
           .set('Authorization', admin)
           .field('grainPrice', '150')
+          .field('estimatedYield', '60')
           .attach('file', await fantasma(), 'tabela.xlsx');
 
         expect(response.status).toBe(422);
@@ -931,6 +942,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', admin)
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach(
           'file',
           await planilha([['GRA-0001', 'Insumo de Código Tomado', 'litro', 'Pasta Inédita', 99]]),
@@ -963,6 +975,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach('file', await planilha(linhas), 'tabela-cheia.xlsx');
 
       expect(response.status).toBe(201);
@@ -978,6 +991,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .field('carryOver', 'true')
         .attach('file', arquivo, 'so-o-que-mudou.xlsx');
 

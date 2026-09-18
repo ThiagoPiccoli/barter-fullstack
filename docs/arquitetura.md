@@ -15,6 +15,15 @@ Antes de qualquer arquitetura, o domínio:
 > que o produtor entrega na colheita. Sacas são **consequência** do custo —
 > nunca o contrário.
 
+E a conversão continua mais um passo, porque as sacas precisam nascer em algum
+lugar:
+
+> As sacas devidas são divididas pela **produção estimada** da cultura (sc/ha) e
+> acrescidas de uma **margem de segurança**. O resultado é a **área de lavoura**
+> que o produtor dá em **penhor** na cédula — e as matrículas que ele informa
+> precisam somar essa área. Hectares são **consequência** das sacas, como as
+> sacas são do custo.
+
 E, acima disso, **quem decide os valores é a empresa, não a permuta**:
 
 > O **Barter é lançado**: a empresa abre uma **safra** sobre um grão (`S2026`) e
@@ -370,6 +379,7 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | `barters.cprIssue` | **emissor** — emitir, colher assinaturas e registrar |
 | `barters.cprRead` | admin, **consultor** e **emissor** — ler a mesa da cédula e gerar o documento |
 | `creditor.manage` | admin **e** emissor (a única dividida — é o timbre, não decisão) |
+| `pledge.policy` | **admin** — a margem de segurança do penhor. Separada de `creditor.manage` porque aquela é do emissor também, e isto É decisão |
 | `barters.changeReview` | **admin** — decide o pedido de alteração (processo, não negócio) e atende no valor |
 | `barters.productReview` | **admin** — atende o pedido de fora do Barter: inclui o item com o valor acertado |
 | `barters.register` · `barters.changeRequest` · `barters.productRequest` · `barters.cprFill` | consultor |
@@ -883,6 +893,20 @@ vigente, e o `productId` do grão da safra ajusta o valor da saca pelo mesmo
 caminho. **Não existe mais `PUT /products/:id/price`**: com as duas portas
 abertas, o catálogo e a versão discordariam, e quem precifica é a versão.
 
+O lançamento tem **duas taxas**, e as duas são obrigatórias: `grainPrice`, que
+leva o custo dos insumos a sacas, e `estimatedYield` — a **produtividade
+estimada** da cultura (sc/ha), que leva as sacas à área de lavoura do penhor (ver
+1.5c). Elas viajam juntas no código (`VersionRates`) justamente para não haver um
+caminho de publicação que carregue uma e esqueça a outra: a versão nasceria
+vigente, aceitando permuta e sem conseguir dimensionar a garantia dela.
+
+`PUT /barter-versions/:code/estimated-yield` acerta a produtividade de uma versão
+**já publicada**. Ela existe pela mesma razão do vencimento da safra: as versões
+anteriores ao campo nasceram sem ele e são as que estão vigentes no dia em que a
+migration sobe — e a alternativa seria republicar a tabela inteira, o que
+encerraria a versão e reiniciaria a contagem do realizado por causa de um número
+de dois dígitos.
+
 ## 1.5c O documento: a Cédula de Produto Rural (CPR)
 
 O faturamento não encerra o negócio: a entrega do grão é formalizada por uma
@@ -974,7 +998,24 @@ mantém longe de quem opera: é o *timbre do papel*, e quem percebe que o CNPJ s
 com um dígito trocado é quem leva o título a registro. Ela já foi do faturista, e
 mudou de mãos junto com a cédula — o timbre segue quem emite o papel, não quem
 emite a nota. Mandá-lo abrir chamado com o admin para
-corrigir o próprio timbre trocaria um campo de texto por um processo. O cadastro é
+corrigir o próprio timbre trocaria um campo de texto por um processo.
+
+**E é por isso que a MARGEM DO PENHOR saiu de dentro dele.** A margem de
+segurança (`Creditor.pledgeMarginPercent`) é da EMPRESA, e esta é a única linha
+que representa a empresa — então ela nasceu como mais um campo do `CreditorDto`.
+Com isso, o emissor passou a decidir, sem que ninguém escolhesse isso, quanta
+terra a empresa exige em garantia de toda permuta futura: baixá-la de 20% para
+10% corta a garantia pela metade, e a porta era a mesma de corrigir um CNPJ.
+
+A correção não foi mudar de tabela — foi separar por AUTORIDADE dentro dela:
+rota própria (`PUT /creditor/pledge-margin`), DTO próprio e capacidade própria
+(`pledge.policy`, só do admin). É o mesmo desenho de
+`PUT /seasons/:code/cpr-due-date` e `PUT /barter-versions/:code/estimated-yield`:
+**o campo que tem dono ou ciclo próprio ganha porta própria**, em vez de viajar
+dentro de um formulário cujo dono é outro. A tela da credora é a mesma para os
+dois papéis, e o campo simplesmente não existe para quem não tem a capacidade.
+
+O cadastro é
 ÚNICO, na rota singular `/creditor`, pelo mesmo desenho do comitê: uma instalação
 serve uma empresa, e duas credoras fariam a cédula ter de escolher sem que nada no
 documento diga qual. A leitura nunca dá 404 — instalação nova devolve o cadastro
@@ -1036,6 +1077,68 @@ entrega) e todos os extensos. O modelo recebido mostra por que os extensos
 pertencem à geração e não à digitação: ele traz *"367 (quatrocentos e quarenta)
 sacas"*, com o algarismo e o extenso discordando — um erro de digitação com
 efeito jurídico.
+
+### O penhor — a garantia deixou de ser "existe?" e passou a ser "de quanto?"
+
+`cprGaps()` sempre cobrou **ao menos uma lavoura**: sem a matrícula do imóvel, a
+cédula promete um grão e não garante nada. O que ela não perguntava era o
+tamanho — e uma permuta de 3.000 sacas passava com uma matrícula de 4 ha anotada.
+O penhor ficava do tamanho do que alguém teve tempo de digitar.
+
+A conta que fechou esse buraco é a mesma do escambo, continuada mais um passo:
+
+```
+custo dos insumos ──(÷ preço da saca)──▶ sacas ──(÷ produtividade)──▶ hectares
+                                                 ──(× 1 + margem)───▶ área EXIGIDA
+```
+
+As três parcelas vêm de três lugares, e nenhuma delas é digitada no formulário:
+
+- as **sacas** são o item de grão da permuta;
+- a **produtividade estimada** (sc/ha) é da VERSÃO do Barter
+  (`BarterVersion.estimatedYield`), ao lado de `grainPrice` — as duas são as
+  metades da mesma conversão, decididas no mesmo ato e revisáveis pelo mesmo
+  mecanismo (publicar a próxima versão não reescreve o que já foi acordado);
+- a **margem de segurança** (%) é da CREDORA (`Creditor.pledgeMarginPercent`) —
+  política da empresa, que não muda porque o fornecedor republicou a tabela.
+
+> A margem **não é a reserva legal**, embora a conversa que originou a feature a
+> chamasse assim. A reserva legal é do Código Florestal: o percentual do IMÓVEL
+> que fica em vegetação nativa, imposto por lei, atributo de cada matrícula, e o
+> efeito dela é o oposto — dizer que parte da área registrada não é plantável.
+> Esta é apetite de risco da credora, vale igual para todas as matrículas, e muda
+> quando a diretoria muda de ideia.
+
+**As duas taxas ficam congeladas na permuta** (`Barter.pledgeYield`,
+`pledgeMarginPercent`), pelo mesmo motivo de `taxRate` e `producerAreaHa`: lidas
+na hora de conferir, fariam uma permuta já encaminhada passar a exigir mais área
+do que as lavouras que o consultor anotou, sem nada nela ter mudado.
+
+**A área exigida NÃO é coluna.** Ela é derivada, como os quilos e o valor total —
+e aqui isso não é estética: deferir um produto de fora do Barter recalcula a
+linha do grão (`repriceGrain`), as sacas crescem, e um número gravado continuaria
+dizendo o valor da semana passada num campo com cara de atual. A conferência
+refaz a conta a cada leitura, e é assim que o penhor que bastava ontem é acusado
+hoje.
+
+**Onde trava:** no encaminhamento, junto com o resto de `consultantCprGaps` — o
+último instante em que voltar atrás custa zero. Foi essa lacuna que obrigou
+`consultantCprGaps` a receber contexto: até ela, tudo o que o consultor devia
+estava dentro do rascunho.
+
+**`pledgeYield` 0 é a marca do legado.** A partir desta regra, `POST /barters`
+recusa versão sem produtividade (o portão gêmeo do de `grainPrice`), então toda
+permuta nova nasce com a taxa preenchida — e zero passa a significar "nasceu
+antes de o penhor ser dimensionado", não "faltou preencher". Sem esse portão, a
+migration travaria a emissão de todo título já aprovado.
+
+**O que avisa sem travar** (`pledgeWarningsFor`): a mesma matrícula em penhor
+noutra permuta da mesma gestão, e a soma das lavouras passando da área cultivável
+do produtor. São os dois jeitos conhecidos de a área fechar na conta e não fechar
+no mundo — e nenhum dos dois é certeza (há arrendamento que o cadastro não
+reflete, há matrícula grande repartida de boa-fé). Travar recusaria operação boa;
+calar deixaria passar a operação que a feature existe para pegar. Por isso eles
+saem em `pledgeWarnings`, fora de `gaps`, que é a lista que o portão lê.
 
 A cédula continua **editável depois de a permuta ser faturada**, e não é
 contradição com "não existe desfaturar": o que o estado fecha é o **ato**; a
@@ -1272,6 +1375,7 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | GET | `/barter-versions/current` | autenticado | a versão VIGENTE com a tabela; `null` = Barter fechado |
 | GET | `/barter-versions/:code` | admin | detalhe + metas × realizado |
 | PUT | `/barter-versions/:code/prices/:productId` | admin | correção pontual (o grão da safra ajusta a saca) |
+| PUT | `/barter-versions/:code/estimated-yield` | admin | produtividade estimada (sc/ha) da versão vigente — a taxa do penhor |
 | POST | `/barter-versions/:code/close` | admin | encerra o Barter, mantém a safra |
 | GET/POST | `/seasons` | admin | safras com o histórico de versões |
 | POST | `/seasons/:code/close` | admin | encerra safra + versão vigente |
@@ -1309,6 +1413,7 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | GET | `/barters/:code/cpr/registry-file` | consultor, emissor, admin | baixa a via registrada |
 | PUT | `/seasons/:code/cpr-due-date` | admin | o VENCIMENTO da CPR daquela safra — ele muda conforme a cultura |
 | GET/PUT | `/creditor` | admin **e** emissor | a credora dos documentos — cadastro ÚNICO, sem `:id` e sem DELETE |
+| PUT | `/creditor/pledge-margin` | **admin** | a margem de segurança do penhor (%) — rota à parte porque a autoridade é outra |
 
 As cinco rotas de usuário seguem o mesmo desenho e **só alcançam o próprio
 papel**: papel diferente responde 404, e o admin não é gerenciado por nenhuma

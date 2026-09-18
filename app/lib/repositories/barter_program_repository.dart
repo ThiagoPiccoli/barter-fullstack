@@ -109,6 +109,7 @@ class BarterProgramRepository {
     required String filename,
     required List<int> bytes,
     required double grainPrice,
+    required double estimatedYield,
     DateTime? endsAt,
     double? targetSales,
     double? targetSacks,
@@ -123,6 +124,10 @@ class BarterProgramRepository {
       bytes: bytes,
       fields: {
         'grainPrice': '$grainPrice',
+        // A PRODUTIVIDADE vai junto do preço da saca, e é obrigatória como ele:
+        // sem ela a versão nasceria vigente e recusando toda permuta, porque o
+        // penhor não teria como ser dimensionado.
+        'estimatedYield': '$estimatedYield',
         if (endsAt != null) 'endsAt': endsAt.toUtc().toIso8601String(),
         if (targetSales != null) 'targetSales': '$targetSales',
         if (targetSacks != null) 'targetSacks': '$targetSacks',

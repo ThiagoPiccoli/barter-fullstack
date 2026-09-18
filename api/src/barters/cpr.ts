@@ -51,7 +51,12 @@
  * - os EXTENSOS ("[VALOR TOTAL EM PALAVRAS]", "[ÁREA EM PALAVRAS]"…) são
  *   escrita do número ao lado, e por isso pertencem à geração do documento, não
  *   à coleta: digitá-los seria abrir a mesma porta pela qual o 367 entrou.
+ * - a ÁREA EXIGIDA em penhor é `(sacas ÷ produtividade) × (1 + margem)`, e ela
+ *   não sai impressa em cláusula nenhuma: é a RÉGUA com que se confere se as
+ *   lavouras listadas dão conta da dívida. O documento enumera as matrículas;
+ *   esta conta diz se elas bastam. Ver `pledgeReadingOf`.
  */
+import { AREA_EPSILON, pledgeAreaFor } from './barter-math';
 
 /** O que o consultor preencheu — o rascunho, com o vazio significando "falta". */
 export interface CprDraft {
@@ -166,6 +171,39 @@ export interface CprGuarantorDraft {
   spouseProfession: string;
 }
 
+/**
+ * O DIMENSIONAMENTO DO PENHOR desta permuta — o que transforma "tem lavoura?" em
+ * "tem lavoura suficiente?".
+ *
+ * As três parcelas vêm de três lugares e nenhuma delas é digitada no formulário
+ * da cédula: as SACAS são o item de grão da permuta, a PRODUTIVIDADE é a da
+ * versão em que ela nasceu e a MARGEM é a política da credora — as duas últimas
+ * congeladas na permuta no dia do registro (ver `Barter.pledgeYield`).
+ *
+ * Elas chegam aqui como CONTEXTO, e não dentro do rascunho, pela mesma razão das
+ * notas fiscais: o rascunho é o que o consultor escreveu, e nada disto ele
+ * escreve. O que ele escreve é a resposta — as matrículas que somam a área.
+ */
+export interface CprPledge {
+  /** Sacas do item de grão. É o que muda quando um produto de fora é deferido. */
+  sacks: number;
+  /**
+   * A produtividade (sc/ha) congelada no registro.
+   *
+   * ZERO TEM SIGNIFICADO PRÓPRIO: é a permuta anterior a esta regra. Toda permuta
+   * registrada a partir daqui nasce com a taxa preenchida, porque `POST /barters`
+   * recusa versão sem produtividade — logo 0 não é "faltou preencher", é "nasceu
+   * antes de o penhor ser dimensionado", e a permuta fica de fora da exigência.
+   * Ver `Barter.pledgeYield` no schema.
+   */
+  yieldPerHa: number;
+  /** A margem de segurança (%) da credora, congelada junto. Zero é legítimo. */
+  marginPercent: number;
+}
+
+/** O penhor de uma permuta que não está sob a regra — ver `CprPledge.yieldPerHa`. */
+export const NO_PLEDGE: CprPledge = { sacks: 0, yieldPerHa: 0, marginPercent: 0 };
+
 /** Uma lavoura do penhor, com os donos do imóvel. */
 export interface CprAreaDraft {
   locality: string;
@@ -243,6 +281,62 @@ export interface CprContext {
   invoices: { number: string; fileId: number | null }[];
   /** A safra em que a permuta foi fechada, para endereçar a pendência do vencimento. */
   seasonName: string;
+  /**
+   * O DIMENSIONAMENTO DO PENHOR — quanta área esta permuta exige em garantia.
+   *
+   * Diferente das notas e da safra, esta parte do contexto pertence ao CONSULTOR:
+   * ela é o que `consultantCprGaps` cobra no encaminhamento. Foi a chegada dela
+   * que obrigou aquela função a receber contexto — até aqui nenhuma pendência do
+   * consultor dependia de nada fora do rascunho.
+   */
+  pledge: CprPledge;
+}
+
+/**
+ * A LEITURA DO PENHOR: quanto se exige, quanto foi penhorado e quanto falta.
+ *
+ * Ela é uma peça só porque é lida em três lugares que precisam concordar — a
+ * lacuna que trava o encaminhamento, o JSON que a tela do detalhe desenha e o
+ * resumo do formulário da cédula. Três contas escritas à mão divergiriam na
+ * primeira mudança de arredondamento, e a divergência apareceria como um
+ * formulário dizendo "completo" ao lado de um botão que recusa.
+ *
+ * `applies` é a pergunta anterior a todas: esta permuta está sob a regra? Ela é
+ * falsa para as permutas anteriores ao dimensionamento (`yieldPerHa` 0) e para as
+ * que ainda não têm sacas. Repare que ela NÃO é "o penhor está em dia" — uma
+ * permuta fora da regra continua devendo ao menos uma lavoura, que é a exigência
+ * que já existia e que segue valendo para todo mundo.
+ */
+export interface CprPledgeReading {
+  applies: boolean;
+  requiredAreaHa: number;
+  pledgedAreaHa: number;
+  /** Quanto falta (ha), já zerado quando a soma alcança o exigido. */
+  shortfallHa: number;
+}
+
+export function pledgeReadingOf(pledge: CprPledge, areas: CprAreaDraft[]): CprPledgeReading {
+  const requiredAreaHa = pledgeAreaFor(pledge.sacks, pledge.yieldPerHa, pledge.marginPercent);
+  // A soma arredondada a duas casas, na mesma precisão em que cada área é
+  // digitada: sem isso o total carregaria o lixo do ponto flutuante para dentro
+  // da frase da lacuna, e a tela mostraria "as lavouras somam 23,999999999 ha".
+  const pledgedAreaHa =
+    Math.round(areas.reduce((total, area) => total + (area.areaHa || 0), 0) * 100) / 100;
+  const applies = requiredAreaHa > 0;
+  const missing = requiredAreaHa - pledgedAreaHa;
+  return {
+    applies,
+    requiredAreaHa,
+    pledgedAreaHa,
+    // A FOLGA DE UM CENTÉSIMO entra aqui, e não na comparação de quem chama, para
+    // que "falta?" tenha uma resposta só no sistema inteiro. Ver `AREA_EPSILON`.
+    shortfallHa: applies && missing > AREA_EPSILON ? Math.round(missing * 100) / 100 : 0,
+  };
+}
+
+/** Hectares como o Brasil os escreve — é texto de frase, não de cálculo. */
+function formatHa(value: number): string {
+  return value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /**
@@ -380,10 +474,43 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
   // Sem lavoura não há penhor: as cláusulas V "b" e VI descrevem a garantia
   // pela MATRÍCULA do imóvel, e uma cédula que não diz sobre o que recai o
   // penhor não tem garantia nenhuma — tem uma promessa.
+  //
+  // E QUANDO A PERMUTA É DIMENSIONADA, a mesma frase já diz o TAMANHO. Duas
+  // pendências — "falta lavoura" e "faltam 18,00 ha de 18,00 ha" — são a mesma
+  // informação dita duas vezes, e a segunda, com as lavouras somando zero, é uma
+  // conta que ninguém precisa ler para entender que não há nada ali. O que o
+  // consultor precisa saber, quando ainda não anotou matrícula nenhuma, é quanta
+  // área ir buscar; é isso que entra aqui.
+  const pledge = pledgeReadingOf(context.pledge, areas);
   if (areas.length === 0) {
     gaps.push({
       owner: CPR_GAP_OWNER.consultant,
-      label: 'ao menos uma lavoura (a garantia do penhor)',
+      label: pledge.applies
+        ? `ao menos uma lavoura (a garantia do penhor — esta permuta exige ${formatHa(pledge.requiredAreaHa)} ha)`
+        : 'ao menos uma lavoura (a garantia do penhor)',
+    });
+  }
+
+  // E A LAVOURA PRECISA DAR CONTA DA DÍVIDA — a exigência que faltava ao lado da
+  // de cima.
+  //
+  // "Ao menos uma lavoura" responde "existe garantia?" e não responde "garantia
+  // de quanto?": uma permuta de 3.000 sacas passava com uma matrícula de 4 ha
+  // anotada, e o penhor ficava do tamanho do que alguém teve tempo de digitar.
+  // Aqui a área é medida contra o que a própria permuta pede (ver
+  // `pledgeReadingOf`), e é isso que o consultor vai fechar somando matrículas.
+  //
+  // A FRASE TRAZ OS TRÊS NÚMEROS de propósito. "Área insuficiente" manda alguém
+  // adivinhar quanto falta; "faltam 12,4 ha" é o que se resolve pedindo a próxima
+  // matrícula ao produtor — que é a ação que esta lacuna existe para provocar, e
+  // que só é barata enquanto a visita ainda está acontecendo.
+  if (areas.length > 0 && pledge.applies && pledge.shortfallHa > 0) {
+    gaps.push({
+      owner: CPR_GAP_OWNER.consultant,
+      label:
+        `área de penhor insuficiente: faltam ${formatHa(pledge.shortfallHa)} ha ` +
+        `(a permuta exige ${formatHa(pledge.requiredAreaHa)} ha e as lavouras somam ` +
+        `${formatHa(pledge.pledgedAreaHa)} ha)`,
     });
   }
   areas.forEach((area, index) => {
@@ -421,11 +548,30 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
  * o vencimento (do admin, na safra) e o número da cédula (do emissor, na
  * emissão).
  *
- * O CONTEXTO é vazio aqui porque nenhuma pendência do consultor depende dele:
- * as dele são o que ele digita e anexa.
+ * O CONTEXTO DEIXOU DE SER VAZIO, e o que o encheu foi o PENHOR.
+ *
+ * Até ele, nenhuma pendência do consultor dependia de nada fora do rascunho — o
+ * que ele deve é o que ele digita e anexa —, e por isso esta função passava
+ * `{ invoices: [], seasonName: '' }` e pronto. A área exigida quebra isso: ela é
+ * dele (é ele quem soma matrículas para fechá-la), mas não sai do rascunho — sai
+ * das sacas da permuta e das duas taxas congeladas no registro.
+ *
+ * As notas e a safra continuam vazias, e continuam pelo mesmo motivo de antes:
+ * as pendências que dependem delas são de OUTROS postos, e este recorte as
+ * descarta de qualquer jeito.
+ *
+ * O PENHOR NÃO TEM PADRÃO, e isso é deliberado: `NO_PLEDGE` existe e seria um
+ * default cômodo, mas um parâmetro opcional aqui é a porta pela qual a próxima
+ * chamada desliga a exigência sem que ninguém perceba — o portão continuaria
+ * respondendo "pode encaminhar" com a garantia pela metade. Quem chama diz de que
+ * permuta está falando, mesmo para dizer que ela é das antigas.
  */
-export function consultantCprGaps(cpr: CprDraft, areas: CprAreaDraft[]): string[] {
-  return cprGapsOf(cpr, areas, { invoices: [], seasonName: '' })
+export function consultantCprGaps(
+  cpr: CprDraft,
+  areas: CprAreaDraft[],
+  pledge: CprPledge,
+): string[] {
+  return cprGapsOf(cpr, areas, { invoices: [], seasonName: '', pledge })
     .filter((gap) => gap.owner === CPR_GAP_OWNER.consultant)
     .map((gap) => gap.label);
 }

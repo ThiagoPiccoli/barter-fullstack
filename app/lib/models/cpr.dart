@@ -161,6 +161,18 @@ class CprCreditor {
   /// cédula: quem resolve esta é quem tem o cadastro na mão.
   final List<String> gaps;
 
+  /// A MARGEM DE SEGURANÇA DO PENHOR (%) — a folga de área que a credora exige
+  /// além da que a produção estimada justifica.
+  ///
+  /// Zero NÃO é lacuna, e por isso ela não entra em [gaps]: é a credora dizendo
+  /// que não exige folga, e o penhor sai do tamanho exato da área estimada.
+  ///
+  /// NÃO é a reserva legal do Código Florestal — aquela é atributo do imóvel e
+  /// imposta por lei, e diz que parte da matrícula não é plantável. Esta é
+  /// apetite de risco, vale igual para todas as matrículas, e muda quando a
+  /// empresa muda de ideia.
+  final double pledgeMarginPercent;
+
   final String updatedBy;
   final DateTime? updatedAt;
 
@@ -173,6 +185,7 @@ class CprCreditor {
     this.forum = '',
     this.effectiveForum = '',
     this.gaps = const [],
+    this.pledgeMarginPercent = 0,
     this.updatedBy = '',
     this.updatedAt,
   });
@@ -186,6 +199,7 @@ class CprCreditor {
         forum: _asText(json['forum']),
         effectiveForum: _asText(json['effectiveForum']),
         gaps: ((json['gaps'] as List?) ?? const []).map((g) => '$g').toList(),
+        pledgeMarginPercent: _asDouble(json['pledgeMarginPercent']),
         updatedBy: _asText(json['updatedBy']),
         updatedAt: _asDateOrNull(json['updatedAt']),
       );
@@ -201,10 +215,38 @@ class CprCreditor {
         'addressNumber': addressNumber.trim(),
         'city': city.trim(),
         'forum': forum.trim(),
+        // A MARGEM NÃO VAI AQUI. Ela tem rota própria (`PUT /creditor/pledge-margin`)
+        // porque tem dono próprio: o cadastro é do admin e do emissor, a margem é
+        // só do admin. Mandá-la neste corpo faria o servidor recusar o `PUT`
+        // inteiro do emissor — ou, pior, aceitá-lo e dar a ele a caneta de uma
+        // política de risco.
       };
 
   /// Já dá para emitir cédula com este cadastro?
   bool get isComplete => gaps.isEmpty;
+
+  CprCreditor copyWith({
+    String? name,
+    String? cnpj,
+    String? address,
+    String? addressNumber,
+    String? city,
+    String? forum,
+    double? pledgeMarginPercent,
+  }) =>
+      CprCreditor(
+        name: name ?? this.name,
+        cnpj: cnpj ?? this.cnpj,
+        address: address ?? this.address,
+        addressNumber: addressNumber ?? this.addressNumber,
+        city: city ?? this.city,
+        forum: forum ?? this.forum,
+        effectiveForum: effectiveForum,
+        gaps: gaps,
+        pledgeMarginPercent: pledgeMarginPercent ?? this.pledgeMarginPercent,
+        updatedBy: updatedBy,
+        updatedAt: updatedAt,
+      );
 }
 
 /// O PROPRIETÁRIO de uma lavoura — que raramente é o emitente: a área
@@ -225,6 +267,46 @@ class CprOwner {
 
   CprOwner copyWith({String? name, String? document}) =>
       CprOwner(name: name ?? this.name, document: document ?? this.document);
+}
+
+/// O PLACAR DO PENHOR — quanta área a permuta exige, quanto foi dado em
+/// garantia e quanto falta.
+///
+/// Quem calcula é o SERVIDOR, e por isso aqui não há conta nenhuma: a área
+/// exigida é `(sacas ÷ produtividade) × (1 + margem)`, e as três parcelas vêm de
+/// lugares que o app não enxerga inteiros — as sacas mudam quando um produto de
+/// fora do Barter é deferido, a produtividade e a margem ficaram congeladas na
+/// permuta no dia do registro. Uma segunda cópia da conta em Dart divergiria da
+/// do servidor no primeiro arredondamento, e a divergência apareceria como uma
+/// tela dizendo "completo" ao lado de um botão que recusa.
+///
+/// [applies] falso é a permuta FORA da regra — as registradas antes de o penhor
+/// ser dimensionado. Não é "está em dia": é "esta conta não vale para ela", e a
+/// tela esconde o placar em vez de mostrar zero hectare exigido.
+class CprPledge {
+  final bool applies;
+  final double requiredAreaHa;
+  final double pledgedAreaHa;
+  final double shortfallHa;
+
+  const CprPledge({
+    this.applies = false,
+    this.requiredAreaHa = 0,
+    this.pledgedAreaHa = 0,
+    this.shortfallHa = 0,
+  });
+
+  /// A exigência já cumprida? Falso também quando ela não se aplica — quem
+  /// pergunta isto está desenhando um selo de "em dia", e uma permuta fora da
+  /// regra não tem o que ostentar.
+  bool get satisfied => applies && shortfallHa <= 0;
+
+  factory CprPledge.fromJson(Map<String, dynamic> json) => CprPledge(
+        applies: json['applies'] == true,
+        requiredAreaHa: _asDouble(json['requiredAreaHa']),
+        pledgedAreaHa: _asDouble(json['pledgedAreaHa']),
+        shortfallHa: _asDouble(json['shortfallHa']),
+      );
 }
 
 /// UMA LAVOURA dada em penhor — o "(i)", o "(ii)" e quantos mais houver.
@@ -817,6 +899,25 @@ class CprDesk {
   /// desmente.
   final List<String> consultantGaps;
 
+  /// O PLACAR DO PENHOR: quanta área a permuta exige, quanto as lavouras somam
+  /// e quanto falta.
+  ///
+  /// Ele acompanha [consultantGaps] sem se confundir com ela. A lacuna diz O QUE
+  /// FAZER e some quando a área fecha; este placar continua dizendo POR QUANTO
+  /// ela fechou — que é o que a pessoa olha enquanto acrescenta matrícula, e
+  /// depois, para conferir que não fechou raspando.
+  final CprPledge pledge;
+
+  /// O QUE MERECE UMA CONFERIDA, e não trava nada: a matrícula que já está em
+  /// penhor noutra permuta, a soma que passa da área cultivável do produtor.
+  ///
+  /// Lista à parte de [gaps] porque não é pendência. Há arrendamento legítimo
+  /// que o cadastro não reflete e há matrícula grande repartida de boa-fé entre
+  /// duas permutas — travar por isso recusaria operação boa. O que não dá é
+  /// calar: são os dois jeitos conhecidos de a área fechar na conta e não fechar
+  /// no mundo.
+  final List<String> pledgeWarnings;
+
   final bool complete;
 
   /// Esta cédula deixa a permuta ser encaminhada?
@@ -833,6 +934,8 @@ class CprDesk {
     this.creditorGaps = const [],
     this.gaps = const [],
     this.consultantGaps = const [],
+    this.pledge = const CprPledge(),
+    this.pledgeWarnings = const [],
     this.complete = false,
     this.suggestion,
   });
@@ -849,6 +952,8 @@ class CprDesk {
       creditorGaps: ((json['creditorGaps'] as List?) ?? const []).map((g) => '$g').toList(),
       gaps: ((json['gaps'] as List?) ?? const []).map((g) => '$g').toList(),
       consultantGaps: ((json['consultantGaps'] as List?) ?? const []).map((g) => '$g').toList(),
+      pledge: CprPledge.fromJson((json['pledge'] as Map?)?.cast<String, dynamic>() ?? const {}),
+      pledgeWarnings: ((json['pledgeWarnings'] as List?) ?? const []).map((w) => '$w').toList(),
       complete: json['complete'] == true,
       suggestion: suggestion.isEmpty ? null : CprDraft.fromSuggestion(suggestion),
     );

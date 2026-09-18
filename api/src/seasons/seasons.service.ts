@@ -54,6 +54,30 @@ type PublishableLimits = Pick<
   'endsAt' | 'closeOnGoal' | 'targetSales' | 'targetSacks' | 'targetBarters'
 >;
 
+/**
+ * AS DUAS TAXAS DA VERSÃO, juntas — porque elas são uma conversão só.
+ *
+ * `grainPrice` leva o custo dos insumos a SACAS; `estimatedYield` leva as sacas
+ * aos HECTARES de lavoura que precisam garanti-las. Elas viajam num parâmetro só,
+ * e não como dois números soltos na assinatura, justamente para não haver um
+ * caminho de publicação que carregue uma e esqueça a outra — que é como a versão
+ * nasceria vigente, aceitando permuta e sem conseguir dimensionar o penhor dela.
+ */
+export interface VersionRates {
+  grainPrice: number;
+  estimatedYield: number;
+}
+
+/**
+ * As duas taxas de um DTO de publicação. Escrito uma vez porque os dois caminhos
+ * (JSON e planilha) precisam montar o mesmo par, e um deles montando só metade é
+ * exatamente o que `VersionRates` existe para impedir.
+ */
+const ratesOf = (dto: VersionRates): VersionRates => ({
+  grainPrice: dto.grainPrice,
+  estimatedYield: dto.estimatedYield,
+});
+
 /** A versão tem alguma meta definida? É o que dá sentido ao `closeOnGoal`. */
 const hasAnyTarget = (limits: PublishableLimits): boolean =>
   [limits.targetSales, limits.targetSacks, limits.targetBarters].some(
@@ -304,7 +328,7 @@ export class SeasonsService {
     const season = await this.findSeason(seasonCodeValue);
     this.assertPublishable(season, dto);
     const prices = await this.resolvePrices(dto.prices);
-    return this.publishResolved(admin, season, prices, dto.grainPrice, dto, null);
+    return this.publishResolved(admin, season, prices, ratesOf(dto), dto, null);
   }
 
   /**
@@ -370,12 +394,12 @@ export class SeasonsService {
           await this.carryOverInto(tx, season, prices);
         }
 
-        return this.writeVersion(tx, admin, season, prices, dto.grainPrice, dto, file.originalname);
+        return this.writeVersion(tx, admin, season, prices, ratesOf(dto), dto, file.originalname);
       },
       { timeout: PUBLISH_TIMEOUT_MS, maxWait: PUBLISH_MAX_WAIT_MS },
     );
 
-    await this.recordPublication(admin, created, dto.grainPrice, file.originalname);
+    await this.recordPublication(admin, created, file.originalname);
     return created;
   }
 
@@ -448,15 +472,15 @@ export class SeasonsService {
     admin: User,
     season: Season,
     prices: ResolvedPrice[],
-    grainPrice: number,
+    rates: VersionRates,
     limits: VersionLimitsDto,
     sourceFile: string | null,
   ): Promise<VersionWithPrices> {
     const created = await this.prisma.$transaction(
-      (tx) => this.writeVersion(tx, admin, season, prices, grainPrice, limits, sourceFile),
+      (tx) => this.writeVersion(tx, admin, season, prices, rates, limits, sourceFile),
       { timeout: PUBLISH_TIMEOUT_MS, maxWait: PUBLISH_MAX_WAIT_MS },
     );
-    await this.recordPublication(admin, created, grainPrice, sourceFile);
+    await this.recordPublication(admin, created, sourceFile);
     return created;
   }
 
@@ -479,7 +503,7 @@ export class SeasonsService {
     admin: User,
     season: Season,
     prices: ResolvedPrice[],
-    grainPrice: number,
+    rates: VersionRates,
     limits: VersionLimitsDto,
     sourceFile: string | null,
   ): Promise<VersionWithPrices> {
@@ -510,7 +534,11 @@ export class SeasonsService {
         number,
         code,
         status: 'active',
-        grainPrice,
+        grainPrice: rates.grainPrice,
+        // A PRODUTIVIDADE ESTIMADA da cultura nesta gestão — a taxa que dimensiona
+        // a área do penhor das permutas que nascerem aqui. Ver `estimatedYield`
+        // no schema e `pledgeAreaFor` em barters/barter-math.ts.
+        estimatedYield: rates.estimatedYield,
         startsAt: now,
         endsAt,
         targetSales: limits.targetSales ?? null,
@@ -538,7 +566,7 @@ export class SeasonsService {
     // na mesma lista: a cotação da saca também é um preço que se acompanha.
     const published: { productId: number; price: number }[] = [
       ...prices.map((row) => ({ productId: row.product.id, price: row.price })),
-      ...(season.grainId ? [{ productId: season.grainId, price: grainPrice }] : []),
+      ...(season.grainId ? [{ productId: season.grainId, price: rates.grainPrice }] : []),
     ];
 
     await tx.priceHistoryEntry.createMany({
@@ -576,7 +604,6 @@ export class SeasonsService {
   private async recordPublication(
     admin: User,
     version: VersionWithPrices,
-    grainPrice: number,
     sourceFile: string | null,
   ): Promise<void> {
     await this.audit.record({
@@ -586,7 +613,11 @@ export class SeasonsService {
       targetId: version.id,
       targetLabel: version.code,
       detail:
-        `${version.prices.length} insumo(s), saca a ${grainPrice.toFixed(2)}` +
+        `${version.prices.length} insumo(s), saca a ${version.grainPrice.toFixed(2)}` +
+        // A PRODUTIVIDADE entra na trilha ao lado do preço da saca pelo mesmo
+        // motivo do modo de encerramento: ela é decisão do lançamento, e é por
+        // ela que se responde "por que esta permuta exigiu 34 ha de penhor?".
+        `, ${version.estimatedYield} sc/ha` +
         (sourceFile ? `, arquivo ${sourceFile}` : '') +
         // O MODO entra na trilha do lançamento porque ele é uma decisão do
         // lançamento: "por que este Barter fechou sozinho em março?" começa a
@@ -687,6 +718,56 @@ export class SeasonsService {
     });
 
     return { version: await this.findVersion(version.code), reason };
+  }
+
+  /**
+   * ACERTA A PRODUTIVIDADE ESTIMADA de uma versão — a taxa que dimensiona o
+   * penhor.
+   *
+   * Rota própria pelo mesmo motivo do vencimento da safra: ela é obrigatória no
+   * lançamento, mas as versões anteriores a este campo nasceram sem ela — e são
+   * essas que estão vigentes no dia em que a migration sobe. Sem esta porta, a
+   * única maneira de destravar a venda seria republicar a tabela inteira, o que
+   * encerraria a versão e reiniciaria a contagem do realizado por causa de um
+   * número de dois dígitos.
+   *
+   * SÓ A VERSÃO VIGENTE, como o modo de encerramento: a taxa é sobre o que ainda
+   * vai ser registrado, e versão encerrada não registra mais nada. Corrigir a de
+   * uma versão fechada não mudaria nenhuma permuta (todas já congelaram a sua) e
+   * só reescreveria a história do que foi exigido na época.
+   */
+  async setEstimatedYield(
+    admin: User,
+    code: string,
+    estimatedYield: number,
+  ): Promise<VersionWithPrices> {
+    const version = await this.findVersion(code);
+    if (version.status !== 'active') {
+      throw new UnprocessableEntityException(
+        'Só a versão vigente pode ter a produtividade estimada acertada',
+      );
+    }
+    if (version.estimatedYield === estimatedYield) return version;
+
+    const previous = version.estimatedYield;
+    await this.prisma.barterVersion.update({
+      where: { id: version.id },
+      data: { estimatedYield },
+    });
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.versionYieldChanged,
+      targetType: 'version',
+      targetId: version.id,
+      targetLabel: version.code,
+      // O DE-PARA na frase, e não só o novo valor: a pergunta que alguém traz a
+      // esta linha é "mudou quanto?", e a resposta com um número só obriga a
+      // procurar a linha anterior — que pode não existir, porque a primeira
+      // gravação vem de uma versão que nasceu sem a taxa.
+      detail: `produtividade estimada: ${previous || 'sem taxa'} → ${estimatedYield} sc/ha`,
+    });
+
+    return this.findVersion(code);
   }
 
   /**

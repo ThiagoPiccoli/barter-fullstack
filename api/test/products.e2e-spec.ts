@@ -211,6 +211,7 @@ describe('Products & Classes (e2e)', () => {
         .post('/api/v1/seasons/S2026/versions/import')
         .set('Authorization', admin)
         .field('grainPrice', '150')
+        .field('estimatedYield', '60')
         .attach('file', arquivo, 'tabela.xlsx')
         .expect(201);
 

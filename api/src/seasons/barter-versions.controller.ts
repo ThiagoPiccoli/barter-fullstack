@@ -3,7 +3,7 @@ import type { User } from '@prisma/client';
 import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterVersionJson } from '../common/serializers';
-import { CloseOnGoalDto, UpdateVersionPriceDto } from './dto/season.dto';
+import { CloseOnGoalDto, UpdateVersionPriceDto, VersionEstimatedYieldDto } from './dto/season.dto';
 import { SeasonsService } from './seasons.service';
 
 /**
@@ -73,6 +73,30 @@ export class BarterVersionsController {
   ) {
     return toBarterVersionJson(
       await this.seasons.setCloseOnGoal(admin, code, dto.enabled),
+      undefined,
+      admin,
+    );
+  }
+
+  /**
+   * A PRODUTIVIDADE ESTIMADA da versão vigente — a taxa que dimensiona a área do
+   * penhor das permutas registradas nela.
+   *
+   * `PUT` pelo mesmo motivo do modo de encerramento: é um estado que se declara.
+   * Ela é obrigatória no lançamento, e esta rota existe para as versões que
+   * nasceram antes de o campo existir — republicar a tabela inteira para
+   * informá-la encerraria a versão e reiniciaria a contagem do realizado. Ver
+   * `setEstimatedYield`.
+   */
+  @Put(':code/estimated-yield')
+  @RequireCapability(CAPABILITY.barterManage)
+  async estimatedYield(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Body() dto: VersionEstimatedYieldDto,
+  ) {
+    return toBarterVersionJson(
+      await this.seasons.setEstimatedYield(admin, code, dto.estimatedYield),
       undefined,
       admin,
     );

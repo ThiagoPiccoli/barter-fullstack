@@ -53,6 +53,12 @@ class _CreditorScreenState extends State<CreditorScreen> {
   final _city = TextEditingController();
   final _forum = TextEditingController();
 
+  /// A MARGEM DE SEGURANÇA DO PENHOR (%). Ela mora nesta tela porque é política
+  /// da EMPRESA — a folga que se exige de um produtor é a mesma que se exige de
+  /// todos —, mas NÃO é cadastro como o resto daqui: é regra, tem rota própria e
+  /// dono próprio. Ver [_canSetPledgeMargin].
+  final _pledgeMargin = TextEditingController();
+
   List<TextEditingController> get _all => [
         _name,
         _cnpj,
@@ -60,6 +66,7 @@ class _CreditorScreenState extends State<CreditorScreen> {
         _addressNumber,
         _city,
         _forum,
+        _pledgeMargin,
       ];
 
   @override
@@ -100,13 +107,27 @@ class _CreditorScreenState extends State<CreditorScreen> {
     _addressNumber.text = creditor.addressNumber;
     _city.text = creditor.city;
     _forum.text = creditor.forum;
+    _pledgeMargin.text =
+        creditor.pledgeMarginPercent == 0 ? '' : creditor.pledgeMarginPercent.toStringAsFixed(0);
   }
+
+  /// Esta pessoa pode mexer na MARGEM DE SEGURANÇA DO PENHOR?
+  ///
+  /// A tela é a mesma para o admin e para o emissor — os dois mantêm o timbre do
+  /// documento. Este é o ÚNICO campo que os separa: ele decide quanta terra a
+  /// empresa exige em garantia de tudo o que for registrado dali em diante, e
+  /// isso não é conferir um CNPJ.
+  ///
+  /// A pergunta é feita ao SERVIDOR (a capacidade chega em `/me`), e não ao
+  /// papel: o dia em que um comitê de crédito ganhar a caneta, esta tela se
+  /// ajusta sem versão nova do app.
+  bool get _canSetPledgeMargin => AppData.can(Capability.pledgePolicyManage);
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
-      final saved = await AppData.saveCreditor(CprCreditor(
+      final cadastro = await AppData.saveCreditor(CprCreditor(
         name: _name.text,
         cnpj: _cnpj.text,
         address: _address.text,
@@ -114,6 +135,22 @@ class _CreditorScreenState extends State<CreditorScreen> {
         city: _city.text,
         forum: _forum.text,
       ));
+
+      // A MARGEM VAI NUMA SEGUNDA CHAMADA, e só de quem pode.
+      //
+      // São duas rotas no servidor porque são duas autoridades: o cadastro é do
+      // admin e do emissor, a margem é só do admin. Mandá-la dentro do corpo do
+      // cadastro faria o `PUT` inteiro do emissor ser recusado — e, antes desta
+      // separação, dava a ele a caneta de uma política de risco pela porta do
+      // CNPJ.
+      //
+      // Só quando MUDOU: a rota grava trilha de auditoria, e reenviar o mesmo
+      // número a cada "salvar" encheria a linha do tempo de atos que não
+      // aconteceram.
+      final margem = double.tryParse(_pledgeMargin.text.trim().replaceAll(',', '.')) ?? 0;
+      final saved = _canSetPledgeMargin && margem != (_creditor?.pledgeMarginPercent ?? 0)
+          ? await AppData.saveCreditorPledgeMargin(margem)
+          : cadastro;
       if (!mounted) return;
       setState(() {
         _creditor = saved;
@@ -222,6 +259,37 @@ class _CreditorScreenState extends State<CreditorScreen> {
               style: TextStyle(fontSize: 11.5, color: AppColors.textLight, height: 1.35),
             ),
           ),
+
+          // ── A MARGEM DE SEGURANÇA DO PENHOR ──────────────────────────────
+          //
+          // Ela não é dado de documento como o resto desta tela: é uma REGRA — a
+          // única desta instalação que decide quanta terra se exige em garantia.
+          //
+          // SOME para quem não pode mudá-la (o emissor, que mantém o timbre e
+          // não decide risco). Some INTEIRA, e não desabilitada: um campo cinza
+          // convida a perguntar por que não dá, e a resposta — "este número não é
+          // seu" — é melhor dita pela ausência.
+          if (_canSetPledgeMargin) ...[
+            _field(
+              _pledgeMargin,
+              'Margem de segurança do penhor (%)',
+              hint: 'Em branco = sem folga',
+              caps: false,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 16),
+              child: Text(
+                'Somada à área que a produção estimada justifica: uma permuta que '
+                'precisa de 20 ha de lavoura passa a exigir 24 ha com 20% de margem. '
+                'Vale para as permutas registradas a partir de agora — as já '
+                'fechadas guardam a margem do dia em que nasceram.\n\n'
+                'Não confundir com a reserva legal do Código Florestal, que é '
+                'obrigação ambiental de cada imóvel. Esta aqui é decisão comercial '
+                'da empresa.',
+                style: TextStyle(fontSize: 11.5, color: AppColors.textLight, height: 1.35),
+              ),
+            ),
+          ],
           if (creditor.updatedBy.isNotEmpty)
             Text(
               'Última alteração por ${creditor.updatedBy}'

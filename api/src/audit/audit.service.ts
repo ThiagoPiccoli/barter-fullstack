@@ -165,6 +165,27 @@ export const AUDIT_ACTION = {
    * quanto crédito a mais vai ser aprovado.
    */
   versionCloseRuleChanged: 'barter.version-close-rule',
+  /**
+   * Mudou a PRODUTIVIDADE ESTIMADA da versão — a taxa que dimensiona a área do
+   * penhor.
+   *
+   * Entra na trilha porque ela decide quanta terra a empresa exige em garantia:
+   * baixá-la de 60 para 50 sc/ha faz cada permuta nova pedir 20% mais lavoura, e
+   * subi-la afrouxa a garantia de todas elas na mesma proporção. É decisão de
+   * risco tomada num campo de dois dígitos, e "por que as permutas de março
+   * pediram menos área?" se responde aqui.
+   */
+  versionYieldChanged: 'barter.version-yield-changed',
+  /**
+   * Mudou a MARGEM DE SEGURANÇA DO PENHOR no cadastro da credora.
+   *
+   * O par da de cima, pelo outro lado da conta: a produtividade é estimativa
+   * agronômica, esta é apetite de risco da empresa. As duas multiplicam a área
+   * exigida, as duas valem para tudo o que for registrado depois delas, e
+   * nenhuma das duas reescreve permuta já fechada — o que torna a data do ato a
+   * informação principal da linha.
+   */
+  creditorPledgeMarginChanged: 'creditor.pledge-margin-changed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];

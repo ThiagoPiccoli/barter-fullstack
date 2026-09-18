@@ -140,6 +140,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       // Foro em branco de propósito: é o caso comum (elege-se a comarca da
       // sede), e é ele que exercita a regra do `forumOf`.
       forum: '',
+      // A MARGEM DE SEGURANÇA DO PENHOR: 20% de folga sobre a área que a produção
+      // estimada justifica. Vem preenchida porque o dataset existe para mostrar o
+      // sistema funcionando, e uma margem zerada faria as permutas da demonstração
+      // exigirem exatamente a área estimada — o caso de borda, e não o normal.
+      pledgeMarginPercent: 20,
       updatedBy: 'Dataset de demonstração',
     },
   });
@@ -612,6 +617,13 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     code: string;
     status: 'active' | 'closed';
     grainPrice: number;
+    /**
+     * A PRODUTIVIDADE ESTIMADA da cultura (sc/ha) — a taxa que dimensiona a área
+     * do penhor. Obrigatória no lançamento real (ver `PublishVersionDto`), e por
+     * isso obrigatória aqui: uma versão vigente sem ela recusaria toda permuta, e
+     * a demonstração abriria travada.
+     */
+    estimatedYield: number;
     priceIndex: number;
     startsAt: Date;
     closedAt?: Date;
@@ -625,6 +637,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         code: args.code,
         status: args.status,
         grainPrice: args.grainPrice,
+        estimatedYield: args.estimatedYield,
         startsAt: args.startsAt,
         closedAt: args.closedAt ?? null,
         closedBy: args.closedAt ? admin.fullName : null,
@@ -668,6 +681,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     code: 'T2025.01',
     status: 'closed',
     grainPrice: trigo.price,
+    // Números de produtividade do Paraná: trigo ~55 sc/ha, milho ~170, soja ~60.
+    estimatedYield: 55,
     priceIndex: 6,
     startsAt: at(2025, 12, 1),
     closedAt: at(2026, 3, 31),
@@ -694,6 +709,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     code: 'M2026.01',
     status: 'closed',
     grainPrice: milho.price,
+    estimatedYield: 170,
     priceIndex: 6,
     startsAt: at(2026, 1, 15),
     closedAt: at(2026, 6, 30),
@@ -726,6 +742,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     code: 'S2026.01',
     status: 'closed',
     grainPrice: 145.0,
+    estimatedYield: 60,
     priceIndex: 2,
     startsAt: at(2026, 1, 5),
     closedAt: at(2026, 1, 8),
@@ -737,6 +754,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     code: 'S2026.02',
     status: 'active',
     grainPrice: soja.price,
+    estimatedYield: 60,
     priceIndex: 6,
     startsAt: at(2026, 1, 8),
     note: 'Tabela vigente da safra de soja.',
@@ -1053,6 +1071,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         // A ÁREA congelada no registro — o denominador do investimento por
         // hectare. Sai do cadastro do produtor, que é de onde o service a copia.
         producerAreaHa: entry.producer.areaHa,
+        // O PENHOR congelado, como o service o congela: a produtividade da versão
+        // em que a permuta nasceu e a margem da credora no dia. É deles que sai a
+        // área que as lavouras da cédula precisam fechar.
+        pledgeYield: entry.version.estimatedYield,
+        pledgeMarginPercent: 20,
         unitId: unit.id,
         unitName: unit.name,
         status: entry.status,
@@ -1289,11 +1312,20 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
             position: 1,
             locality: 'Gleba Patrimônio Ivaí',
             city: 'Doutor Camargo/PR',
-            // 45,05 ha de propósito: o zero à esquerda do bloco decimal é o
+            // 38,05 ha de propósito: o zero à esquerda do bloco decimal é o
             // caso em que o extenso e o algarismo já discordaram, e agora ele
-            // sai impresso em toda geração do documento — "quarenta e cinco
+            // sai impresso em toda geração do documento — "trinta e oito
             // vírgula zero cinco hectares". Ver `extensoDecimal`, no app.
-            areaHa: 45.05,
+            //
+            // Eram 45,05, e o número desceu quando o penhor passou a ser medido:
+            // 78,5 + 45,05 penhorava 123,55 ha de um produtor com 120 ha de área
+            // cultivável no cadastro — o dataset dando em garantia mais terra do
+            // que ele declara plantar. Não era erro de digitação, era uma
+            // inconsistência que nada no sistema tinha como notar; hoje
+            // `pledgeWarningsFor` a nota, e a demonstração abriria com o aviso
+            // aceso. O total agora é 116,55 ha, folgado dentro dos 120 e muito
+            // acima dos 6,04 ha que as 251,4142 sacas desta permuta exigem.
+            areaHa: 38.05,
             withinLargerArea: true,
             registryNumber: '7.309',
             registryBook: '2-RG',

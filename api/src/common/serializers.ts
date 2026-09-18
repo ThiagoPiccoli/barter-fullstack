@@ -10,6 +10,7 @@ import { CAPABILITY, can, capabilitiesOf } from './policy';
 import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
 import { creditorGaps, forumOf } from './creditor';
+import { pledgeAreaFor } from '../barters/barter-math';
 import type {
   AuditLog,
   Barter,
@@ -410,6 +411,14 @@ export function toBarterVersionJson(
     // `sacksPerUnit` devolveria os R$ por multiplicação, e a conversão não teria
     // servido para nada.
     ...(lens.showsCurrency ? { grainPrice: version.grainPrice } : {}),
+    // A PRODUTIVIDADE ESTIMADA vai para TODO MUNDO, inclusive para quem não vê
+    // R$ — ela é sc/ha, e não moeda. É a outra metade da conversão que o preço
+    // da saca começa, e é a única maneira de o consultor entender por que a
+    // permuta dele pede a área que pede (ver `pledgeAreaHa` no detalhe).
+    //
+    // `0` é a versão anterior ao campo, e nela `POST /barters` recusa: a tela do
+    // admin lê este zero para mostrar que o Barter está vigente e travado.
+    estimatedYield: version.estimatedYield,
     status: version.status,
     isOpen: isOpenAt(version, new Date()),
     startsAt: version.startsAt,
@@ -637,6 +646,43 @@ function investmentPerHa(
 }
 
 /**
+ * O PENHOR desta permuta, do jeito que a tela precisa dele: a área exigida e as
+ * duas taxas que a produziram.
+ *
+ * ELE NÃO CARREGA O QUE FOI PENHORADO, e essa ausência é escolha. A soma das
+ * lavouras mora na CÉDULA, e a cédula é uma resposta à parte (`GET
+ * /barters/:code/cpr`, ver `toCprJson`); trazê-la para cá obrigaria toda listagem
+ * e todo detalhe de permuta a carregar as áreas e os proprietários de cada uma
+ * para desenhar um número. O que o detalhe responde é "quanto esta permuta pede";
+ * "quanto já foi dado" é pergunta do formulário que dá.
+ *
+ * `{}` — e não zeros — em dois casos, pelo mesmo motivo de `investmentPerHa`:
+ * quando a resposta não trouxe os itens (a listagem não os carrega, e sem a linha
+ * de grão não há sacas) e quando a permuta é anterior ao dimensionamento
+ * (`pledgeYield` 0). Um `pledgeAreaHa: 0` no JSON seria o servidor afirmando que
+ * esta permuta não exige garantia nenhuma, que é o oposto do que o silêncio
+ * significa nos dois casos.
+ */
+function pledgeOf(
+  barter: Barter & { items?: BarterItem[] },
+):
+  | { pledgeAreaHa: number; pledgeYield: number; pledgeMarginPercent: number }
+  | Record<string, never> {
+  if (!barter.items || barter.pledgeYield <= 0) return {};
+
+  const sacks = barter.items.find((item) => item.kind === 'grain')?.quantity ?? 0;
+  return {
+    pledgeAreaHa: pledgeAreaFor(sacks, barter.pledgeYield, barter.pledgeMarginPercent),
+    // AS DUAS TAXAS vão junto, e não só o resultado: "esta permuta pede 34 ha" é
+    // um número que alguém vai contestar, e a resposta a "por quê?" são elas. Sem
+    // as duas, a única maneira de conferir a conta é abrir o lançamento do Barter
+    // — que o consultor não enxerga.
+    pledgeYield: barter.pledgeYield,
+    pledgeMarginPercent: barter.pledgeMarginPercent,
+  };
+}
+
+/**
  * A COTAÇÃO DA SACA com que esta permuta foi fechada, lida do item de grão dela.
  *
  * É o que permite converter em sacas, para quem não vê R$, os valores que a
@@ -738,6 +784,19 @@ export function toBarterJson(
     // e chega ao imposto na unidade em que enxerga a permuta. Ver `ValueLens`.
     taxRegime: barter.taxRegime,
     taxRate: barter.taxRate,
+    // O PENHOR — quanta área de lavoura esta permuta precisa dar em garantia.
+    //
+    // Vai para TODO MUNDO, inclusive o consultor, pelo mesmo motivo de `taxRate`:
+    // é hectare e é percentual, não é R$. E vai no DETALHE DA PERMUTA, e não só
+    // na mesa da cédula, porque este é o primeiro lugar em que o consultor pode
+    // lê-lo — logo depois de registrar, com o produtor ainda por perto. Descobrir
+    // "esta permuta pede 34 ha" na tela da cédula já é tarde para renegociar o
+    // tamanho dela; descobrir na emissão é tarde para tudo.
+    //
+    // `undefined` quando os itens não vieram (a listagem não os carrega): sem a
+    // linha de grão não há sacas, e um `0` ali seria a listagem afirmando que a
+    // permuta não exige penhor nenhum. Mesma regra de presença de `steps`.
+    ...pledgeOf(barter),
     // A QUEM esta permuta foi enviada — o gerente do consultor no momento do
     // registro — e o parecer dele. `managerId`/`managerName` vêm preenchidos
     // desde a criação (é o destinatário); `managerNote` e `managerReviewedAt`
@@ -842,6 +901,9 @@ export function toCreditorJson(creditor: Creditor) {
     // O que foi ESCOLHIDO (vazio = "a comarca da sede") e o que VALE.
     forum: creditor.forum,
     effectiveForum: forumOf(creditor),
+    // A MARGEM DE SEGURANÇA DO PENHOR. Não entra em `gaps`: zero é uma escolha
+    // ("não exijo folga"), e não um cadastro pela metade.
+    pledgeMarginPercent: creditor.pledgeMarginPercent,
     updatedBy: creditor.updatedBy,
     updatedAt: creditor.updatedAt,
     gaps: creditorGaps(creditor),
@@ -878,6 +940,8 @@ export function toCprJson(desk: {
   creditor: Creditor;
   gaps: string[];
   consultantGaps: string[];
+  pledge: unknown;
+  pledgeWarnings: string[];
   suggestion: unknown;
 }) {
   const creditor = toCreditorJson(desk.creditor);
@@ -893,6 +957,15 @@ export function toCprJson(desk: {
     // ali mandaria ele procurar o número da CPR, que é do emissor, e a nota
     // fiscal, que é do faturista, num formulário onde nenhum dos dois existe.
     consultantGaps: desk.consultantGaps,
+    // O PLACAR DO PENHOR — exigido, penhorado, faltando. Ele acompanha a lista de
+    // pendências sem se confundir com ela: a lacuna some quando a área fecha, e
+    // este bloco continua dizendo por quanto ela fechou, que é o que a tela
+    // mostra no cabeçalho das lavouras enquanto alguém acrescenta matrícula.
+    pledge: desk.pledge,
+    // OS AVISOS, fora de `gaps` e fora de `consultantGaps`: eles não travam ato
+    // nenhum (ver `pledgeWarningsFor`), e o dia em que uma suspeita entrar na
+    // lista que o `forward` lê é o dia em que uma permuta boa é recusada por ela.
+    pledgeWarnings: desk.pledgeWarnings,
     // `complete` é derivado de `gaps` e vai junto porque é a pergunta que a
     // LISTA faz (um selo "CPR pronta" no cartão), enquanto a lista é a pergunta
     // que o FORMULÁRIO faz. Calculá-lo no cliente seria a mesma regra escrita

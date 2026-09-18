@@ -153,7 +153,62 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     expect(gaps).toContain('número da CPR');
     expect(gaps).toContain('RG do emitente');
     expect(gaps).toContain('local da entrega');
-    expect(gaps).toContain('ao menos uma lavoura (a garantia do penhor)');
+    // A LAVOURA é cobrada COM O TAMANHO dela: 358,7879 sacas ÷ 60 sc/ha dão
+    // 5,98 ha, e os 20% de margem da credora os levam a 7,18. Sem o número, a
+    // pendência mandaria o consultor voltar à fazenda sem saber quanta matrícula
+    // precisa trazer — que é a pergunta inteira desta etapa.
+    expect(gaps).toContain(
+      'ao menos uma lavoura (a garantia do penhor — esta permuta exige 7,18 ha)',
+    );
+  });
+
+  /**
+   * O PENHOR DIMENSIONADO — a mesa da cédula traz o placar, e não só a lacuna.
+   *
+   * As duas coisas respondem perguntas diferentes: a lacuna diz o que fazer e
+   * some quando a área fecha; o placar continua dizendo por quanto ela fechou. É
+   * ele que a tela desenha no cabeçalho das lavouras enquanto alguém acrescenta
+   * matrícula.
+   */
+  it('a mesa traz o placar do penhor: exigido, penhorado e o que falta', async () => {
+    const ana = await asUser(ANA);
+    const mesa = async () => (await readCpr('PRM-2026-004', ana)).body.data;
+
+    const vazia = await mesa();
+    expect(vazia.pledge).toEqual({
+      applies: true,
+      requiredAreaHa: 7.18,
+      pledgedAreaHa: 0,
+      shortfallHa: 7.18,
+    });
+    // E as taxas que produziram o número acompanham a permuta, para quem for
+    // contestá-lo: a produtividade da versão e a margem da credora, congeladas.
+    expect(vazia.known.sacks).toBe(358.7879);
+
+    // Uma lavoura pequena não fecha, e a frase traz os três números.
+    await saveCpr('PRM-2026-004', ana, { areas: [{ ...lavoura, areaHa: 5 }] });
+    const curta = await mesa();
+    expect(curta.pledge.shortfallHa).toBe(2.18);
+    expect(curta.consultantGaps.join(' ')).toContain(
+      'área de penhor insuficiente: faltam 2,18 ha (a permuta exige 7,18 ha e as lavouras somam 5,00 ha)',
+    );
+
+    // A SEGUNDA MATRÍCULA fecha a área — é o caso que a feature existe para
+    // permitir: o produtor planta em pedaços, e o penhor soma todos eles.
+    await saveCpr('PRM-2026-004', ana, {
+      areas: [
+        { ...lavoura, areaHa: 5 },
+        { ...lavoura, areaHa: 3, registryNumber: '67.890' },
+      ],
+    });
+    const fechada = await mesa();
+    expect(fechada.pledge).toEqual({
+      applies: true,
+      requiredAreaHa: 7.18,
+      pledgedAreaHa: 8,
+      shortfallHa: 0,
+    });
+    expect(fechada.consultantGaps.join(' ')).not.toContain('penhor');
   });
 
   /**

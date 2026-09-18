@@ -716,6 +716,26 @@ class _CprFormScreenState extends State<CprFormScreen> {
           const SizedBox(height: 14),
 
           _section('LAVOURAS EM PENHOR', Icons.map_outlined),
+          // O PLACAR antes das matrículas, e não depois: ele é a INSTRUÇÃO
+          // ("busque 24 ha"), e instrução que aparece embaixo da lista é lida
+          // quando o trabalho já foi feito.
+          //
+          // A ÁREA EXIGIDA vem do servidor; a PENHORADA é somada aqui, das
+          // lavouras que estão na tela AGORA. A divisão não é arbitrária: a
+          // exigida depende das sacas e de duas taxas congeladas no registro,
+          // que o app não tem como recompor sem errar; a soma é o que a pessoa
+          // acabou de digitar, e precisa responder à tecla, não ao salvar.
+          if (desk.pledge.applies) ...[
+            _PledgeCard(
+              requiredAreaHa: desk.pledge.requiredAreaHa,
+              pledgedAreaHa: _areas.fold(0.0, (total, area) => total + area.areaHa),
+              barter: _barter,
+            ),
+            const SizedBox(height: 12),
+          ],
+          // OS AVISOS ficam aqui, coladas no lugar onde se resolvem, e são
+          // AVISOS: nenhum deles trava o encaminhamento. Ver `pledgeWarnings`.
+          ...desk.pledgeWarnings.map((aviso) => _PledgeWarning(text: aviso)),
           ..._areas.asMap().entries.map((entry) => _AreaCard(
                 position: entry.key,
                 area: entry.value,
@@ -2354,6 +2374,119 @@ class _SuggestionNote extends StatelessWidget {
       ),
     ]);
   }
+}
+
+/// O PLACAR DO PENHOR: quanto a permuta exige, quanto as matrículas somam e
+/// quanto falta.
+///
+/// Ele existe porque "adicione lavouras até fechar a área" é uma instrução que
+/// precisa de um número, e o número mudava a cada linha digitada. Sem o placar, a
+/// pessoa só descobria se tinha fechado ao tentar encaminhar — e voltava à
+/// fazenda por causa de meio hectare.
+///
+/// A CONTA É EXPLICADA embaixo ("produção estimada de 60 sc/ha + 20% de margem")
+/// porque a primeira reação a uma exigência de área é contestá-la, e a resposta
+/// mora no lançamento do Barter, que é tela do admin.
+class _PledgeCard extends StatelessWidget {
+  final double requiredAreaHa;
+  final double pledgedAreaHa;
+  final BarterModel barter;
+
+  const _PledgeCard({
+    required this.requiredAreaHa,
+    required this.pledgedAreaHa,
+    required this.barter,
+  });
+
+  /// A mesma folga de um centésimo do servidor (`AREA_EPSILON`): sem ela, quem
+  /// digitou 12,5 + 11,5 veria "faltam 0,00 ha" por causa do ponto flutuante.
+  static const _epsilon = 0.01;
+
+  bool get _satisfied => pledgedAreaHa + _epsilon >= requiredAreaHa;
+
+  String _ha(double value) => '${value.toStringAsFixed(2).replaceAll('.', ',')} ha';
+
+  @override
+  Widget build(BuildContext context) {
+    final cor = _satisfied ? AppColors.approved : AppColors.pending;
+    final fundo = _satisfied ? AppColors.approvedBg : AppColors.pendingBg;
+    final faltam = requiredAreaHa - pledgedAreaHa;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: fundo,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: cor.withValues(alpha: 0.35)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(_satisfied ? Icons.verified_outlined : Icons.pending_outlined, size: 18, color: cor),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              _satisfied
+                  ? 'Área do penhor fechada'
+                  : 'Faltam ${_ha(faltam)} de lavoura em penhor',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: cor),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          _figure('EXIGIDO', _ha(requiredAreaHa), AppColors.textDark),
+          const SizedBox(width: 16),
+          _figure('PENHORADO', _ha(pledgedAreaHa), cor),
+        ]),
+        if (barter.hasPledge) ...[
+          const SizedBox(height: 8),
+          Text(
+            '${barter.totalGrainQty.toStringAsFixed(0)} sc ÷ ${barter.pledgeBasisLabel}',
+            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  Widget _figure(String label, String value, Color color) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label,
+              style: TextStyle(
+                  fontSize: 9, fontWeight: FontWeight.w700, color: AppColors.textLight)),
+          Text(value,
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: color)),
+        ],
+      );
+}
+
+/// UM AVISO do penhor — a matrícula repetida, a soma acima do cadastro.
+///
+/// Desenhado diferente de uma pendência de propósito: ele não trava nada, e
+/// pintá-lo como erro faria a pessoa procurar o que consertar num formulário que
+/// está certo. É uma conferida pedida, não um portão.
+class _PledgeWarning extends StatelessWidget {
+  final String text;
+  const _PledgeWarning({required this.text});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Icon(Icons.info_outline, size: 16, color: AppColors.textMedium),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text, style: TextStyle(fontSize: 11.5, color: AppColors.textMedium)),
+          ),
+        ]),
+      );
 }
 
 /// UMA LAVOURA na lista do penhor.

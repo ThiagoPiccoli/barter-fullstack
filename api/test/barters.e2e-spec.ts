@@ -1921,6 +1921,7 @@ describe('Barters (e2e)', () => {
         .set('Authorization', await asUser(ADMIN))
         .send({
           grainPrice: 150,
+          estimatedYield: 60,
           prices: [
             { productId: 5, price: 120 },
             { productId: 6, price: 18.9 },

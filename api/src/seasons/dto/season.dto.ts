@@ -184,6 +184,21 @@ export class PublishVersionDto extends VersionLimitsDto {
   grainPrice!: number;
 
   /**
+   * A PRODUTIVIDADE ESTIMADA da cultura (sc/ha) — obrigatória, como o preço da
+   * saca, e pelo mesmo motivo.
+   *
+   * As duas são as metades da mesma conversão: o preço leva o custo dos insumos
+   * a sacas, a produtividade leva as sacas à área de lavoura que precisa
+   * garanti-las. Publicar sem ela é publicar um Barter em que nenhuma permuta
+   * pode ser registrada (`POST /barters` recusa) — e recusar AQUI é dizer isso no
+   * único momento em que o admin está com a tela do lançamento aberta, em vez de
+   * deixar a descoberta para o primeiro consultor que tentar vender.
+   */
+  @IsNumber()
+  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
+  estimatedYield!: number;
+
+  /**
    * A MESMA constante que a planilha usa (MAX_VERSION_PRICES, em
    * version-import.ts) — importada, não copiada. Os dois caminhos publicam a
    * mesma tabela, e um limite diferente em cada um significaria que o arquivo
@@ -214,6 +229,12 @@ export class ImportVersionDto extends VersionLimitsDto {
   @IsPositive()
   grainPrice!: number;
 
+  /** A produtividade estimada (sc/ha) — ver `PublishVersionDto.estimatedYield`. */
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
+  estimatedYield!: number;
+
   @IsOptional()
   @Matches(/^(true|false)$/i, { message: 'carryOver deve ser true ou false' })
   carryOver?: string;
@@ -234,6 +255,28 @@ export class UpdateVersionPriceDto {
  * — o que encerraria a atual e reiniciaria a contagem do realizado só para
  * virar um interruptor.
  */
+/**
+ * A PRODUTIVIDADE ESTIMADA de uma versão já publicada.
+ *
+ * Rota própria pelo mesmo motivo do `cprDueDate` da safra e do `closeOnGoal`: ela
+ * é obrigatória no lançamento, mas as versões anteriores a este campo nasceram
+ * sem ela — e elas são justamente as vigentes hoje, que travariam toda venda até
+ * alguém republicar a tabela inteira só para informar um número. Republicar
+ * encerraria a versão atual e reiniciaria a contagem do realizado: um preço de
+ * dois dígitos por um campo de dois dígitos.
+ *
+ * O QUE ELA NÃO FAZ é reescrever permuta já registrada — a taxa é congelada em
+ * `Barter.pledgeYield` no ato do registro. Corrigi-la aqui vale para as
+ * próximas, que é a mesma leitura do vencimento da safra: o que já foi acordado
+ * continua dizendo o que diz.
+ */
+export class VersionEstimatedYieldDto {
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
+  estimatedYield!: number;
+}
+
 export class CloseOnGoalDto {
   @BooleanFromText()
   @IsBoolean({ message: 'Informe true para encerrar ao bater meta, ou false para manual' })

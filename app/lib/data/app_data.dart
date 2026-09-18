@@ -801,6 +801,7 @@ class AppData {
     required String filename,
     required List<int> bytes,
     required double grainPrice,
+    required double estimatedYield,
     DateTime? endsAt,
     double? targetSales,
     double? targetSacks,
@@ -814,6 +815,7 @@ class AppData {
       filename: filename,
       bytes: bytes,
       grainPrice: grainPrice,
+      estimatedYield: estimatedYield,
       endsAt: endsAt,
       targetSales: targetSales,
       targetSacks: targetSacks,
@@ -1169,6 +1171,12 @@ class AppData {
   static Future<CprCreditor> creditor() => _creditor.get();
 
   static Future<CprCreditor> saveCreditor(CprCreditor creditor) => _creditor.save(creditor);
+
+  /// A MARGEM DE SEGURANÇA DO PENHOR — só para quem tem
+  /// `Capability.pledgePolicyManage` (o admin). Chamada à parte do cadastro
+  /// porque no servidor são duas rotas com autoridades diferentes.
+  static Future<CprCreditor> saveCreditorPledgeMargin(double percent) =>
+      _creditor.savePledgeMargin(percent);
 
   /// Troca uma permuta do cache pela versão que o servidor devolveu.
   static void _replaceBarter(BarterModel updated) {

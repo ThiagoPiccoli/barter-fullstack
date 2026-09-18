@@ -22,4 +22,16 @@ class CreditorRepository {
     final data = await api.put('/creditor', body: creditor.toJson());
     return CprCreditor.fromJson(data as Map<String, dynamic>);
   }
+
+  /// A MARGEM DE SEGURANÇA DO PENHOR — chamada À PARTE do cadastro.
+  ///
+  /// Duas chamadas, e não um campo a mais no `save`, porque são duas
+  /// AUTORIDADES: o cadastro é do admin e do emissor (o timbre segue quem leva o
+  /// título a registro); a margem é só do admin (`Capability.pledgePolicyManage`).
+  /// No servidor são duas rotas com políticas diferentes, e mandar a margem junto
+  /// do CNPJ faria o emissor levar 403 ao corrigir um endereço.
+  Future<CprCreditor> savePledgeMargin(double percent) async {
+    final data = await api.put('/creditor/pledge-margin', body: {'pledgeMarginPercent': percent});
+    return CprCreditor.fromJson(data as Map<String, dynamic>);
+  }
 }

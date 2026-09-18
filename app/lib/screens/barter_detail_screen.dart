@@ -507,6 +507,16 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
     // um imposto que ninguém aplicou.
     if (_barter.hasTax) DetailBlock.main(_TaxCard(barter: _barter, showsCurrency: widget.isAdmin)),
 
+    // O PENHOR, logo depois do imposto e pelo mesmo motivo: é consequência do
+    // total. As sacas que a permuta deve precisam nascer de algum lugar, e este
+    // card diz de quanta terra.
+    //
+    // É AQUI que o consultor lê o número pela primeira vez — antes do formulário
+    // da cédula, com o produtor ainda por perto. Descobrir "esta permuta pede
+    // 34 ha" na tela da cédula já é tarde para renegociar o tamanho dela;
+    // descobrir na emissão é tarde para tudo.
+    if (_barter.hasPledge) DetailBlock.main(_PledgeCard(barter: _barter)),
+
     // O RASCUNHO — a etapa do consultor, e a única em que ele age depois
     // de registrar.
     if (_isMyDraft)
@@ -1789,6 +1799,67 @@ class _TaxCard extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             value,
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A ÁREA DE PENHOR que esta permuta exige — e de onde o número saiu.
+///
+/// Vai para TODO MUNDO, inclusive o consultor, pelo mesmo motivo do imposto: é
+/// hectare e percentual, não é R\$.
+///
+/// A BASE DO CÁLCULO sai por extenso ("produção estimada de 60 sc/ha + 20% de
+/// margem de segurança") porque a primeira reação a uma exigência de área é
+/// contestá-la — e as duas taxas moram no lançamento do Barter, que é tela do
+/// admin. Sem a frase, a única resposta possível a "por que 34 ha?" seria pedir
+/// a alguém que abrisse outra tela.
+class _PledgeCard extends StatelessWidget {
+  final BarterModel barter;
+
+  const _PledgeCard({required this.barter});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.borderSubtle),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.map_outlined, size: 18, color: AppColors.textLight),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Lavoura em penhor',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${barter.pledgeBasisLabel}. As matrículas informadas na cédula '
+                  'precisam somar esta área para a permuta ser encaminhada.',
+                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            barter.pledgeAreaLabel,
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.textDark),
           ),
         ],

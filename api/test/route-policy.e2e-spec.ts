@@ -133,6 +133,10 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // trava, para a divisão não virar precedente sem alguém escrever a linha.
         { route: 'GET /creditor', policy: 'capability:creditor.manage' },
         { route: 'PUT /creditor', policy: 'capability:creditor.manage' },
+        // A MARGEM DO PENHOR é a exceção desta rota: ela É decisão de negócio, e
+        // por isso NÃO entra por `creditor.manage`, que o emissor também tem.
+        // Uma porta por autoridade — ver `pledgePolicyManage`.
+        { route: 'PUT /creditor/pledge-margin', policy: 'capability:pledge.policy' },
 
         // Permutas — leitura escopada pelo service; escrita por capacidade.
         { route: 'GET /barters', policy: 'any-authenticated' },
@@ -251,6 +255,15 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // sozinho.
         {
           route: 'PUT /barter-versions/:code/close-on-goal',
+          policy: 'capability:barter.manage',
+        },
+        // A PRODUTIVIDADE ESTIMADA é da mesma alçada do preço da saca: as duas
+        // são as taxas do lançamento, e quem publica a tabela é quem as acerta.
+        // Ela decide quanta área de penhor cada permuta nova vai exigir, então
+        // não é campo de cadastro — é decisão de risco, e mora com quem gere o
+        // Barter.
+        {
+          route: 'PUT /barter-versions/:code/estimated-yield',
           policy: 'capability:barter.manage',
         },
         {

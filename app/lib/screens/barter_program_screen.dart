@@ -97,6 +97,7 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
         filename: result.filename,
         bytes: result.bytes,
         grainPrice: result.grainPrice,
+        estimatedYield: result.estimatedYield,
         endsAt: result.endsAt,
         targetSales: result.targetSales,
         targetSacks: result.targetSacks,
@@ -563,6 +564,49 @@ class _CurrentVersionCard extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: 8),
+
+          // A PRODUTIVIDADE ESTIMADA, ao lado da cotação — as duas taxas do
+          // lançamento, no mesmo cartão, porque são as duas metades da mesma
+          // conversão: a cotação leva o custo a sacas, esta leva as sacas à área
+          // do penhor.
+          //
+          // ZERO É UM ALARME, e não um campo em branco: esta versão está VIGENTE
+          // e recusando toda permuta nova, porque sem a taxa não há como
+          // dimensionar a garantia. Sem este aviso, o admin veria um Barter
+          // aberto e um time de vendas parado, sem ligar as duas coisas — o erro
+          // apareceria como "a API está recusando permuta", na voz do consultor.
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.onPrimaryOverlay,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  version.estimatedYield > 0
+                      ? Icons.agriculture_outlined
+                      : Icons.warning_amber_rounded,
+                  color: AppColors.onPrimaryMuted,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    version.estimatedYield > 0
+                        ? 'Produção estimada (penhor)'
+                        : 'Sem produção estimada — o Barter recusa permuta nova',
+                    style: TextStyle(color: AppColors.onPrimary, fontSize: 12),
+                  ),
+                ),
+                if (version.estimatedYield > 0)
+                  Text('${version.estimatedYield.toStringAsFixed(0)} sc/ha',
+                      style: TextStyle(
+                          color: AppColors.onPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
+              ],
+            ),
+          ),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -936,6 +980,11 @@ class _PublishRequest {
   final String filename;
   final List<int> bytes;
   final double grainPrice;
+
+  /// A PRODUTIVIDADE ESTIMADA da cultura (sc/ha) — a taxa que dimensiona a área
+  /// do penhor das permutas desta gestão. Obrigatória, como o valor da saca: as
+  /// duas são as metades da mesma conversão.
+  final double estimatedYield;
   final DateTime? endsAt;
   final double? targetSales;
   final double? targetSacks;
@@ -948,6 +997,7 @@ class _PublishRequest {
     required this.filename,
     required this.bytes,
     required this.grainPrice,
+    required this.estimatedYield,
     this.endsAt,
     this.targetSales,
     this.targetSacks,
@@ -983,6 +1033,17 @@ class _PublishSheetState extends State<_PublishSheet> {
   late final TextEditingController _grainPrice = TextEditingController(
     text: widget.previous?.grainPrice.toStringAsFixed(2).replaceAll('.', ',') ?? '',
   );
+
+  /// A PRODUTIVIDADE vem preenchida com a da versão anterior, e é o campo em que
+  /// isso mais importa: ela muda pouco de uma gestão para a outra (é estimativa
+  /// agronômica da cultura, não cotação de mercado), e redigitá-la a cada
+  /// republicação é a chance de sair um 6 no lugar de 60 — com o efeito de a
+  /// permuta seguinte exigir dez vezes mais terra em garantia.
+  late final TextEditingController _estimatedYield = TextEditingController(
+    text: (widget.previous?.estimatedYield ?? 0) > 0
+        ? widget.previous!.estimatedYield.toStringAsFixed(0)
+        : '',
+  );
   final _sales = TextEditingController();
   final _sacks = TextEditingController();
   final _barters = TextEditingController();
@@ -991,6 +1052,7 @@ class _PublishSheetState extends State<_PublishSheet> {
   @override
   void dispose() {
     _grainPrice.dispose();
+    _estimatedYield.dispose();
     _sales.dispose();
     _sacks.dispose();
     _barters.dispose();
@@ -1046,6 +1108,13 @@ class _PublishSheetState extends State<_PublishSheet> {
       setState(() => _error = 'Informe o valor da saca de ${widget.season.grainName.toLowerCase()}.');
       return;
     }
+    final estimatedYield = _number(_estimatedYield);
+    if (estimatedYield == null || estimatedYield <= 0) {
+      setState(() => _error =
+          'Informe a produção estimada de ${widget.season.grainName.toLowerCase()} (sacas por hectare).');
+      return;
+    }
+
     // A mesma regra do servidor, respondida antes de subir a planilha: sem meta,
     // "encerrar ao bater meta" é uma opção ligada que nunca aconteceria. O 422
     // chegaria depois do upload inteiro.
@@ -1060,6 +1129,7 @@ class _PublishSheetState extends State<_PublishSheet> {
         filename: filename,
         bytes: bytes,
         grainPrice: grainPrice,
+        estimatedYield: estimatedYield,
         endsAt: _endsAt,
         targetSales: _number(_sales),
         targetSacks: _number(_sacks),
@@ -1131,6 +1201,19 @@ class _PublishSheetState extends State<_PublishSheet> {
               decoration: InputDecoration(
                 labelText: 'Valor da saca de ${widget.season.grainName.toLowerCase()} (R\$)',
                 prefixIcon: const Icon(Icons.grass),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _estimatedYield,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText:
+                    'Produção estimada de ${widget.season.grainName.toLowerCase()} (sc/ha)',
+                helperText: 'Divide as sacas da permuta para achar a área do penhor',
+                helperMaxLines: 2,
+                prefixIcon: const Icon(Icons.agriculture_outlined),
               ),
             ),
             const SizedBox(height: 12),

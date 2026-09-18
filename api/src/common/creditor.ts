@@ -25,6 +25,11 @@ export const EMPTY_CREDITOR: Creditor = {
   addressNumber: '',
   city: '',
   forum: '',
+  // Sem MARGEM DE SEGURANÇA numa instalação que ainda não configurou nada: o
+  // penhor sai do tamanho exato da produção estimada, sem folga. É o padrão certo
+  // para um campo em branco — inventar uma folga que ninguém escolheu faria a
+  // instalação nova exigir mais terra do que a empresa decidiu exigir.
+  pledgeMarginPercent: 0,
   updatedAt: new Date(0),
   updatedBy: '',
 };

@@ -23,6 +23,7 @@ import type {
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  AREA_EPSILON,
   MONEY_EPSILON,
   classRequired,
   classSpend,
@@ -71,9 +72,12 @@ import {
   consultantCprGaps,
   cprGaps,
   knownFrom,
+  pledgeReadingOf,
   suggestFrom,
   type CprContext,
   type CprKnown,
+  type CprPledge,
+  type CprPledgeReading,
 } from './cpr';
 import { creditorGaps } from '../common/creditor';
 import { Paginated, windowOf } from '../common/pagination';
@@ -330,11 +334,55 @@ interface CprDesk {
    * dois lugares, senão o aviso diz uma coisa e a recusa diz outra.
    */
   consultantGaps: string[];
+  /**
+   * O PENHOR MEDIDO: quanto de área a permuta exige, quanto as lavouras somam e
+   * quanto falta.
+   *
+   * Ele sai ao lado das pendências, e não dentro delas, porque responde a outra
+   * pergunta. `consultantGaps` diz O QUE FAZER ("faltam 12,40 ha"); isto é o
+   * PLACAR que a tela desenha enquanto a pessoa acrescenta matrículas, e que
+   * continua útil depois de a exigência ser cumprida — a lacuna some quando fecha,
+   * o placar continua mostrando por quanto fechou.
+   */
+  pledge: CprPledgeReading;
+  /**
+   * O QUE MERECE UMA CONFERIDA, sem travar nada — ver `pledgeWarningsFor`.
+   *
+   * Lista separada de `gaps` de propósito: o portão do encaminhamento lê `gaps`,
+   * e uma suspeita não pode recusar ato nenhum.
+   */
+  pledgeWarnings: string[];
   suggestion: ReturnType<typeof suggestFrom>;
 }
 
 /** Quanto de um texto longo cabe numa linha da trilha sem afogá-la. */
 const AUDIT_DETAIL_LIMIT = 180;
+
+/**
+ * AS SACAS que a permuta deve — a quantidade da linha de grão.
+ *
+ * Função, e não `items.find(...)?.quantity ?? 0` espalhado: ela é lida pelo
+ * penhor, pela cédula e pelo comprovante, e `0` para a permuta sem linha de grão
+ * (as anteriores ao item de pagamento) é uma decisão, não um acidente — ver
+ * `repriceGrain`, que sai intacto pelo mesmo motivo.
+ */
+function sacksOf(items: { kind: string; quantity: number }[]): number {
+  return items.find((item) => item.kind === 'grain')?.quantity ?? 0;
+}
+
+/**
+ * A MATRÍCULA reduzida ao que o cartório reconhece: só os dígitos.
+ *
+ * É a mesma ideia de `Producer.documentDigits`, e pela mesma razão — comparar o
+ * texto cru deixaria "12.345" e "12345" passarem como imóveis diferentes, que é
+ * exatamente o caso que o aviso de penhor em dobro existe para encontrar. Aqui a
+ * normalização NÃO vira coluna: ela serve a um aviso, não a uma unicidade, e uma
+ * coluna pediria migração de dados para salvar uma comparação que roda ao abrir
+ * uma tela.
+ */
+function registryKeyOf(registryNumber: string): string {
+  return registryNumber.replace(/\D/g, '');
+}
 
 /**
  * O ITEM que um pedido atendido vira dentro da permuta.
@@ -574,6 +622,25 @@ export class BartersService {
         `O Barter ${version.code} está sem valor para a saca de ${version.season.grainName}`,
       );
     }
+    // E SEM PRODUTIVIDADE ESTIMADA TAMBÉM NÃO SE PERMUTA — o portão gêmeo do de
+    // cima, e pelo mesmo motivo.
+    //
+    // A cotação da saca é o que converte custo em dívida; a produtividade é o que
+    // converte a dívida em ÁREA DE GARANTIA. Faltando ela, a permuta entraria na
+    // esteira com um penhor que ninguém sabe dimensionar — e a descoberta
+    // aconteceria lá na frente, com o insumo já retirado, que é exatamente o custo
+    // que o dimensionamento existe para evitar.
+    //
+    // A recusa é AQUI, e não no encaminhamento, porque aqui ela é grátis: a
+    // permuta ainda não existe, ninguém digitou cédula nenhuma, e quem resolve é
+    // o admin em um campo só. É também por causa dela que `pledgeYield` 0 pode
+    // significar "permuta antiga" sem ambiguidade — ver o campo no schema.
+    if (version.estimatedYield <= 0) {
+      throw new UnprocessableEntityException(
+        `O Barter ${version.code} está sem produtividade estimada de ${version.season.grainName} — ` +
+          `sem ela não há como dimensionar a área do penhor. Peça ao administrador para informá-la no lançamento`,
+      );
+    }
 
     // 2. O produtor precisa estar na carteira de QUEM REGISTRA. A carteira é
     //    compartilhável (o mesmo produtor é atendido por vários consultores,
@@ -633,6 +700,13 @@ export class BartersService {
       // rural, e o que vale é a tabela do dia. Ver `tax-regime.ts`.
       taxRegime,
       taxRate: taxRateOf(taxRegime, producer.documentDigits),
+      // O PENHOR congelado: a produtividade desta versão e a margem da credora
+      // HOJE. As duas mudam — a próxima versão revê a estimativa, a diretoria
+      // revê o apetite de risco —, e lidas na hora de conferir fariam esta
+      // permuta passar a exigir mais área do que as lavouras que o consultor já
+      // anotou, sem que nada nela tivesse mudado. Mesmo argumento de `taxRate`.
+      pledgeYield: version.estimatedYield,
+      pledgeMarginPercent: (await this.creditor.get()).pledgeMarginPercent,
       // Sem `managerId`: o destinatário é gravado no ENVIO, e o envio é o
       // encaminhamento (ver `forward`). Trocar o gerente do consultor entre o
       // registro e o encaminhamento vale para esta permuta; depois dele, não.
@@ -989,7 +1063,20 @@ export class BartersService {
    */
   private async requireCprFilledBy(consultant: User, barter: Barter): Promise<void> {
     const cpr = await this.loadCpr(barter.id);
-    const missing = consultantCprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? []);
+    // AS SACAS SÃO LIDAS AGORA, e não do que veio com a permuta: este portão
+    // confere a garantia contra a dívida que a permuta tem NESTE INSTANTE. Entre
+    // o registro e o encaminhamento ela pode ter engordado — um produto de fora
+    // do Barter deferido soma custo e a linha do grão é recalculada —, e conferir
+    // contra o número antigo aprovaria um penhor que já não cobre.
+    const grain = await this.prisma.barterItem.findFirst({
+      where: { barterId: barter.id, kind: 'grain' },
+      select: { quantity: true },
+    });
+    const missing = consultantCprGaps(
+      cpr ?? EMPTY_CPR,
+      cpr?.areas ?? [],
+      this.pledgeOf(barter, grain?.quantity ?? 0),
+    );
     if (missing.length === 0) return;
 
     const MOSTRADAS = 4;
@@ -2152,6 +2239,7 @@ export class BartersService {
       : null;
 
     const season = await this.seasonOf(barter);
+    const context = this.cprContextOf(barter, season);
 
     return {
       cpr,
@@ -2165,14 +2253,107 @@ export class BartersService {
       // as pendências dela — assim a mesa da cédula e a tela de cadastro dizem
       // exatamente a mesma coisa sobre o que falta.
       creditor: await this.creditor.get(),
-      gaps: cprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? [], this.cprContextOf(barter, season)),
-      consultantGaps: consultantCprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? []),
+      gaps: cprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? [], context),
+      consultantGaps: consultantCprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? [], context.pledge),
+      // O PENHOR MEDIDO, ao lado da lista de pendências: a lista diz que falta
+      // área, este bloco diz quanta e contra o quê. É o que o formulário desenha
+      // no cabeçalho das lavouras enquanto o consultor acrescenta matrículas.
+      pledge: pledgeReadingOf(context.pledge, cpr?.areas ?? []),
+      // OS AVISOS, que não são pendências (ver `pledgeWarningsFor`): eles não
+      // travam nada, e por isso ficam fora de `gaps` — misturá-los faria a lista
+      // que o portão do encaminhamento lê recusar uma permuta por uma suspeita.
+      pledgeWarnings: await this.pledgeWarningsFor(barter, cpr?.areas ?? []),
       // A sugestão só faz sentido enquanto NÃO há rascunho: depois que o
       // consultor escreveu, o que está na tela é dele, e oferecer por cima o
       // texto de uma cédula antiga é a maneira mais fácil de sobrescrever uma
       // correção que alguém acabou de fazer.
       suggestion: cpr ? {} : suggestFrom(producer, await this.previousCpr(barter.producerId)),
     };
+  }
+
+  /**
+   * O QUE CHEIRA MAL NO PENHOR, sem travar nada — os dois jeitos conhecidos de a
+   * área fechar na conta e não fechar no mundo.
+   *
+   * São AVISOS e não pendências, e a diferença é de autoridade. `cprGaps`
+   * responde "dá para emitir?", e a resposta dela recusa atos: tudo o que entra
+   * lá precisa ser verdade sem exceção. Estes dois não são — há arrendamento
+   * legítimo que a área cultivável do cadastro não reflete, e há matrícula grande
+   * cuja lavoura foi repartida de boa-fé entre duas permutas. Travar por eles
+   * recusaria operação boa; calar sobre eles é deixar passar a operação que a
+   * feature existe para pegar. O meio-termo é dizer, e deixar a decisão com quem
+   * tem o contexto.
+   *
+   * 1. A MESMA MATRÍCULA GARANTINDO DUAS PERMUTAS. É o furo mais caro do penhor:
+   *    os mesmos 100 ha fechando a área de dois barters valem 100 ha e garantem
+   *    200. Acontece sem má-fé — o mesmo produtor emite duas cédulas na safra, ou
+   *    dois arrendatários apontam para a fazenda do mesmo dono — e é invisível
+   *    para quem olha uma cédula por vez, que é como todo mundo olha.
+   *
+   * 2. A SOMA PASSANDO DA ÁREA CULTIVÁVEL DO PRODUTOR. A área da lavoura é
+   *    digitada à mão e virou um portão: quem precisa de 40 ha e tem 30 anotados
+   *    tem agora um motivo para escrever 40. O cadastro (`producerAreaHa`,
+   *    congelado no registro) é a única segunda fonte que existe sobre quanta
+   *    terra esse produtor tem.
+   *
+   * A busca da matrícula ignora as permutas NEGADAS e os rascunhos dos outros —
+   * as primeiras não garantem nada e os segundos ainda não estão na mesa de
+   * ninguém —, e compara pelo número normalizado: "12.345" e "12345" são a mesma
+   * matrícula, e o cartório não tem opinião sobre a pontuação de quem digita.
+   */
+  private async pledgeWarningsFor(
+    barter: Barter,
+    areas: { areaHa: number; registryNumber: string }[],
+  ): Promise<string[]> {
+    const warnings: string[] = [];
+
+    const registries = new Map(
+      areas
+        .map((area) => [registryKeyOf(area.registryNumber), area.registryNumber] as const)
+        .filter(([key]) => key.length > 0),
+    );
+    if (registries.size > 0) {
+      const elsewhere = await this.prisma.cprArea.findMany({
+        where: {
+          cpr: {
+            barter: {
+              id: { not: barter.id },
+              versionCode: barter.versionCode,
+              status: { notIn: [BARTER_STATUS.denied, BARTER_STATUS.draft] },
+            },
+          },
+        },
+        select: { registryNumber: true, cpr: { select: { barter: { select: { code: true } } } } },
+      });
+
+      const shared = new Map<string, Set<string>>();
+      for (const row of elsewhere) {
+        const key = registryKeyOf(row.registryNumber);
+        if (!registries.has(key)) continue;
+        const codes = shared.get(key) ?? new Set<string>();
+        codes.add(row.cpr.barter.code);
+        shared.set(key, codes);
+      }
+      for (const [key, codes] of shared) {
+        warnings.push(
+          `a matrícula ${registries.get(key)} também está em penhor na(s) permuta(s) ` +
+            `${[...codes].sort().join(', ')} desta mesma gestão — confira se a lavoura não está ` +
+            `sendo dada em garantia duas vezes`,
+        );
+      }
+    }
+
+    const pledged =
+      Math.round(areas.reduce((total, area) => total + (area.areaHa || 0), 0) * 100) / 100;
+    if (barter.producerAreaHa > 0 && pledged > barter.producerAreaHa + AREA_EPSILON) {
+      warnings.push(
+        `as lavouras somam ${pledged.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ha, ` +
+          `acima dos ${barter.producerAreaHa.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ha ` +
+          `de área cultivável registrados para o produtor — confira as áreas ou o cadastro`,
+      );
+    }
+
+    return warnings;
   }
 
   /**
@@ -2196,7 +2377,10 @@ export class BartersService {
     return version?.season ?? null;
   }
 
-  /** O contexto que `cprGaps` precisa: as notas do faturamento e a safra. */
+  /**
+   * O contexto que `cprGaps` precisa: as notas do faturamento, a safra e o
+   * dimensionamento do penhor.
+   */
   private cprContextOf(barter: BarterWithItems, season: Season | null): CprContext {
     return {
       invoices: barter.invoices.map((invoice) => ({
@@ -2204,6 +2388,25 @@ export class BartersService {
         fileId: invoice.fileId,
       })),
       seasonName: season?.name ?? '',
+      pledge: this.pledgeOf(barter, sacksOf(barter.items)),
+    };
+  }
+
+  /**
+   * O PENHOR DESTA PERMUTA — as duas taxas congeladas, com as sacas de agora.
+   *
+   * As sacas entram por fora, e não são lidas aqui, porque quem as tem à mão
+   * muda: a mesa da cédula já carrega os itens, o portão do encaminhamento não.
+   * Elas também são a única das três parcelas que MUDA depois do registro —
+   * deferir um produto de fora do Barter recalcula a linha do grão (ver
+   * `repriceGrain`) —, e é por isso que a área exigida se recalcula a cada
+   * leitura em vez de ficar gravada.
+   */
+  private pledgeOf(barter: Barter, sacks: number): CprPledge {
+    return {
+      sacks,
+      yieldPerHa: barter.pledgeYield,
+      marginPercent: barter.pledgeMarginPercent,
     };
   }
 

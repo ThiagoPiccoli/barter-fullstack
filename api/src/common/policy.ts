@@ -252,6 +252,25 @@ export const CAPABILITY = {
    * esta linha que responde por isso.
    */
   creditorManage: 'creditor.manage',
+  /**
+   * DEFINIR A MARGEM DE SEGURANÇA DO PENHOR — a folga de área que a empresa
+   * exige além da que a produção estimada justifica.
+   *
+   * Ela é SEPARADA de `creditorManage`, e a separação é a correção de um erro:
+   * a margem chegou dentro do cadastro da credora porque o número é da EMPRESA,
+   * e a credora é a linha única da empresa. Só que `creditorManage` é do admin
+   * **e do emissor**, e a justificativa dela é literalmente "não decide permuta"
+   * — o timbre do papel. A margem decide: baixá-la de 20% para 10% corta pela
+   * metade a garantia de tudo o que for registrado dali em diante. Passar por
+   * aquela porta dava ao emissor a caneta de uma política de risco.
+   *
+   * É do ADMIN, e só dele — quem decide POR QUANTO se permuta (`barterManage`) é
+   * quem decide QUANTA TERRA se exige em troca. Não foi fundida com
+   * `barterManage` pelo mesmo motivo de `unitsManage` não ser `usersManage`: um
+   * dia isso pode ser de um comitê de crédito sem que ele publique tabela de
+   * preço, e é esta linha que responde por isso.
+   */
+  pledgePolicyManage: 'pledge.policy',
   /** Ler a trilha de auditoria. */
   auditRead: 'audit.read',
   /**
@@ -316,6 +335,10 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.producersReadAll,
     CAPABILITY.bartersReadAll,
     CAPABILITY.creditorManage,
+    // A MARGEM DE SEGURANÇA DO PENHOR — só do admin. Ver a capacidade: ela mora
+    // no cadastro da credora e NÃO entra por `creditorManage`, que o emissor
+    // também tem. Timbre é uma coisa; quanta terra se exige em garantia é outra.
+    CAPABILITY.pledgePolicyManage,
     // A CÉDULA em segunda via: ler e gerar o documento do que já foi faturado.
     // Não vem com `bartersInvoice` junto — o admin não fatura permuta, e
     // preencher a cédula continua sendo de quem apura a matrícula.

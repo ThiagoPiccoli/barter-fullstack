@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 /**
  * O CADASTRO DA CREDORA — a identidade da empresa nos documentos que ela emite.
@@ -47,4 +47,31 @@ export class CreditorDto {
   @IsString()
   @MaxLength(80)
   forum?: string;
+}
+
+/**
+ * A MARGEM DE SEGURANÇA DO PENHOR (%) — a folga de área que a empresa exige além
+ * da que a produção estimada justifica.
+ *
+ * DTO PRÓPRIO, em ROTA PRÓPRIA, e é esse o ponto: o número mora na mesma linha do
+ * cadastro da credora (é a linha única da empresa), mas não é cadastro — é REGRA.
+ * `PUT /creditor` é de quem mantém o timbre, e o timbre é do admin E DO EMISSOR;
+ * esta é de quem decide política de risco, que é só o admin (ver
+ * `pledgePolicyManage`). Enquanto ela foi um campo do `CreditorDto`, o emissor
+ * mudava a garantia de toda permuta futura pela porta do CNPJ.
+ *
+ * OBRIGATÓRIA aqui, ao contrário de tudo no `CreditorDto`: lá o ausente significa
+ * "ainda não tenho esse dado", e aqui o ato É informar o número. Zero se diz
+ * digitando zero.
+ *
+ * O TETO de 100% não é decoração: ele é o dobro da área estimada, e uma margem
+ * acima disso costuma ser um dígito a mais digitado por engano — com o efeito de
+ * exigir uma fazenda inteira em garantia de uma permuta pequena, e de travar a
+ * carteira do consultor sem que ninguém entenda por quê.
+ */
+export class PledgeMarginDto {
+  @IsNumber({}, { message: 'A margem de segurança do penhor deve ser um número' })
+  @Min(0, { message: 'A margem de segurança do penhor não pode ser negativa' })
+  @Max(100, { message: 'A margem de segurança do penhor não pode passar de 100%' })
+  pledgeMarginPercent!: number;
 }
