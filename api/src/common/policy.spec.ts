@@ -130,6 +130,12 @@ describe('Tabela de capacidades', () => {
         CAPABILITY.bartersReview,
         CAPABILITY.pricesRead,
         CAPABILITY.bartersInvestmentPerHa,
+        // O DOSSIÊ é a terceira coisa que ele ganhou, e ela anda junto com a
+        // decisão: ler os anexos que já estão na permuta e juntar o que se
+        // apurou sobre o cliente (Serasa, endividamento interno) é parte de
+        // decidir crédito, não uma atribuição nova.
+        CAPABILITY.bartersCreditRead,
+        CAPABILITY.bartersCreditAttach,
       ].sort(),
     );
     expect(can({ role: ROLE.committee }, CAPABILITY.bartersInvoice)).toBe(false);
@@ -198,6 +204,49 @@ describe('Tabela de capacidades', () => {
     expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReadInvoicing)).toBe(false);
     expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReadAll)).toBe(false);
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersReadIssuance)).toBe(false);
+  });
+
+  /**
+   * O DOSSIÊ DA ANÁLISE DE CRÉDITO — a única leitura de anexo restrita do
+   * sistema.
+   *
+   * Nota fiscal, cédula assinada e comprovante de registro vão para quem alcança
+   * a permuta; a consulta ao Serasa e o endividamento do produtor dentro da
+   * cooperativa, não. A diferença é a natureza da peça: as primeiras são
+   * documentos da operação, e estas são a vida financeira de um cliente,
+   * colhida para uma decisão de crédito.
+   *
+   * E a ESCRITA é mais estreita ainda do que a leitura — ela não é do admin.
+   * Quem junta prova a uma decisão é quem decide; a leitura do admin existe para
+   * auditar isso, e ele escrever ali seria escrever dentro da fundamentação de
+   * uma decisão que não é dele.
+   */
+  it('o dossiê do comitê é lido pelo comitê e pelo admin, e escrito só pelo comitê', () => {
+    expect(rolesWith(CAPABILITY.bartersCreditRead).sort()).toEqual(
+      [ROLE.admin, ROLE.committee].sort(),
+    );
+    expect(rolesWith(CAPABILITY.bartersCreditAttach)).toEqual([ROLE.committee]);
+
+    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCreditAttach)).toBe(false);
+  });
+
+  /**
+   * A BASE DE SEGUROS é do admin, e é SEPARADA da caneta do preço do Barter.
+   *
+   * As duas decidem quanto a permuta custa ao produtor e hoje moram na mesma
+   * mão, mas são atos diferentes: publicar a tabela de valores é decisão
+   * comercial da safra; manter a base de seguros é transcrever a cotação que a
+   * seguradora mandou. O dia em que a segunda for do escritório de crédito, é
+   * esta linha que muda.
+   */
+  it('a base de seguros é do admin, e ninguém mais escreve nela', () => {
+    expect(rolesWith(CAPABILITY.insuranceManage)).toEqual([ROLE.admin]);
+    expect(can({ role: ROLE.committee }, CAPABILITY.insuranceManage)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.insuranceManage)).toBe(false);
   });
 
   it('o gerente enxerga o TIME dele e escreve UMA coisa: o parecer', () => {

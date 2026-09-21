@@ -18,6 +18,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { PaginationQuery } from '../../common/pagination';
+import { CREDIT_FILE_KINDS, type CreditFileKind } from '../credit-file';
 import { BARTER_STATUS, BARTER_STATUSES, type BarterStatus } from '../barter-workflow';
 import { TAX_REGIMES, TAX_REGIME_MESSAGE } from '../tax-regime';
 import type { TaxRegime } from '../tax-regime';
@@ -198,6 +199,39 @@ export class ReviewBarterDto {
   // entender o que falta seja qual for a que chegar até a tela.
   @MaxLength(1000, { message: 'Escreva o motivo da decisão em até 1000 caracteres' })
   note?: string;
+
+  /**
+   * AS EXIGÊNCIAS: avalista, garantia real e seguro — as três coisas que o
+   * comitê define, agora legíveis por máquina.
+   *
+   * Elas viviam dentro de `note`, em prosa ("exigir aval do cônjuge", "com
+   * avalista", "condicionada a aval"), e isso bastava para quem lia a permuta e
+   * não bastava para mais nada: não havia como listar o que estava pendente de
+   * aval, e o emissor descobria a exigência lendo parágrafo na véspera de
+   * emitir o título.
+   *
+   * SÃO OPCIONAIS, e isso é deliberado em dois sentidos. Primeiro, a aprovação
+   * limpa não exige nada — e a negativa também não: exigir avalista de uma
+   * permuta negada seria pedir garantia para um negócio que não vai acontecer.
+   * Segundo, elas NÃO SUBSTITUEM o texto: `note` continua obrigatório na
+   * ressalva porque as caixas dizem O QUÊ e só ele diz QUAL — qual matrícula,
+   * qual valor segurado, quem se espera como avalista.
+   *
+   * Ausente vale `false`, e não "não mexer": esta é a decisão, e ela é tomada
+   * uma vez. Um cliente que não conheça os campos manda a decisão sem exigência
+   * nenhuma, que é exatamente o que ele quis dizer.
+   */
+  @IsOptional()
+  @IsBoolean()
+  requiresGuarantor?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresCollateral?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresInsurance?: boolean;
 }
 
 /**
@@ -264,6 +298,32 @@ export class AttachInvoiceDto {
   @IsNumber({}, { message: 'O valor da nota precisa ser um número' })
   @Min(0)
   value?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+}
+
+/**
+ * UMA PEÇA DO DOSSIÊ DO COMITÊ anexada à permuta — o que vem junto com o
+ * arquivo (ver `barters/credit-file.ts`).
+ *
+ * Os dois campos são OPCIONAIS, e isso é o oposto da nota fiscal de propósito.
+ * Lá, o número é o que identifica o documento perante o fisco; aqui, o
+ * documento se identifica sozinho — é um PDF de consulta de crédito, com o nome
+ * do arquivo, a data e quem o anexou. Exigir classificação e comentário de quem
+ * está no meio de uma reunião trocaria "anexei os três" por três formulários.
+ *
+ * `kind` ausente vale `other`, que é a resposta honesta: o comitê juntou um
+ * documento e não disse qual dos dois tipos conhecidos ele é.
+ */
+export class AttachCreditFileDto {
+  @IsOptional()
+  @IsIn(CREDIT_FILE_KINDS, {
+    message: `Tipo de documento inválido. Use um destes: ${CREDIT_FILE_KINDS.join(', ')}`,
+  })
+  kind?: CreditFileKind;
 
   @IsOptional()
   @IsString()

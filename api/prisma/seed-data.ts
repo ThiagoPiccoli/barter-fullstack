@@ -6,6 +6,7 @@ import { TAX_REGIME, taxRateOf, type TaxRegime } from '../src/barters/tax-regime
 import { CHANGE_REQUEST_ACTION, CHANGE_REQUEST_STATUS } from '../src/barters/change-request';
 import { PRODUCT_REQUEST_ACTION, PRODUCT_REQUEST_STATUS } from '../src/barters/product-request';
 import { normalizeName } from '../src/seasons/product-name';
+import { cityKeyOf } from '../src/insurance/insurance-rate';
 
 /**
  * A senha de todas as contas de demonstração.
@@ -99,6 +100,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // primeiro derrubaria o FK. A cédula já saiu acima, então o SCR também está
   // livre quando os arquivos caem.
   await prisma.barterInvoice.deleteMany();
+  // O DOSSIÊ DO COMITÊ também sai antes dos arquivos, pelo mesmo motivo da
+  // nota: a peça aponta para o arquivo dela.
+  await prisma.barterCreditFile.deleteMany();
   await prisma.barterFile.deleteMany();
   // O pedido de fora do Barter vem DEPOIS do item, e não antes: o item aponta
   // para ele (`BarterItem.requestId`), e apagar o pedido primeiro esvaziaria
@@ -112,6 +116,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.product.deleteMany();
   await prisma.productClass.deleteMany();
   await prisma.producer.deleteMany();
+  // A base de seguros não tem filho nem pai: ela é lida pela CHAVE do município
+  // (`cityKey`), e a permuta guarda a taxa congelada em vez de apontar para a
+  // linha. Some junto com o resto porque o dataset a recria — e sem isto o
+  // segundo seed esbarraria no índice único da praça.
+  await prisma.insuranceRate.deleteMany();
   await prisma.accessToken.deleteMany();
   await prisma.auditLog.deleteMany();
   // Usuário antes de unidade: o usuário aponta a lotação dele, e o FK é
@@ -443,6 +452,38 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     areaHa: 150,
     createdAt: at(2022, 6, 14),
   });
+
+  /* ── Base de seguros por município ────────────────────────────────── */
+  //
+  // O SEGURO é opcional, e quem diz se a safra o leva é o admin, no lançamento
+  // (ver `BarterVersion.insuranceRequired`). O que mora aqui é a outra metade:
+  // QUANTO custa o hectare em cada praça — o risco do lugar, que é o que a
+  // seguradora cota.
+  //
+  // A base cobre TODAS as praças dos produtores do dataset, e isso é de
+  // propósito: ligando o seguro na demonstração, nenhuma permuta é recusada por
+  // município sem taxa. Faltando uma, a recusa é a que `missingRateRefusal`
+  // escreve — e ela é a coisa certa a acontecer, só não numa demonstração.
+  //
+  // Os valores são de ordem realista para o Paraná (R$ 80 a R$ 95/ha em soja) e
+  // sobem para o Mato Grosso, que é onde o frete e o risco climático pesam mais.
+  // O Barter vigente do dataset NÃO leva seguro — as permutas dele contam a
+  // história de antes —, e ligá-lo é um toque na tela do lançamento.
+  const mkRate = (city: string, valuePerHa: number, note?: string) =>
+    prisma.insuranceRate.create({
+      data: { city, cityKey: cityKeyOf(city), valuePerHa, note: note ?? null },
+    });
+
+  await mkRate('Maringá/PR', 85.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Sarandi/PR', 82.5, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Mandaguari/PR', 88.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Marialva/PR', 86.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Paiçandu/PR', 84.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Floresta/PR', 83.5, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Campo Mourão/PR', 92.5, 'Soja 2026 — região de granizo recorrente');
+  // A praça de FORA da carteira: ela existe para a tela do admin mostrar uma
+  // base maior do que a lista de produtores, que é como ela é no mundo.
+  await mkRate('Sorriso/MT', 140.0, 'Soja 2026 — praça nova, cotação da matriz');
 
   /* ── Classes de produto ───────────────────────────────────────────── */
   //

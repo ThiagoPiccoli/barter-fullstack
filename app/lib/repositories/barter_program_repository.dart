@@ -99,6 +99,23 @@ class BarterProgramRepository {
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
+  /// LIGA ou DESLIGA o seguro agrícola do Barter vigente.
+  ///
+  /// Existe pelo mesmo motivo do modo de encerramento: a opção nasce no
+  /// lançamento, e mudar de ideia no meio do Barter (a apólice saiu depois da
+  /// tabela, a diretoria decidiu incluir) não pode custar uma republicação —
+  /// que encerraria a versão e reiniciaria a contagem do realizado.
+  ///
+  /// O que ela NÃO faz é mexer em permuta já registrada: a taxa está congelada
+  /// em cada uma. Vale para as próximas.
+  Future<BarterVersionModel> setInsurance(String code, bool enabled) async {
+    final data = await api.put(
+      '/barter-versions/$code/insurance',
+      body: {'enabled': enabled},
+    );
+    return BarterVersionModel.fromJson(data as Map<String, dynamic>);
+  }
+
   /// Publica a próxima versão a partir da planilha do fornecedor.
   ///
   /// Os limites vão como TEXTO porque o corpo é multipart; o servidor aceita
@@ -115,6 +132,7 @@ class BarterProgramRepository {
     double? targetSacks,
     int? targetBarters,
     bool closeOnGoal = false,
+    bool insuranceRequired = false,
     String? note,
     bool carryOver = false,
   }) async {
@@ -135,6 +153,9 @@ class BarterProgramRepository {
         // Só vai quando é `true`: o padrão do servidor é o manual, e mandar
         // "false" é dizer a mesma coisa com um campo a mais no multipart.
         if (closeOnGoal) 'closeOnGoal': 'true',
+        // O SEGURO do lançamento, pela mesma regra do `closeOnGoal`: só viaja
+        // quando é `true`, porque o padrão do servidor é o Barter sem seguro.
+        if (insuranceRequired) 'insuranceRequired': 'true',
         if (note != null && note.isNotEmpty) 'note': note,
         if (carryOver) 'carryOver': 'true',
       },

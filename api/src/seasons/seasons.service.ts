@@ -545,6 +545,10 @@ export class SeasonsService {
         targetSacks: limits.targetSacks ?? null,
         targetBarters: limits.targetBarters ?? null,
         closeOnGoal: limits.closeOnGoal ?? false,
+        // ESTE BARTER LEVA SEGURO? Ver `insuranceRequired` no schema: ligado,
+        // toda permuta desta versão nasce com a linha do seguro, cotada pelo
+        // município do produtor.
+        insuranceRequired: limits.insuranceRequired ?? false,
         sourceFile,
         note: limits.note?.trim() || null,
       },
@@ -818,6 +822,49 @@ export class SeasonsService {
       const closed = await this.closeIfGoalReached(admin, version.id);
       if (closed) return closed.version;
     }
+    return this.findVersion(code);
+  }
+
+  /**
+   * LIGA ou DESLIGA o seguro agrícola da versão vigente.
+   *
+   * Só a VIGENTE, como o modo de encerramento e pelo mesmo motivo: a opção é
+   * sobre as permutas que ainda vão nascer, e uma versão encerrada não terá
+   * nenhuma. As que já nasceram têm a taxa congelada (ver
+   * `Barter.insuranceRatePerHa`) e não são tocadas aqui — nem as que estão sem
+   * seguro, nem as que estão com ele.
+   *
+   * NÃO confere a base de seguros, e isso é deliberado: ligar o seguro não
+   * conhece os produtores que vão aparecer, e a base muda depois de qualquer
+   * jeito. Quem cobra a praça que falta é o REGISTRO da permuta, com a frase que
+   * nomeia o município (ver `missingRateRefusal`) — e ali a recusa é grátis.
+   */
+  async setInsuranceRequired(
+    admin: User,
+    code: string,
+    enabled: boolean,
+  ): Promise<VersionWithPrices> {
+    const version = await this.findVersion(code);
+    if (version.status !== 'active') {
+      throw new UnprocessableEntityException('Só a versão vigente pode ligar ou desligar o seguro');
+    }
+    if (version.insuranceRequired === enabled) return version;
+
+    await this.prisma.barterVersion.update({
+      where: { id: version.id },
+      data: { insuranceRequired: enabled },
+    });
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.versionInsuranceChanged,
+      targetType: 'version',
+      targetId: version.id,
+      targetLabel: version.code,
+      detail: enabled
+        ? 'passa a incluir o seguro agrícola nas permutas novas'
+        : 'deixa de incluir o seguro agrícola nas permutas novas',
+    });
+
     return this.findVersion(code);
   }
 

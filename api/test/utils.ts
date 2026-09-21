@@ -19,6 +19,27 @@ export async function createTestApp(): Promise<INestApplication> {
   const app = moduleRef.createNestApplication({ logger: false, bodyParser: false });
   setupApp(app);
   await app.init();
+  // O servidor PASSA A ESCUTAR aqui, e não no supertest.
+  //
+  // `app.init()` monta a aplicação mas não abre porta. Sem porta aberta, cada
+  // `request(app.getHttpServer())` do supertest chama `listen(0)` no MESMO
+  // objeto de servidor e guarda o endereço que voltar. Enquanto as chamadas são
+  // uma de cada vez, isso funciona por acidente.
+  //
+  // Elas não são. O padrão que as specs usam —
+  // `request(app.getHttpServer()).get(rota).set('Authorization', await asUser(X))`
+  // — tem um `await` DENTRO da montagem do pedido: o `asUser` dispara um
+  // segundo pedido (o login) enquanto o primeiro já pegou o servidor. As duas
+  // chamadas de `listen(0)` se cruzam, uma delas enxerga o servidor ainda sem
+  // endereço, e o pedido sai para um servidor que ainda não tem as rotas do
+  // Nest penduradas. O que volta é o 404 do Express, de corpo vazio — nada a
+  // ver com a rota pedida, e por isso a falha aparecia longe da causa.
+  //
+  // Era daí que vinha a intermitência da suíte: o mesmo arquivo passava sozinho
+  // e quebrava em dezenas de casos quando rodava junto dos outros, variando de
+  // execução para execução conforme o tempo caía. Com a porta já aberta, o
+  // supertest só lê o endereço e não há corrida.
+  await app.listen(0);
   return app;
 }
 
@@ -59,12 +80,28 @@ async function restartSequences(prisma: PrismaService): Promise<void> {
  */
 export { SEED_PASSWORD } from '../prisma/seed-data';
 
-/** Loga com a senha do seed e devolve o token Bearer. */
+/**
+ * Loga com a senha do seed e devolve o token Bearer.
+ *
+ * O login é CONFERIDO aqui, e não lido às cegas. Sem esta checagem, um login
+ * que não deu 200 devolvia `response.body.data` indefinido e a spec quebrava
+ * lá adiante com `Cannot read properties of undefined (reading 'token')` —
+ * uma pilha que aponta para esta linha e não diz nada sobre o motivo. Quando
+ * isso acontece em cinquenta testes de uma vez, o que está na tela é cinquenta
+ * cópias do mesmo TypeError, e o status que explicaria tudo (429 do limite de
+ * login, 401 de seed que não rodou, 500 do banco) nunca chega a ser visto.
+ */
 export async function loginAs(app: INestApplication, email: string): Promise<string> {
   const response = await request(app.getHttpServer())
     .post('/api/v1/auth/login')
     .send({ email, password: SEED_PASSWORD });
-  return response.body.data.token as string;
+  const token = (response.body as { data?: { token?: string } }).data?.token;
+  if (!token) {
+    throw new Error(
+      `Login de ${email} falhou: HTTP ${response.status} — ${JSON.stringify(response.body)}`,
+    );
+  }
+  return token;
 }
 
 export const ADMIN = 'admin@agrobarter.com.br';

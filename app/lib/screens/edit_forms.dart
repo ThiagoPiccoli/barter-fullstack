@@ -939,6 +939,133 @@ class _EditUnitScreenState extends State<EditUnitScreen> {
   }
 }
 
+/// UMA PRAÇA da base de seguros — o município e quanto custa segurar um
+/// hectare nele.
+///
+/// O cadastro é curto porque a cotação é curta: um lugar e um valor. O que NÃO
+/// existe aqui é safra nem cultura — a base responde "quanto custa o hectare
+/// nesta praça HOJE", e cada permuta CONGELA a taxa que usou. Recotar a praça
+/// no ano seguinte é reescrever esta linha; as permutas já fechadas continuam
+/// com a taxa do dia delas.
+class EditInsuranceRateScreen extends StatefulWidget {
+  final InsuranceRateModel? rate;
+  const EditInsuranceRateScreen({super.key, this.rate});
+
+  @override
+  State<EditInsuranceRateScreen> createState() => _EditInsuranceRateScreenState();
+}
+
+class _EditInsuranceRateScreenState extends State<EditInsuranceRateScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _city;
+  late final TextEditingController _value;
+  late final TextEditingController _note;
+  bool _saving = false;
+
+  bool get _isNew => widget.rate == null;
+
+  @override
+  void initState() {
+    super.initState();
+    _city = TextEditingController(text: widget.rate?.city ?? '');
+    _value = TextEditingController(
+      text: (widget.rate?.valuePerHa ?? 0) > 0
+          ? widget.rate!.valuePerHa.toStringAsFixed(2).replaceAll('.', ',')
+          : '',
+    );
+    _note = TextEditingController(text: widget.rate?.note ?? '');
+  }
+
+  @override
+  void dispose() {
+    _city.dispose();
+    _value.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      final saved = await AppData.saveInsuranceRate(
+        id: widget.rate?.id,
+        city: _city.text.trim(),
+        valuePerHa: _parsed(_value.text) ?? 0,
+        note: _note.text.trim(),
+      );
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Número como o Brasil escreve — a mesma leitura da planilha da seguradora,
+  /// para quem digita e quem carrega o arquivo não terem regras diferentes.
+  double? _parsed(String raw) {
+    final cleaned = raw.replaceAll(RegExp(r'[^\d,.-]'), '').trim();
+    if (cleaned.isEmpty) return null;
+    final normalized =
+        cleaned.contains(',') ? cleaned.replaceAll('.', '').replaceAll(',', '.') : cleaned;
+    return double.tryParse(normalized);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(_isNew ? 'Nova praça' : 'Editar praça')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _EditField(
+              controller: _city,
+              label: 'Município/UF',
+              icon: Icons.location_on_outlined,
+              required: true,
+            ),
+            _EditField(
+              controller: _value,
+              label: 'Valor por hectare (R\$)',
+              icon: Icons.shield_outlined,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              validator: (v) {
+                final value = _parsed(v ?? '');
+                // Zero não é seguro de graça: é linha pela metade. A praça a
+                // R$ 0,00 produziria permutas com uma linha de seguro que não
+                // cobra nada — pior do que a praça ausente, que ao menos recusa
+                // o registro dizendo o que falta.
+                if (value == null || value <= 0) return 'Informe um valor maior que zero';
+                return null;
+              },
+            ),
+            _EditField(
+              controller: _note,
+              label: 'Observação (seguradora, vigência, cultura)',
+              icon: Icons.notes_outlined,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'O seguro é do LUGAR: o que a seguradora cota é o risco da praça — chuva, '
+              'granizo, seca. A permuta pega a área cultivável do produtor, multiplica '
+              'por este valor e cobra o resultado em sacas, junto com os insumos. '
+              'Quem decide se a safra leva seguro é o lançamento do Barter.',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+            const SizedBox(height: 20),
+            _saving
+                ? const Center(child: CircularProgressIndicator())
+                : _SaveButton(onPressed: _save, isNew: _isNew),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Cadastro de um PRODUTO — grão de pagamento ou insumo do catálogo.
 ///
 /// Só criação. Depois de criado, o item se edita na tela dele (código, classe,

@@ -233,6 +233,64 @@ export const CAPABILITY = {
    */
   bartersCprRead: 'barters.cprRead',
   /**
+   * LER a mesa de anexos da permuta e ABRIR as peças da ANÁLISE DE CRÉDITO — a
+   * consulta ao Serasa, o endividamento do produtor dentro da cooperativa.
+   *
+   * É do COMITÊ e do ADMIN, e de mais ninguém. Esta é a única leitura restrita
+   * de anexo no sistema (nota fiscal, cédula e comprovante de registro vão para
+   * quem alcança a permuta), e a restrição é a natureza da peça: consulta de
+   * crédito e endividamento são a vida financeira do produtor, colhidas para
+   * uma decisão de crédito. O consultor que atende o cliente não as vê — não por
+   * desconfiança, mas porque elas não são dele: ele leva ao produtor a decisão,
+   * e não o dossiê que a fundamentou. O gerente também não: o parecer dele é
+   * técnico e vem ANTES da análise de crédito, que é a etapa seguinte.
+   *
+   * Ela também é o que dá ao comitê o SCR do produtor sem lhe dar a cédula
+   * inteira (ver a rota do SCR em barters.controller.ts). Os dois documentos
+   * respondem à mesma pergunta na mesa dele — quanto este produtor já deve —, e
+   * `bartersCprRead` traria junto o formulário do título, que não é assunto de
+   * quem decide o negócio.
+   */
+  bartersCreditRead: 'barters.creditRead',
+  /**
+   * ANEXAR (e remover) as peças da análise de crédito.
+   *
+   * É do COMITÊ e só dele — nem do admin, que lê. A distinção é a mesma de
+   * `bartersReview`: o admin administra o sistema e enxerga a operação, e quem
+   * junta prova a uma decisão é quem decide. Um admin que pudesse acrescentar
+   * documentos ao dossiê estaria escrevendo dentro da fundamentação de uma
+   * decisão que não é dele — e a leitura dele existe para auditar exatamente
+   * isso.
+   *
+   * Separada da leitura pelo mesmo motivo de `unitsManage` não ser
+   * `usersManage`: um dia o gerente vai poder juntar o extrato do time dele sem
+   * poder ler o dossiê inteiro, e é esta linha que responde por isso.
+   */
+  bartersCreditAttach: 'barters.creditAttach',
+  /**
+   * Manter a BASE DE SEGUROS POR MUNICÍPIO — quanto custa segurar um hectare em
+   * cada praça.
+   *
+   * É do ADMIN, ao lado de `barterManage`, e pela mesma razão: os dois números
+   * decidem quanto a permuta custa ao produtor. A cotação da saca converte
+   * insumo em dívida; a taxa do seguro acrescenta custo à dívida antes da
+   * conversão.
+   *
+   * NÃO foi fundida com `barterManage` — que é quem liga o seguro no lançamento
+   * (ver `BarterVersion.insuranceRequired`) — pelo mesmo motivo de
+   * `pledgePolicyManage` não ter sido: são dois atos com donos possivelmente
+   * diferentes. Publicar a tabela de valores é decisão comercial da safra;
+   * manter a base de seguros é transcrever a cotação que a seguradora mandou, e
+   * o dia em que isso for do escritório de crédito é esta linha que muda — sem
+   * lhe dar de carona a caneta do preço do Barter.
+   *
+   * Ela é de ESCRITA. A leitura da base não pede capacidade nenhuma: o
+   * consultor precisa saber quanto o seguro vai custar ao cliente dele antes de
+   * fechar a permuta, e o valor sai convertido em sacas para quem não vê R$
+   * (ver `pricesRead`).
+   */
+  insuranceManage: 'insurance.manage',
+  /**
    * Ler e editar o CADASTRO DA CREDORA — a identidade da empresa nos documentos
    * que ela emite (razão social, CNPJ, endereço da sede e foro eleito).
    *
@@ -346,6 +404,14 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.auditRead,
     CAPABILITY.pricesRead,
     CAPABILITY.bartersInvestmentPerHa,
+    // A BASE DE SEGUROS POR MUNICÍPIO — a outra metade do custo que o admin
+    // lança. Ver `insuranceManage`, e repare que ela é separada de
+    // `barterManage`, que é quem LIGA o seguro na versão.
+    CAPABILITY.insuranceManage,
+    // O DOSSIÊ do comitê, em LEITURA. Ele não anexa nada (ver
+    // `bartersCreditAttach`): quem junta prova a uma decisão é quem decide, e a
+    // leitura do admin existe justamente para auditar isso.
+    CAPABILITY.bartersCreditRead,
     // O caminho de VOLTA da esteira. Ele não é decisão de negócio — é o admin
     // dizendo se o trabalho já feito pelos outros postos vai ser refeito. Ver
     // `bartersChangeReview`, e repare que `bartersReview` continua fora daqui.
@@ -377,6 +443,13 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersReview,
     CAPABILITY.pricesRead,
     CAPABILITY.bartersInvestmentPerHa,
+    // O DOSSIÊ: abrir os anexos que já estão na permuta (as notas, o SCR do
+    // produtor) e juntar os seus — a consulta ao Serasa, o endividamento dentro
+    // da cooperativa. Decidir crédito sem poder ler o que se apurou sobre o
+    // cliente era pedir uma decisão pela metade, e os documentos circulavam por
+    // e-mail entre os integrantes da reunião.
+    CAPABILITY.bartersCreditRead,
+    CAPABILITY.bartersCreditAttach,
   ],
   // O FATURISTA fatura, e é só isso — inclusive no que enxerga. Ele alcança o
   // que CHEGOU ao faturamento e nada antes disso: o parecer que o gerente ainda

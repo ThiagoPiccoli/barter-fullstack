@@ -177,6 +177,16 @@ export const AUDIT_ACTION = {
    */
   versionYieldChanged: 'barter.version-yield-changed',
   /**
+   * LIGOU ou DESLIGOU o seguro agrícola da versão.
+   *
+   * Entra pelo mesmo critério das duas de cima: é um interruptor de dois
+   * estados que muda o custo de toda permuta registrada dali em diante — ligado,
+   * cada uma passa a carregar área × taxa do município em custo novo, pago em
+   * sacas. "Por que as permutas de outubro ficaram mais caras?" se responde
+   * aqui, e não na tabela de valores, que não mudou.
+   */
+  versionInsuranceChanged: 'barter.version-insurance-changed',
+  /**
    * Mudou a MARGEM DE SEGURANÇA DO PENHOR no cadastro da credora.
    *
    * O par da de cima, pelo outro lado da conta: a produtividade é estimativa
@@ -186,6 +196,39 @@ export const AUDIT_ACTION = {
    * informação principal da linha.
    */
   creditorPledgeMarginChanged: 'creditor.pledge-margin-changed',
+  /**
+   * A BASE DE SEGUROS POR MUNICÍPIO — a linha editada uma a uma e a planilha
+   * carregada inteira.
+   *
+   * Entra pelo critério dos outros valores lançados: ela decide quanto a permuta
+   * custa ao produtor. Uma taxa dobrada numa praça acrescenta, a cada permuta
+   * nova daquela região, um custo que vira sacas e vira área de penhor — e a
+   * pergunta "por que as permutas de Sorriso ficaram mais caras em outubro?" só
+   * tem resposta aqui: a base é cadastro vivo, e o valor anterior não fica
+   * guardado em lugar nenhum.
+   *
+   * A CARGA é linha separada da edição, e não a mesma com outro detalhe, porque
+   * ela pode APAGAR: o modo `replace` troca a base inteira, e praça que sai da
+   * lista deixa de segurar permuta nova. É o ato de maior alcance deste
+   * cadastro, e ele acontece com um clique num formulário de upload.
+   */
+  insuranceRateChanged: 'insurance.rate-changed',
+  insuranceRateDeleted: 'insurance.rate-deleted',
+  insuranceBaseImported: 'insurance.base-imported',
+  /**
+   * O DOSSIÊ DO COMITÊ: a peça de análise de crédito anexada — e a removida.
+   *
+   * A REMOÇÃO é o motivo deste par existir, como no par das notas fiscais.
+   * Anexar é rotina; tirar do dossiê a consulta que fundamentou uma aprovação
+   * apaga a prova de uma decisão de crédito — e é justamente sobre uma decisão
+   * questionada que alguém vai procurar o documento que sumiu.
+   *
+   * A leitura das peças é restrita ao comitê e ao admin (ver
+   * `bartersCreditRead`); a TRILHA, que diz apenas que elas existiram, é do
+   * admin, como o resto desta tabela.
+   */
+  barterCreditFileAttached: 'barter.credit-file-attached',
+  barterCreditFileRemoved: 'barter.credit-file-removed',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTION)[keyof typeof AUDIT_ACTION];
@@ -206,7 +249,18 @@ export interface AuditActor {
 export interface AuditEntry {
   actor: User | AuditActor;
   action: AuditAction;
-  targetType: 'user' | 'unit' | 'barter' | 'season' | 'version' | 'session' | 'creditor';
+  targetType:
+    | 'user'
+    | 'unit'
+    | 'barter'
+    | 'season'
+    | 'version'
+    | 'session'
+    | 'creditor'
+    // A PRAÇA da base de seguros. A carga por planilha também entra com este
+    // alvo, e sem `targetId`: ela não mexe numa linha, mexe na base — e o rótulo
+    // dela é o nome do arquivo, que é o que alguém vai procurar depois.
+    | 'insuranceRate';
   targetId?: number | null;
   targetLabel: string;
   detail?: string;

@@ -1090,6 +1090,14 @@ void reviewBarter(
     builder: (ctx) {
       final noteCtrl = TextEditingController();
       var submitting = false;
+      // AS EXIGÊNCIAS do comitê: avalista, garantia real e seguro. Elas se
+      // acumulam — a mesma decisão pede duas delas com frequência —, e por isso
+      // são três caixas e não uma escolha.
+      final required = <String, bool>{
+        'guarantor': false,
+        'collateral': false,
+        'insurance': false,
+      };
       return StatefulBuilder(
         builder: (ctx, setLocal) {
           final enough =
@@ -1127,6 +1135,43 @@ void reviewBarter(
                     ),
                     textCapitalization: TextCapitalization.sentences,
                   ),
+                  // AS EXIGÊNCIAS não aparecem na NEGATIVA: pedir avalista de
+                  // uma permuta negada é pedir garantia para um negócio que não
+                  // vai acontecer — e a exigência ficaria pendurada na tela de
+                  // quem levou a negativa ao produtor.
+                  if (newStatus != BarterStatus.denied) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Exigências (aparecem na permuta para quem vai cumpri-las)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                    // O TEXTO continua sendo o que diz QUAL: qual matrícula,
+                    // qual valor segurado, quem se espera como avalista. As
+                    // caixas dizem só O QUÊ.
+                    Text(
+                      'Marque o que a reunião exigiu. O texto acima é o que diz qual.',
+                      style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                    ),
+                    for (final entry in const {
+                      'guarantor': 'Avalista',
+                      'collateral': 'Garantia real',
+                      'insurance': 'Seguro',
+                    }.entries)
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        value: required[entry.key],
+                        onChanged: submitting
+                            ? null
+                            : (v) => setLocal(() => required[entry.key] = v ?? false),
+                        title: Text(entry.value, style: const TextStyle(fontSize: 13)),
+                      ),
+                  ],
                 ],
               ),
             ),
@@ -1142,7 +1187,13 @@ void reviewBarter(
                         setLocal(() => submitting = true);
                         try {
                           final updated = await AppData.reviewBarter(
-                              barter.id, newStatus, noteCtrl.text);
+                            barter.id,
+                            newStatus,
+                            noteCtrl.text,
+                            requiresGuarantor: required['guarantor'] ?? false,
+                            requiresCollateral: required['collateral'] ?? false,
+                            requiresInsurance: required['insurance'] ?? false,
+                          );
                           if (!ctx.mounted) return;
                           Navigator.pop(ctx);
                           onReviewed(updated);
@@ -2580,6 +2631,34 @@ class ConditionsCard extends StatelessWidget {
             barter.reviewNote ?? '',
             style: TextStyle(fontSize: 13, color: AppColors.textDark, height: 1.35),
           ),
+          // AS EXIGÊNCIAS marcadas, em fichas. Elas dizem O QUÊ; o texto acima
+          // diz QUAL — qual matrícula, qual valor segurado, quem se espera como
+          // avalista. Quem lê esta tela é quem vai ter de providenciá-las.
+          if (barter.requirements.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final requirement in barter.requirements)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.approvedWithConditions.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      requirement,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.approvedWithConditions,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             'Exigência a cumprir antes da entrega.',

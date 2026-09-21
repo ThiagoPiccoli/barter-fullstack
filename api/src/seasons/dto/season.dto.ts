@@ -148,6 +148,30 @@ export class VersionLimitsDto {
   @IsBoolean({ message: 'closeOnGoal deve ser true ou false' })
   closeOnGoal?: boolean;
 
+  /**
+   * ESTE LANÇAMENTO LEVA SEGURO AGRÍCOLA? (false, o padrão).
+   *
+   * É a chave do seguro, e ela mora no lançamento porque contratar seguro é
+   * decisão comercial da SAFRA — a empresa fechou apólice com a seguradora, ou
+   * não —, e não caso a caso do consultor. Ligada, toda permuta desta versão
+   * nasce com a linha do seguro, precificada pelo município do produtor (ver
+   * `InsuranceRate`) e paga em sacas como qualquer custo adiantado.
+   *
+   * Ela vem aqui, nos LIMITES, e não ao lado de `grainPrice` e
+   * `estimatedYield`: aquelas duas são taxas obrigatórias que a conta usa; esta
+   * é uma opção do lançamento, da mesma natureza de `closeOnGoal` — e, como
+   * ela, o padrão é o que não acrescenta nada a ninguém.
+   *
+   * O que ela NÃO faz é conferir se as praças dos produtores estão na base de
+   * seguros: publicar não conhece os produtores, e a base muda depois. Quem
+   * cobra é o REGISTRO da permuta, com a frase que nomeia o município que falta
+   * (ver `missingRateRefusal`).
+   */
+  @IsOptional()
+  @BooleanFromText()
+  @IsBoolean({ message: 'insuranceRequired deve ser true ou false' })
+  insuranceRequired?: boolean;
+
   // Metas: ver NumberFromText — no multipart elas chegam como texto.
   @IsOptional()
   @NumberFromText()
@@ -280,5 +304,28 @@ export class VersionEstimatedYieldDto {
 export class CloseOnGoalDto {
   @BooleanFromText()
   @IsBoolean({ message: 'Informe true para encerrar ao bater meta, ou false para manual' })
+  enabled!: boolean;
+}
+
+/**
+ * LIGA ou DESLIGA o seguro agrícola de uma versão já publicada.
+ *
+ * Rota própria pelo mesmo motivo do `closeOnGoal` e da produtividade estimada: a
+ * opção nasce no lançamento, e mudar de ideia no meio do Barter obrigaria a
+ * republicar a tabela inteira — o que encerraria a versão vigente e reiniciaria
+ * a contagem do realizado só para virar um interruptor.
+ *
+ * E mudar de ideia acontece: a apólice sai depois da tabela, a seguradora
+ * atrasa a cotação de uma região, a diretoria decide incluir o seguro com o
+ * Barter já aberto.
+ *
+ * O QUE ELA NÃO FAZ é mexer em permuta já registrada. A taxa está congelada em
+ * `Barter.insuranceRatePerHa`, e as permutas de ontem continuam dizendo o que
+ * dizem — inclusive as que nasceram sem seguro nenhum. Vale para as PRÓXIMAS,
+ * que é a mesma leitura do vencimento da safra e da produtividade.
+ */
+export class VersionInsuranceDto {
+  @BooleanFromText()
+  @IsBoolean({ message: 'Informe true para este Barter levar seguro, ou false para não levar' })
   enabled!: boolean;
 }

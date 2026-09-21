@@ -405,6 +405,40 @@ export const BARTER_STEPS: Record<BarterAction, WorkflowStep> = {
   },
 };
 
+/**
+ * AS EXIGÊNCIAS QUE O COMITÊ PODE IMPOR junto com a aprovação — avalista,
+ * garantia real e seguro.
+ *
+ * Elas moram aqui, ao lado da etapa que as produz, e não numa tabela do banco:
+ * são três, são fixas, e cada uma é uma condição de negócio que a operação
+ * inteira já nomeia assim. A lista fechada é o que permite à tela desenhar três
+ * caixas e ao emissor ler "esta cédula espera um avalista" sem interpretar
+ * prosa.
+ *
+ * O rótulo vem daqui pelo mesmo motivo de `BARTER_STATUS_LABELS`: o app não
+ * deveria ter uma segunda cópia do vocabulário do fluxo para sair de sincronia
+ * com esta.
+ */
+export const REVIEW_REQUIREMENT_LABELS = {
+  requiresGuarantor: 'Avalista',
+  requiresCollateral: 'Garantia real',
+  requiresInsurance: 'Seguro',
+} as const;
+
+export type ReviewRequirement = keyof typeof REVIEW_REQUIREMENT_LABELS;
+
+export const REVIEW_REQUIREMENTS = Object.keys(REVIEW_REQUIREMENT_LABELS) as ReviewRequirement[];
+
+/**
+ * As exigências LIGADAS, pelos rótulos — a lista que a tela mostra e que a
+ * linha do tempo guarda por escrito.
+ */
+export function requirementsOf(source: Partial<Record<ReviewRequirement, boolean>>): string[] {
+  return REVIEW_REQUIREMENTS.filter((key) => source[key] === true).map(
+    (key) => REVIEW_REQUIREMENT_LABELS[key],
+  );
+}
+
 /** A etapa que age sobre uma permuta parada neste estado, se houver. */
 export function stepAt(status: string): WorkflowStep | undefined {
   return Object.values(BARTER_STEPS).find((step) =>

@@ -199,6 +199,13 @@ describe('Pedido de alteração da permuta', () => {
       reviewedBy: null,
       reviewedById: null,
       reviewedAt: null,
+      // AS EXIGÊNCIAS caem junto com a decisão que as criou: elas foram
+      // exigidas de uma permuta que está prestes a mudar, e mantidas fariam a
+      // tela do consultor mostrar "exige avalista" num rascunho que ninguém
+      // decidiu.
+      requiresGuarantor: false,
+      requiresCollateral: false,
+      requiresInsurance: false,
     });
   });
 

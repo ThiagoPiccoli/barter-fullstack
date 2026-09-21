@@ -107,6 +107,19 @@ class OfflinePackage {
   final List<Map<String, dynamic>> producers;
   final List<Map<String, dynamic>> units;
 
+  /// A BASE DE SEGUROS por município.
+  ///
+  /// Ela entra no pacote porque o consultor monta permuta EM CAMPO, sem sinal, e
+  /// a prévia dele precisa dizer quanto o seguro vai custar ao produtor — ou que
+  /// a praça dele ainda não tem taxa, que é uma recusa esperando acontecer no
+  /// registro. Sem a base gravada, o aparelho offline mostraria "sem taxa
+  /// cadastrada" para toda praça e a permuta pareceria impossível.
+  ///
+  /// Vazia nos pacotes gravados antes deste campo — e vazia também é uma
+  /// resposta legítima: base vazia é o que existe antes de o admin cadastrar a
+  /// primeira praça.
+  final List<Map<String, dynamic>> insuranceRates;
+
   const OfflinePackage({
     required this.savedAt,
     required this.user,
@@ -115,6 +128,7 @@ class OfflinePackage {
     required this.classes,
     required this.producers,
     required this.units,
+    this.insuranceRates = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -125,6 +139,7 @@ class OfflinePackage {
         'classes': classes,
         'producers': producers,
         'units': units,
+        'insuranceRates': insuranceRates,
       };
 
   factory OfflinePackage.fromJson(Map<String, dynamic> json) => OfflinePackage(
@@ -135,6 +150,7 @@ class OfflinePackage {
         classes: _rows(json['classes']),
         producers: _rows(json['producers']),
         units: _rows(json['units']),
+        insuranceRates: _rows(json['insuranceRates']),
       );
 
   static List<Map<String, dynamic>> _rows(dynamic value) => value is List

@@ -10,6 +10,7 @@ import { BartersModule } from './barters/barters.module';
 import { ClassesModule } from './classes/classes.module';
 import { CreditorModule } from './creditor/creditor.module';
 import { EnvelopeInterceptor } from './common/envelope.interceptor';
+import { InsuranceModule } from './insurance/insurance.module';
 import { AllExceptionsFilter } from './common/exception.filter';
 import { AccessGuard } from './common/access.guard';
 import { throttlerModule } from './common/throttling';
@@ -35,6 +36,7 @@ import { UsersModule } from './users/users.module';
     ProductsModule,
     SeasonsModule,
     CreditorModule,
+    InsuranceModule,
     BartersModule,
   ],
   controllers: [AppController],

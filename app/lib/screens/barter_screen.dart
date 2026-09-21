@@ -224,11 +224,58 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   double get _offBarterCost => (_draft?.addedProductRequests ?? const <BarterProductRequest>[])
       .fold(0.0, (sum, request) => sum + (request.total ?? 0));
 
+  /// A TAXA DO SEGURO desta permuta — a praça do produtor na base, quando o
+  /// Barter vigente leva seguro.
+  ///
+  /// `null` em três casos diferentes, e a tela os trata como um só: o Barter
+  /// não leva seguro, não há produtor escolhido ainda, ou a praça dele não está
+  /// na base. Quem separa o terceiro é [_insuranceMissing] — é o único que vai
+  /// RECUSAR o registro, e o consultor precisa saber disso antes de montar a
+  /// permuta inteira.
+  InsuranceRateModel? get _insuranceRate {
+    final version = _version;
+    final producer = _producer;
+    if (version == null || !version.insuranceRequired || producer == null) return null;
+    return AppData.insuranceRateFor(producer.city);
+  }
+
+  /// O Barter leva seguro e a praça do produtor NÃO está na base.
+  ///
+  /// É a recusa que o servidor vai dar no registro, antecipada para a tela: sem
+  /// isto, o consultor monta a permuta inteira com o produtor ao lado e só
+  /// descobre o problema ao salvar.
+  bool get _insuranceMissing {
+    final version = _version;
+    final producer = _producer;
+    return version != null &&
+        version.insuranceRequired &&
+        producer != null &&
+        AppData.insuranceRateFor(producer.city) == null;
+  }
+
+  /// O CUSTO DO SEGURO na moeda da lente — área cultivável × taxa da praça.
+  ///
+  /// A mesma conta do servidor (`insuranceCostFor`), e na mesma lente do resto
+  /// da tela: o consultor lê tudo em sacas, e a retaguarda em R$. Zero quando
+  /// não há seguro a cobrar.
+  double get _insuranceCost {
+    final rate = _insuranceRate;
+    final producer = _producer;
+    if (rate == null || producer == null) return 0;
+    return rate.showsCurrency ? rate.costFor(producer.areaHa) : rate.sacksFor(producer.areaHa);
+  }
+
   /// Sacas do grão da safra necessárias para cobrir o custo dos insumos.
   /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
+  ///
+  /// O SEGURO entra aqui, e só aqui, pelo mesmo caminho do item de fora do
+  /// Barter: ele é custo que a empresa adianta, as sacas o pagam, e as réguas
+  /// das pastas não o enxergam — ver `pricedItemsFor`, na API.
   double get _sacksNeeded {
     final version = _version;
-    return version == null ? 0 : sacksToCover(_inputCost + _offBarterCost, version.costPerSack);
+    return version == null
+        ? 0
+        : sacksToCover(_inputCost + _offBarterCost + _insuranceCost, version.costPerSack);
   }
 
   /// Quantidade mínima obrigatória de um insumo para o produtor atual:
@@ -1484,6 +1531,53 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // O SEGURO da praça do produtor, dito ANTES do total: ele muda o
+            // número que o consultor vai falar em voz alta, e o produtor vai
+            // perguntar de onde saiu.
+            //
+            // A PRAÇA SEM TAXA aparece como aviso, e não como silêncio: é a
+            // recusa que o servidor vai dar no registro, antecipada para agora
+            // — quando ainda dá tempo de alguém cadastrar o município.
+            if (_insuranceMissing) ...[
+              Row(
+                children: [
+                  Icon(Icons.shield_outlined, size: 14, color: AppColors.pending),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Este Barter leva seguro e ${producer.city} não tem valor por hectare '
+                      'cadastrado: o registro será recusado.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.pending,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+            ] else if (_insuranceCost > 0) ...[
+              Row(
+                children: [
+                  Icon(Icons.shield_outlined, size: 14, color: AppColors.atManager),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Seguro de ${producer.city}: ${formatQty(producer.areaHa)} ha • '
+                      '${version.showsCurrency ? formatCurrency(_insuranceCost) : '${formatSacks(_insuranceCost)} ${version.grainName.toLowerCase()}'}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textMedium,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+            ],
             if (_unmetClasses.isNotEmpty) ...[
               Row(
                 children: [

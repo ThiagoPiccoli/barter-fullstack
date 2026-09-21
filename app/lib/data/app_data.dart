@@ -11,6 +11,7 @@ import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
 import '../repositories/committee_repository.dart';
 import '../repositories/creditor_repository.dart';
+import '../repositories/insurance_repository.dart';
 import '../repositories/staff_repository.dart';
 import '../repositories/unit_repository.dart';
 
@@ -31,6 +32,10 @@ class AppData {
   static final BarterRepository _barters = BarterRepository();
   static final BarterProgramRepository _program = BarterProgramRepository();
   static final UnitRepository _units = UnitRepository();
+
+  /// A BASE DE SEGUROS por município — quanto custa segurar um hectare em cada
+  /// praça. O admin a mantém; todo mundo a lê.
+  static final InsuranceRepository _insurance = InsuranceRepository();
   static const StaffRepository _managers = StaffRepository('/managers');
 
   /// FATURISTAS — quem fatura o que o comitê aprovou e anexa as notas. Rota de
@@ -92,6 +97,14 @@ class AppData {
   /// consultor escolhe entre elas ao registrar, o gerente descobre quais são as
   /// dele e o admin as cadastra.
   static List<UnitModel> units = [];
+
+  /// AS PRAÇAS da base de seguros, em ordem alfabética.
+  ///
+  /// Ela é carregada para todo mundo, e não só para o admin, por causa do
+  /// CONSULTOR: quando o Barter vigente leva seguro, a prévia da permuta dele
+  /// precisa mostrar quanto a apólice vai custar ao cliente ANTES de ele fechar
+  /// o negócio. Quem não vê R$ recebe a taxa em sacas por hectare.
+  static List<InsuranceRateModel> insuranceRates = [];
 
   static List<ProductModel> grains = [];
   static List<ProductModel> inputs = [];
@@ -246,6 +259,7 @@ class AppData {
     classes = _catalog.parseClasses(package.classes);
     producers = _producers.parse(package.producers);
     units = _units.parse(package.units);
+    insuranceRates = _insurance.parse(package.insuranceRates);
     currentVersion = _program.parseVersion(package.version);
     lastSyncAt = package.savedAt;
   }
@@ -284,6 +298,7 @@ class AppData {
     committee = null;
     producers = [];
     units = [];
+    insuranceRates = [];
     grains = [];
     inputs = [];
     classes = [];
@@ -313,6 +328,9 @@ class AppData {
       if (isAdmin) refreshEmitters(),
       if (isAdmin) refreshCommittee(),
       if (isAdmin) refreshSeasons(),
+      // A BASE DE SEGUROS vai para todo mundo: ela é leitura aberta, e é da
+      // prévia do consultor que ela participa. Ver `insuranceRates`.
+      refreshInsuranceRates(),
     ]);
   }
 
@@ -335,6 +353,10 @@ class AppData {
       _producers.listRaw(),
       _units.listRaw(),
       _program.currentRaw(),
+      // A BASE DE SEGUROS viaja com as outras cinco, e pelo mesmo motivo que
+      // elas: a prévia da permuta depende dela quando o Barter leva seguro, e
+      // quem monta permuta faz isso na fazenda, sem sinal.
+      _insurance.listRaw(),
     ]);
 
     final productRows = results[0] as List<Map<String, dynamic>>;
@@ -342,6 +364,7 @@ class AppData {
     final producerRows = results[2] as List<Map<String, dynamic>>;
     final unitRows = results[3] as List<Map<String, dynamic>>;
     final versionRow = results[4] as Map<String, dynamic>?;
+    final rateRows = results[5] as List<Map<String, dynamic>>;
 
     final package = OfflinePackage(
       savedAt: DateTime.now(),
@@ -351,6 +374,7 @@ class AppData {
       classes: classRows,
       producers: producerRows,
       units: unitRows,
+      insuranceRates: rateRows,
     );
 
     _applyPackage(package);
@@ -366,6 +390,101 @@ class AppData {
   static Future<void> refreshUnits() async {
     units = await _units.list();
   }
+
+  /// A BASE DE SEGUROS por município.
+  ///
+  /// Falhar aqui NÃO pode derrubar o login nem o refresh: o seguro é opcional, e
+  /// um Barter sem ele não depende desta lista para nada. Sem a base, a tela do
+  /// consultor deixa de mostrar a prévia do custo — e quem cobra a praça que
+  /// falta continua sendo o servidor, no registro, com a frase que nomeia o
+  /// município.
+  static Future<void> refreshInsuranceRates() async {
+    try {
+      insuranceRates = await _insurance.list();
+    } on ApiException {
+      // Mantém o que já estava em memória: uma lista zerada por falha de rede
+      // faria a tela afirmar que não há praça cadastrada nenhuma.
+    }
+  }
+
+  /// A TAXA da praça deste produtor, ou `null` quando ela não está na base.
+  ///
+  /// A comparação é a MESMA do servidor (`sameCity`), e ela tem duas partes. A
+  /// primeira é a forma canônica — sem acento, sem caixa, sem espaço em volta
+  /// da barra: o cadastro do produtor tem "Maringá/PR" e a base pode ter
+  /// "maringa / pr", escritos por duas pessoas diferentes.
+  ///
+  /// A segunda é a UF, e é o caso NORMAL: a planilha da seguradora é toda de um
+  /// estado só e traz "TUPANCIRETÃ", enquanto o cadastro do produtor traz
+  /// "Tupanciretã/RS". Quem não declara o estado não contradiz quem declara —
+  /// mas dois estados DIFERENTES separam de verdade ("Bom Jesus/RS" não é "Bom
+  /// Jesus/SC"), e duas praças casando ao mesmo tempo é ambiguidade: devolve
+  /// `null`, como o servidor, em vez de escolher uma delas no palpite.
+  static InsuranceRateModel? insuranceRateFor(String city) {
+    final key = _cityKey(city);
+    if (key.isEmpty) return null;
+
+    final matches = insuranceRates.where((rate) => _sameCity(rate.city, city)).toList();
+    if (matches.length == 1) return matches.single;
+    // Empate: a praça escrita exatamente igual vence — é o que acontece quando
+    // a base tem "Bom Jesus/RS" e "Bom Jesus/SC" e o produtor disse qual é.
+    for (final rate in matches) {
+      if (_cityKey(rate.city) == key) return rate;
+    }
+    return null;
+  }
+
+  /// Estes dois textos falam do mesmo município? Ver `sameCity` na API.
+  static bool _sameCity(String a, String b) {
+    final nameA = _cityKey(a).split('/').first.trim();
+    final nameB = _cityKey(b).split('/').first.trim();
+    if (nameA != nameB) return false;
+    final ufA = _uf(a);
+    final ufB = _uf(b);
+    return ufA.isEmpty || ufB.isEmpty || ufA == ufB;
+  }
+
+  /// A UF, quando ela foi escrita. Vazio quando o município veio sozinho.
+  static String _uf(String city) {
+    final parts = _cityKey(city).split('/');
+    return parts.length > 1 ? parts.last.trim() : '';
+  }
+
+  /// A forma COMPARÁVEL de um município — a mesma regra do `cityKeyOf` da API:
+  /// sem acento, sem caixa, sem espaço repetido e sem espaço em volta da barra.
+  ///
+  /// O acento cai aqui, e não só lá, porque as duas pontas precisam concordar:
+  /// o dia em que a base tiver "maringa/pr" e o produtor "Maringá/PR", o
+  /// servidor encontra a praça e a prévia da tela não encontraria — e o
+  /// consultor veria "sem seguro cadastrado" numa permuta que vai nascer com a
+  /// linha dele.
+  static String _cityKey(String city) {
+    final lower = city.toLowerCase();
+    final buffer = StringBuffer();
+    for (final rune in lower.runes) {
+      final char = String.fromCharCode(rune);
+      buffer.write(_accents[char] ?? char);
+    }
+    return buffer
+        .toString()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .replaceAll(RegExp(r'\s*/\s*'), '/');
+  }
+
+  /// As letras acentuadas do português, reduzidas à forma sem acento.
+  ///
+  /// Um mapa, e não `unorm`: são estas e nada mais — o que entra aqui é nome de
+  /// município brasileiro, e uma dependência a mais para dobrar quinze letras
+  /// seria um pacote inteiro no aparelho de quem vai a campo.
+  static const Map<String, String> _accents = {
+    'á': 'a', 'à': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a',
+    'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+    'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
+    'ó': 'o', 'ò': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+    'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
+    'ç': 'c', 'ñ': 'n',
+  };
 
   /// A versão vigente do Barter. Todo papel carrega — o consultor precisa dela
   /// para montar a permuta, e a retaguarda para saber o que está aberto.
@@ -783,6 +902,57 @@ class AppData {
     await refreshBarters();
   }
 
+  /* ── Base de seguros (admin mantém; todo mundo lê) ──────────────────── */
+
+  /// Cadastra ou corrige uma praça. A lista em memória é reordenada por
+  /// município, que é a ordem em que a tela e o servidor a entregam.
+  static Future<InsuranceRateModel> saveInsuranceRate({
+    String? id,
+    required String city,
+    required double valuePerHa,
+    String? note,
+  }) async {
+    final saved = id == null
+        ? await _insurance.create(city: city, valuePerHa: valuePerHa, note: note)
+        : await _insurance.update(id, city: city, valuePerHa: valuePerHa, note: note);
+    final index = insuranceRates.indexWhere((rate) => rate.id == saved.id);
+    if (index == -1) {
+      insuranceRates.add(saved);
+    } else {
+      insuranceRates[index] = saved;
+    }
+    insuranceRates.sort((a, b) => a.city.compareTo(b.city));
+    return saved;
+  }
+
+  /// Excluir a praça NÃO mexe nas permutas dela: a taxa está congelada em cada
+  /// uma. O que some é a possibilidade de registrar permuta nova naquele
+  /// município enquanto o Barter levar seguro — que é o que "a seguradora não
+  /// cobre mais esta praça" significa.
+  static Future<void> deleteInsuranceRate(String id) async {
+    await _insurance.delete(id);
+    insuranceRates.removeWhere((rate) => rate.id == id);
+  }
+
+  /// A CARGA DA PLANILHA. Devolve o relatório da leitura — a base inteira mais
+  /// a coluna de onde o valor saiu, que é o que a tela mostra de volta ao
+  /// admin.
+  static Future<InsuranceImportResult> importInsuranceRates({
+    required String filename,
+    required List<int> bytes,
+    bool replace = false,
+    String? column,
+  }) async {
+    final result = await _insurance.importSheet(
+      filename: filename,
+      bytes: bytes,
+      replace: replace,
+      column: column,
+    );
+    insuranceRates = result.rates;
+    return result;
+  }
+
   /// PARECER TÉCNICO do gerente. A permuta volta do servidor já em revisão —
   /// o cache guarda a resposta dele, nunca uma versão montada aqui.
   static Future<BarterModel> giveOpinion(String code, String note) async {
@@ -807,6 +977,7 @@ class AppData {
     double? targetSacks,
     int? targetBarters,
     bool closeOnGoal = false,
+    bool insuranceRequired = false,
     String? note,
     bool carryOver = false,
   }) async {
@@ -821,6 +992,7 @@ class AppData {
       targetSacks: targetSacks,
       targetBarters: targetBarters,
       closeOnGoal: closeOnGoal,
+      insuranceRequired: insuranceRequired,
       note: note,
       carryOver: carryOver,
     );
@@ -882,6 +1054,17 @@ class AppData {
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
+  /// LIGA ou DESLIGA o seguro agrícola do Barter vigente.
+  ///
+  /// Vale para as permutas que ainda vão nascer: as registradas têm a taxa
+  /// congelada e não são tocadas. A versão vigente em memória é atualizada com
+  /// o que o servidor devolveu.
+  static Future<BarterVersionModel> setVersionInsurance(String code, bool enabled) async {
+    final updated = await _program.setInsurance(code, enabled);
+    if (currentVersion?.code == updated.code) currentVersion = updated;
+    return updated;
+  }
+
   /// ACERTA o vencimento da CPR de uma safra já aberta — a data de entrega de
   /// todas as cédulas dela que ainda não foram emitidas.
   static Future<void> setSeasonCprDueDate(String code, DateTime dueDate) async {
@@ -891,12 +1074,58 @@ class AppData {
 
   /// A DECISÃO DO COMITÊ: aprovar, aprovar com RESSALVA ou negar. O cache
   /// guarda a resposta do servidor, nunca uma versão montada aqui.
+  ///
+  /// AS EXIGÊNCIAS (avalista, garantia real, seguro) andam junto com a decisão:
+  /// elas dizem O QUÊ o comitê exigiu, e o texto continua dizendo QUAL — qual
+  /// matrícula, qual valor segurado, quem se espera como avalista.
   static Future<BarterModel> reviewBarter(
     String code,
     BarterStatus status,
-    String note,
-  ) async {
-    final updated = await _barters.review(code, status, note);
+    String note, {
+    bool requiresGuarantor = false,
+    bool requiresCollateral = false,
+    bool requiresInsurance = false,
+  }) async {
+    final updated = await _barters.review(
+      code,
+      status,
+      note,
+      requiresGuarantor: requiresGuarantor,
+      requiresCollateral: requiresCollateral,
+      requiresInsurance: requiresInsurance,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /* ── O DOSSIÊ DO COMITÊ ─────────────────────────────────────────────── */
+
+  /// ANEXA uma peça da análise de crédito à permuta (comitê).
+  ///
+  /// O cache guarda a permuta que o servidor devolveu — ela já volta com o
+  /// dossiê inteiro, e remontá-la aqui abriria a chance de a tela mostrar uma
+  /// lista que o servidor não tem.
+  static Future<BarterModel> attachCreditFile(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+    String kind = 'other',
+    String note = '',
+  }) async {
+    final updated = await _barters.attachCreditFile(
+      code,
+      filename: filename,
+      bytes: bytes,
+      kind: kind,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// REMOVE uma peça do dossiê. A janela é a mesma de anexar: até a decisão.
+  static Future<BarterModel> removeCreditFile(String code, String creditFileId) async {
+    final updated = await _barters.removeCreditFile(code, creditFileId);
     _replaceBarter(updated);
     return updated;
   }
@@ -1140,6 +1369,16 @@ class AppData {
   static Future<({List<int> bytes, String filename, String contentType})>
       downloadBarterInvoiceFile(String code, String invoiceId) =>
           _barters.download(_barters.invoiceFilePath(code, invoiceId));
+
+  /// BAIXA uma peça do DOSSIÊ do comitê (Serasa, endividamento interno).
+  ///
+  /// Só o comitê e o admin chegam aqui: o servidor recusa os demais com 403,
+  /// e a tela nem oferece o botão — ver `Capability.bartersCreditRead`.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadCreditFile(
+    String code,
+    String creditFileId,
+  ) =>
+      _barters.download(_barters.creditFilePath(code, creditFileId));
 
   /// BAIXA o arquivo do SCR anexado à cédula.
   static Future<({List<int> bytes, String filename, String contentType})> downloadBarterScr(

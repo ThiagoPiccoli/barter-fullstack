@@ -27,6 +27,7 @@ import { CAPABILITY } from '../common/policy';
 import { toBarterJson, toBarterVersionJson, toCprJson } from '../common/serializers';
 import { BartersService, MAX_ATTACHMENT_BYTES, type StoredFile } from './barters.service';
 import {
+  AttachCreditFileDto,
   AttachInvoiceDto,
   BarterOpinionDto,
   ChangeBarterPricesDto,
@@ -418,6 +419,69 @@ export class BartersController {
     sendFile(response, await this.bartersService.invoiceFile(viewer, code, id));
   }
 
+  /* ── O DOSSIÊ DO COMITÊ ───────────────────────────────────────────────── */
+
+  /**
+   * ANEXA UMA PEÇA DA ANÁLISE DE CRÉDITO — a consulta ao Serasa, o extrato do
+   * endividamento do produtor dentro da cooperativa.
+   *
+   * `multipart/form-data` e `POST` numa COLEÇÃO, pelos mesmos motivos da nota
+   * fiscal: o anexo não cabe no JSON, e são várias — a reunião junta o que
+   * precisar.
+   *
+   * A capacidade é do COMITÊ, e não do admin que lê o dossiê: quem põe prova
+   * dentro de uma decisão é quem decide. Ver `bartersCreditAttach`.
+   */
+  @Post(':code/credit-files')
+  @RequireCapability(CAPABILITY.bartersCreditAttach)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  @HttpCode(200)
+  async attachCreditFile(
+    @CurrentUser() committee: User,
+    @Param('code') code: string,
+    @Body() dto: AttachCreditFileDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o arquivo do documento (campo "file")');
+    }
+    return toBarterJson(
+      await this.bartersService.attachCreditFile(committee, code, dto, file),
+      committee,
+    );
+  }
+
+  /** Remove uma peça do dossiê — a que subiu trocada, ou a substituída. */
+  @Delete(':code/credit-files/:id')
+  @RequireCapability(CAPABILITY.bartersCreditAttach)
+  async removeCreditFile(
+    @CurrentUser() committee: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return toBarterJson(await this.bartersService.removeCreditFile(committee, code, id), committee);
+  }
+
+  /**
+   * O ARQUIVO de uma peça do dossiê.
+   *
+   * É a ÚNICA leitura de anexo deste controller que não é `@AnyRole`: nota
+   * fiscal, cédula assinada e comprovante de registro vão para quem alcança a
+   * permuta, e estes não. Consulta de crédito e endividamento são a vida
+   * financeira do produtor, colhida para uma decisão — ver `bartersCreditRead`,
+   * que o comitê e o admin têm, e mais ninguém.
+   */
+  @Get(':code/credit-files/:id/file')
+  @RequireCapability(CAPABILITY.bartersCreditRead)
+  async creditFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.creditFile(viewer, code, id));
+  }
+
   /**
    * A CÉDULA DE PRODUTO RURAL desta permuta — o rascunho, o que a permuta já
    * responde, a credora configurada e o que ainda falta.
@@ -487,9 +551,17 @@ export class BartersController {
     return toCprJson(await this.bartersService.saveScr(actor, code, file));
   }
 
-  /** O arquivo do SCR. Mesma porta do anexo da nota — ver `invoiceFile`. */
+  /**
+   * O arquivo do SCR. Mesma porta do anexo da nota — ver `invoiceFile`.
+   *
+   * O COMITÊ entra por aqui sem ter a cédula, e essa é a segunda capacidade: o
+   * SCR é o retrato do endividamento do produtor no Banco Central, e é uma das
+   * peças que a reunião lê para decidir. `bartersCprRead` traria junto o
+   * formulário do título, que não é assunto de quem decide o negócio — daí ele
+   * chegar por `bartersCreditRead`, a mesma capacidade do dossiê.
+   */
   @Get(':code/cpr/scr')
-  @RequireCapability(CAPABILITY.bartersCprRead)
+  @RequireAnyCapability(CAPABILITY.bartersCprRead, CAPABILITY.bartersCreditRead)
   async scrFile(
     @CurrentUser() viewer: User,
     @Param('code') code: string,

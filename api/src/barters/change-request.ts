@@ -293,6 +293,14 @@ export const CLEARED_BY_CHANGE = {
   reviewedBy: null,
   reviewedById: null,
   reviewedAt: null,
+  // AS EXIGÊNCIAS DO COMITÊ caem junto com a decisão que as criou, e pelo mesmo
+  // motivo dela: elas foram exigidas de uma permuta que está prestes a mudar.
+  // Mantidas, a tela do consultor mostraria "exige avalista" num rascunho que
+  // ninguém decidiu — e o comitê seguinte poderia decidir sem exigir nada,
+  // deixando na tela uma exigência de que ele nunca soube.
+  requiresGuarantor: false,
+  requiresCollateral: false,
+  requiresInsurance: false,
 } as const;
 
 /**

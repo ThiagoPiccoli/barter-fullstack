@@ -72,10 +72,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 230 testes de unidade (matemática, máquina de estados, desvio e pedido de fora do Barter, senha, sessão, políticas, cédula)
-cd api && npm run test:e2e  # 324 testes funcionais da API (auth, escopo, fluxo, notas do faturamento, cédula e emissão, credora, contrato de erro)
+cd api && npm test          # 281 testes de unidade (matemática, máquina de estados, desvio e pedido de fora do Barter, seguro por município, senha, sessão, políticas, cédula)
+cd api && npm run test:e2e  # 377 testes funcionais da API (auth, escopo, fluxo, seguro do lançamento, dossiê do comitê, notas do faturamento, cédula e emissão, credora, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura
-cd app && flutter test      # 234 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
+cd app && flutter test      # 266 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -159,6 +159,32 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   catálogo (o catálogo é a lista do fornecedor), paga em sacas como qualquer
   insumo retirado e **não entra em régua nenhuma**: sem classe, ele engordaria o
   denominador de todas as pastas e derrubaria a permuta que veio ajudar.
+- **O seguro é opcional, é do LANÇAMENTO e é precificado pelo LUGAR**: o admin
+  diz, ao publicar o Barter, se aquela safra leva seguro agrícola (e liga ou
+  desliga depois, sem republicar a tabela). Quanto custa não é do cliente, é da
+  praça — o que a seguradora cota é o risco do lugar —, e por isso existe uma
+  **base por município** (R$/ha), mantida linha a linha ou pela planilha da
+  seguradora — que vem com três valores por hectare (sem subvenção, com
+  subvenção e o reajustado para a safra) e é lida pelo último, o que a empresa
+  de fato adianta; a carga responde de qual coluna leu. O município casa com o
+  cadastro do produtor mesmo sem a UF ("TUPANCIRETÃ" é "Tupanciretã/RS"), que é
+  como a seguradora manda quando a planilha é de um estado só. Cada permuta pega a **área cultivável do produtor × a taxa do
+  município dele**, e o resultado entra no custo e é pago em sacas, como os
+  insumos: o seguro é dinheiro que a empresa adianta. A taxa é **congelada** no
+  registro (recotar a praça não reescreve o que foi combinado), a linha do
+  seguro é marcada no comprovante (e não entra nas réguas das pastas), e o
+  município sem taxa **recusa o registro** nomeando a praça — a recusa acontece
+  onde ela é grátis, e não com o insumo já na fazenda.
+- **O comitê decide com o dossiê na mão, e a exigência deixou de ser prosa**: a
+  consulta ao Serasa e o extrato do endividamento do produtor dentro da
+  cooperativa agora ficam **anexados à permuta**, em vez de circularem por
+  e-mail entre quem foi à reunião. É a única leitura de anexo **restrita** do
+  sistema (comitê e admin, e mais ninguém: o consultor leva ao produtor a
+  decisão, não o dossiê), e a janela de mexer nela fecha na decisão — depois
+  dela, o que fundamentou uma aprovação é prova. O comitê também passou a abrir
+  o **SCR** sem receber a cédula junto. E o que a reunião exige — **avalista,
+  garantia real, seguro** — virou três campos ao lado do texto da decisão: as
+  caixas dizem O QUÊ, e o texto continua dizendo QUAL.
 - **A permuta mostra o caminho inteiro, e não só o já andado**: o detalhe traz
   um `steps` com as quatro etapas sempre — a cumprida com quem a assinou e o que
   escreveu, a de agora com o que ela espera ("aguarda o parecer do gerente

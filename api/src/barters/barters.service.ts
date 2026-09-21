@@ -8,6 +8,7 @@ import {
 import type {
   Barter,
   BarterCpr,
+  BarterCreditFile,
   BarterInvoice,
   Creditor,
   BarterEvent,
@@ -41,9 +42,11 @@ import {
   lineFrom,
   outcomeLabelOf,
   refusalFor,
+  requirementsOf,
   stageOf,
   type BarterAction,
   type BarterStatus,
+  type ReviewRequirement,
 } from './barter-workflow';
 import { taxRateOf, type TaxRegime } from './tax-regime';
 import {
@@ -79,14 +82,29 @@ import {
   type CprPledge,
   type CprPledgeReading,
 } from './cpr';
+import {
+  CREDIT_FILE_KIND,
+  CREDIT_FILE_LABELS,
+  creditFileRefusal,
+  type CreditFileKind,
+} from './credit-file';
 import { creditorGaps } from '../common/creditor';
 import { Paginated, windowOf } from '../common/pagination';
 import { CAPABILITY, can } from '../common/policy';
 import { ROLE } from '../common/roles';
 import { CreditorService } from '../creditor/creditor.service';
+import { InsuranceService } from '../insurance/insurance.service';
+import {
+  INSURANCE_UNIT,
+  MISSING_CITY_REFUSAL,
+  insuranceCostFor,
+  insuranceItemNameOf,
+  missingRateRefusal,
+} from '../insurance/insurance-rate';
 import { SeasonsService, type VersionWithPrices } from '../seasons/seasons.service';
 import { countsAsRealized } from '../seasons/version-progress';
 import {
+  AttachCreditFileDto,
   AttachInvoiceDto,
   BarterInputDto,
   BarterOpinionDto,
@@ -130,6 +148,9 @@ export type FileMeta = Prisma.BarterFileGetPayload<{ select: typeof FILE_META }>
 
 /** Uma nota fiscal com o anexo dela (sem o conteúdo). */
 export type InvoiceWithFile = BarterInvoice & { file: FileMeta | null };
+
+/** Uma peça do dossiê do comitê com o anexo dela (sem o conteúdo). */
+export type CreditFileWithFile = BarterCreditFile & { file: FileMeta | null };
 
 /**
  * QUANTO pode pesar um anexo. Dez megabytes cobre com folga um DANFE em PDF, o
@@ -232,8 +253,19 @@ type BarterWithItems = Barter & {
   invoices: InvoiceWithFile[];
 };
 
-/** A permuta com a LINHA DO TEMPO junto — a forma do detalhe. */
-type BarterDetail = BarterWithItems & { events: BarterEvent[] };
+/**
+ * A permuta com a LINHA DO TEMPO e o DOSSIÊ junto — a forma do detalhe.
+ *
+ * O dossiê do comitê entra aqui, e não no `include` da listagem, pelo mesmo
+ * motivo dos eventos: ele é trajetória da análise, não estado da permuta — e
+ * carregar os anexos de cinquenta permutas para desenhar cinquenta linhas de
+ * tabela é trabalho jogado fora. Quem o serializa só o entrega a quem pode
+ * abri-lo (ver `bartersCreditRead`).
+ */
+type BarterDetail = BarterWithItems & {
+  events: BarterEvent[];
+  creditFiles: CreditFileWithFile[];
+};
 
 /**
  * O `include` da LISTAGEM: os itens e os pedidos de fora do Barter.
@@ -269,6 +301,12 @@ const BARTER_INCLUDE = {
 const BARTER_DETAIL_INCLUDE = {
   ...BARTER_INCLUDE,
   events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] },
+  // O DOSSIÊ DO COMITÊ, sem os bytes — pelo mesmo motivo das notas: a tela lista
+  // os documentos, e quem quer o arquivo pede o arquivo (ver `creditFile`).
+  creditFiles: {
+    orderBy: { id: 'asc' },
+    include: { file: { select: FILE_META } },
+  },
 } as const satisfies Prisma.BarterInclude;
 
 /** A cédula com as lavouras, os donos delas e os anexos. */
@@ -412,6 +450,90 @@ function offBarterItemOf(
 }
 
 /**
+ * O TEXTO DA DECISÃO com as exigências por escrito no fim.
+ *
+ * Elas entram no EVENTO — não nas colunas, que já as guardam — porque a linha
+ * do tempo é o que sobrevive a uma alteração: o aceite de um pedido devolve a
+ * permuta a rascunho e apaga a decisão atual, exigências inclusive (ver
+ * `CLEARED_BY_CHANGE`). Sem isto, "o que o comitê exigiu da primeira vez?"
+ * deixaria de ter resposta assim que a permuta fosse decidida de novo.
+ *
+ * Por extenso, e não como três letras: quem lê a linha do tempo é gente, e o
+ * texto precisa continuar legível daqui a dois anos, num app que talvez já não
+ * desenhe caixa nenhuma.
+ */
+function noteWithRequirements(
+  note: string | null,
+  requirements: Partial<Record<ReviewRequirement, boolean>>,
+): string | null {
+  const required = requirementsOf(requirements);
+  if (required.length === 0) return note;
+
+  const line = `Exigências: ${required.join(', ')}.`;
+  return note ? `${note}\n${line}` : line;
+}
+
+/**
+ * A COTAÇÃO DO SEGURO desta permuta: a praça e a taxa dela.
+ *
+ * Tipo próprio, e não o registro do cadastro (`InsuranceRate`), porque o que a
+ * permuta usa é só isto — e porque a permuta CONGELA os dois valores. Passar o
+ * registro inteiro adiante convidaria alguém a ler dele, um dia, um campo que
+ * muda depois (o `updatedAt`, a observação do admin) dentro de uma conta que
+ * precisa ser a do dia do registro.
+ */
+interface InsuranceQuote {
+  city: string;
+  ratePerHa: number;
+}
+
+/**
+ * A COTAÇÃO CONGELADA numa permuta já registrada — `null` quando ela não tem
+ * seguro.
+ *
+ * É por aqui que a remontagem do rascunho recria a linha com a taxa do DIA DO
+ * REGISTRO (ver `replaceInputs`). A pergunta é feita à taxa, e não ao município:
+ * `insuranceCity` pode estar preenchido num registro cuja base foi corrigida
+ * depois, e é o número que paga a apólice.
+ */
+function insuranceOf(barter: Barter): InsuranceQuote | null {
+  return barter.insuranceRatePerHa > 0
+    ? { city: barter.insuranceCity, ratePerHa: barter.insuranceRatePerHa }
+    : null;
+}
+
+/**
+ * A LINHA DO SEGURO dentro da permuta.
+ *
+ * Em um lugar só porque ela nasce em DOIS momentos, como o item de fora do
+ * Barter: no registro e de novo a cada remontagem do rascunho
+ * (`replaceInputs`), que apaga os itens e recria a lista inteira.
+ *
+ * A CONTA FICA LEGÍVEL NA PRÓPRIA LINHA: `quantity` é a área cultivável (ha) e
+ * `unitValue` é a taxa do município. É o que permite ao produtor conferir o
+ * valor lendo o comprovante — 1.200 ha × R$ 85,00 —, em vez de receber um
+ * número fechado cuja origem está em outro lugar.
+ *
+ * `kind: 'input'` com `insurance: true`: ver o campo no schema. O seguro forma
+ * custo como tudo o mais que a empresa adianta, e é a marca — não o `kind` —
+ * que diz que esta linha não se separa em balcão nenhum.
+ */
+function insuranceItemOf(
+  quote: InsuranceQuote,
+  areaHa: number,
+): Prisma.BarterItemUncheckedCreateWithoutBarterInput {
+  return {
+    productId: null,
+    kind: 'input',
+    productName: insuranceItemNameOf(quote.city),
+    unit: INSURANCE_UNIT,
+    quantity: areaHa,
+    unitValue: quote.ratePerHa,
+    insurance: true,
+  };
+}
+
+/**
  * Um valor em R$ e uma quantidade como a LINHA DO TEMPO os escreve.
  *
  * Em pt-BR, e não em `toFixed`, porque estes dois textos são lidos pelo
@@ -442,6 +564,7 @@ export class BartersService {
     private readonly audit: AuditService,
     private readonly seasons: SeasonsService,
     private readonly creditor: CreditorService,
+    private readonly insurance: InsuranceService,
   ) {}
 
   /**
@@ -668,11 +791,17 @@ export class BartersService {
       throw new UnprocessableEntityException('Escolha uma unidade de retirada válida');
     }
 
+    // 3.5. O SEGURO, quando o Barter desta versão leva seguro: a taxa da praça
+    //      do produtor, cotada agora e congelada no registro. A recusa por praça
+    //      sem taxa acontece AQUI, pelo mesmo motivo da recusa por versão sem
+    //      produtividade — aqui ela é grátis.
+    const insurance = await this.insuranceFor(version, producer);
+
     // 4, 5 e 6 — a precificação e as travas — em um lugar só, porque a
     // ALTERAÇÃO de um rascunho passa exatamente pelas mesmas (ver
     // `replaceInputs`): mudar um insumo é refazer a permuta inteira contra as
     // mesmas regras, e duas cópias delas divergiriam no primeiro ajuste.
-    const items = await this.pricedItemsFor(version, producer, dto.inputs);
+    const items = await this.pricedItemsFor(version, producer, dto.inputs, [], insurance);
 
     // A FORMA de recolhimento: a do CADASTRO do produtor, que é onde a opção
     // formal dele mora (ver `Producer.taxRegime`). O corpo ainda pode dizer
@@ -707,6 +836,10 @@ export class BartersService {
       // anotou, sem que nada nela tivesse mudado. Mesmo argumento de `taxRate`.
       pledgeYield: version.estimatedYield,
       pledgeMarginPercent: (await this.creditor.get()).pledgeMarginPercent,
+      // O SEGURO congelado: a praça que o precificou e a taxa dela HOJE. Vazio
+      // e zero quando o Barter não leva seguro — ver `Barter.insuranceCity`.
+      insuranceCity: insurance?.city ?? '',
+      insuranceRatePerHa: insurance?.ratePerHa ?? 0,
       // Sem `managerId`: o destinatário é gravado no ENVIO, e o envio é o
       // encaminhamento (ver `forward`). Trocar o gerente do consultor entre o
       // registro e o encaminhamento vale para esta permuta; depois dele, não.
@@ -721,6 +854,50 @@ export class BartersService {
         create: [this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.draft)],
       },
     });
+  }
+
+  /**
+   * O SEGURO DESTA PERMUTA — a praça do produtor e a taxa dela, ou `null`
+   * quando o Barter não leva seguro.
+   *
+   * Quem decide se leva é o LANÇAMENTO (`BarterVersion.insuranceRequired`), e
+   * não o consultor nem o produtor: contratar seguro é decisão comercial da
+   * safra, e deixá-la permuta a permuta faria o mesmo Barter ser vendido de dois
+   * jeitos na mesma praça, no mesmo dia, conforme quem atendeu.
+   *
+   * AS DUAS RECUSAS são o ponto deste método, e elas acontecem no REGISTRO de
+   * propósito — o lugar mais barato para elas: a permuta ainda não existe,
+   * ninguém retirou nada, e quem resolve é o admin num campo de cadastro. A
+   * alternativa seria deixar a permuta nascer sem a linha do seguro, e aí o que
+   * se descobre semanas depois é uma permuta sem seguro dentro de uma safra que
+   * tem seguro — com o insumo já na fazenda.
+   *
+   * Elas dizem coisas DIFERENTES porque mandam fazer coisas diferentes: falta a
+   * praça na base de seguros, ou falta o município no cadastro do produtor. Ver
+   * `insurance-rate.ts`, onde as duas frases moram.
+   */
+  private async insuranceFor(
+    version: VersionWithPrices,
+    producer: { city: string | null; areaHa: number },
+  ): Promise<InsuranceQuote | null> {
+    if (!version.insuranceRequired) return null;
+
+    const city = producer.city?.trim() ?? '';
+    if (!city) {
+      throw new UnprocessableEntityException(MISSING_CITY_REFUSAL);
+    }
+
+    const rate = await this.insurance.rateFor(city);
+    if (!rate) {
+      throw new UnprocessableEntityException(missingRateRefusal(city));
+    }
+
+    // A PRAÇA GRAVADA é a do CADASTRO DA BASE, e não a do produtor: as duas são
+    // o mesmo lugar (é o que a chave canônica garante), e a da base é a grafia
+    // que o admin escolheu. É ela que sai na linha do comprovante, e ler
+    // "Seguro agrícola — maringa / pr" num documento seria expor ao produtor a
+    // digitação de outra pessoa.
+    return { city: rate.city, ratePerHa: rate.valuePerHa };
   }
 
   /**
@@ -746,12 +923,20 @@ export class BartersService {
    * classe, então nunca somariam no numerador de uma pasta; contá-los no
    * denominador faria um pedido atendido derrubar, na remontagem, uma permuta
    * que cumpria os mínimos antes dele.
+   *
+   * O SEGURO entra por `insurance`, e pela mesma porta separada e pelo mesmo
+   * motivo: ele soma custo (a empresa adianta a apólice, e as sacas a pagam) e
+   * não é insumo de classe nenhuma. Fosse ele contado no total que mede as
+   * pastas, ligar o seguro no lançamento derrubaria, de uma vez, todas as
+   * permutas da praça que cumpriam os mínimos no dia anterior — sem que nenhum
+   * consultor tivesse mudado um item sequer.
    */
   private async pricedItemsFor(
     version: VersionWithPrices,
     producer: { areaHa: number },
     inputs: BarterInputDto[],
     granted: GrantedRequest[] = [],
+    insurance: InsuranceQuote | null = null,
   ): Promise<Prisma.BarterItemUncheckedCreateWithoutBarterInput[]> {
     // Consolida quantidades por produto (payload pode repetir ids) e as leva à
     // precisão em que serão GRAVADAS. Arredondar aqui, e não só no app, é o que
@@ -833,9 +1018,14 @@ export class BartersService {
     }
 
     // 6. Converte o custo em sacas do grão da safra — o coração do escambo. O
-    //    que veio de fora do Barter entra AQUI, e só aqui: ele é custo retirado
-    //    como qualquer outro, e as sacas pagam a permuta inteira.
-    const sacks = sacksToCover(totalCost + offBarterCost(granted), version.grainPrice);
+    //    que veio de fora do Barter e o SEGURO entram AQUI, e só aqui: os dois
+    //    são custo adiantado como qualquer outro, e as sacas pagam a permuta
+    //    inteira.
+    const insuranceCost = insurance ? insuranceCostFor(producer.areaHa, insurance.ratePerHa) : 0;
+    const sacks = sacksToCover(
+      totalCost + offBarterCost(granted) + insuranceCost,
+      version.grainPrice,
+    );
 
     return [
       {
@@ -862,6 +1052,14 @@ export class BartersService {
         unitValue: valueOf.get(product.id)!.price,
       })),
       ...granted.map(offBarterItemOf),
+      // A LINHA DO SEGURO, quando há. Ela vem por último de propósito: é a
+      // última coisa que o produtor lê no comprovante antes do total, e é lá
+      // que ela pertence — não é insumo que ele retira do balcão.
+      //
+      // Ela só existe com custo maior que zero: área zerada não gera linha
+      // (ver `insuranceCostFor`), e uma linha de R$ 0,00 no comprovante seria o
+      // documento afirmando um seguro que não foi contratado.
+      ...(insurance && insuranceCost > 0 ? [insuranceItemOf(insurance, producer.areaHa)] : []),
     ];
   }
 
@@ -1201,6 +1399,16 @@ export class BartersService {
     const barter = await this.requireBarter(committee, code, BARTER_ACTION.review);
 
     const note = dto.note?.trim() ? dto.note.trim() : null;
+    // AS EXIGÊNCIAS só sobrevivem na APROVAÇÃO, e são zeradas na negativa: pedir
+    // avalista de uma permuta negada é pedir garantia para um negócio que não
+    // vai acontecer, e a exigência ficaria pendurada na tela de quem levou a
+    // negativa ao produtor. Não é conferência do DTO porque não é erro de quem
+    // chama — é o desfecho que decide o que a decisão carrega.
+    const requirements = {
+      requiresGuarantor: dto.status !== BARTER_STATUS.denied && dto.requiresGuarantor === true,
+      requiresCollateral: dto.status !== BARTER_STATUS.denied && dto.requiresCollateral === true,
+      requiresInsurance: dto.status !== BARTER_STATUS.denied && dto.requiresInsurance === true,
+    };
     const reviewed = await this.applyStep(
       barter,
       BARTER_ACTION.review,
@@ -1211,8 +1419,14 @@ export class BartersService {
         reviewedBy: committee.fullName,
         reviewedById: committee.id,
         reviewedAt: new Date(),
+        ...requirements,
       },
-      note,
+      // AS EXIGÊNCIAS ENTRAM NO EVENTO junto com o texto, e não só nas colunas
+      // da permuta: a linha do tempo é o que sobrevive a uma alteração (ver
+      // `CLEARED_BY_CHANGE`, que apaga a decisão atual quando a permuta volta a
+      // rascunho). Sem elas ali, "o que o comitê exigiu da primeira vez?" não
+      // teria onde ser respondido depois de a permuta ser decidida de novo.
+      noteWithRequirements(note, requirements),
     );
 
     // A permuta já guarda `reviewedBy`, e a linha do tempo dela já guarda o
@@ -1462,6 +1676,138 @@ export class BartersService {
       throw new NotFoundException('Esta nota não tem arquivo anexado');
     }
     return invoice.file;
+  }
+
+  /* ── O DOSSIÊ DO COMITÊ: o que fundamenta a decisão de crédito ────────── */
+
+  /**
+   * ANEXA UMA PEÇA DA ANÁLISE DE CRÉDITO — a consulta ao Serasa, o extrato do
+   * endividamento do produtor dentro da cooperativa, a certidão que a reunião
+   * pediu.
+   *
+   * Quem anexa é o COMITÊ (`barters.creditAttach`), e a janela vai até a decisão
+   * (ver `creditFileRefusal`): o dossiê existe para DECIDIR, e juntar uma
+   * consulta a uma permuta já aprovada seria acrescentar fundamento a uma
+   * decisão tomada — um documento que parece ter sido lido e não foi.
+   *
+   * O ARQUIVO E A LINHA nascem na MESMA transação, como na nota fiscal: um anexo
+   * sem dono é lixo, e uma peça sem documento é o e-mail de volta.
+   */
+  async attachCreditFile(
+    committee: User,
+    code: string,
+    dto: AttachCreditFileDto,
+    file: UploadedAttachment,
+  ): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(committee, code);
+
+    const refusal = creditFileRefusal(barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    const contentType = this.requireAttachable(file);
+    const kind = dto.kind ?? CREDIT_FILE_KIND.other;
+
+    await this.prisma.$transaction(async (tx) => {
+      const stored = await tx.barterFile.create({
+        data: this.fileDataOf(committee, file, contentType),
+      });
+      await tx.barterCreditFile.create({
+        data: {
+          barterId: barter.id,
+          kind,
+          note: dto.note?.trim() ? dto.note.trim() : null,
+          attachedBy: committee.fullName,
+          attachedById: committee.id,
+          fileId: stored.id,
+        },
+      });
+    });
+
+    await this.audit.record({
+      actor: committee,
+      action: AUDIT_ACTION.barterCreditFileAttached,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `${CREDIT_FILE_LABELS[kind]} anexada ao dossiê (${file.originalname})`,
+    });
+    return this.findFor(committee, code);
+  }
+
+  /**
+   * REMOVE uma peça do dossiê — a que subiu trocada, ou a que foi substituída
+   * por uma consulta mais nova.
+   *
+   * A MESMA JANELA de anexar, e é o ponto: o que fundamentou uma decisão já
+   * tomada não se apaga. Enquanto a permuta espera decisão, o dossiê é rascunho
+   * de trabalho da reunião; depois dela, é prova — e a trilha guarda as duas
+   * pontas justamente porque é sobre uma decisão questionada que alguém vai
+   * procurar o documento que sumiu.
+   *
+   * O arquivo vai junto (`Cascade` do lado da peça, aplicado aqui na ordem que o
+   * domínio quer, como na nota).
+   */
+  async removeCreditFile(
+    committee: User,
+    code: string,
+    creditFileId: number,
+  ): Promise<BarterDetail> {
+    const barter = await this.visibleBarter(committee, code);
+
+    const refusal = creditFileRefusal(barter);
+    if (refusal) throw new UnprocessableEntityException(refusal);
+
+    const credit = await this.prisma.barterCreditFile.findFirst({
+      where: { id: creditFileId, barterId: barter.id },
+    });
+    if (!credit) {
+      throw new NotFoundException('Esta permuta não tem a peça que você quer remover');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.barterCreditFile.delete({ where: { id: credit.id } });
+      await tx.barterFile.delete({ where: { id: credit.fileId } });
+    });
+
+    await this.audit.record({
+      actor: committee,
+      action: AUDIT_ACTION.barterCreditFileRemoved,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `${CREDIT_FILE_LABELS[credit.kind as CreditFileKind] ?? credit.kind} removida do dossiê`,
+    });
+    return this.findFor(committee, code);
+  }
+
+  /**
+   * O ARQUIVO de uma peça do dossiê, com os bytes.
+   *
+   * DUAS PORTAS são conferidas aqui, e não uma: o ESCOPO da permuta (`findFor`,
+   * como em toda leitura) e a CAPACIDADE de ler o dossiê. A segunda é o que
+   * torna esta leitura diferente da do anexo da nota — quem alcança a permuta
+   * alcança os documentos dela, menos estes. Ver `bartersCreditRead`.
+   *
+   * A capacidade também é exigida na porta da rota; repeti-la aqui é a mesma
+   * escolha de `create` conferir o papel do consultor: uma invariante do
+   * domínio não pode depender de alguém ter lembrado de pôr o decorator.
+   */
+  async creditFile(viewer: User, code: string, creditFileId: number): Promise<StoredFile> {
+    if (!can(viewer, CAPABILITY.bartersCreditRead)) {
+      throw new ForbiddenException(
+        'O dossiê da análise de crédito é do comitê — ele não acompanha a permuta',
+      );
+    }
+
+    const barter = await this.findFor(viewer, code);
+    const credit = await this.prisma.barterCreditFile.findFirst({
+      where: { id: creditFileId, barterId: barter.id },
+      include: { file: true },
+    });
+    if (!credit?.file) {
+      throw new NotFoundException('Esta peça não tem arquivo anexado');
+    }
+    return credit.file;
   }
 
   /* ── O DESVIO: o pedido de alteração e o caminho de volta ─────────────── */
@@ -2078,11 +2424,18 @@ export class BartersService {
     // acabou de incluir, sem ninguém ter pedido isso.
     const granted = await this.grantedRequestsOf(barter.id);
 
+    // O SEGURO volta pela mesma razão dos itens de fora do Barter — ele não
+    // está na lista que o consultor manda, e sumiria na primeira correção de
+    // quantidade —, mas ele volta do lugar oposto: da PRÓPRIA PERMUTA, e não do
+    // cadastro. A taxa foi congelada no registro (ver `Barter.insuranceCity`), e
+    // relê-la da base faria uma correção de quantidade reprecificar o seguro
+    // pela cotação de hoje, num rascunho que o produtor já viu.
     const items = await this.pricedItemsFor(
       version,
       { areaHa: barter.producerAreaHa },
       dto.inputs,
       granted,
+      insuranceOf(barter),
     );
 
     // Os itens antigos SAEM e os novos entram, na mesma transação: a permuta é

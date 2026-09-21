@@ -97,6 +97,26 @@ class Capability {
   /// operação dele emitiu). O faturista NÃO a tem: o que ele produz é a nota.
   static const bartersCprRead = 'barters.cprRead';
 
+  /// LER o dossiê da ANÁLISE DE CRÉDITO da permuta — a consulta ao Serasa, o
+  /// endividamento do produtor dentro da cooperativa (comitê e admin).
+  ///
+  /// É a única leitura de anexo restrita do app: nota fiscal, cédula assinada e
+  /// comprovante de registro vão para quem alcança a permuta, e estas não. A
+  /// diferença é a natureza da peça — as primeiras são documentos da operação,
+  /// e estas são a vida financeira de um cliente, colhida para decidir crédito.
+  ///
+  /// É também por ela que o comitê abre o SCR sem receber a cédula junto.
+  static const bartersCreditRead = 'barters.creditRead';
+
+  /// ANEXAR (e remover) as peças do dossiê — só do COMITÊ, nem do admin, que lê.
+  ///
+  /// Quem põe prova dentro de uma decisão é quem decide; a leitura do admin
+  /// existe para auditar isso.
+  static const bartersCreditAttach = 'barters.creditAttach';
+
+  /// MANTER a base de seguros por município (admin).
+  static const insuranceManage = 'insurance.manage';
+
   /// Registrar permuta (consultor).
   static const bartersRegister = 'barters.register';
 
@@ -801,6 +821,18 @@ class BarterItem {
   /// número sem história. Só chega a quem vê R$, como [unitValue].
   final double? listValue;
 
+  /// Esta linha é o SEGURO AGRÍCOLA — não um insumo retirado.
+  ///
+  /// Ela chega como insumo (forma custo, é paga em sacas como todo o resto) e é
+  /// esta marca que a distingue: não há o que separar no balcão, e o que o
+  /// produtor está pagando ali é a apólice, não adubo. A conta fica legível na
+  /// própria linha — [quantity] é a área cultivável dele (ha) e [unitValue] é a
+  /// taxa do município.
+  ///
+  /// Como [offBarter], ela é sobre a PROCEDÊNCIA e por isso chega a todo mundo,
+  /// inclusive a quem não vê R$.
+  final bool insurance;
+
   const BarterItem({
     this.id = '',
     required this.productId,
@@ -812,6 +844,7 @@ class BarterItem {
     this.hasUnitValue = true,
     this.offBarter = false,
     this.listValue,
+    this.insurance = false,
   });
 
   factory BarterItem.fromJson(Map<String, dynamic> json) => BarterItem(
@@ -825,6 +858,7 @@ class BarterItem {
         hasUnitValue: json['unitValue'] != null,
         offBarter: json['offBarter'] == true,
         listValue: _asDoubleOrNull(json['listValue']),
+        insurance: json['insurance'] == true,
       );
 
   /// O valor deste item foi REESCRITO pelo admin — e [listValue] diz de quanto.
@@ -1040,6 +1074,44 @@ class BarterModel {
   final String? reviewNote;
   final String? reviewedBy;
 
+  /// AS EXIGÊNCIAS DO COMITÊ: avalista, garantia real e seguro.
+  ///
+  /// Elas viviam DENTRO de [reviewNote], em prosa — "com aval", "exigir aval do
+  /// cônjuge", "condicionada a garantia real" —, e isso bastava para quem lia a
+  /// permuta e não bastava para mais nada: não havia como listar o que estava
+  /// pendente de aval, e a exigência perdida no meio do parágrafo não era
+  /// esquecida por ninguém em particular.
+  ///
+  /// Elas NÃO substituem o texto: as caixas dizem O QUÊ, e só [reviewNote] diz
+  /// QUAL — qual matrícula, qual valor segurado, quem se espera como avalista.
+  ///
+  /// Chegam a todo mundo que enxerga a permuta, e não só a quem decidiu: são
+  /// trabalho para OUTRA pessoa — o consultor as leva ao produtor, o faturista
+  /// sabe que a retirada foi condicionada, o emissor sabe que aquele título
+  /// espera um avalista.
+  final bool requiresGuarantor;
+  final bool requiresCollateral;
+  final bool requiresInsurance;
+
+  /// O SEGURO AGRÍCOLA desta permuta: a praça que o precificou e a taxa (R$/ha)
+  /// congeladas no registro.
+  ///
+  /// [insuranceCity] vazio é permuta SEM seguro — ou porque o Barter dela não
+  /// leva, ou porque ela é anterior à regra. A taxa é R$, e por isso só chega a
+  /// quem vê valores; o consultor lê o seguro pela própria linha da permuta,
+  /// onde a quantidade é a área e o total já está dentro das sacas do grão.
+  final String insuranceCity;
+  final double? insuranceRatePerHa;
+
+  /// AS PEÇAS DA ANÁLISE DE CRÉDITO que o comitê juntou — a consulta ao Serasa,
+  /// o endividamento do produtor dentro da cooperativa.
+  ///
+  /// `null` (e não lista vazia) para quem não pode abri-las: só o comitê e o
+  /// admin as enxergam, e o campo SOME do JSON dos demais. A diferença importa
+  /// — vazio diria "o comitê não apurou nada", e quem lê concluiria que a
+  /// permuta foi decidida no escuro.
+  final List<BarterCreditFileModel>? creditFiles;
+
   /// O FATURAMENTO. Null enquanto ela não foi faturada, que é o que
   /// [isInvoiced] lê.
   final String? invoicedBy;
@@ -1159,6 +1231,12 @@ class BarterModel {
     this.sacksPerHa,
     this.reviewNote,
     this.reviewedBy,
+    this.requiresGuarantor = false,
+    this.requiresCollateral = false,
+    this.requiresInsurance = false,
+    this.insuranceCity = '',
+    this.insuranceRatePerHa,
+    this.creditFiles,
     this.invoicedBy,
     this.invoicedAt,
     this.invoiceNote,
@@ -1225,6 +1303,19 @@ class BarterModel {
       sacksPerHa: _asDoubleOrNull(json['sacksPerHa']),
       reviewNote: json['reviewNote'] as String?,
       reviewedBy: json['reviewedBy'] as String?,
+      requiresGuarantor: json['requiresGuarantor'] == true,
+      requiresCollateral: json['requiresCollateral'] == true,
+      requiresInsurance: json['requiresInsurance'] == true,
+      insuranceCity: (json['insuranceCity'] ?? '') as String,
+      insuranceRatePerHa: _asDoubleOrNull(json['insuranceRatePerHa']),
+      // `null` quando o campo NÃO VEIO (quem não pode ler o dossiê), e lista
+      // quando veio — inclusive vazia, que aí significa "não há peça nenhuma".
+      creditFiles: json['creditFiles'] == null
+          ? null
+          : (json['creditFiles'] as List)
+              .cast<Map<String, dynamic>>()
+              .map(BarterCreditFileModel.fromJson)
+              .toList(),
       invoicedBy: json['invoicedBy'] as String?,
       invoicedAt: _asDateOrNull(json['invoicedAt']),
       invoiceNote: json['invoiceNote'] as String?,
@@ -1426,6 +1517,30 @@ class BarterModel {
   /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote].
   bool get hasConditions => status == BarterStatus.approvedWithConditions;
 
+  /// AS EXIGÊNCIAS DO COMITÊ, por extenso e na ordem em que a reunião as pensa:
+  /// quem se obriga junto, o que garante, e o que protege a lavoura.
+  ///
+  /// Lista vazia é "o comitê não exigiu nada" — e vale tanto para a aprovação
+  /// limpa quanto para a permuta que ainda não foi decidida.
+  List<String> get requirements => [
+        if (requiresGuarantor) 'Avalista',
+        if (requiresCollateral) 'Garantia real',
+        if (requiresInsurance) 'Seguro',
+      ];
+
+  /// Esta permuta CARREGA SEGURO — a linha que a empresa adiantou e as sacas
+  /// pagam. Ver [insuranceCity] e [BarterItem.insurance].
+  bool get hasInsurance => insuranceCity.isNotEmpty;
+
+  /// A LINHA DO SEGURO desta permuta, se houver. É dela que saem a área
+  /// segurada (a quantidade) e a taxa da praça (o valor unitário).
+  BarterItem? get insuranceItem {
+    for (final item in inputs) {
+      if (item.insurance) return item;
+    }
+    return null;
+  }
+
   /// Já foi faturada — e aí ela passa ao EMISSOR, que emite a cédula.
   ///
   /// Não é mais fim de linha: [awaitsCprIssue] é o que a tela do emissor lê.
@@ -1604,6 +1719,125 @@ class BarterFileModel {
     return '${(size / 1024 / 1024).toStringAsFixed(1).replaceAll('.', ',')} MB';
   }
 }
+
+/// UMA PRAÇA da base de seguros — o município e quanto custa segurar um
+/// hectare nele.
+///
+/// O seguro é uma proteção de PRAÇA, não de cliente: o que o define é o risco
+/// do lugar (o regime de chuva, o granizo que volta, a seca de três em três
+/// anos). Por isso a base é por município, e dois vizinhos da mesma linha pagam
+/// o mesmo por hectare.
+///
+/// O VALOR chega pela lente: quem vê R$ recebe [valuePerHa]; o consultor, que
+/// lê a permuta em sacas, recebe [sacksPerHa] — quantas sacas do grão cobrem um
+/// hectare de seguro. [showsCurrency] é o que distingue "R$ 0,00" de "esta
+/// resposta não traz R$", como em [BarterItem.hasUnitValue].
+class InsuranceRateModel {
+  final String id;
+  final String city;
+  final double valuePerHa;
+  final double sacksPerHa;
+  final bool showsCurrency;
+  final String? note;
+  final DateTime? updatedAt;
+
+  const InsuranceRateModel({
+    this.id = '',
+    required this.city,
+    this.valuePerHa = 0,
+    this.sacksPerHa = 0,
+    this.showsCurrency = true,
+    this.note,
+    this.updatedAt,
+  });
+
+  factory InsuranceRateModel.fromJson(Map<String, dynamic> json) => InsuranceRateModel(
+        id: _asId(json['id']),
+        city: (json['city'] ?? '') as String,
+        valuePerHa: _asDouble(json['valuePerHa']),
+        sacksPerHa: _asDouble(json['sacksPerHa']),
+        showsCurrency: json['valuePerHa'] != null,
+        note: json['note'] as String?,
+        updatedAt: _asDateOrNull(json['updatedAt']),
+      );
+
+  /// O CUSTO (R$) de segurar esta área — a conta inteira do seguro.
+  ///
+  /// Ela é a mesma do servidor (`insuranceCostFor`), e mora aqui pelo mesmo
+  /// motivo de `barter_math.dart`: a prévia que o consultor mostra ao produtor
+  /// precisa bater, ao centavo, com o que vai ser gravado.
+  double costFor(double areaHa) =>
+      areaHa > 0 && valuePerHa > 0 ? (areaHa * valuePerHa * 100).round() / 100 : 0;
+
+  /// O mesmo custo em SACAS, para quem não vê R$.
+  double sacksFor(double areaHa) => areaHa > 0 ? areaHa * sacksPerHa : 0;
+}
+
+/// UMA PEÇA DA ANÁLISE DE CRÉDITO — o que o comitê juntou para decidir: a
+/// consulta ao Serasa, o endividamento do produtor dentro da cooperativa, e o
+/// que mais a reunião tiver pedido.
+///
+/// Ela existe porque a decisão era tomada sobre documentos que não estavam no
+/// sistema: eles circulavam por e-mail entre os integrantes e morriam na caixa
+/// de quem convocou a reunião. Meses depois, "com base em quê vocês aprovaram
+/// isto?" não tinha onde ser respondido — havia a decisão, e não a prova.
+///
+/// QUEM VÊ é o comitê e o admin, e mais ninguém: é o único anexo de leitura
+/// restrita do app. O consultor que atende o cliente leva ao produtor a
+/// DECISÃO, e não o dossiê que a fundamentou.
+class BarterCreditFileModel {
+  final String id;
+
+  /// `serasa`, `indebtedness` ou `other` — e [kindLabel] é o que a tela mostra.
+  /// O rótulo vem RESOLVIDO do servidor pelo mesmo motivo de
+  /// [BarterModel.statusLabel]: o app não precisa manter uma segunda cópia do
+  /// vocabulário para sair de sincronia com ele.
+  final String kind;
+  final String kindLabel;
+
+  /// O que o comitê tem a dizer sobre o documento (a data da consulta, o valor
+  /// apurado, de onde o extrato veio). Opcional.
+  final String? note;
+
+  final String attachedBy;
+  final DateTime? attachedAt;
+
+  /// O anexo, sem os bytes — eles se baixam pela rota do arquivo.
+  final BarterFileModel? file;
+
+  const BarterCreditFileModel({
+    this.id = '',
+    this.kind = 'other',
+    this.kindLabel = 'Outro documento',
+    this.note,
+    this.attachedBy = '',
+    this.attachedAt,
+    this.file,
+  });
+
+  factory BarterCreditFileModel.fromJson(Map<String, dynamic> json) => BarterCreditFileModel(
+        id: _asId(json['id']),
+        kind: (json['kind'] ?? 'other') as String,
+        kindLabel: (json['kindLabel'] ?? 'Outro documento') as String,
+        note: json['note'] as String?,
+        attachedBy: (json['attachedBy'] ?? '') as String,
+        attachedAt: _asDateOrNull(json['attachedAt']),
+        file: json['file'] == null
+            ? null
+            : BarterFileModel.fromJson((json['file'] as Map).cast<String, dynamic>()),
+      );
+}
+
+/// OS TIPOS de peça do dossiê, na ordem em que a tela os oferece.
+///
+/// A lista é curta e fechada nos dois primeiros porque eles são os que a
+/// operação nomeia; o terceiro é aberto de propósito — a reunião junta o que
+/// precisar, e sem ele a certidão que o gerente trouxe voltaria para o e-mail.
+const Map<String, String> creditFileKinds = {
+  'serasa': 'Consulta ao Serasa',
+  'indebtedness': 'Endividamento na cooperativa',
+  'other': 'Outro documento',
+};
 
 /// UMA NOTA FISCAL do faturamento, com o arquivo dela.
 ///
@@ -2071,6 +2305,19 @@ class BarterVersionModel {
   /// ela, só conta ao admin em que modo o Barter está. Quem fecha, quando ligado,
   /// é a aprovação que cruza a meta (ver `closeIfGoalReached` na API).
   final bool closeOnGoal;
+
+  /// ESTE BARTER LEVA SEGURO AGRÍCOLA?
+  ///
+  /// É a chave do seguro, e ela é do LANÇAMENTO: contratar seguro é decisão
+  /// comercial da safra (a empresa fechou apólice, ou não), e não caso a caso
+  /// do consultor. Ligada, toda permuta desta versão nasce com a linha do
+  /// seguro, precificada pelo município do produtor.
+  ///
+  /// Ela chega a todo mundo, como [closeOnGoal] e [isOpen]: não é um valor, é
+  /// uma regra do lançamento. É por ela que a tela do consultor sabe que a
+  /// prévia dele leva a linha do seguro.
+  final bool insuranceRequired;
+
   final String? sourceFile;
   final String? note;
 
@@ -2107,6 +2354,7 @@ class BarterVersionModel {
     this.closedBy,
     this.estimatedYield = 0,
     this.closeOnGoal = false,
+    this.insuranceRequired = false,
     this.sourceFile,
     this.note,
     this.goals = const [],
@@ -2136,6 +2384,7 @@ class BarterVersionModel {
       closedAt: _asDateOrNull(json['closedAt']),
       closedBy: json['closedBy'] as String?,
       closeOnGoal: json['closeOnGoal'] == true,
+      insuranceRequired: json['insuranceRequired'] == true,
       sourceFile: json['sourceFile'] as String?,
       note: json['note'] as String?,
       prices: (json['prices'] as List? ?? const [])

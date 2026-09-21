@@ -6,6 +6,7 @@ import {
   progressOf,
   type BarterStatus,
 } from '../barters/barter-workflow';
+import { CREDIT_FILE_LABELS, type CreditFileKind } from '../barters/credit-file';
 import { CAPABILITY, can, capabilitiesOf } from './policy';
 import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
@@ -15,6 +16,7 @@ import type {
   AuditLog,
   Barter,
   BarterCpr,
+  BarterCreditFile,
   BarterEvent,
   BarterInvoice,
   BarterItem,
@@ -24,6 +26,7 @@ import type {
   CprAreaOwner,
   CprGuarantor,
   Creditor,
+  InsuranceRate,
   ProductClass,
   PriceHistoryEntry,
   Producer,
@@ -329,6 +332,32 @@ export function toProductListJson(
   };
 }
 
+/**
+ * UMA PRAÇA da base de seguros — o município e quanto custa segurar um hectare
+ * nele.
+ *
+ * O valor sai pela LENTE, como tudo o mais: o admin lê "R$ 85,00 por hectare"; o
+ * consultor, que não vê moeda, lê `sacksPerHa` — quantas sacas do grão cobrem
+ * um hectare de seguro. É a mesma conversão de `toVersionPriceJson`, e existe
+ * pela mesma razão: a prévia da tela dele precisa do número, e o R$ não pode
+ * viajar no JSON de quem não pode lê-lo.
+ *
+ * A cotação que converte é a da VERSÃO VIGENTE, e ela chega de fora (a lente),
+ * porque este cadastro não pertence a versão nenhuma: a base é do município, e
+ * a saca é do Barter aberto hoje.
+ */
+export function toInsuranceRateJson(rate: InsuranceRate, lens: ValueLens = CURRENCY_LENS) {
+  return {
+    id: rate.id,
+    city: rate.city,
+    ...(lens.showsCurrency
+      ? { valuePerHa: rate.valuePerHa }
+      : { sacksPerHa: inSacks(rate.valuePerHa, lens.grainPrice) ?? 0 }),
+    note: rate.note,
+    updatedAt: rate.updatedAt,
+  };
+}
+
 /* ── Barter: safra e versões ──────────────────────────────────────────── */
 
 export function toSeasonJson(
@@ -419,6 +448,13 @@ export function toBarterVersionJson(
     // `0` é a versão anterior ao campo, e nela `POST /barters` recusa: a tela do
     // admin lê este zero para mostrar que o Barter está vigente e travado.
     estimatedYield: version.estimatedYield,
+    // ESTE BARTER LEVA SEGURO? Vai para todo mundo, e não é valor: é uma regra
+    // do lançamento, da mesma natureza de `closeOnGoal` e de `isOpen`.
+    //
+    // É ela que a tela do consultor lê para mostrar a linha do seguro na prévia
+    // — e para avisar, antes de ele montar a permuta inteira, que a praça do
+    // produtor ainda não tem taxa cadastrada. Ver `InsuranceRate`.
+    insuranceRequired: version.insuranceRequired,
     status: version.status,
     isOpen: isOpenAt(version, new Date()),
     startsAt: version.startsAt,
@@ -482,6 +518,16 @@ export function toBarterItemJson(item: BarterItem, lens: ValueLens = CURRENCY_LE
     // saber que aquele item não está na lista da praça, e o consultor precisa
     // saber que ele está ali porque foi pedido — é dele o pedido.
     offBarter: item.offBarter,
+    // ESTA LINHA É O SEGURO AGRÍCOLA, e não um insumo retirado.
+    //
+    // Vai para todo mundo pelo mesmo motivo de `offBarter`: é procedência, não
+    // valor. Quem confere a retirada no balcão precisa saber que esta linha não
+    // se separa em lugar nenhum (não há o que entregar), e o produtor precisa
+    // ler no comprovante que parte das sacas dele paga a apólice, e não adubo.
+    //
+    // A conta fica legível na própria linha: `quantity` é a área cultivável
+    // dele (ha) e `unitValue` é a taxa do município (ver `InsuranceRate`).
+    insurance: item.insurance,
     // O VALOR DE TABELA, quando o admin escreveu outro por cima. Só para quem vê
     // R$, pelo mesmo motivo de `unitValue`: é dinheiro, e o consultor lê a
     // permuta em sacas. Null (ou ausente) é o caso normal — o item vale o que a
@@ -721,6 +767,26 @@ function toBarterInvoiceJson(invoice: BarterInvoice & { file?: BarterFileMeta | 
   };
 }
 
+/**
+ * UMA PEÇA DA ANÁLISE DE CRÉDITO do comitê, com o anexo dela.
+ *
+ * Mesma forma da nota fiscal: o arquivo sai como METADADO — nome, tipo,
+ * tamanho, quem anexou —, e os bytes têm rota própria. `kindLabel` vem resolvido
+ * pelo mesmo motivo de `statusLabel`: o cliente não deveria precisar conhecer a
+ * lista de tipos para escrever "Consulta ao Serasa" na tela.
+ */
+function toBarterCreditFileJson(credit: BarterCreditFile & { file?: BarterFileMeta | null }) {
+  return {
+    id: credit.id,
+    kind: credit.kind,
+    kindLabel: CREDIT_FILE_LABELS[credit.kind as CreditFileKind] ?? credit.kind,
+    note: credit.note,
+    attachedBy: credit.attachedBy,
+    attachedAt: credit.attachedAt,
+    file: credit.file ? toBarterFileJson(credit.file) : null,
+  };
+}
+
 /** O anexo sem os bytes — a forma como ele aparece em toda resposta que não é download. */
 function toBarterFileJson(file: BarterFileMeta) {
   return {
@@ -749,6 +815,7 @@ export function toBarterJson(
     events?: BarterEvent[];
     productRequests?: BarterProductRequest[];
     invoices?: (BarterInvoice & { file?: BarterFileMeta | null })[];
+    creditFiles?: (BarterCreditFile & { file?: BarterFileMeta | null })[];
   },
   viewer?: Pick<User, 'role'>,
 ) {
@@ -812,6 +879,39 @@ export function toBarterJson(
     reviewNote: barter.reviewNote,
     reviewedBy: barter.reviewedBy,
     reviewedAt: barter.reviewedAt,
+    // AS EXIGÊNCIAS DO COMITÊ — avalista, garantia real, seguro.
+    //
+    // Vão para TODO MUNDO que enxerga a permuta, e não só para quem decidiu:
+    // elas são trabalho para OUTRA pessoa. O consultor precisa levá-las ao
+    // produtor, o faturista precisa saber que a retirada foi condicionada, e o
+    // emissor precisa saber que aquele título espera um avalista antes de ser
+    // assinado. Enquanto isso viveu dentro do texto da decisão, a única maneira
+    // de descobrir era ler o parágrafo até o fim.
+    //
+    // Elas não substituem `reviewNote`: as caixas dizem O QUÊ, e só o texto diz
+    // QUAL — qual matrícula, qual valor segurado, quem se espera como avalista.
+    requiresGuarantor: barter.requiresGuarantor,
+    requiresCollateral: barter.requiresCollateral,
+    requiresInsurance: barter.requiresInsurance,
+    // O SEGURO AGRÍCOLA desta permuta: a praça que o precificou e a taxa
+    // congelada no registro. `insuranceCity` vazio é permuta sem seguro — ou
+    // porque o Barter dela não leva, ou porque ela é anterior à regra.
+    //
+    // A TAXA sai pela lente, como todo R$: quem não vê moeda lê o seguro pela
+    // própria linha da permuta, em que a quantidade é a área e o total já está
+    // dentro das sacas do grão.
+    insuranceCity: barter.insuranceCity,
+    ...(lens.showsCurrency ? { insuranceRatePerHa: barter.insuranceRatePerHa } : {}),
+    // AS PEÇAS DA ANÁLISE DE CRÉDITO — a consulta ao Serasa, o endividamento do
+    // produtor dentro da cooperativa.
+    //
+    // Só para quem pode abri-las (`barters.creditRead`: comitê e admin), e o
+    // campo SOME para os outros em vez de vir vazio: uma lista vazia diria "não
+    // há dossiê", e o consultor concluiria que o comitê decidiu sem apurar
+    // nada. Ver `BarterCreditFile`.
+    ...(viewer && can(viewer, CAPABILITY.bartersCreditRead)
+      ? { creditFiles: barter.creditFiles?.map(toBarterCreditFileJson) }
+      : {}),
     // O FATURAMENTO. Null enquanto ela não foi faturada.
     invoicedBy: barter.invoicedBy,
     invoicedAt: barter.invoicedAt,

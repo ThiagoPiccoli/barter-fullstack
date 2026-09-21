@@ -218,11 +218,65 @@ class BarterRepository {
   ///
   /// Quem decide é o comitê — o admin administra o sistema e não passa por aqui.
   /// A rota continua sendo `/review`: o que mudou foi o papel, não a etapa.
-  Future<BarterModel> review(String code, BarterStatus status, String note) async {
+  ///
+  /// AS EXIGÊNCIAS (avalista, garantia real, seguro) vão junto com a decisão, e
+  /// não substituem o texto: as caixas dizem O QUÊ, e só o texto diz QUAL —
+  /// qual matrícula, qual valor segurado, quem se espera como avalista. Só
+  /// viajam quando marcadas: o padrão do servidor é não exigir nada, e mandar
+  /// três `false` seria dizer a mesma coisa com três campos a mais.
+  Future<BarterModel> review(
+    String code,
+    BarterStatus status,
+    String note, {
+    bool requiresGuarantor = false,
+    bool requiresCollateral = false,
+    bool requiresInsurance = false,
+  }) async {
     final data = await api.post('/barters/$code/review', body: {
       'status': status.name,
       if (note.trim().isNotEmpty) 'note': note.trim(),
+      if (requiresGuarantor) 'requiresGuarantor': true,
+      if (requiresCollateral) 'requiresCollateral': true,
+      if (requiresInsurance) 'requiresInsurance': true,
     });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /* ── O DOSSIÊ DO COMITÊ ─────────────────────────────────────────────── */
+
+  /// ANEXA UMA PEÇA DA ANÁLISE DE CRÉDITO — a consulta ao Serasa, o extrato do
+  /// endividamento do produtor dentro da cooperativa.
+  ///
+  /// Quem anexa é o COMITÊ, e a janela vai até a decisão: o dossiê existe para
+  /// DECIDIR, e o servidor recusa (422) a peça que chega depois — juntar
+  /// documento a uma permuta já aprovada seria acrescentar fundamento a uma
+  /// decisão tomada.
+  ///
+  /// [kind] é um dos [creditFileKinds]; ausente, o servidor grava `other`.
+  Future<BarterModel> attachCreditFile(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+    String kind = 'other',
+    String note = '',
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/credit-files',
+      filename: filename,
+      bytes: bytes,
+      fields: {
+        'kind': kind,
+        if (note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// REMOVE uma peça do dossiê — a que subiu trocada, ou a substituída por uma
+  /// consulta mais nova. Mesma janela de anexar, e pelo mesmo motivo: o que
+  /// fundamentou uma decisão tomada não se apaga.
+  Future<BarterModel> removeCreditFile(String code, String creditFileId) async {
+    final data = await api.delete('/barters/$code/credit-files/$creditFileId');
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 
@@ -448,7 +502,15 @@ class BarterRepository {
       '/barters/$code/invoices/$invoiceId/file';
 
   /// O ENDEREÇO do arquivo do SCR. Ver [invoiceFilePath].
+  ///
+  /// O COMITÊ chega a ele sem ter a cédula: o SCR é o retrato do endividamento
+  /// do produtor no Banco Central, e é uma das peças que a reunião lê para
+  /// decidir. Ver `barters.creditRead` na API.
   String scrFilePath(String code) => '/barters/$code/cpr/scr';
+
+  /// O ENDEREÇO de uma peça do dossiê do comitê. Ver [invoiceFilePath].
+  String creditFilePath(String code, String creditFileId) =>
+      '/barters/$code/credit-files/$creditFileId/file';
 
   /// Os endereços dos dois documentos que voltaram de fora.
   String signedCprPath(String code) => '/barters/$code/cpr/signed';

@@ -3,7 +3,12 @@ import type { User } from '@prisma/client';
 import { AnyRole, CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterVersionJson } from '../common/serializers';
-import { CloseOnGoalDto, UpdateVersionPriceDto, VersionEstimatedYieldDto } from './dto/season.dto';
+import {
+  CloseOnGoalDto,
+  UpdateVersionPriceDto,
+  VersionEstimatedYieldDto,
+  VersionInsuranceDto,
+} from './dto/season.dto';
 import { SeasonsService } from './seasons.service';
 
 /**
@@ -97,6 +102,29 @@ export class BarterVersionsController {
   ) {
     return toBarterVersionJson(
       await this.seasons.setEstimatedYield(admin, code, dto.estimatedYield),
+      undefined,
+      admin,
+    );
+  }
+
+  /**
+   * O SEGURO AGRÍCOLA da versão vigente — liga e desliga.
+   *
+   * `PUT` pelo mesmo motivo dos dois acima: é um estado que se declara. E existe
+   * pela mesma razão do modo de encerramento — a opção nasce no lançamento, e
+   * mudar de ideia no meio do Barter (a apólice saiu depois da tabela, a
+   * diretoria decidiu incluir) não pode custar uma republicação, que encerraria
+   * a versão e reiniciaria a contagem do realizado.
+   */
+  @Put(':code/insurance')
+  @RequireCapability(CAPABILITY.barterManage)
+  async insurance(
+    @CurrentUser() admin: User,
+    @Param('code') code: string,
+    @Body() dto: VersionInsuranceDto,
+  ) {
+    return toBarterVersionJson(
+      await this.seasons.setInsuranceRequired(admin, code, dto.enabled),
       undefined,
       admin,
     );

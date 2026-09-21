@@ -177,12 +177,22 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         //   conferindo nada.
         { route: 'GET /barters/:code/cpr', policy: 'capability:barters.cprRead' },
         { route: 'PUT /barters/:code/cpr', policy: 'capability:barters.cprFill' },
-        { route: 'GET /barters/:code/cpr/scr', policy: 'capability:barters.cprRead' },
-        // O SCR é a ÚNICA rota do sistema com duas chaves: o CONSULTOR anexa
-        // porque é ele quem consulta o SCR, e o EMISSOR porque é ele quem fica
-        // travado por ele na hora de emitir — "peça ao consultor e espere" seria
-        // a resposta errada com o produtor na sala. Anexar não é escrever a
-        // cédula: o que o emissor não pode é mexer no que ele confere.
+        // O SCR tem DUAS CHAVES em cada ponta, e elas não são as mesmas.
+        // Para LER, o COMITÊ entra sem ter a cédula: o SCR é o retrato do
+        // endividamento do produtor no Banco Central, e é uma das peças que a
+        // reunião lê para decidir. Ele chega por `barters.creditRead` — a mesma
+        // porta do dossiê — e não por `barters.cprRead`, que traria junto o
+        // formulário do título, assunto de quem emite e não de quem decide o
+        // negócio.
+        {
+          route: 'GET /barters/:code/cpr/scr',
+          policy: 'capability-any:barters.cprRead|barters.creditRead',
+        },
+        // Para ANEXAR, o CONSULTOR porque é ele quem consulta o SCR, e o EMISSOR
+        // porque é ele quem fica travado por ele na hora de emitir — "peça ao
+        // consultor e espere" seria a resposta errada com o produtor na sala.
+        // Anexar não é escrever a cédula: o que o emissor não pode é mexer no
+        // que ele confere.
         {
           route: 'PUT /barters/:code/cpr/scr',
           policy: 'capability-any:barters.cprFill|barters.cprIssue',
@@ -233,6 +243,31 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
           route: 'POST /barters/:code/product-requests/:id/decision',
           policy: 'capability:barters.productReview',
         },
+        // O DOSSIÊ DO COMITÊ — as peças que fundamentam a decisão de crédito: a
+        // consulta ao Serasa, o extrato do que o produtor já deve à cooperativa.
+        // Duas capacidades, e a divisão é o desenho: JUNTA o comitê
+        // (`barters.creditAttach`), e só ele — nem o admin, que lê; quem põe
+        // prova dentro de uma decisão é quem decide, e a leitura do admin existe
+        // para auditar isso.
+        //
+        // A LEITURA do arquivo é a ÚNICA de anexo do sistema que não é
+        // `any-authenticated`, e é essa a linha que este inventário trava: nota
+        // fiscal, cédula assinada e comprovante de registro vão para quem alcança
+        // a permuta, porque são documentos da operação; estes são a vida
+        // financeira de um cliente, colhida para decidir crédito — o consultor
+        // que o atende leva ao produtor a DECISÃO, e não o dossiê.
+        {
+          route: 'POST /barters/:code/credit-files',
+          policy: 'capability:barters.creditAttach',
+        },
+        {
+          route: 'DELETE /barters/:code/credit-files/:id',
+          policy: 'capability:barters.creditAttach',
+        },
+        {
+          route: 'GET /barters/:code/credit-files/:id/file',
+          policy: 'capability:barters.creditRead',
+        },
         // A TABELA da permuta: quem alcança a permuta alcança os valores com que
         // ela foi fechada — é deles que a remontagem precisa quando a gestão
         // vigente já é outra. Escopo no service, como o detalhe.
@@ -266,6 +301,16 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
           route: 'PUT /barter-versions/:code/estimated-yield',
           policy: 'capability:barter.manage',
         },
+        // O SEGURO do lançamento é da mesma alçada, e pelo mesmo raciocínio:
+        // ligá-lo acrescenta área × taxa do município ao custo de toda permuta
+        // nova — é decisão comercial da safra, e mora com quem publica a tabela.
+        // Quem MANTÉM a base de cotações é o admin por outra porta
+        // (`insurance.manage`), e as duas são separadas de propósito: uma decide
+        // se a safra tem seguro, a outra transcreve o que a seguradora cobra.
+        {
+          route: 'PUT /barter-versions/:code/insurance',
+          policy: 'capability:barter.manage',
+        },
         {
           route: 'PUT /barter-versions/:code/prices/:productId',
           policy: 'capability:barter.manage',
@@ -293,6 +338,19 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /products', policy: 'capability:catalog.manage' },
         { route: 'PUT /products/:id', policy: 'capability:catalog.manage' },
         // Sem rota de preço no catálogo: valor é da versão do Barter.
+
+        // SEGURO — a base de cotações por município. A LEITURA é de qualquer
+        // autenticado: o consultor precisa dela para a prévia do custo, e QUANTO
+        // cada papel enxerga em R$ é decidido pela lente da resposta
+        // (`lensFor`), não pela porta — por isso `any-authenticated` aqui não é
+        // permissivo. A ESCRITA é do admin (`insurance.manage`), linha a linha
+        // ou por planilha: a carga é o mesmo ato de cadastro do POST, só que em
+        // lote, e por isso divide a capacidade em vez de ter uma própria.
+        { route: 'GET /insurance-rates', policy: 'any-authenticated' },
+        { route: 'POST /insurance-rates', policy: 'capability:insurance.manage' },
+        { route: 'POST /insurance-rates/import', policy: 'capability:insurance.manage' },
+        { route: 'PUT /insurance-rates/:id', policy: 'capability:insurance.manage' },
+        { route: 'DELETE /insurance-rates/:id', policy: 'capability:insurance.manage' },
 
         // Produtores — leitura escopada pelo service; cadastro do admin.
         { route: 'DELETE /producers/:id', policy: 'capability:producers.manage' },

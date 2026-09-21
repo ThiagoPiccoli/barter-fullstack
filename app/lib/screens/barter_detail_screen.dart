@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
+import 'package:file_saver/file_saver.dart';
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
@@ -253,6 +256,21 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               if (_barter.updatedAt != null)
                 _InfoRow(label: 'Atualizada em', value: _formatDate(_barter.updatedAt!)),
               if (_barter.hasDecision) _InfoRow(label: 'Decidida por', value: _barter.reviewedBy!),
+              // AS EXIGÊNCIAS aparecem aqui só quando NÃO há o cartão da
+              // ressalva: ele já as mostra em fichas, e repetidas nos dois
+              // lugares elas viram paisagem. Este caminho é o da aprovação
+              // limpa que veio com uma exigência marcada.
+              if (!_barter.hasConditions && _barter.requirements.isNotEmpty)
+                _InfoRow(
+                  label: 'Exigências',
+                  value: _barter.requirements.join(', '),
+                ),
+              // O SEGURO, quando a permuta o carrega: a praça que o precificou.
+              // O valor por hectare fica na própria linha do seguro, entre os
+              // insumos — aqui a pergunta é "por que ele custa isso?", e a
+              // resposta é o município.
+              if (_barter.hasInsurance)
+                _InfoRow(label: 'Seguro agrícola', value: _barter.insuranceCity),
               if (_barter.invoicedBy != null) ...[
                 _InfoRow(label: 'Faturada por', value: _barter.invoicedBy!),
                 if (_barter.invoicedAt != null)
@@ -642,6 +660,19 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               ),
             ),
           ],
+        ),
+      ),
+
+    // O DOSSIÊ DA ANÁLISE DE CRÉDITO — o que o comitê juntou para decidir.
+    //
+    // Ele aparece só para quem pode abri-lo (comitê e admin), e o campo nem
+    // chega no JSON dos demais: a lista é `null` para eles, e não vazia — vazia
+    // diria "o comitê não apurou nada". Ver `BarterModel.creditFiles`.
+    if (AppData.can(Capability.bartersCreditRead) && _barter.creditFiles != null)
+      DetailBlock.side(
+        _CreditDossierCard(
+          barter: _barter,
+          onChanged: (updated) => setState(() => _barter = updated),
         ),
       ),
 
@@ -2109,6 +2140,25 @@ class _ItemTile extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
+          // A PROCEDÊNCIA da linha, quando ela não é um insumo da tabela.
+          //
+          // As duas marcas existem pelo mesmo motivo e dizem coisas diferentes
+          // a quem confere a retirada no balcão: "fora do Barter" é item que
+          // veio de um pedido e não está na lista da praça; "seguro agrícola"
+          // não se separa em lugar nenhum — é a apólice que a empresa adiantou,
+          // cobrada em sacas como o resto.
+          if (item.insurance || item.offBarter)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                item.insurance ? 'seguro agrícola' : 'fora do Barter',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: item.insurance ? AppColors.atManager : AppColors.pending,
+                ),
+              ),
+            ),
           const SizedBox(height: 4),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -2143,6 +2193,260 @@ class _ItemTile extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// O DOSSIÊ DA ANÁLISE DE CRÉDITO — as peças que o comitê juntou para decidir.
+///
+/// Ele existe porque a decisão era tomada sobre documentos que não estavam no
+/// sistema: a consulta ao Serasa e o extrato do endividamento do produtor na
+/// cooperativa circulavam por e-mail entre os integrantes e morriam na caixa de
+/// quem convocou a reunião. Meses depois, "com base em quê vocês aprovaram
+/// isto?" não tinha onde ser respondido.
+///
+/// QUEM ANEXA é o comitê; quem LÊ são o comitê e o admin. A janela de mexer no
+/// dossiê fecha na decisão — depois dela, o que fundamentou uma aprovação é
+/// prova, e prova não se edita. É o servidor quem recusa (422), e a tela
+/// esconde os botões antes disso para ninguém esbarrar numa porta fechada.
+class _CreditDossierCard extends StatefulWidget {
+  final BarterModel barter;
+  final ValueChanged<BarterModel> onChanged;
+
+  const _CreditDossierCard({required this.barter, required this.onChanged});
+
+  @override
+  State<_CreditDossierCard> createState() => _CreditDossierCardState();
+}
+
+class _CreditDossierCardState extends State<_CreditDossierCard> {
+  bool _busy = false;
+
+  BarterModel get _barter => widget.barter;
+  List<BarterCreditFileModel> get _files => _barter.creditFiles ?? const [];
+
+  /// O dossiê ainda se mexe? A janela é a mesma do servidor: até a decisão.
+  ///
+  /// A conta é feita sobre o ESTADO, e não sobre uma lista de estados escrita
+  /// aqui: a permuta que ainda não foi decidida é a que está com o consultor,
+  /// com o gerente ou com o comitê.
+  bool get _open =>
+      _barter.status == BarterStatus.draft ||
+      _barter.awaitsManager ||
+      _barter.awaitsCommittee;
+
+  bool get _canAttach => AppData.can(Capability.bartersCreditAttach) && _open;
+
+  Future<void> _attach() async {
+    final kind = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Que documento é este?'),
+        children: [
+          for (final entry in creditFileKinds.entries)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, entry.key),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Text(entry.value),
+              ),
+            ),
+        ],
+      ),
+    );
+    if (kind == null || !mounted) return;
+
+    final file = await FilePicker.pickFile(
+      dialogTitle: 'Documento da análise de crédito',
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg', 'xlsx'],
+    );
+    if (file == null) return;
+    // Os BYTES, e não o caminho: no Android/iOS o arquivo escolhido fica num
+    // diretório temporário que pode sumir antes do envio.
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final updated = await AppData.attachCreditFile(
+        _barter.id,
+        filename: file.name,
+        bytes: bytes,
+        kind: kind,
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      widget.onChanged(updated);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showErrorSnack(context, e);
+    }
+  }
+
+  Future<void> _remove(BarterCreditFileModel piece) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remover do dossiê'),
+        content: Text(
+          '${piece.kindLabel}${piece.file != null ? ' (${piece.file!.fileName})' : ''} sai da '
+          'permuta, e o arquivo vai junto. A trilha de auditoria guarda que ele existiu.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.denied),
+            child: const Text('Remover'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final updated = await AppData.removeCreditFile(_barter.id, piece.id);
+      if (!mounted) return;
+      setState(() => _busy = false);
+      widget.onChanged(updated);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
+      showErrorSnack(context, e);
+    }
+  }
+
+  Future<void> _download(BarterCreditFileModel piece) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final arquivo = await AppData.downloadCreditFile(_barter.id, piece.id);
+      final ponto = arquivo.filename.lastIndexOf('.');
+      await FileSaver.instance.saveFile(
+        name: ponto > 0 ? arquivo.filename.substring(0, ponto) : arquivo.filename,
+        bytes: Uint8List.fromList(arquivo.bytes),
+        ext: ponto > 0 ? arquivo.filename.substring(ponto + 1) : 'pdf',
+        mimeType: MimeType.other,
+        customMimeType: arquivo.contentType,
+      );
+      messenger.showSnackBar(SnackBar(
+        content: Text('${arquivo.filename} salvo.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (error) {
+      if (!mounted) return;
+      showErrorSnack(context, error);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Análise de crédito',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+              ),
+            ),
+            Icon(Icons.lock_outline, size: 14, color: AppColors.textLight),
+          ],
+        ),
+        const SizedBox(height: 2),
+        // A RESTRIÇÃO dita em voz alta, e não escondida no servidor: quem anexa
+        // precisa saber que o consultor do cliente não vai ver aquele extrato.
+        Text(
+          'Só o comitê e o administrador abrem estes documentos.',
+          style: TextStyle(fontSize: 11, color: AppColors.textLight),
+        ),
+        const SizedBox(height: 10),
+        if (_files.isEmpty)
+          Text(
+            _open
+                ? 'Nenhum documento anexado. Junte a consulta ao Serasa e o endividamento '
+                    'na cooperativa antes de decidir.'
+                : 'Esta permuta foi decidida sem documentos anexados.',
+            style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+          ),
+        for (final piece in _files)
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              borderRadius: AppShape.card,
+              border: Border.all(color: AppColors.borderSubtle),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.description_outlined, size: 18, color: AppColors.pending),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        piece.kindLabel,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        [
+                          if (piece.file != null) piece.file!.fileName,
+                          if (piece.file != null) piece.file!.sizeLabel,
+                          if (piece.attachedBy.isNotEmpty) piece.attachedBy,
+                        ].join(' • '),
+                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (piece.note != null && piece.note!.isNotEmpty)
+                        Text(
+                          piece.note!,
+                          style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                        ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Baixar',
+                  onPressed: piece.file == null ? null : () => _download(piece),
+                  icon: const Icon(Icons.download_outlined, size: 18),
+                ),
+                if (_canAttach)
+                  IconButton(
+                    tooltip: 'Remover',
+                    onPressed: _busy ? null : () => _remove(piece),
+                    icon: Icon(Icons.delete_outline, size: 18, color: AppColors.denied),
+                  ),
+              ],
+            ),
+          ),
+        if (_canAttach) ...[
+          const SizedBox(height: 4),
+          OutlinedButton.icon(
+            onPressed: _busy ? null : _attach,
+            icon: _busy
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.attach_file, size: 18),
+            label: const Text('Anexar documento'),
+          ),
+        ] else if (!_open)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'A permuta já foi decidida: o dossiê é o que fundamentou a decisão e não se '
+              'altera mais.',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+          ),
+      ],
     );
   }
 }

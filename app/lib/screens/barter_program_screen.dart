@@ -103,6 +103,7 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
         targetSacks: result.targetSacks,
         targetBarters: result.targetBarters,
         closeOnGoal: result.closeOnGoal,
+        insuranceRequired: result.insuranceRequired,
         note: result.note,
         carryOver: result.carryOver,
       );
@@ -315,6 +316,62 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
     }
   }
 
+  /// LIGA ou DESLIGA o seguro agrícola do Barter vigente.
+  ///
+  /// O diálogo aparece ao LIGAR, e não é cerimônia: ligar acrescenta, a cada
+  /// permuta nova, a área cultivável do produtor vezes a taxa da praça dele —
+  /// custo que vira saca e que o produtor vai pagar na colheita. E ele conta
+  /// quantos produtores estão em município SEM taxa cadastrada, porque a
+  /// permuta deles passa a ser recusada no registro: melhor saber disso aqui do
+  /// que pelo telefonema do consultor com o produtor na frente.
+  ///
+  /// Desligar não pede confirmação: ele não cria custo para ninguém, e as
+  /// permutas que já nasceram com seguro continuam com ele (a taxa está
+  /// congelada em cada uma).
+  Future<void> _setInsurance(BarterVersionModel version, bool enabled) async {
+    if (enabled) {
+      final semTaxa = AppData.producers
+          .where((p) => AppData.insuranceRateFor(p.city) == null)
+          .length;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: Icon(Icons.shield_outlined, color: AppColors.atManager, size: 36),
+          title: const Text('Incluir o seguro neste Barter'),
+          content: Text(
+            'Toda permuta registrada em ${version.code} a partir de agora vai incluir o '
+            'seguro agrícola: a área cultivável do produtor vezes o valor por hectare do '
+            'município dele. O custo entra na conta e é pago em sacas, como os insumos.'
+            '${semTaxa > 0 ? '\n\nAtenção: $semTaxa produtor(es) estão em município sem taxa '
+                'cadastrada, e a permuta deles será recusada no registro até a praça entrar '
+                'na base de seguros.' : ''}',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Incluir o seguro'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+
+    try {
+      await AppData.setVersionInsurance(version.code, enabled);
+      await _loadDetail();
+      if (!mounted) return;
+      setState(() {});
+      widget.onChanged();
+      _toast(enabled
+          ? 'As permutas novas passam a incluir o seguro agrícola.'
+          : 'As permutas novas deixam de incluir o seguro. As já registradas não mudam.');
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
   void _toast(String message) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -348,6 +405,16 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
                 loading: _loading,
                 onPublish: _publish,
                 onClose: () => _closeVersion(current),
+              ),
+              const SizedBox(height: 16),
+              // O SEGURO vem antes das metas de propósito: ele muda o CUSTO de
+              // cada permuta, e as metas medem o que já foi vendido. O que
+              // decide dinheiro fica mais perto do cartão do lançamento.
+              _sectionTitle('Seguro agrícola'),
+              const SizedBox(height: 8),
+              _InsuranceCard(
+                version: current,
+                onChanged: (enabled) => _setInsurance(current, enabled),
               ),
               const SizedBox(height: 16),
               if (current.goals.isNotEmpty) ...[
@@ -767,6 +834,80 @@ class _CprDueDateCard extends StatelessWidget {
 ///
 /// O interruptor mora aqui, junto das barras, porque é aqui que o admin olha
 /// quando a meta está para bater — e é nesse momento que ele decide se o Barter
+/// O SEGURO AGRÍCOLA deste lançamento — o interruptor e o que ele significa.
+///
+/// Cartão próprio, e não uma linha dentro do cartão da versão, pelo mesmo
+/// motivo do vencimento da CPR: ele não é um dado do lançamento, é uma DECISÃO
+/// sobre ele — e uma que muda o custo de toda permuta que vier depois.
+///
+/// O que ele mostra além do interruptor é o estado da BASE: quantas praças
+/// estão cadastradas e quantos produtores ficariam de fora. Ligado o seguro,
+/// essa segunda contagem é a lista de recusas que o consultor vai encontrar.
+class _InsuranceCard extends StatelessWidget {
+  final BarterVersionModel version;
+  final ValueChanged<bool> onChanged;
+
+  const _InsuranceCard({required this.version, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final cities = AppData.insuranceRates.length;
+    final semTaxa =
+        AppData.producers.where((p) => AppData.insuranceRateFor(p.city) == null).length;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: version.insuranceRequired,
+              onChanged: onChanged,
+              title: const Text('Este Barter leva seguro', style: TextStyle(fontSize: 13)),
+              subtitle: Text(
+                version.insuranceRequired
+                    ? 'Cada permuta nova inclui a área do produtor × o valor por hectare da praça dele.'
+                    : 'As permutas saem sem seguro. A base por município continua cadastrada.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ),
+            const Divider(height: 20),
+            Row(
+              children: [
+                Icon(Icons.shield_outlined, size: 16, color: AppColors.atManager),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    cities == 0
+                        ? 'Nenhuma praça na base de seguros — cadastre-as em Cadastros › Seguros.'
+                        : '$cities praça(s) na base'
+                            '${semTaxa > 0 ? ' • $semTaxa produtor(es) em município sem taxa' : ''}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: semTaxa > 0 || cities == 0 ? AppColors.pending : AppColors.textMedium,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (version.insuranceRequired && semTaxa > 0) ...[
+              const SizedBox(height: 8),
+              Text(
+                'A permuta de um produtor sem taxa é RECUSADA no registro, com o nome do '
+                'município na mensagem. Quem a lê é o consultor, e quem a resolve é você.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// para sozinho ou espera um toque dele.
 class _GoalsCard extends StatelessWidget {
   final BarterVersionModel version;
@@ -990,6 +1131,10 @@ class _PublishRequest {
   final double? targetSacks;
   final int? targetBarters;
   final bool closeOnGoal;
+
+  /// ESTE LANÇAMENTO LEVA SEGURO? Ver `BarterVersionModel.insuranceRequired`.
+  final bool insuranceRequired;
+
   final String? note;
   final bool carryOver;
 
@@ -1003,6 +1148,7 @@ class _PublishRequest {
     this.targetSacks,
     this.targetBarters,
     this.closeOnGoal = false,
+    this.insuranceRequired = false,
     this.note,
     this.carryOver = false,
   });
@@ -1028,6 +1174,10 @@ class _PublishSheetState extends State<_PublishSheet> {
   DateTime? _endsAt;
   bool _carryOver = false;
   bool _closeOnGoal = false;
+
+  /// ESTE LANÇAMENTO LEVA SEGURO? Padrão desligado, como no servidor: o que
+  /// acrescenta custo à permuta de todo mundo se escolhe, não se herda.
+  bool _insuranceRequired = false;
   String? _error;
 
   late final TextEditingController _grainPrice = TextEditingController(
@@ -1135,6 +1285,7 @@ class _PublishSheetState extends State<_PublishSheet> {
         targetSacks: _number(_sacks),
         targetBarters: _number(_barters)?.round(),
         closeOnGoal: _closeOnGoal,
+        insuranceRequired: _insuranceRequired,
         note: _note.text.trim().isEmpty ? null : _note.text.trim(),
         carryOver: _carryOver,
       ),
@@ -1268,6 +1419,34 @@ class _PublishSheetState extends State<_PublishSheet> {
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ),
+            const SizedBox(height: 4),
+
+            const Divider(height: 24),
+            // O SEGURO fica com as metas, e não com o preço da saca: as duas
+            // taxas de cima (cotação e produtividade) são obrigatórias e a
+            // conta não sai sem elas; isto aqui é uma OPÇÃO do lançamento, como
+            // o encerramento automático.
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _insuranceRequired,
+              onChanged: (v) => setState(() => _insuranceRequired = v),
+              title: const Text('Incluir seguro agrícola', style: TextStyle(fontSize: 13)),
+              subtitle: Text(
+                _insuranceRequired
+                    ? 'Cada permuta inclui a área do produtor × o valor por hectare do município dele.'
+                    : 'As permutas saem sem seguro. Pode ser ligado depois, sem republicar.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ),
+            if (_insuranceRequired && AppData.insuranceRates.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'A base de seguros está vazia: sem praça cadastrada, toda permuta será '
+                  'recusada no registro. Cadastre-as em Cadastros › Seguros.',
+                  style: TextStyle(fontSize: 11, color: AppColors.pending),
+                ),
+              ),
             const SizedBox(height: 4),
 
             TextField(
