@@ -53,15 +53,17 @@ describe('CPR — o que falta para a cédula sair', () => {
   });
 
   /**
-   * O CONTEXTO do faturamento e da safra — o que a cédula exige e não é dela.
+   * O CONTEXTO do faturamento e do LANÇAMENTO — o que a cédula exige e não é
+   * dela.
    *
    * Ele entra por parâmetro porque as duas peças têm outros donos: a nota é do
-   * faturista e o vencimento é de quem cadastra a safra. `contexto()` é o caso
-   * resolvido; os testes que cobram uma das duas o alteram na chamada.
+   * faturista e o vencimento é de quem lança a CULTURA no Barter. `contexto()` é
+   * o caso resolvido; os testes que cobram uma das duas o alteram na chamada.
    */
   const contexto = (): CprContext => ({
     invoices: [{ number: '55.318', fileId: 42 }],
-    seasonName: 'Soja 2026',
+    seasonName: 'Barter 2026/27',
+    grainName: 'Soja',
     // O PENHOR do caso resolvido: 900 sacas a 60 sc/ha com 20% de margem pedem
     // 18 ha, e a lavoura de `area()` tem 45,5. Os testes que são SOBRE o penhor
     // mexem nestes números na chamada, como fazem com as notas e a safra.
@@ -193,15 +195,16 @@ describe('CPR — o que falta para a cédula sair', () => {
    * endereçar.
    *
    * A cédula deixou de caber numa tabela só: a nota é do faturista e o
-   * vencimento é de quem cadastra a safra. Quem lê a lista é, em geral, o
+   * vencimento é de quem lança a cultura. Quem lê a lista é, em geral, o
    * consultor — e "falta o vencimento" o mandaria procurar um campo que não
    * existe na tela dele. Por isso cada frase diz ONDE a coisa se resolve.
+   *
+   * A CULTURA na frase é o que o Barter com soja e milho exige: o vencimento se
+   * acerta em UMA das duas, e a pendência precisa dizer em qual.
    */
-  it('o vencimento é da SAFRA, e a pendência dele diz isso', () => {
+  it('o vencimento é da CULTURA, e a pendência dele diz isso', () => {
     const gaps = cprGaps({ ...filled(), dueDate: null }, [area()], contexto());
-    expect(gaps).toEqual([
-      'vencimento da CPR (defina-o na safra Soja 2026, no cadastro do Barter)',
-    ]);
+    expect(gaps).toEqual(['vencimento da CPR (defina-o na cultura Soja, no lançamento do Barter)']);
   });
 
   it('sem nota fiscal não há origem da dívida — e ela é do faturista', () => {

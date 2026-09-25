@@ -374,56 +374,57 @@ model Product {
   priceHistory  PriceHistoryEntry[]
   items         BarterItem[]
   versionPrices VersionPrice[]
-  seasons       Season[]            @relation("SeasonGrain")
+
+  /// Os lançamentos que aceitam ESTE grão como pagamento (só produtos
+  /// `type: "grain"` têm). Era `seasons`, quando a safra é que tinha um grão.
+  versionGrains VersionGrain[] @relation("VersionGrain")
 }
 
-/// SAFRA (temporada): o Barter acontece SOBRE um grão, durante um ciclo.
-/// `code` é a raiz do código das versões: letra do grão + ano (ex.: S2026 →
-/// versões S2026.01, S2026.02...).
+/// SAFRA (temporada): o CICLO em que o Barter acontece. `code` é a raiz do
+/// código das versões (ex.: B2026 → versões B2026.01, B2026.02...).
 ///
-/// O grão fica desnormalizado (nome e unidade) porque a safra é registro
-/// histórico: excluir o produto do catálogo não pode apagar a memória de que
-/// aquela temporada era de soja.
+/// ELA NÃO É MAIS A CULTURA, e essa é a mudança deste modelo. A safra TINHA um
+/// grão — era "soja 2026", e toda permuta registrada nela só podia ser paga em
+/// soja —, e a lavoura não é assim: na mesma janela o produtor planta soja e
+/// milho, e o Barter precisa aceitar as duas ao mesmo tempo, com o cliente
+/// escolhendo em qual delas paga. Enquanto o grão morou aqui, a única forma de
+/// oferecer duas culturas era abrir duas safras — e aí "em qual gestão esta
+/// permuta caiu?" voltava a ter duas respostas, que é justamente o que a regra
+/// de uma safra aberta existe para evitar.
+///
+/// As CULTURAS agora moram na versão (ver `VersionGrain`): elas coexistem, cada
+/// uma com a própria cotação da saca, produtividade estimada e vencimento de
+/// CPR, sobre UMA tabela de insumos — porque o insumo custa o mesmo em R$
+/// qualquer que seja o grão com que ele vai ser pago.
+///
+/// O que sobrou aqui é o que a safra sempre foi por baixo do nome do grão: o
+/// ciclo, o ano e o código que numera as versões.
 model Season {
-  id        Int       @id @default(autoincrement())
-  code      String    @unique
-  name      String
-  year      Int
-  grainId   Int?
-  grain     Product?  @relation("SeasonGrain", fields: [grainId], references: [id], onDelete: SetNull)
-  grainName String
-  grainUnit String
-  status    String    @default("open")
-  openedAt  DateTime  @default(now())
-  closedAt  DateTime?
-
-  /// O VENCIMENTO DA CPR desta safra — a data em que a entrega do grão vence.
-  ///
-  /// Ele mora AQUI, e não na cédula, porque não é dado da cédula: o vencimento
-  /// muda conforme a CULTURA, e a safra é justamente "a cultura, neste ano"
-  /// (ver `grainName`). A soja vence na colheita dela, o milho safrinha na
-  /// dele, e todas as cédulas de uma mesma safra vencem no mesmo dia — é uma
-  /// decisão comercial tomada uma vez, quando a safra abre.
-  ///
-  /// Enquanto ele foi um campo do formulário, quem o digitava era o faturista,
-  /// cédula por cédula, sem nada que dissesse qual era a data certa daquela
-  /// cultura. Duas cédulas da mesma safra saíam com vencimentos diferentes, e a
-  /// única maneira de descobrir era comparar os papéis.
-  ///
-  /// Nulável porque a safra pode ser aberta antes de a data estar acertada — e
-  /// aí `cprGaps()` cobra, com o recado endereçado a quem pode resolver (o
-  /// admin, no cadastro da safra), e não ao consultor, que não tem esse campo.
-  cprDueDate DateTime?
+  id       Int       @id @default(autoincrement())
+  code     String    @unique
+  name     String
+  year     Int
+  status   String    @default("open")
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
 
   versions BarterVersion[]
 }
 
-/// O BARTER LANÇADO — uma versão da safra (S2026.01, S2026.02...).
+/// O BARTER LANÇADO — uma versão da safra (B2026.01, B2026.02...).
 ///
-/// É ela que responde "com que valores se permuta hoje": o valor da saca do
-/// grão e a tabela de preços dos insumos. Uma correção de valores no meio da
-/// safra não reescreve a versão vigente — publica a próxima, e a anterior
-/// fecha. É isso que mantém legível o que foi acordado em cada momento.
+/// É ela que responde "com que valores se permuta hoje": AS CULTURAS aceitas
+/// (com a cotação da saca de cada uma) e a tabela de preços dos insumos. Uma
+/// correção de valores no meio da safra não reescreve a versão vigente —
+/// publica a próxima, e a anterior fecha. É isso que mantém legível o que foi
+/// acordado em cada momento.
+///
+/// A TABELA DE INSUMOS É UMA SÓ para todas as culturas, e isso é uma afirmação
+/// sobre o domínio: o litro de glifosato custa os mesmos R$ 40 quer ele vá ser
+/// pago em soja ou em milho. O que muda de uma cultura para a outra é a
+/// COTAÇÃO — e é por ela que o mesmo insumo vale 0,33 saca de soja e 0,69 de
+/// milho. Uma tabela por cultura duplicaria o lançamento inteiro para expressar
+/// uma divisão que o preço da saca já faz.
 ///
 /// A VIGÊNCIA tem duas naturezas de propósito: `endsAt` é uma data que o admin
 /// marcou e por isso TRAVA (a API recusa permuta depois dela); as metas abaixo
@@ -437,33 +438,10 @@ model BarterVersion {
   code     String @unique
   status   String @default("active")
 
-  /// Valor (R$) da saca do grão nesta versão — a taxa que converte o custo dos
-  /// insumos em sacas. É digitado pelo admin ao publicar, não vem da planilha.
-  grainPrice Float
-
-  /// A PRODUTIVIDADE ESTIMADA da cultura nesta versão, em sacas por hectare — a
-  /// taxa que converte as sacas da permuta em HECTARES a penhorar.
-  ///
-  /// Ela é a outra metade da conversão que `grainPrice` começa: o preço da saca
-  /// leva o custo dos insumos a sacas, e a produtividade leva as sacas à área de
-  /// lavoura que precisa nascer para pagá-las. É por isso que ela mora AQUI, ao
-  /// lado dele, e não na safra: as duas são decisão comercial do admin, tomadas
-  /// no mesmo ato, e revisáveis pelo mesmo mecanismo — publicar a próxima versão
-  /// não reescreve o que já foi acordado nesta.
-  ///
-  /// (O `cprDueDate` foi para a SAFRA pelo motivo oposto, e a distinção é o que
-  /// separa os dois: o vencimento é um FATO do calendário da cultura; a
-  /// produtividade é a estimativa que a empresa ADOTA para medir risco. Fato é
-  /// da safra, política é da versão.)
-  ///
-  /// OBRIGATÓRIA na publicação (ver `PublishVersionDto`), e por isso o `0` só
-  /// existe nas versões anteriores a este campo. Enquanto ela for 0, `POST
-  /// /barters` recusa: sem produtividade não há área exigida, e uma permuta que
-  /// passasse sem ela entraria na esteira sem garantia dimensionada — que é
-  /// exatamente o que o penhor existe para impedir. Ver
-  /// `VersionEstimatedYieldDto`, que é por onde ela se acerta numa versão já
-  /// publicada.
-  estimatedYield Float @default(0)
+  /// AS CULTURAS que este lançamento aceita — ver `VersionGrain`. Pelo menos
+  /// uma, e é a publicação que garante isso: versão sem cultura nenhuma seria
+  /// uma tabela de insumos que ninguém tem como pagar.
+  grains VersionGrain[]
 
   /// ESTE LANÇAMENTO LEVA SEGURO AGRÍCOLA?
   ///
@@ -500,8 +478,14 @@ model BarterVersion {
   ///
   /// Não há meta de lucro: sem custo na lista de preços, ela seria a de vendas
   /// com outro nome.
+  ///
+  /// A META DE SACAS NÃO ESTÁ AQUI — ela é de cada cultura
+  /// (`VersionGrain.targetSacks`). Sacas de soja e sacas de milho não somam:
+  /// são grãos diferentes, com preço, peso e comprador diferentes, e um número
+  /// único juntando os dois seria uma medida sem significado físico — a barra do
+  /// painel andaria com o milho e o admin leria compromisso de soja. As outras
+  /// duas somam sem problema: R$ é R$, e permuta é permuta.
   targetSales   Float?
-  targetSacks   Float?
   targetBarters Int?
 
   /// O QUE FAZER quando a meta bater: encerrar o Barter (true) ou só avisar e
@@ -530,6 +514,94 @@ model BarterVersion {
   barters Barter[]
 
   @@unique([seasonId, number])
+}
+
+/// UMA CULTURA aceita pelo Barter lançado — o grão em que a permuta pode ser
+/// paga, com tudo o que muda de um grão para o outro.
+///
+/// Ela existe porque as culturas COEXISTEM. O Barter é uma janela de venda, e
+/// dentro dela o produtor decide o que planta: fecha a soja em setembro, o
+/// milho safrinha em janeiro, e às vezes os dois no mesmo dia, em talhões
+/// diferentes. O grão morava na safra (ver `Season`) e isso obrigava a escolher
+/// uma cultura por gestão — quem quisesse oferecer duas abria duas safras, e a
+/// pergunta "por quanto se permuta hoje?" passava a ter duas respostas.
+///
+/// O QUE É POR CULTURA é o que este modelo lista, e cada campo tem um porquê
+/// diferente de não ser da versão inteira:
+///
+/// - `price` é a cotação da saca. É ela que converte o custo dos insumos em
+///   sacas, e soja e milho não valem o mesmo;
+/// - `estimatedYield` é a produtividade estimada (sc/ha). É ela que converte as
+///   sacas em ÁREA a penhorar, e 60 sc/ha de soja não é 120 sc/ha de milho;
+/// - `cprDueDate` é o vencimento da entrega. Ele é um FATO do calendário da
+///   cultura — a soja vence na colheita dela, o milho safrinha na dele;
+/// - `targetSacks` é a meta de sacas, que só existe por grão (ver
+///   `BarterVersion.targetSales`).
+///
+/// O QUE NÃO É POR CULTURA ficou na versão, e a lista é curta de propósito: a
+/// tabela de insumos (o preço em R$ não muda com o grão), o seguro agrícola (é
+/// do lançamento, cotado por praça) e a vigência.
+///
+/// O GRÃO fica desnormalizado (nome e unidade) pelo mesmo motivo de tudo o mais
+/// neste schema: excluir o produto do catálogo não pode apagar a memória de que
+/// aquele lançamento aceitava soja.
+model VersionGrain {
+  id        Int           @id @default(autoincrement())
+  versionId Int
+  version   BarterVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  grainId   Int?
+  grain     Product? @relation("VersionGrain", fields: [grainId], references: [id], onDelete: SetNull)
+  grainName String
+  grainUnit String
+
+  /// Valor (R$) da saca desta cultura nesta versão — a taxa que converte o
+  /// custo dos insumos em sacas. É digitado pelo admin ao publicar, não vem da
+  /// planilha do fornecedor (ela é de insumo).
+  price Float
+
+  /// A PRODUTIVIDADE ESTIMADA desta cultura, em sacas por hectare — a taxa que
+  /// converte as sacas da permuta em HECTARES a penhorar.
+  ///
+  /// Ela é a outra metade da conversão que `price` começa: o preço da saca leva
+  /// o custo dos insumos a sacas, e a produtividade leva as sacas à área de
+  /// lavoura que precisa nascer para pagá-las.
+  ///
+  /// OBRIGATÓRIA na publicação (ver `VersionGrainDto`). Enquanto ela for 0,
+  /// `POST /barters` recusa a cultura: sem produtividade não há área exigida, e
+  /// uma permuta que passasse sem ela entraria na esteira sem garantia
+  /// dimensionada — que é exatamente o que o penhor existe para impedir.
+  estimatedYield Float @default(0)
+
+  /// O VENCIMENTO DA CPR desta cultura — a data em que a entrega do grão vence.
+  ///
+  /// Ele não é dado da cédula, e por isso não mora nela: todas as cédulas da
+  /// mesma cultura, na mesma gestão, vencem no mesmo dia. Enquanto foi campo do
+  /// formulário, quem o digitava era o faturista, cédula por cédula, sem nada
+  /// que dissesse qual era a data certa daquela cultura — duas CPRs da mesma
+  /// safra saíam com vencimentos diferentes e ninguém tinha como saber qual
+  /// estava certa.
+  ///
+  /// Estava na SAFRA, e veio para cá junto com o grão: ele era "o vencimento da
+  /// cultura da safra", e a safra deixou de ter cultura.
+  ///
+  /// Nulável porque o lançamento pode acontecer antes de a data estar acertada —
+  /// e aí `cprGaps()` cobra, com o recado endereçado a quem pode resolver (o
+  /// admin, no lançamento), e não ao consultor, que não tem esse campo.
+  cprDueDate DateTime?
+
+  /// A META DE SACAS desta cultura (null = sem meta). Ver
+  /// `BarterVersion.targetSales` para por que ela não é da versão.
+  targetSacks Float?
+
+  /// A ORDEM em que as culturas aparecem para quem escolhe — a primeira é o
+  /// padrão da tela. É conteúdo, e não apresentação: o admin lança "soja e, se
+  /// quiser, milho", e inverter isso muda o que o consultor vê primeiro.
+  position Int @default(0)
+
+  /// Uma linha por cultura em cada versão: o mesmo grão duas vezes seriam duas
+  /// cotações para a mesma pergunta, e nada no documento diria qual vale.
+  @@unique([versionId, grainId])
 }
 
 /// Uma LINHA da tabela de valores da versão: o preço de um insumo naquele
@@ -574,6 +646,14 @@ model PriceHistoryEntry {
 /// valores esta permuta foi fechada. `versionCode` fica desnormalizado porque é
 /// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
 /// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
+///
+/// A CULTURA da permuta — soja ou milho, agora que a versão aceita as duas — NÃO
+/// é coluna daqui, e isso é deliberado: ela é a LINHA DO GRÃO (o `BarterItem` de
+/// `kind: "grain"`), que já guarda o produto, o nome, a unidade e a cotação
+/// congelados. Uma coluna ao lado seria um segundo lugar dizendo o mesmo, e os
+/// dois poderiam divergir na primeira remontagem de rascunho. O que ESTÁ aqui é
+/// o que a escolha da cultura PRODUZIU e não se lê do item: a produtividade com
+/// que o penhor foi dimensionado (`pledgeYield`).
 ///
 /// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de cinco postos:
 ///
@@ -991,6 +1071,14 @@ model BarterEvent {
 /// Item da permuta com snapshots imutáveis de nome/unidade/preço. O preço é
 /// congelado aqui — e não lido da tabela da versão — porque publicar a versão
 /// seguinte não pode reescrever o que já foi acordado.
+///
+/// A LINHA DE `kind: "grain"` É A CULTURA DA PERMUTA. Ela sempre foi o
+/// pagamento — quantas sacas cobrem o custo —, e desde que a versão passou a
+/// aceitar mais de um grão (ver `VersionGrain`) ela é também a resposta a "em
+/// que o produtor paga esta?": `productId` diz qual cultura foi escolhida,
+/// `unitValue` a cotação com que ela foi convertida, e as duas ficam congeladas
+/// como todo o resto. É por essa linha que a alteração de rascunho confere se a
+/// cultura continua aberta e que a meta de sacas sabe de qual grão ela é.
 model BarterItem {
   id          Int      @id @default(autoincrement())
   barterId    Int

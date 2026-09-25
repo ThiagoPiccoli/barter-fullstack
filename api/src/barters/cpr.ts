@@ -282,6 +282,14 @@ export interface CprContext {
   /** A safra em que a permuta foi fechada, para endereçar a pendência do vencimento. */
   seasonName: string;
   /**
+   * A CULTURA em que esta permuta é paga — soja, milho —, para a mesma
+   * pendência. Com mais de uma cultura no mesmo lançamento, "defina o
+   * vencimento no Barter" não diz em qual delas, e quem lê a frase é quem vai
+   * resolvê-la. Opcional porque nem todo chamador a tem (ver `consultantCprGaps`,
+   * que monta um contexto mínimo).
+   */
+  grainName?: string;
+  /**
    * O DIMENSIONAMENTO DO PENHOR — quanta área esta permuta exige em garantia.
    *
    * Diferente das notas e da safra, esta parte do contexto pertence ao CONSULTOR:
@@ -400,14 +408,15 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
   // esteira num número que só existe semanas depois. Quem o informa é o emissor,
   // no ato de emitir (ver `IssueCprDto`).
   of(CPR_GAP_OWNER.emitter)(cpr.number, 'número da CPR');
-  // O VENCIMENTO é da safra (ele muda conforme a cultura), e a frase diz isso:
-  // quem lê esta lista não tem campo de vencimento em tela nenhuma.
+  // O VENCIMENTO é da CULTURA (ele muda de um grão para o outro), e a frase diz
+  // isso: quem lê esta lista não tem campo de vencimento em tela nenhuma, e
+  // precisa saber em qual cultura do lançamento a data se acerta.
   if (!cpr.dueDate) {
     gaps.push({
       owner: CPR_GAP_OWNER.admin,
-      label: `vencimento da CPR (defina-o na safra${
-        context.seasonName ? ` ${context.seasonName}` : ''
-      }, no cadastro do Barter)`,
+      label: `vencimento da CPR (defina-o na cultura${
+        context.grainName ? ` ${context.grainName}` : ''
+      }, no lançamento do Barter)`,
     });
   }
 
@@ -636,8 +645,9 @@ export interface CprInvoiceRef {
  * é um número que vai impresso, e a impressão não pode discordar do cálculo.
  *
  * A SAFRA e as NOTAS entram por parâmetro pelo mesmo motivo do peso da saca:
- * elas não estão na permuta. A primeira é do cadastro do Barter (é ela que diz o
- * vencimento da cultura) e as segundas são o que o faturamento produziu.
+ * elas não estão na permuta. A primeira é do lançamento — o nome da gestão e o
+ * vencimento da CULTURA em que esta permuta é paga — e as segundas são o que o
+ * faturamento produziu.
  */
 export function knownFrom(
   barter: { code: string; producerName: string; versionCode: string; unitName: string },

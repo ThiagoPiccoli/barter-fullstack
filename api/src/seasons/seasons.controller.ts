@@ -5,7 +5,6 @@ import {
   HttpCode,
   Param,
   Post,
-  Put,
   UnprocessableEntityException,
   UploadedFile,
   UseInterceptors,
@@ -15,12 +14,7 @@ import type { User } from '@prisma/client';
 import { CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterVersionJson, toSeasonJson } from '../common/serializers';
-import {
-  ImportVersionDto,
-  OpenSeasonDto,
-  PublishVersionDto,
-  SeasonCprDueDateDto,
-} from './dto/season.dto';
+import { ImportVersionDto, OpenSeasonDto, PublishVersionDto } from './dto/season.dto';
 import { SeasonsService } from './seasons.service';
 
 /**
@@ -31,7 +25,7 @@ import { SeasonsService } from './seasons.service';
 const SHEET_LIMIT_BYTES = 5 * 1024 * 1024;
 
 /**
- * A SAFRA — a temporada em que o Barter acontece, sobre um grão.
+ * A SAFRA — o ciclo em que o Barter acontece.
  *
  * Só quem lança o Barter enxerga esta rota: para o consultor, safra é
  * consequência (ele vê a versão vigente em /barter-versions/current).
@@ -52,29 +46,10 @@ export class SeasonsController {
     return toSeasonJson(await this.seasons.open(admin, dto), admin);
   }
 
-  /**
-   * O VENCIMENTO DA CPR desta safra — a data em que a entrega do grão vence.
-   *
-   * É a única coisa da safra que se edita depois de aberta, e tem rota própria
-   * por isso: um `PUT /seasons/:code` genérico abriria a porta para reescrever o
-   * grão e o ano, que é o que as permutas já fechadas apontam.
-   *
-   * Ela vale para TODAS as cédulas da safra, e é a resposta ao problema que a
-   * criou: o vencimento muda conforme a cultura, e enquanto foi digitado cédula
-   * a cédula, duas CPRs da mesma safra saíam com datas diferentes.
-   */
-  @Put(':code/cpr-due-date')
-  @RequireCapability(CAPABILITY.barterManage)
-  async setCprDueDate(
-    @CurrentUser() admin: User,
-    @Param('code') code: string,
-    @Body() dto: SeasonCprDueDateDto,
-  ) {
-    return toSeasonJson(
-      await this.seasons.setCprDueDate(admin, code, new Date(dto.cprDueDate)),
-      admin,
-    );
-  }
+  // O VENCIMENTO DA CPR não está mais aqui: ele é de cada CULTURA, e as culturas
+  // são do lançamento (ver `PUT /barter-versions/:code/grains/:grainId`). A
+  // safra deixou de ter grão, e com ele foi embora a única coisa dela que se
+  // editava depois de aberta.
 
   /** Encerra a safra e a versão vigente dela. */
   @Post(':code/close')
@@ -101,8 +76,9 @@ export class SeasonsController {
 
   /**
    * Publica a próxima versão a partir da PLANILHA (.xlsx) — o caminho do admin
-   * no app. O arquivo traz os insumos; o valor da saca, a vigência e as metas
-   * vêm nos campos do formulário.
+   * no app. O arquivo traz os insumos; as culturas (com cotação, produtividade,
+   * vencimento e meta de cada uma), a vigência e as metas da versão vêm nos
+   * campos do formulário.
    */
   @Post(':code/versions/import')
   @RequireCapability(CAPABILITY.barterManage)

@@ -48,9 +48,29 @@ void main() {
       consultor('4', 'Roberto Souza', 'Filial 34'),
       consultor('3', 'Ana Paula Ferreira', 'Filial 04'),
     ];
+    // A CARTEIRA é campo do ADMIN: quem atende quem é decisão de quem
+    // administra, e o consultor que a escrevesse poderia se remover do próprio
+    // cliente. Sem este usuário, a tela desenha a versão do consultor — e o
+    // campo que este arquivo inteiro mede não existe nela.
+    AppData.currentUser = UserModel(
+      id: '1',
+      name: 'Admin',
+      email: 'admin@agrobarter.com.br',
+      role: UserRole.admin,
+      phone: '',
+      branch: 'Matriz',
+      unitId: '1',
+      avatarInitials: 'AD',
+      createdAt: DateTime(2024, 1, 1),
+      mustChangePassword: false,
+      capabilities: const {Capability.producersManage, Capability.producersEdit},
+    );
   });
 
-  tearDown(() => AppData.consultants = []);
+  tearDown(() {
+    AppData.consultants = [];
+    AppData.currentUser = null;
+  });
 
   /// Tela alta o bastante para o formulário inteiro caber sem rolagem. O padrão
   /// de 800×600 deixa o botão de salvar fora do viewport, e a `ListView` nem

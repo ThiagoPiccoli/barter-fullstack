@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 
@@ -12,20 +14,59 @@ import '../services/api/api_client.dart';
 /// vira o dia em fuso nenhum.
 DateTime cprDueDateInstant(DateTime day) => DateTime.utc(day.year, day.month, day.day, 12);
 
+/// UMA CULTURA sendo lançada — o que o admin digita por grão ao publicar.
+///
+/// As quatro coisas que mudam de uma cultura para a outra viajam juntas porque
+/// são decididas juntas: a cotação da saca converte o custo dos insumos em
+/// sacas, a produtividade converte as sacas na área do penhor, o vencimento é a
+/// data da entrega daquele grão e a meta mede o quanto já foi comprometido
+/// nele.
+class VersionGrainInput {
+  final String grainId;
+  final double price;
+  final double estimatedYield;
+  final DateTime? cprDueDate;
+  final double? targetSacks;
+
+  const VersionGrainInput({
+    required this.grainId,
+    required this.price,
+    required this.estimatedYield,
+    this.cprDueDate,
+    this.targetSacks,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'grainId': int.parse(grainId),
+        'price': price,
+        'estimatedYield': estimatedYield,
+        if (cprDueDate != null) 'cprDueDate': cprDueDateInstant(cprDueDate!).toIso8601String(),
+        if (targetSacks != null) 'targetSacks': targetSacks,
+      };
+}
+
 /// O LANÇAMENTO do Barter: safras, versões e a tabela de valores.
 ///
 /// `current` é a única leitura que o consultor faz — é dela que a tela de nova
-/// permuta descobre se há Barter aberto, qual é o grão e por quanto vale cada
-/// insumo. Todo o resto é do admin.
+/// permuta descobre se há Barter aberto, quais CULTURAS ele aceita e por quanto
+/// vale cada insumo. Todo o resto é do admin.
 class BarterProgramRepository {
   /// A versão vigente, ou null quando não há Barter lançado.
-  Future<BarterVersionModel?> current() async => parseVersion(await currentRaw());
+  ///
+  /// [grainId] escolhe a CULTURA pela qual a tabela vem convertida — o mesmo
+  /// insumo custa 0,77 saca de soja e 1,78 de milho, e quem lê em sacas (o
+  /// consultor) precisa da conversão da cultura que ele escolheu. Sem ele, a
+  /// primeira cultura do lançamento.
+  Future<BarterVersionModel?> current({String? grainId}) async =>
+      parseVersion(await currentRaw(grainId: grainId));
 
   /// A mesma versão, ainda como veio da API. `null` aqui é resposta legítima do
   /// servidor — significa que NÃO HÁ Barter aberto —, e é diferente de nunca ter
   /// perguntado: quem distingue as duas é `AppData.lastSyncAt`.
-  Future<Map<String, dynamic>?> currentRaw() async =>
-      await api.get('/barter-versions/current') as Map<String, dynamic>?;
+  Future<Map<String, dynamic>?> currentRaw({String? grainId}) async =>
+      await api.get(
+        '/barter-versions/current${grainId == null ? '' : '?grainId=$grainId'}',
+      ) as Map<String, dynamic>?;
 
   BarterVersionModel? parseVersion(Map<String, dynamic>? row) =>
       row == null ? null : BarterVersionModel.fromJson(row);
@@ -41,39 +82,54 @@ class BarterProgramRepository {
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// [cprDueDate] é o VENCIMENTO DA CPR desta safra — a data em que o produtor
-  /// entrega o grão. Opcional aqui de propósito: ele é da colheita, e a safra
-  /// abre antes de o calendário dela estar fechado. Sem ele a safra abre do
-  /// mesmo jeito, e a pendência aparece na cédula endereçada ao admin.
+  /// ABRE A SAFRA — o CICLO, e não mais a cultura.
+  ///
+  /// Não há grão aqui: as culturas são do LANÇAMENTO (ver [VersionGrainInput]),
+  /// porque elas coexistem e mudam de uma versão para a outra — o Barter pode
+  /// abrir só com soja e acrescentar o milho na versão seguinte, sem que a safra
+  /// tenha deixado de ser a mesma.
   Future<SeasonModel> openSeason({
-    required String grainId,
     required int year,
     String? name,
     String? letter,
-    DateTime? cprDueDate,
   }) async {
     final data = await api.post('/seasons', body: {
-      'grainId': int.parse(grainId),
       'year': year,
       if (name != null && name.isNotEmpty) 'name': name,
       if (letter != null && letter.isNotEmpty) 'letter': letter,
-      if (cprDueDate != null) 'cprDueDate': cprDueDateInstant(cprDueDate).toIso8601String(),
     });
     return SeasonModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// ACERTA o vencimento da CPR de uma safra JÁ ABERTA.
+  /// ACERTA UMA CULTURA de uma versão já publicada: a cotação da saca, a
+  /// produtividade estimada, o vencimento da CPR ou a meta de sacas dela.
   ///
-  /// Rota própria (`PUT`), e não um "editar safra": é o único campo dela que se
-  /// corrige depois de aberta, e mexer nele muda a data de entrega de TODA
-  /// cédula da safra que ainda não foi emitida — por isso ele deixa rastro na
-  /// trilha de auditoria, sozinho.
-  Future<SeasonModel> setCprDueDate(String code, DateTime dueDate) async {
+  /// Rota própria (`PUT`), e não um "editar versão": esses números nascem no
+  /// lançamento, e mudar um deles no meio do Barter obrigaria a republicar a
+  /// tabela inteira — o que encerraria a versão vigente e reiniciaria a contagem
+  /// do realizado por causa de um campo. Mexer no vencimento muda a data de
+  /// entrega de TODA cédula daquela cultura que ainda não foi emitida, e por
+  /// isso o ato deixa rastro na trilha de auditoria.
+  Future<BarterVersionModel> updateGrain(
+    String versionCode,
+    String grainId, {
+    double? price,
+    double? estimatedYield,
+    DateTime? cprDueDate,
+    double? targetSacks,
+  }) async {
     final data = await api.put(
-      '/seasons/$code/cpr-due-date',
-      body: {'cprDueDate': cprDueDateInstant(dueDate).toIso8601String()},
+      '/barter-versions/$versionCode/grains/$grainId',
+      // Só o que veio: um `PUT` que mandasse os quatro campos sempre
+      // reescreveria com `null` o que esta tela não estava editando.
+      body: {
+        'price': ?price,
+        'estimatedYield': ?estimatedYield,
+        if (cprDueDate != null) 'cprDueDate': cprDueDateInstant(cprDueDate).toIso8601String(),
+        'targetSacks': ?targetSacks,
+      },
     );
-    return SeasonModel.fromJson(data as Map<String, dynamic>);
+    return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
   Future<SeasonModel> closeSeason(String code) async {
@@ -125,11 +181,9 @@ class BarterProgramRepository {
     required String seasonCode,
     required String filename,
     required List<int> bytes,
-    required double grainPrice,
-    required double estimatedYield,
+    required List<VersionGrainInput> grains,
     DateTime? endsAt,
     double? targetSales,
-    double? targetSacks,
     int? targetBarters,
     bool closeOnGoal = false,
     bool insuranceRequired = false,
@@ -141,14 +195,14 @@ class BarterProgramRepository {
       filename: filename,
       bytes: bytes,
       fields: {
-        'grainPrice': '$grainPrice',
-        // A PRODUTIVIDADE vai junto do preço da saca, e é obrigatória como ele:
-        // sem ela a versão nasceria vigente e recusando toda permuta, porque o
-        // penhor não teria como ser dimensionado.
-        'estimatedYield': '$estimatedYield',
+        // AS CULTURAS em JSON dentro de um campo de texto: no multipart todo
+        // campo é texto, e uma lista de objetos não tem como chegar de outro
+        // jeito. A META DE SACAS viaja aqui dentro, e não ao lado das outras
+        // metas, porque ela é de cada cultura — sacas de soja e de milho não
+        // somam.
+        'grains': jsonEncode(grains.map((grain) => grain.toJson()).toList()),
         if (endsAt != null) 'endsAt': endsAt.toUtc().toIso8601String(),
         if (targetSales != null) 'targetSales': '$targetSales',
-        if (targetSacks != null) 'targetSacks': '$targetSacks',
         if (targetBarters != null) 'targetBarters': '$targetBarters',
         // Só vai quando é `true`: o padrão do servidor é o manual, e mandar
         // "false" é dizer a mesma coisa com um campo a mais no multipart.
@@ -163,8 +217,8 @@ class BarterProgramRepository {
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Corrige um valor da versão vigente. O `productId` do grão da safra ajusta
-  /// o valor da saca — é o mesmo caminho, de propósito.
+  /// Corrige um valor da versão vigente. O `productId` de uma das CULTURAS
+  /// ajusta a cotação da saca dela — é o mesmo caminho, de propósito.
   Future<BarterVersionModel> updatePrice(
     String versionCode,
     String productId,

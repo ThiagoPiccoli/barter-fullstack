@@ -24,11 +24,18 @@ class BarterRepository {
   Future<BarterModel> create({
     required String producerId,
     required String unitId,
+    required String grainId,
     required Map<String, double> inputQuantities,
     String note = '',
   }) async {
     final data = await api.post('/barters', body: {
       'producerId': int.parse(producerId),
+      // A CULTURA em que a permuta será paga — a primeira decisão dela, e do
+      // CONSULTOR: é ele quem sabe o que o cliente vai plantar naquele talhão.
+      // Obrigatória mesmo quando o Barter tem uma cultura só, porque um padrão
+      // silencioso faria a permuta nascer numa cultura que ninguém escolheu no
+      // dia em que o admin lançasse a segunda.
+      'grainId': int.parse(grainId),
       if (note.trim().isNotEmpty) 'note': note.trim(),
       // SEM `taxRegime`: o regime é do produtor e mora no cadastro dele, e é de
       // lá que o servidor o lê. Mandá-lo daqui significaria mandar o que o
@@ -79,8 +86,24 @@ class BarterRepository {
   ///
   /// Vem na moeda da LENTE, como a versão vigente: sacas por unidade para o
   /// consultor, R$ para a retaguarda.
-  Future<BarterVersionModel> versionOf(String code) async {
-    final data = await api.get('/barters/$code/version');
+  /// TROCA A CULTURA de um rascunho — o grão em que a permuta será paga.
+  ///
+  /// `PUT` pelo mesmo motivo dos insumos: é um estado que se declara ("esta
+  /// permuta é de milho"), e reenviar o mesmo grão dá o mesmo resultado. Só o
+  /// rascunho aceita — depois do encaminhamento, o caminho é o pedido de
+  /// alteração.
+  Future<BarterModel> setCulture(String code, String grainId) async {
+    final data = await api.put(
+      '/barters/$code/culture',
+      body: {'grainId': int.parse(grainId)},
+    );
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  Future<BarterVersionModel> versionOf(String code, {String? grainId}) async {
+    final data = await api.get(
+      '/barters/$code/version${grainId == null ? '' : '?grainId=$grainId'}',
+    );
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 

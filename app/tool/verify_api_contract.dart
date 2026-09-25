@@ -190,15 +190,25 @@ Future<void> _run() async {
 
   /* ── Barter vigente ───────────────────────────────────────────────── */
   // É o dado de que a tela de nova permuta depende: sem ele o consultor não
-  // tem grão, nem valores, nem sacas. Um campo renomeado aqui deixaria o app
+  // tem CULTURA, nem valores, nem sacas. Um campo renomeado aqui deixaria o app
   // achando que o Barter está fechado.
   final program = BarterProgramRepository();
   final current = await program.current();
   check('existe Barter vigente', current != null, current?.code ?? 'nenhum');
   if (current != null) {
-    check('a versão traz grão e cotação',
-        current.grainName.isNotEmpty && current.grainPrice > 0,
-        '${current.grainName} a ${current.grainPrice}');
+    // AS CULTURAS que este Barter aceita — pelo menos uma, com a cotação e a
+    // produtividade dela. É entre elas que o consultor escolhe em que o cliente
+    // paga, e é a cotação que converte o custo dos insumos em sacas.
+    check(
+        'a versão traz as culturas com cotação e produtividade',
+        current.grains.isNotEmpty &&
+            current.grains.every((g) => g.grainName.isNotEmpty && g.estimatedYield > 0) &&
+            current.grainPrice > 0,
+        current.grains
+            .map((g) => '${g.grainName} a ${g.price} (${g.estimatedYield} sc/ha)')
+            .join(', '));
+    check('a tabela diz em que cultura ela está convertida',
+        current.pricedInGrainId.isNotEmpty, current.pricedInGrainId);
     check('a versão traz a tabela de insumos', current.prices.isNotEmpty,
         '${current.prices.length} insumo(s)');
     check('a permuta aponta a versão em que foi fechada',

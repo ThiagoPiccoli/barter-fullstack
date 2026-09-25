@@ -41,7 +41,7 @@ describe('Seguro do produtor (e2e)', () => {
   const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
 
   /** O Barter vigente do dataset — é nele que uma permuta nova cai. */
-  const VERSAO = 'S2026.02';
+  const VERSAO = 'B2026.02';
 
   /**
    * Antônio Carvalho: 120 ha em Maringá/PR, carteira do João. Os insumos são os
@@ -53,6 +53,7 @@ describe('Seguro do produtor (e2e)', () => {
   const payload = {
     producerId: 1,
     unitId: UNIT.filial02,
+    grainId: 1,
     inputs: [
       { productId: 5, quantity: 48 },
       { productId: 6, quantity: 300 },

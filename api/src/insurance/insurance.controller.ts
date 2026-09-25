@@ -8,6 +8,7 @@ import {
   ParseIntPipe,
   Post,
   Put,
+  Query,
   UnprocessableEntityException,
   UploadedFile,
   UseInterceptors,
@@ -52,15 +53,20 @@ export class InsuranceController {
    * A base inteira.
    *
    * A LENTE precisa da cotação da saca para converter R$/ha em sacas/ha, e a
-   * cotação é a da versão VIGENTE — a base não pertence a versão nenhuma (é do
-   * município), e a saca de hoje é a do Barter aberto agora. Sem Barter aberto,
-   * a conversão não acontece e quem não vê R$ recebe zero: não é permissivo —
-   * sem Barter aberto ele não registra permuta nenhuma.
+   * cotação é a da CULTURA escolhida na versão VIGENTE — a base não pertence a
+   * versão nenhuma (é do município), e a saca de hoje é a do Barter aberto
+   * agora. Com mais de uma cultura aberta, o mesmo seguro custa duas
+   * quantidades de saca diferentes, e quem diz qual interessa é quem chama
+   * (`?grainId=`, a cultura que o consultor selecionou); sem escolha, a
+   * primeira do lançamento.
+   *
+   * Sem Barter aberto a conversão não acontece e quem não vê R$ recebe zero:
+   * não é permissivo — sem Barter aberto ele não registra permuta nenhuma.
    */
   @Get()
   @AnyRole()
-  async index(@CurrentUser() viewer: User) {
-    const lens = lensFor(viewer, await this.currentGrainPrice());
+  async index(@CurrentUser() viewer: User, @Query('grainId') grainId?: string) {
+    const lens = lensFor(viewer, await this.currentGrainPrice(Number(grainId) || null));
     return (await this.insurance.list()).map((rate) => toInsuranceRateJson(rate, lens));
   }
 
@@ -126,15 +132,19 @@ export class InsuranceController {
   }
 
   /**
-   * A cotação da saca do Barter aberto, ou 0 quando não há nenhum.
+   * A cotação da saca de uma CULTURA do Barter aberto, ou 0 quando não há
+   * Barter nenhum.
    *
    * Zero não trava a listagem de propósito: quem vê R$ (a retaguarda inteira)
    * não depende dela, e para o consultor a base sem Barter aberto é informação
    * que ele não vai usar — ele não consegue registrar permuta nenhuma nesse
-   * estado.
+   * estado. Cultura pedida que não está no lançamento cai na primeira, pelo
+   * mesmo desenho de `toBarterVersionJson`.
    */
-  private async currentGrainPrice(): Promise<number> {
+  private async currentGrainPrice(grainId: number | null): Promise<number> {
     const version = await this.seasons.currentVersion();
-    return version?.grainPrice ?? 0;
+    if (!version) return 0;
+    const grain = version.grains.find((row) => row.grainId === grainId) ?? version.grains[0];
+    return grain?.price ?? 0;
   }
 }

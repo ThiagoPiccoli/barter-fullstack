@@ -34,6 +34,13 @@ export interface CountedItem {
   kind: string;
   quantity: number;
   unitValue: number;
+  /**
+   * O PRODUTO do item. Só a linha de grão precisa dele, e para uma coisa só:
+   * dizer de QUAL CULTURA são as sacas desta permuta, agora que a versão aceita
+   * mais de uma (ver `VersionGrain`). Nos insumos ele é ignorado.
+   */
+  productId?: number | null;
+  productName?: string;
 }
 
 /** Uma permuta, reduzida ao que as metas precisam. */
@@ -42,26 +49,50 @@ export interface CountedBarter {
   items: CountedItem[];
 }
 
+/** As sacas comprometidas em UMA cultura. */
+export interface RealizedSacks {
+  grainId: number | null;
+  grainName: string;
+  sacks: number;
+}
+
 /**
  * O realizado de uma versão, nas três unidades em que se pode pôr meta.
  *
  * Não há lucro. A lista de preços do fornecedor traz o preço de VENDA e mais
  * nada; sem custo, "lucro" seria o faturamento com outro nome — um número que
  * parece outro e engana quem lê o painel.
+ *
+ * As SACAS são POR CULTURA, e não um total, desde que a versão passou a aceitar
+ * mais de um grão: 4.000 sacas de soja e 3.000 de milho não são 7.000 de coisa
+ * nenhuma — são dois compromissos de entrega, com compradores, preços e
+ * calendários diferentes. Somá-los produziria uma barra de progresso que anda
+ * com o milho enquanto o admin lê compromisso de soja.
  */
 export interface Realized {
   /** R$ em insumos retirados. */
   sales: number;
-  /** Sacas do grão comprometidas. */
-  sacks: number;
+  /** Sacas comprometidas, uma linha por cultura com permuta fechada. */
+  sacks: RealizedSacks[];
   /** Quantidade de permutas. */
   barters: number;
 }
 
-/** As metas da versão. `null` em qualquer uma = sem meta naquela unidade. */
+/** A meta de sacas de UMA cultura da versão. */
+export interface GrainTarget {
+  grainId: number | null;
+  grainName: string;
+  targetSacks: number | null;
+}
+
+/**
+ * As metas da versão. `null` em qualquer uma = sem meta naquela unidade.
+ *
+ * A de SACAS não está aqui porque não é da versão: ela é de cada cultura
+ * (`VersionGrain.targetSacks`), e entra por `grains`.
+ */
 export interface Targets {
   targetSales: number | null;
-  targetSacks: number | null;
   targetBarters: number | null;
 }
 
@@ -81,6 +112,13 @@ export interface Goal {
   /** 0–1, saturado em 1 (a barra não passa do fim). */
   ratio: number;
   met: boolean;
+  /**
+   * DE QUE CULTURA é esta meta. Só as de sacas têm: vendas e permutas são da
+   * versão inteira. É o que faz a tela (e a frase do fechamento automático)
+   * dizerem "meta de sacas de milho" em vez de deixar o admin adivinhar qual das
+   * barras é qual.
+   */
+  grainName?: string;
 }
 
 const round2 = (value: number): number => Math.round(value * 100) / 100;
@@ -115,33 +153,71 @@ export function countsAsRealized(status: string): boolean {
 export function realizedFrom(barters: CountedBarter[]): Realized {
   const approved = barters.filter((barter) => COUNTS_AS_REALIZED.includes(barter.status));
   const inputs = approved.flatMap((barter) => barter.items.filter((item) => item.kind !== 'grain'));
-  const sacks = approved
-    .flatMap((barter) => barter.items.filter((item) => item.kind === 'grain'))
-    .reduce((sum, item) => sum + item.quantity, 0);
+
+  /*
+   * AS SACAS, agrupadas pela CULTURA de cada permuta.
+   *
+   * A chave é o `productId` do item de grão, que é quem diz qual cultura a
+   * permuta escolheu (ver `BarterItem` no schema). Item sem produto — o grão foi
+   * excluído do catálogo depois — cai numa chave própria pelo NOME congelado, em
+   * vez de se misturar com outra cultura: o nome é o que sobra, e é o que o
+   * painel mostra.
+   */
+  const byGrain = new Map<string, RealizedSacks>();
+  for (const item of approved.flatMap((barter) => barter.items)) {
+    if (item.kind !== 'grain') continue;
+    const grainId = item.productId ?? null;
+    const grainName = item.productName ?? '';
+    const key = grainId === null ? `name:${grainName}` : `id:${grainId}`;
+    const row = byGrain.get(key) ?? { grainId, grainName, sacks: 0 };
+    row.sacks += item.quantity;
+    byGrain.set(key, row);
+  }
 
   return {
     sales: round2(inputs.reduce((sum, item) => sum + item.quantity * item.unitValue, 0)),
-    sacks: round2(sacks),
+    sacks: [...byGrain.values()]
+      .map((row) => ({ ...row, sacks: round2(row.sacks) }))
+      .sort((a, b) => a.grainName.localeCompare(b.grainName, 'pt-BR')),
     barters: approved.length,
   };
 }
 
-/** As metas que existem, cruzadas com o realizado. Meta ausente não vira Goal. */
-export function goalsOf(targets: Targets, realized: Realized): Goal[] {
-  const pairs: [GoalKind, number | null, number][] = [
-    [GOAL_KIND.sales, targets.targetSales, realized.sales],
-    [GOAL_KIND.sacks, targets.targetSacks, realized.sacks],
-    [GOAL_KIND.barters, targets.targetBarters, realized.barters],
+/**
+ * As metas que existem, cruzadas com o realizado. Meta ausente não vira Goal.
+ *
+ * As de SACAS são uma POR CULTURA: cada grão do lançamento pode ter a sua, e o
+ * realizado de cada uma é o das permutas fechadas naquela cultura — zero quando
+ * ainda não houve nenhuma, que é o começo certo de uma barra de progresso.
+ */
+export function goalsOf(targets: Targets, realized: Realized, grains: GrainTarget[] = []): Goal[] {
+  const sacksOf = (grain: GrainTarget): number =>
+    realized.sacks.find((row) =>
+      grain.grainId === null ? row.grainName === grain.grainName : row.grainId === grain.grainId,
+    )?.sacks ?? 0;
+
+  // A ORDEM é a da leitura: vendas, sacas (uma por cultura, na ordem do
+  // lançamento) e permutas — a mesma de quando a meta de sacas era uma só.
+  const pairs: [GoalKind, number | null | undefined, number, string | undefined][] = [
+    [GOAL_KIND.sales, targets.targetSales, realized.sales, undefined],
+    ...grains.map((grain): [GoalKind, number | null | undefined, number, string | undefined] => [
+      GOAL_KIND.sacks,
+      grain.targetSacks,
+      sacksOf(grain),
+      grain.grainName,
+    ]),
+    [GOAL_KIND.barters, targets.targetBarters, realized.barters, undefined],
   ];
 
   return pairs
     .filter(([, target]) => target !== null && target !== undefined && target > 0)
-    .map(([kind, target, done]) => ({
+    .map(([kind, target, done, grainName]) => ({
       kind,
       target: target as number,
       realized: done,
       ratio: Math.min(done / (target as number), 1),
       met: done >= (target as number),
+      ...(grainName ? { grainName } : {}),
     }));
 }
 
@@ -172,7 +248,11 @@ export function closingReasonOf(goals: Goal[]): string | null {
   const met = goals.find((goal) => goal.met);
   if (!met) return null;
   const target = met.kind === GOAL_KIND.barters ? String(met.target) : met.target.toFixed(2);
-  return `Automático: meta de ${GOAL_LABELS[met.kind]} atingida (${target})`;
+  // A CULTURA entra na frase quando a meta é de sacas: com duas culturas no
+  // mesmo Barter, "meta de sacas atingida" não diz qual delas encheu — e é
+  // justamente isso que alguém vai querer saber lendo por que o Barter fechou.
+  const of = met.grainName ? ` de ${met.grainName}` : '';
+  return `Automático: meta de ${GOAL_LABELS[met.kind]}${of} atingida (${target})`;
 }
 
 /**

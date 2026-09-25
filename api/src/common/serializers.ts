@@ -10,6 +10,7 @@ import { CREDIT_FILE_LABELS, type CreditFileKind } from '../barters/credit-file'
 import { CAPABILITY, can, capabilitiesOf } from './policy';
 import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
+import type { VersionWithGrains } from '../seasons/seasons.service';
 import { creditorGaps, forumOf } from './creditor';
 import { pledgeAreaFor } from '../barters/barter-math';
 import type {
@@ -34,6 +35,7 @@ import type {
   Season,
   Unit,
   User,
+  VersionGrain,
   VersionPrice,
 } from '@prisma/client';
 
@@ -360,8 +362,15 @@ export function toInsuranceRateJson(rate: InsuranceRate, lens: ValueLens = CURRE
 
 /* ── Barter: safra e versões ──────────────────────────────────────────── */
 
+/**
+ * A SAFRA — o ciclo, e não mais a cultura.
+ *
+ * O grão e o vencimento da CPR saíram daqui: eles são de cada CULTURA, e as
+ * culturas são do lançamento (ver `toVersionGrainJson`). O que a safra responde
+ * é "qual ciclo está aberto e quais gestões ele teve".
+ */
 export function toSeasonJson(
-  season: Season & { versions?: BarterVersion[] },
+  season: Season & { versions?: VersionWithGrains[] },
   viewer?: Pick<User, 'role'>,
 ) {
   return {
@@ -369,20 +378,39 @@ export function toSeasonJson(
     code: season.code,
     name: season.name,
     year: season.year,
-    grainId: season.grainId,
-    grainName: season.grainName,
-    grainUnit: season.grainUnit,
     status: season.status,
     openedAt: season.openedAt,
     closedAt: season.closedAt,
-    // O VENCIMENTO DA CPR desta safra. Ele é da CULTURA, e não da cédula: todas
-    // as CPRs da safra vencem no mesmo dia. `null` enquanto o admin não o
-    // acertou — e aí nenhuma cédula da safra pode ser emitida.
-    cprDueDate: season.cprDueDate,
     // O viewer atravessa: sem ele a lente cai no padrão fechado e a safra sairia
     // sem valor nenhum — inclusive para quem tem barterManage, que é o único
     // papel que chega a estas rotas.
     versions: season.versions?.map((version) => toBarterVersionJson(version, undefined, viewer)),
+  };
+}
+
+/**
+ * UMA CULTURA do lançamento — o grão em que a permuta pode ser paga.
+ *
+ * A COTAÇÃO da saca só vai para quem vê R$, pelo mesmo motivo de sempre:
+ * entregá-la a quem recebe a tabela em sacas devolveria os R$ por multiplicação.
+ *
+ * O RESTO vai para todo mundo, e cada um por um motivo:
+ *
+ * - `estimatedYield` é sc/ha, e não moeda — é o que explica ao consultor por que
+ *   a permuta dele pede a área de penhor que pede;
+ * - `cprDueDate` é a data em que o produtor entrega, e é ele quem vai dizê-la ao
+ *   cliente;
+ * - `targetSacks` é meta em sacas, a mesma natureza do que a versão já mandava.
+ */
+export function toVersionGrainJson(grain: VersionGrain, lens: ValueLens = CURRENCY_LENS) {
+  return {
+    grainId: grain.grainId,
+    grainName: grain.grainName,
+    grainUnit: grain.grainUnit,
+    estimatedYield: grain.estimatedYield,
+    cprDueDate: grain.cprDueDate,
+    targetSacks: grain.targetSacks,
+    ...(lens.showsCurrency ? { price: grain.price } : {}),
   };
 }
 
@@ -408,8 +436,8 @@ export function toVersionPriceJson(price: VersionPrice, lens: ValueLens = CURREN
 /**
  * A versão do Barter. Três públicos, um formato:
  *
- * - o consultor precisa de `grainPrice` e da tabela `prices` para a prévia das
- *   sacas (a tela esconde o R$, mas a conta é a mesma do servidor);
+ * - o consultor precisa da tabela `prices` em sacas para a prévia (a tela
+ *   esconde o R$, mas a conta é a mesma do servidor);
  * - o admin precisa de `progress` para saber o quanto falta para a meta;
  * - os dois precisam de `isOpen`, que é a resposta pronta para "dá para
  *   registrar permuta agora?" — calculada aqui para o app não reimplementar a
@@ -417,15 +445,39 @@ export function toVersionPriceJson(price: VersionPrice, lens: ValueLens = CURREN
  *
  * `progress` só vai quando quem chamou pode gerenciar o Barter: meta é número
  * de retaguarda, e o consultor não vê valores.
+ *
+ * AS CULTURAS e a TABELA EM SACAS, agora que a versão aceita mais de um grão:
+ *
+ * `grains` lista todas as culturas do lançamento, sempre. A tabela `prices`,
+ * porém, é convertida por UMA cotação — e `pricedInGrainId` diz por qual. Quem
+ * escolhe é quem chama (`?grainId=`, a cultura que o consultor selecionou na
+ * tela); sem escolha, a primeira do lançamento.
+ *
+ * Uma conversão por vez, e não um `sacksPerUnit` por cultura em cada linha,
+ * porque a tabela do fornecedor tem milhares de itens: multiplicá-la pelo número
+ * de culturas engordaria a resposta inteira para entregar de uma vez o que a
+ * tela mostra uma de cada vez. Trocar a cultura é uma leitura a mais — e é um
+ * toque raro, feito uma vez antes de montar a permuta.
  */
 export function toBarterVersionJson(
-  version: BarterVersion & { season?: Season; prices?: VersionPrice[] },
+  version: BarterVersion & {
+    season?: Season;
+    prices?: VersionPrice[];
+    grains?: VersionGrain[];
+  },
   extra?: { realized: Realized; goals: Goal[] },
   viewer?: Pick<User, 'role'>,
+  pricedInGrainId?: number | null,
 ) {
-  // A cotação da saca DESTA versão é o divisor da conversão — por isso a lente
-  // nasce aqui, e não na porta da requisição: cada versão tem a sua.
-  const lens = lensFor(viewer, version.grainPrice);
+  const grains = version.grains ?? [];
+  // A CULTURA pela qual a tabela é convertida: a pedida, ou a primeira do
+  // lançamento. Pedir uma que não está nesta versão cai na primeira também — a
+  // resposta diz em `pricedInGrainId` qual foi usada, e a tela não fica
+  // mostrando sacas de um grão que este Barter não aceita.
+  const priced = grains.find((grain) => grain.grainId === pricedInGrainId) ?? grains[0];
+  // A cotação da saca DESTA cultura é o divisor da conversão — por isso a lente
+  // nasce aqui, e não na porta da requisição.
+  const lens = lensFor(viewer, priced?.price ?? 0);
   return {
     id: version.id,
     code: version.code,
@@ -433,21 +485,13 @@ export function toBarterVersionJson(
     seasonId: version.seasonId,
     seasonCode: version.season?.code,
     seasonName: version.season?.name,
-    grainId: version.season?.grainId,
-    grainName: version.season?.grainName,
-    grainUnit: version.season?.grainUnit,
-    // A COTAÇÃO DA SACA é o divisor de tudo: entregá-la a quem recebe
-    // `sacksPerUnit` devolveria os R$ por multiplicação, e a conversão não teria
-    // servido para nada.
-    ...(lens.showsCurrency ? { grainPrice: version.grainPrice } : {}),
-    // A PRODUTIVIDADE ESTIMADA vai para TODO MUNDO, inclusive para quem não vê
-    // R$ — ela é sc/ha, e não moeda. É a outra metade da conversão que o preço
-    // da saca começa, e é a única maneira de o consultor entender por que a
-    // permuta dele pede a área que pede (ver `pledgeAreaHa` no detalhe).
-    //
-    // `0` é a versão anterior ao campo, e nela `POST /barters` recusa: a tela do
-    // admin lê este zero para mostrar que o Barter está vigente e travado.
-    estimatedYield: version.estimatedYield,
+    // AS CULTURAS que este Barter aceita, na ordem em que foram lançadas — a
+    // primeira é a que a tela mostra escolhida.
+    grains: grains.map((grain) => toVersionGrainJson(grain, lens)),
+    // EM QUE CULTURA a tabela abaixo está expressa. Ela importa para quem lê em
+    // sacas (o consultor) e é informação honesta para todo mundo: o mesmo insumo
+    // custa duas quantidades de saca diferentes conforme o grão.
+    pricedInGrainId: priced?.grainId ?? null,
     // ESTE BARTER LEVA SEGURO? Vai para todo mundo, e não é valor: é uma regra
     // do lançamento, da mesma natureza de `closeOnGoal` e de `isOpen`.
     //
@@ -459,14 +503,14 @@ export function toBarterVersionJson(
     isOpen: isOpenAt(version, new Date()),
     startsAt: version.startsAt,
     endsAt: version.endsAt,
-    // Metas são número de retaguarda; `targetSales` é R$ direto.
+    // Metas são número de retaguarda; `targetSales` é R$ direto. A de SACAS não
+    // está aqui: ela é de cada cultura, e sai dentro de `grains`.
     ...(lens.showsCurrency
       ? {
           targetSales: version.targetSales,
           targetBarters: version.targetBarters,
         }
       : {}),
-    targetSacks: version.targetSacks,
     // O MODO de encerramento vai para todo mundo, e não só para a retaguarda:
     // ele não é um valor, é uma regra de vigência — a mesma natureza de `isOpen`
     // e de `endsAt`, que o consultor já recebe. Saber que o Barter pode fechar ao

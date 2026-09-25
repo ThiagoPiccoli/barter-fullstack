@@ -22,6 +22,20 @@ String initialsFrom(String name) {
 /// Cadastro/edição de um PRODUTOR (cliente). Quando [producer] é null, cria um
 /// novo registro; caso contrário, edita o existente. Salva em [AppData.producers] e
 /// devolve o produtor resultante via Navigator.pop.
+///
+/// A TELA TEM DOIS DONOS, e o que cada um alcança é diferente.
+///
+/// O ADMIN cadastra, exclui e edita tudo — inclusive a carteira, a área
+/// cultivável, o documento e o regime de Funrural.
+///
+/// O CONSULTOR edita os dados de contato e endereço dos clientes da carteira
+/// dele: é ele quem visita a fazenda e sabe que o telefone mudou. Os outros
+/// quatro campos ficam VISÍVEIS e travados, com o porquê ao lado — escondê-los
+/// faria a tela parecer incompleta, e o consultor procuraria a área cultivável
+/// que ele acabou de conferir na fazenda sem entender por que ela sumiu.
+///
+/// Quem recusa de verdade é o servidor (ver `assertEditable`, na API): esta tela
+/// é a tradução da regra, não a regra.
 class EditProducerScreen extends StatefulWidget {
   final ProducerModel? producer;
   const EditProducerScreen({super.key, this.producer});
@@ -52,6 +66,13 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   TaxRegime _taxRegime = TaxRegime.comercializacao;
 
   bool get _isNew => widget.producer == null;
+
+  /// Quem está com a tela na mão pode mexer no CADASTRO — criar, excluir,
+  /// definir a carteira e corrigir as réguas (documento, área, regime)?
+  ///
+  /// Falso para o consultor, que edita só o que ele apura na visita. A regra
+  /// mora no servidor; aqui ela desenha a tela.
+  bool get _manages => AppData.can(Capability.producersManage);
 
   @override
   void initState() {
@@ -95,6 +116,15 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     super.dispose();
   }
 
+  /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
+  String get _walletLabel {
+    final names = _consultantIds
+        .map((id) => AppData.consultantById(id)?.name)
+        .whereType<String>()
+        .toList();
+    return names.isEmpty ? 'sem consultor' : names.join(', ');
+  }
+
   /// Envia o cadastro à API e devolve o registro salvo (com id do servidor).
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
@@ -130,12 +160,32 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _ConsultantWalletField(
-              selected: _consultantIds,
-              onChanged: () => setState(() {}),
-            ),
+            // A CARTEIRA é do admin: ela é a lista inteira num campo só, e um
+            // consultor que a escrevesse poderia se remover do próprio cliente
+            // (ou remover um colega) sem que ninguém tivesse decidido isso.
+            if (_manages)
+              _ConsultantWalletField(
+                selected: _consultantIds,
+                onChanged: () => setState(() {}),
+              )
+            else
+              _LockedNote(
+                icon: Icons.groups_outlined,
+                label: 'Quem atende',
+                value: _walletLabel,
+              ),
             _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
-            _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true),
+            // O DOCUMENTO é a IDENTIDADE do cadastro (a unicidade mora nele):
+            // trocá-lo transforma o cliente A no cliente B mantendo as permutas
+            // do A.
+            if (_manages)
+              _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true)
+            else
+              _LockedNote(
+                icon: Icons.badge_outlined,
+                label: 'Documento (CPF/CNPJ)',
+                value: _document.text,
+              ),
             _EditField(
               controller: _phone,
               label: 'Telefone',
@@ -144,38 +194,103 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             ),
             _EditField(controller: _farm, label: 'Propriedade', icon: Icons.agriculture_outlined, required: true),
             _EditField(controller: _city, label: 'Município/UF', icon: Icons.location_on_outlined, required: true),
-            _EditField(
-              controller: _area,
-              label: 'Área cultivável (ha)',
-              icon: Icons.straighten,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              required: true,
-              validator: (v) {
-                final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
-                if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
-                return null;
-              },
-            ),
+            // A ÁREA CULTIVÁVEL é o denominador de toda régua da permuta — os
+            // mínimos por hectare, o custo do seguro, o investimento por
+            // hectare. Um arrendamento a mais muda quanto insumo o Barter exige
+            // daquele cliente: é decisão de crédito, não atualização de contato.
+            if (_manages)
+              _EditField(
+                controller: _area,
+                label: 'Área cultivável (ha)',
+                icon: Icons.straighten,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                required: true,
+                validator: (v) {
+                  final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                  if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
+                  return null;
+                },
+              )
+            else
+              _LockedNote(
+                icon: Icons.straighten,
+                label: 'Área cultivável',
+                value: '${_area.text} ha',
+              ),
             // O IMPOSTO do produtor, no cadastro dele: é aqui que a opção pela
             // folha mora, porque é uma opção só — feita perante o fisco, valendo
             // para o ano e para todas as entregas. Cada permuta nova nasce com
             // ela e congela a alíquota que ela produziu.
-            _TaxRegimeField(
-              selected: _taxRegime,
-              document: _document.text,
-              onChanged: (regime) => setState(() => _taxRegime = regime),
-            ),
+            if (_manages)
+              _TaxRegimeField(
+                selected: _taxRegime,
+                document: _document.text,
+                onChanged: (regime) => setState(() => _taxRegime = regime),
+              )
+            else
+              _LockedNote(
+                icon: Icons.receipt_long_outlined,
+                label: 'Funrural',
+                value: _taxRegime.label,
+              ),
             const SizedBox(height: 8),
             Text(
-              'A área define os insumos obrigatórios e a quantidade mínima de cada '
-              'um nas novas permutas deste produtor. O produtor só aparece para os '
-              'consultores marcados acima.',
+              _manages
+                  ? 'A área define os insumos obrigatórios e a quantidade mínima de cada '
+                      'um nas novas permutas deste produtor. O produtor só aparece para os '
+                      'consultores marcados acima.'
+                  : 'O documento, a área cultivável, o Funrural e a carteira são '
+                      'alterados pelo administrador: os três primeiros são as réguas que '
+                      'medem todas as permutas deste cliente, e a carteira é quem o atende. '
+                      'Peça a ele e edite o restante normalmente.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// UM CAMPO QUE ESTA PESSOA NÃO ESCREVE — o valor, visível, com o cadeado.
+///
+/// Ele existe para o consultor não procurar o que sumiu: a área cultivável que
+/// ele acabou de conferir na fazenda continua na tela, dizendo quanto é, e o
+/// cadeado explica por que ela não se digita ali. Esconder o campo faria a tela
+/// parecer incompleta; deixá-lo editável faria o servidor recusar o que a tela
+/// ofereceu.
+class _LockedNote extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _LockedNote({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: AppColors.textLight),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                Text(
+                  value.trim().isEmpty ? '—' : value,
+                  style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textMedium),
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.lock_outline, size: 16, color: AppColors.textLight),
+        ],
       ),
     );
   }

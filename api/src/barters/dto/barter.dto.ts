@@ -54,10 +54,41 @@ export class BarterInputDto {
  * quem diz por quanto vale a saca. Escolher grão era do tempo em que a permuta
  * carregava a própria cotação.
  */
+/**
+ * A TROCA DA CULTURA de um rascunho.
+ *
+ * Um campo só, e uma rota própria em vez de um campo dentro da reescrita dos
+ * insumos: são dois atos diferentes. Trocar insumo é refazer o que a permuta
+ * carrega; trocar cultura é trocar a moeda com que ela é paga — os insumos
+ * continuam os mesmos, e o que muda são as sacas e o penhor.
+ */
+export class BarterCultureDto {
+  @IsInt()
+  @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
+  grainId!: number;
+}
+
 export class CreateBarterDto {
   @IsInt()
   @IsPositive()
   producerId!: number;
+
+  /**
+   * A CULTURA em que esta permuta será paga — soja, milho, o que o Barter
+   * aceitar (ver `VersionGrain`).
+   *
+   * Ela é a primeira decisão da permuta e é do CONSULTOR, junto com o produtor:
+   * é ele quem sabe o que aquele cliente vai plantar naquele talhão. Antes não
+   * havia o que escolher — a safra tinha um grão só, e o servidor o impunha.
+   *
+   * OBRIGATÓRIA de propósito, mesmo quando o Barter tem uma cultura só. Um
+   * padrão silencioso ("se não disser, é a primeira") faria a permuta nascer
+   * numa cultura que ninguém escolheu no dia em que o admin lançasse a segunda —
+   * e o consultor descobriria isso pelo vencimento da cédula.
+   */
+  @IsInt()
+  @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
+  grainId!: number;
 
   /**
    * A UNIDADE em que o produtor vai retirar os insumos.

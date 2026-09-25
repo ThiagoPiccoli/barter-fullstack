@@ -86,13 +86,14 @@ curl http://localhost:3333/api/v1/barters -H "Authorization: Bearer $TOKEN"
 curl http://localhost:3333/api/v1/products -H "Authorization: Bearer $TOKEN"
 ```
 
-**3. Registrar uma permuta** (logado como um consultor — o servidor calcula as
-sacas do grão a partir do custo dos insumos):
+**3. Registrar uma permuta** (logado como um consultor — o `grainId` é a CULTURA
+em que ela será paga, entre as que o Barter aceita, e o servidor calcula as sacas
+daquele grão a partir do custo dos insumos):
 
 ```bash
 curl -X POST http://localhost:3333/api/v1/barters \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"producerId":1,"grainId":1,"inputs":[
+  -d '{"producerId":1,"unitId":1,"grainId":1,"inputs":[
         {"productId":5,"quantity":48},
         {"productId":6,"quantity":300},
         {"productId":7,"quantity":18}]}'
@@ -119,7 +120,9 @@ curl -X POST http://localhost:3333/api/v1/barters \
 | Consultor | `lucas.barros@agrobarter.com.br` | Vanessa Lopes |
 
 Além disso, o dataset traz **9 produtos** (4 grãos + 5 insumos, cada um com 7
-meses de histórico de preço), **3 categorias** de insumo com regras de mínimo, e
+meses de histórico de preço), um Barter vigente que aceita **duas culturas ao
+mesmo tempo** (soja a R$ 148,50 e milho a R$ 64,50, com produtividades e
+vencimentos de cédula próprios), **3 categorias** de insumo com regras de mínimo, e
 **8 permutas** espalhadas pela linha inteira — duas na mesa do gerente, uma no
 comitê, três aprovadas esperando faturamento, uma negada e uma já faturada (com
 a nota fiscal anexada e a cédula completa, pronta na mesa do emissor). Nenhuma
@@ -338,7 +341,8 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | POST | `/auth/password` | autenticado | Troca da própria senha (derruba as outras sessões) |
 | GET | `/producers` | autenticado | Carteira do consultor; admin vê todas (`?consultantId=`) |
 | GET | `/producers/:id` | autenticado | Detalhe (escopado por carteira) |
-| POST/PUT/DELETE | `/producers[/:id]` | admin | CRUD de produtores |
+| POST/DELETE | `/producers[/:id]` | admin | Cadastra e exclui produtor; a carteira é definida aqui |
+| PUT | `/producers/:id` | admin e **consultor da carteira** | Edita os dados do produtor. O consultor não altera CPF/CNPJ, área cultivável, Funrural nem a carteira — ver `assertEditable` |
 | GET | `/products` | autenticado | Catálogo com histórico de valores (`?type=grain\|input`) |
 | GET | `/products/:id` | autenticado | Produto + linha do tempo |
 | POST/PUT | `/products[/:id]` | admin | Criação/edição de cadastro |
@@ -371,7 +375,7 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | PUT | `/barters/:code/cpr/registry-file` | emissor | A via carimbada que o cartório devolveu depois do ato |
 | GET | `/barters/:code/cpr/signed` | consultor, emissor e admin | Baixa a cédula assinada |
 | GET | `/barters/:code/cpr/registry-file` | consultor, emissor e admin | Baixa a via registrada |
-| PUT | `/seasons/:code/cpr-due-date` | admin | O vencimento da CPR daquela safra — ele muda conforme a cultura |
+| PUT | `/barter-versions/:code/grains/:grainId` | admin | Acerta uma CULTURA do lançamento: cotação da saca, produtividade estimada, vencimento da CPR e meta de sacas |
 | POST | `/barters/:code/change-request` | consultor | Pede alteração da permuta que já saiu da mão dele |
 | POST | `/barters/:code/change-request/decision` | admin | Libera (volta a rascunho) ou recusa o pedido |
 | POST | `/barters/:code/change-request/prices` | admin | Atende o pedido no VALOR: corrige os itens, recalcula as sacas, a permuta fica onde está |
@@ -506,11 +510,12 @@ histórico: lista mostra estado, não trajetória.
 
 ## O coração do escambo (`src/barters/barters.service.ts`)
 
-`POST /barters` recebe **apenas produtos e quantidades**:
+`POST /barters` recebe **a cultura, os produtos e as quantidades**:
 
 ```json
 {
   "producerId": 1,
+  "unitId": 1,
   "grainId": 1,
   "inputs": [
     { "productId": 5, "quantity": 48 },
@@ -518,6 +523,13 @@ histórico: lista mostra estado, não trajetória.
   ]
 }
 ```
+
+O `grainId` é a CULTURA em que a permuta será paga, entre as que o Barter
+vigente aceita (ver `VersionGrain` no schema): elas coexistem, e é o consultor —
+junto com o produtor — quem escolhe. Ela decide a cotação que converte o custo em
+sacas, a produtividade que dimensiona o penhor e o vencimento da cédula. Num
+rascunho ela ainda se troca (`PUT /barters/:code/culture`): os insumos ficam, e
+as sacas e o penhor são recalculados.
 
 O servidor então:
 
@@ -527,8 +539,9 @@ O servidor então:
    produtor (payload sem um insumo obrigatório é rejeitado);
 3. valida as regras de mínimo das pastas (`% do custo total` ou `R$/ha`);
 4. **precifica com os valores vigentes do banco** (preço enviado pelo cliente
-   é descartado pelo `whitelist` do `ValidationPipe`), calcula as sacas do
-   grão (`custo ÷ preço da saca`, 4 casas) e cria o item de grão;
+   é descartado pelo `whitelist` do `ValidationPipe`), calcula as sacas da
+   CULTURA escolhida (`custo ÷ cotação daquele grão`, 4 casas) e cria o item de
+   grão — que é, ele mesmo, a resposta a "em que esta permuta é paga?";
 5. gera o código sequencial `PRM-<ano>-NNN` dentro de uma transação Prisma.
 
 Itens guardam *snapshot* de nome/unidade/preço; permutas antigas não mudam

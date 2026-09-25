@@ -212,54 +212,42 @@ export function itemPriceRefusal(item: ItemAtPriceChange): string | null {
     : null;
 }
 
-/** O bastante de uma gestão do Barter para saber de que CULTURA ela é. */
+/** A CULTURA de uma permuta: o grão que a paga, lido da linha de pagamento. */
+export interface BarterCulture {
+  grainId: number | null;
+  grainName: string;
+}
+
+/** O bastante de uma gestão do Barter para saber quais culturas ela aceita. */
 export interface VersionAtCulture {
   code: string;
-  season: { grainId: number | null; grainName: string };
+  grains: BarterCulture[];
 }
 
-/** Duas gestões do Barter são da MESMA cultura? */
-function sameCulture(one: VersionAtCulture, other: VersionAtCulture): boolean {
-  const oneId = one.season.grainId;
-  const otherId = other.season.grainId;
-  // Pelo id do grão quando os dois têm: é ele que identifica a cultura. O nome
-  // é a saída para a safra cujo produto foi excluído do catálogo (o FK vira
-  // null e sobra o nome congelado) — comparar nomes sempre seria frágil; nunca
-  // compará-los deixaria essas safras fora de qualquer alteração.
-  if (oneId !== null && otherId !== null) return oneId === otherId;
-  return one.season.grainName.trim().toLowerCase() === other.season.grainName.trim().toLowerCase();
+/** Esta cultura é uma das que aquela gestão aceita? */
+function offers(version: VersionAtCulture, culture: BarterCulture): boolean {
+  return version.grains.some((grain) => {
+    // Pelo id do grão quando os dois têm: é ele que identifica a cultura. O nome
+    // é a saída para o grão excluído do catálogo (o FK vira null e sobra o nome
+    // congelado) — comparar nomes sempre seria frágil; nunca compará-los
+    // deixaria essas permutas fora de qualquer alteração.
+    if (grain.grainId !== null && culture.grainId !== null) {
+      return grain.grainId === culture.grainId;
+    }
+    return grain.grainName.trim().toLowerCase() === culture.grainName.trim().toLowerCase();
+  });
 }
 
-/**
- * POR QUE esta permuta não pode ser alterada NESTA gestão do Barter, ou `null`
- * quando pode.
- *
- * A alteração atravessa VERSÕES, e não atravessa CULTURAS. A permuta fechada na
- * primeira versão da soja continua alterável quando a terceira já está no ar:
- * ela ainda não foi faturada, o produtor é o mesmo, a lavoura é a mesma, e o
- * que ela precisa é de uma correção nos insumos, não de um recomeço. Amarrá-la
- * à versão vigente transformaria cada publicação de tabela num prazo de
- * validade para as permutas em aberto.
- *
- * O que ela não atravessa é a CULTURA. Com o Barter do milho no ar, uma permuta
- * de soja não é mais o negócio da praça: os insumos que ela pode carregar, os
- * mínimos por hectare e o grão que a paga são outros, e remontá-la ali seria
- * montar uma permuta de soja com a régua do milho. Nesse caso o caminho é o
- * mesmo de sempre — o comitê decide o que fazer com ela.
- *
- * Os PREÇOS continuam sendo os da versão DA PERMUTA, e não os da vigente: o
- * acordo foi fechado naquela tabela, e publicar a seguinte não reescreve o que
- * já foi combinado. É o mesmo motivo de o item guardar o preço em vez de lê-lo.
- */
 export function cultureRefusal(
-  barterVersion: VersionAtCulture,
+  culture: BarterCulture,
   openVersion: VersionAtCulture,
 ): string | null {
-  if (sameCulture(barterVersion, openVersion)) return null;
+  if (offers(openVersion, culture)) return null;
+  const open = openVersion.grains.map((grain) => grain.grainName).join(' e ');
   return (
-    `Esta permuta é do Barter ${barterVersion.code}, de ${barterVersion.season.grainName}, ` +
-    `e o que está aberto hoje é ${openVersion.season.grainName} (${openVersion.code}). ` +
-    'A alteração vale entre versões da mesma cultura'
+    `Esta permuta é paga em ${culture.grainName}, e o Barter aberto hoje ` +
+    `(${openVersion.code}) aceita ${open || 'outra cultura'}. ` +
+    'A alteração vale enquanto o lançamento aberto aceitar a cultura da permuta'
   );
 }
 

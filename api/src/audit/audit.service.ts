@@ -148,12 +148,6 @@ export const AUDIT_ACTION = {
   // valem tanto quanto aprovar uma permuta, e pelo mesmo motivo — é dinheiro.
   seasonOpened: 'season.opened',
   seasonClosed: 'season.closed',
-  /**
-   * O VENCIMENTO DA CPR da safra. Entra na trilha porque ele vale para TODAS as
-   * cédulas da safra: mudá-lo antecipa ou adia a entrega de cada produtor que
-   * ainda não teve o título emitido, num campo que ninguém mais confere depois.
-   */
-  seasonCprDueDateSet: 'season.cpr-due-date-set',
   versionPublished: 'barter.version-published',
   versionPriceChanged: 'barter.price-changed',
   versionClosed: 'barter.version-closed',
@@ -166,16 +160,27 @@ export const AUDIT_ACTION = {
    */
   versionCloseRuleChanged: 'barter.version-close-rule',
   /**
-   * Mudou a PRODUTIVIDADE ESTIMADA da versão — a taxa que dimensiona a área do
-   * penhor.
+   * ACERTOU UMA CULTURA da versão: a cotação da saca, a produtividade estimada,
+   * o vencimento da CPR ou a meta de sacas.
    *
-   * Entra na trilha porque ela decide quanta terra a empresa exige em garantia:
-   * baixá-la de 60 para 50 sc/ha faz cada permuta nova pedir 20% mais lavoura, e
-   * subi-la afrouxa a garantia de todas elas na mesma proporção. É decisão de
-   * risco tomada num campo de dois dígitos, e "por que as permutas de março
-   * pediram menos área?" se responde aqui.
+   * Uma ação para os quatro campos porque eles são o mesmo ato — "acertar a
+   * cultura" —, e o detalhe da linha diz qual deles mudou e de quanto para
+   * quanto. Cada um entra por um motivo próprio, e os quatro pesam:
+   *
+   * - a PRODUTIVIDADE decide quanta terra a empresa exige em garantia: baixá-la
+   *   de 60 para 50 sc/ha faz cada permuta nova pedir 20% mais lavoura, e subi-la
+   *   afrouxa a garantia de todas elas na mesma proporção;
+   * - a COTAÇÃO decide quantas sacas o produtor deve por R$ 1 de insumo;
+   * - o VENCIMENTO vale para todas as cédulas daquela cultura que ainda não
+   *   saíram: mudá-lo antecipa ou adia a entrega de cada produtor, num campo que
+   *   ninguém mais confere depois;
+   * - a META decide quando o Barter fecha sozinho, quando o automático está
+   *   ligado.
+   *
+   * Era `versionYieldChanged`, de quando a produtividade era da versão inteira —
+   * e a versão tinha uma cultura só. Ver `VersionGrain`.
    */
-  versionYieldChanged: 'barter.version-yield-changed',
+  versionGrainChanged: 'barter.version-grain-changed',
   /**
    * LIGOU ou DESLIGOU o seguro agrícola da versão.
    *

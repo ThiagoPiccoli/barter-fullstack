@@ -117,6 +117,23 @@ class Capability {
   /// MANTER a base de seguros por município (admin).
   static const insuranceManage = 'insurance.manage';
 
+  /// EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — do CONSULTOR (e do
+  /// admin, que também cadastra e exclui).
+  ///
+  /// Quem visita a fazenda é quem sabe que o telefone mudou, que o cliente
+  /// passou a plantar noutro município e que o nome da propriedade saiu errado.
+  /// Enquanto isso foi só do admin, corrigir um telefone virava um chamado — e o
+  /// cadastro envelhecia em silêncio.
+  ///
+  /// O que ela NÃO alcança, e o servidor recusa: o CPF/CNPJ (é a identidade do
+  /// cadastro), a área cultivável e o regime de Funrural (as duas réguas que
+  /// medem toda permuta dele) e a carteira (quem atende quem é decisão de quem
+  /// administra).
+  static const producersEdit = 'producers.edit';
+
+  /// CADASTRAR, EXCLUIR e definir a CARTEIRA de um produtor — só do admin.
+  static const producersManage = 'producers.manage';
+
   /// Registrar permuta (consultor).
   static const bartersRegister = 'barters.register';
 
@@ -1354,6 +1371,15 @@ class BarterModel {
     );
   }
 
+  /// A LINHA DE PAGAMENTO — o item de grão, que é a CULTURA desta permuta.
+  ///
+  /// Ela sempre foi o pagamento (quantas sacas cobrem o custo) e, desde que a
+  /// versão passou a aceitar mais de um grão, é também a resposta a "em que o
+  /// produtor paga esta?": `productId` diz qual cultura foi escolhida e
+  /// `unitValue` a cotação com que ela foi convertida. Nula nas permutas
+  /// anteriores ao item de pagamento.
+  BarterItem? get grainItem => grains.isEmpty ? null : grains.first;
+
   /// Custo dos insumos retirados (R$) — é o valor que a permuta precisa pagar.
   double get inputCost => inputs.fold(0.0, (sum, i) => sum + i.total);
 
@@ -2163,12 +2189,20 @@ class BarterGoal {
   final double ratio;
   final bool met;
 
+  /// DE QUE CULTURA é esta meta — só as de sacas têm.
+  ///
+  /// Vendas e permutas são da versão inteira; sacas são de cada grão, porque
+  /// sacas de soja e de milho não somam. Sem este nome, o admin veria duas
+  /// barras iguais chamadas "Sacas" e teria de adivinhar qual é qual.
+  final String grainName;
+
   const BarterGoal({
     required this.kind,
     required this.target,
     required this.realized,
     required this.ratio,
     required this.met,
+    this.grainName = '',
   });
 
   factory BarterGoal.fromJson(Map<String, dynamic> json) => BarterGoal(
@@ -2183,6 +2217,7 @@ class BarterGoal {
         realized: _asDouble(json['realized']),
         ratio: _asDouble(json['ratio']),
         met: json['met'] == true,
+        grainName: (json['grainName'] ?? '') as String,
       );
 
   String get label {
@@ -2190,7 +2225,9 @@ class BarterGoal {
       case GoalKind.sales:
         return 'Vendas';
       case GoalKind.sacks:
-        return 'Sacas';
+        // A CULTURA no rótulo: "Sacas de soja" e "Sacas de milho" são duas
+        // metas, e é o grão que as distingue.
+        return grainName.isEmpty ? 'Sacas' : 'Sacas de ${grainName.toLowerCase()}';
       case GoalKind.barters:
         return 'Permutas';
     }
@@ -2242,45 +2279,116 @@ class VersionPriceModel {
 /// É ela que responde "por quanto se permuta agora": o valor da saca do grão e
 /// a tabela de valores dos insumos. O consultor não escolhe grão nem tabela —
 /// recebe esta aqui pronta, e sem ela não existe permuta nova.
+/// UMA CULTURA do lançamento — o grão em que a permuta pode ser paga.
+///
+/// Ela existe porque as culturas COEXISTEM: o mesmo Barter aceita soja e milho
+/// ao mesmo tempo, sobre a MESMA tabela de insumos, e o consultor escolhe em
+/// qual delas o cliente paga. O que muda de uma para a outra é o que está aqui —
+/// a cotação da saca, a produtividade que dimensiona o penhor e o vencimento da
+/// cédula.
+class VersionGrainModel {
+  final String grainId;
+  final String grainName;
+  final String grainUnit;
+
+  /// A PRODUTIVIDADE ESTIMADA (sc/ha) — a taxa que converte as sacas da permuta
+  /// na ÁREA DE LAVOURA que precisa garanti-las.
+  ///
+  /// Ela vai para TODO MUNDO, inclusive para quem não vê R$: é sacas por
+  /// hectare, e não moeda. É o que explica ao consultor por que a permuta dele
+  /// exige a área que exige.
+  final double estimatedYield;
+
+  /// O VENCIMENTO da entrega desta cultura — a data que sai na cédula. Nulo
+  /// enquanto o admin não o acertou no lançamento, e aí a cédula o cobra dele.
+  final DateTime? cprDueDate;
+
+  /// A meta de sacas desta cultura, quando há. Sacas de grãos diferentes não
+  /// somam, e por isso a meta é de cada uma.
+  final double? targetSacks;
+
+  /// Valor (R$) da saca desta cultura.
+  ///
+  /// **Zero para quem não vê R$.** O servidor não a manda ao consultor de
+  /// propósito: entregá-la a quem recebe a tabela em sacas devolveria os R$ por
+  /// multiplicação.
+  final double price;
+
+  /// Esta cultura chegou com o valor em R$? É a lente da API vista daqui.
+  final bool showsCurrency;
+
+  const VersionGrainModel({
+    required this.grainId,
+    required this.grainName,
+    required this.grainUnit,
+    this.estimatedYield = 0,
+    this.cprDueDate,
+    this.targetSacks,
+    this.price = 0,
+    this.showsCurrency = true,
+  });
+
+  factory VersionGrainModel.fromJson(Map<String, dynamic> json) => VersionGrainModel(
+        grainId: _asId(json['grainId']),
+        grainName: (json['grainName'] ?? '') as String,
+        grainUnit: (json['grainUnit'] ?? '') as String,
+        estimatedYield: _asDouble(json['estimatedYield']),
+        cprDueDate: _asDateOrNull(json['cprDueDate']),
+        targetSacks: json['targetSacks'] == null ? null : _asDouble(json['targetSacks']),
+        price: _asDouble(json['price']),
+        showsCurrency: json['price'] != null,
+      );
+}
+
+/// As SACAS JÁ COMPROMETIDAS em uma cultura — o realizado da meta dela.
+class RealizedSacksModel {
+  final String grainId;
+  final String grainName;
+  final double sacks;
+
+  const RealizedSacksModel({
+    required this.grainId,
+    required this.grainName,
+    required this.sacks,
+  });
+
+  factory RealizedSacksModel.fromJson(Map<String, dynamic> json) => RealizedSacksModel(
+        grainId: _asId(json['grainId']),
+        grainName: (json['grainName'] ?? '') as String,
+        sacks: _asDouble(json['sacks']),
+      );
+}
+
 class BarterVersionModel {
   final String id;
   final String code;
   final int number;
   final String seasonCode;
   final String seasonName;
-  final String grainId;
-  final String grainName;
-  final String grainUnit;
 
-  /// Valor (R$) da saca do grão nesta versão — a taxa que converte o custo dos
-  /// insumos em sacas.
+  /// AS CULTURAS que este Barter aceita, na ordem em que foram lançadas.
   ///
-  /// **Zero para quem não vê R$.** O servidor não a manda ao consultor de
-  /// propósito: entregá-la a quem recebe a tabela em sacas devolveria os R$ por
-  /// multiplicação. Quem precisa converter custo em sacas usa [costPerSack], que
-  /// responde nas duas lentes.
-  final double grainPrice;
+  /// A primeira é a que a tela mostra escolhida. Elas COEXISTEM: o produtor
+  /// escolhe se paga em soja ou em milho, e cada uma tem cotação, produtividade
+  /// e vencimento próprios sobre a MESMA tabela de insumos.
+  final List<VersionGrainModel> grains;
 
-  /// A PRODUTIVIDADE ESTIMADA da cultura (sc/ha) — a taxa que converte as sacas
-  /// da permuta na ÁREA DE LAVOURA que precisa garanti-las.
+  /// EM QUE CULTURA a tabela [prices] está expressa.
   ///
-  /// Ao contrário de [grainPrice], ela vai para TODO MUNDO, inclusive para quem
-  /// não vê R$: é sacas por hectare, e não moeda. É a outra metade da conversão
-  /// que o preço da saca começa, e é o que explica ao consultor por que a
-  /// permuta dele exige a área que exige.
-  ///
-  /// Zero é a versão anterior ao campo — e nela o servidor RECUSA permuta nova,
-  /// porque sem a taxa não há como dimensionar o penhor. A tela do admin lê este
-  /// zero para mostrar o Barter vigente e travado.
-  final double estimatedYield;
+  /// Ela importa para quem lê em sacas: o mesmo insumo custa 0,77 saca de soja
+  /// e 1,78 de milho, e a conversão é feita no servidor por UMA cotação de cada
+  /// vez (a tabela tem milhares de itens; mandá-la vezes o número de culturas
+  /// engordaria a resposta para entregar de uma vez o que a tela mostra uma por
+  /// vez). Trocar a cultura na tela é uma leitura a mais — ver `?grainId=`.
+  final String pricedInGrainId;
 
   /// Esta versão chegou com os valores em R$?
   ///
   /// É a LENTE DE VALOR da API vista do lado de cá: quem tem `prices.read`
-  /// recebe `grainPrice` e a tabela em `price`; o consultor recebe a tabela já
-  /// convertida em `sacksPerUnit`, e sem a cotação. A presença de `grainPrice` é
-  /// o sinal porque é exatamente nela que o servidor decide — ver
-  /// `toBarterVersionJson` em `api/src/common/serializers.ts`.
+  /// recebe a cotação de cada cultura e a tabela em `price`; o consultor recebe
+  /// a tabela já convertida em `sacksPerUnit`, e sem as cotações. A presença do
+  /// preço da cultura é o sinal porque é exatamente nela que o servidor decide —
+  /// ver `toBarterVersionJson` em `api/src/common/serializers.ts`.
   final bool showsCurrency;
 
   final String status;
@@ -2327,7 +2435,10 @@ class BarterVersionModel {
   /// Metas e realizado — só chegam para quem gerencia o Barter.
   final List<BarterGoal> goals;
   final double realizedSales;
-  final double realizedSacks;
+
+  /// As sacas já comprometidas, UMA LINHA POR CULTURA: 4.000 de soja e 3.000 de
+  /// milho não são 7.000 de coisa nenhuma.
+  final List<RealizedSacksModel> realizedSacks;
   final int realizedBarters;
 
   const BarterVersionModel({
@@ -2336,14 +2447,12 @@ class BarterVersionModel {
     required this.number,
     required this.seasonCode,
     required this.seasonName,
-    required this.grainId,
-    required this.grainName,
-    required this.grainUnit,
-    required this.grainPrice,
+    required this.grains,
+    this.pricedInGrainId = '',
     // Padrão da RETAGUARDA porque é o único que se pode montar à mão: quem
-    // escreve `grainPrice:` num construtor está escrevendo R$. O caminho que
-    // vem da rede — [BarterVersionModel.fromJson] — nunca usa este padrão, ele
-    // lê a lente do próprio JSON.
+    // escreve a cotação de uma cultura num construtor está escrevendo R$. O
+    // caminho que vem da rede — [BarterVersionModel.fromJson] — nunca usa este
+    // padrão, ele lê a lente do próprio JSON.
     this.showsCurrency = true,
     required this.status,
     required this.isOpen,
@@ -2352,31 +2461,33 @@ class BarterVersionModel {
     this.endsAt,
     this.closedAt,
     this.closedBy,
-    this.estimatedYield = 0,
     this.closeOnGoal = false,
     this.insuranceRequired = false,
     this.sourceFile,
     this.note,
     this.goals = const [],
     this.realizedSales = 0,
-    this.realizedSacks = 0,
+    this.realizedSacks = const [],
     this.realizedBarters = 0,
   });
 
   factory BarterVersionModel.fromJson(Map<String, dynamic> json) {
     final realized = (json['realized'] as Map<String, dynamic>?) ?? const {};
+    final grains = (json['grains'] as List? ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(VersionGrainModel.fromJson)
+        .toList();
     return BarterVersionModel(
       id: _asId(json['id']),
       code: json['code'] as String,
       number: (json['number'] as num?)?.toInt() ?? 0,
       seasonCode: (json['seasonCode'] ?? '') as String,
       seasonName: (json['seasonName'] ?? '') as String,
-      grainId: _asId(json['grainId']),
-      grainName: (json['grainName'] ?? '') as String,
-      grainUnit: (json['grainUnit'] ?? '') as String,
-      grainPrice: _asDouble(json['grainPrice']),
-      estimatedYield: _asDouble(json['estimatedYield']),
-      showsCurrency: json['grainPrice'] != null,
+      grains: grains,
+      pricedInGrainId: _asId(json['pricedInGrainId']),
+      // A lente é a das CULTURAS: a primeira delas basta, porque o servidor
+      // entrega as cotações de todas ou de nenhuma.
+      showsCurrency: grains.isNotEmpty && grains.first.showsCurrency,
       status: (json['status'] ?? 'closed') as String,
       isOpen: json['isOpen'] == true,
       startsAt: _asDate(json['startsAt']),
@@ -2396,9 +2507,53 @@ class BarterVersionModel {
           .map(BarterGoal.fromJson)
           .toList(),
       realizedSales: _asDouble(realized['sales']),
-      realizedSacks: _asDouble(realized['sacks']),
+      realizedSacks: (realized['sacks'] as List? ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map(RealizedSacksModel.fromJson)
+          .toList(),
       realizedBarters: (realized['barters'] as num?)?.toInt() ?? 0,
     );
+  }
+
+  /// A CULTURA EM USO — aquela em que a tabela [prices] está expressa.
+  ///
+  /// Ela é o que os getters abaixo respondem, e é o que faz a tela continuar
+  /// falando de "o grão da permuta" no singular mesmo com o Barter aceitando
+  /// vários: em cada momento, uma está escolhida. Sem cultura nenhuma (Barter
+  /// fechado, ou versão que não trouxe a lista), devolve null e quem lê cai nos
+  /// vazios — que é a verdade daquele estado.
+  VersionGrainModel? get pricedGrain {
+    for (final grain in grains) {
+      if (grain.grainId == pricedInGrainId) return grain;
+    }
+    return grains.isEmpty ? null : grains.first;
+  }
+
+  /// A cultura de um id, quando este Barter a aceita.
+  VersionGrainModel? grainFor(String grainId) {
+    for (final grain in grains) {
+      if (grain.grainId == grainId) return grain;
+    }
+    return null;
+  }
+
+  /// Os atalhos para a CULTURA EM USO. Eles existem porque quase toda tela fala
+  /// de uma cultura por vez — a que o consultor escolheu —, e escrever
+  /// `version.pricedGrain?.grainName ?? ''` em cada uma delas trocaria clareza
+  /// por cerimônia.
+  String get grainId => pricedGrain?.grainId ?? '';
+  String get grainName => pricedGrain?.grainName ?? '';
+  String get grainUnit => pricedGrain?.grainUnit ?? '';
+  double get grainPrice => pricedGrain?.price ?? 0;
+  double get estimatedYield => pricedGrain?.estimatedYield ?? 0;
+
+  /// As sacas já comprometidas em uma cultura — zero quando ainda não houve
+  /// permuta nenhuma nela, que é o começo certo de uma barra de progresso.
+  double realizedSacksOf(String grainId) {
+    for (final row in realizedSacks) {
+      if (row.grainId == grainId) return row.sacks;
+    }
+    return 0;
   }
 
   /// Quanto custa UMA SACA, na moeda da lente — o divisor que transforma custo
@@ -2429,50 +2584,36 @@ class BarterVersionModel {
   /// para o admin; no automático, a versão já vem encerrada do servidor.
   bool get anyGoalMet => goals.any((goal) => goal.met);
 
-  /// Rótulo curto para a faixa do consultor: "S2026.02 • paga em soja".
+  /// Rótulo curto para a faixa do consultor: "B2026.02 • paga em soja".
   String get shortLabel => '$code • paga em ${grainName.toLowerCase()}';
 }
 
-/// A SAFRA: a temporada em que o Barter acontece, sobre um grão. Carrega as
-/// versões lançadas nela, da mais recente para a mais antiga.
+/// A SAFRA: o CICLO em que o Barter acontece. Carrega as versões lançadas nela,
+/// da mais recente para a mais antiga.
+///
+/// ELA NÃO É MAIS A CULTURA. O grão saiu daqui — e com ele o vencimento da CPR
+/// — quando as culturas passaram a coexistir dentro do lançamento (ver
+/// [VersionGrainModel]): o mesmo ciclo aceita soja e milho, e uma safra que
+/// tivesse um grão só obrigaria a abrir duas para vender os dois.
 class SeasonModel {
   final String id;
   final String code;
   final String name;
   final int year;
-  final String grainId;
-  final String grainName;
   final String status;
   final DateTime openedAt;
   final DateTime? closedAt;
   final List<BarterVersionModel> versions;
-
-  /// O VENCIMENTO DA CPR desta safra — a data em que o produtor entrega o grão.
-  ///
-  /// Mora na SAFRA, e não na cédula, porque ele muda conforme a CULTURA: soja
-  /// vence na colheita da soja, milho safrinha no dele, e todas as cédulas de
-  /// uma mesma safra vencem no mesmo dia. Enquanto foi campo do formulário, quem
-  /// o digitava não tinha nada que dissesse qual era a data certa daquela
-  /// cultura — e duas cédulas da mesma safra saíam com vencimentos diferentes.
-  ///
-  /// Nulo é "ainda não acertado", e não é erro: a safra abre sem ele e a
-  /// pendência aparece na cédula, endereçada a quem a resolve (o admin, aqui).
-  /// O servidor o copia para cada cédula a cada gravação, até ela ser emitida —
-  /// depois disso, congela.
-  final DateTime? cprDueDate;
 
   const SeasonModel({
     required this.id,
     required this.code,
     required this.name,
     required this.year,
-    required this.grainId,
-    required this.grainName,
     required this.status,
     required this.openedAt,
     required this.versions,
     this.closedAt,
-    this.cprDueDate,
   });
 
   factory SeasonModel.fromJson(Map<String, dynamic> json) => SeasonModel(
@@ -2480,12 +2621,9 @@ class SeasonModel {
         code: json['code'] as String,
         name: json['name'] as String,
         year: (json['year'] as num?)?.toInt() ?? 0,
-        grainId: _asId(json['grainId']),
-        grainName: (json['grainName'] ?? '') as String,
         status: (json['status'] ?? 'closed') as String,
         openedAt: _asDate(json['openedAt']),
         closedAt: _asDateOrNull(json['closedAt']),
-        cprDueDate: _asDateOrNull(json['cprDueDate']),
         versions: (json['versions'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(BarterVersionModel.fromJson)

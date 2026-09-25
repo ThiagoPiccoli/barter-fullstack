@@ -57,7 +57,7 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
   bool _editableInVersion(ProductModel product) {
     final version = AppData.currentVersion;
     if (version == null || !version.isOpen) return false;
-    return version.grainId == product.id || version.priceOf(product.id) != null;
+    return version.grainFor(product.id) != null || version.priceOf(product.id) != null;
   }
 
   /// Troca o CÓDIGO do item — único no catálogo e chave da busca.
@@ -135,7 +135,9 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
       context,
       productId: product.id,
       productName: product.name,
-      price: row?.perUnit ?? version.grainPrice,
+      // O VALOR do produto nesta gestão: o do insumo na tabela, ou a cotação da
+      // CULTURA quando o produto é um grão que o Barter aceita.
+      price: row?.perUnit ?? version.grainFor(product.id)?.price ?? 0,
       // Corrigir o valor acrescenta um ponto na linha do tempo: a tela precisa
       // do detalhe de novo, não de um rebuild do que já estava em mãos.
       onUpdated: _loadDetail,

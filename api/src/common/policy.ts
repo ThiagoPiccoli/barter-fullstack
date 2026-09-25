@@ -27,6 +27,30 @@ export const CAPABILITY = {
   /** Cadastrar/editar/excluir produtores e definir a carteira de cada um. */
   producersManage: 'producers.manage',
   /**
+   * EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — sem cadastrar, sem
+   * excluir e sem mexer em quem o atende.
+   *
+   * É do CONSULTOR, e é a leitura literal de quem gerencia os dados do produtor
+   * na prática: quem visita a fazenda, sabe que o telefone mudou, que o cliente
+   * passou a plantar noutro município e que o nome da fazenda saiu errado no
+   * cadastro é ele. Enquanto isso foi do admin, a correção de um telefone virava
+   * um chamado — e o cadastro ficava velho em silêncio, que é pior do que ficar
+   * errado com alguém sabendo.
+   *
+   * Ela é SEPARADA de `producersManage`, e a separação é o desenho: cadastrar,
+   * excluir e definir a carteira continuam do admin. Os três não são "dados do
+   * produtor", são decisões sobre o cadastro — quem entra na base, quem sai dela
+   * e quem atende quem. A carteira em especial: ela é a lista inteira num campo
+   * só, e um consultor que a escrevesse poderia se remover do próprio cliente
+   * (ou remover um colega) sem que ninguém decidisse isso.
+   *
+   * O QUE ELA NÃO ALCANÇA, dentro da própria edição, está em `producers.service`
+   * (ver `assertEditable`): o documento, a área cultivável e o regime de
+   * Funrural. Os três não são contato nem endereço — são a identidade do
+   * cadastro e as duas réguas que medem toda permuta dele.
+   */
+  producersEdit: 'producers.edit',
+  /**
    * Cadastrar as unidades de retirada — os lugares onde o produtor busca os
    * insumos.
    *
@@ -387,6 +411,10 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   [ROLE.admin]: [
     CAPABILITY.usersManage,
     CAPABILITY.producersManage,
+    // A EDIÇÃO também, ao lado do cadastro: quem pode o mais pode o menos, e a
+    // rota de edição pede esta capacidade. Sem ela aqui, o admin perderia a
+    // caneta do cadastro que ele mesmo abre.
+    CAPABILITY.producersEdit,
     CAPABILITY.unitsManage,
     CAPABILITY.catalogManage,
     CAPABILITY.barterManage,
@@ -489,6 +517,10 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   // que ele sabe sobre a lavoura entra no sistema em vez de sair por telefone.
   [ROLE.consultant]: [
     CAPABILITY.bartersRegister,
+    // OS DADOS DO PRODUTOR, dos da própria carteira. Quem visita a fazenda é
+    // quem sabe que o telefone mudou — ver `producersEdit`, inclusive para o
+    // que ela deliberadamente NÃO alcança.
+    CAPABILITY.producersEdit,
     CAPABILITY.bartersChangeRequest,
     CAPABILITY.bartersProductRequest,
     CAPABILITY.bartersCprFill,

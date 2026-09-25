@@ -276,6 +276,10 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // do consultor e os insumos. As duas são o mesmo tipo de ato — a
         // bancada de quem montou a permuta, reescrita quantas vezes for preciso
         // enquanto ela não sair da mão dele. Daí o PUT nas duas.
+        // A CULTURA do rascunho entra na mesma lista e sob a mesma capacidade:
+        // trocar o grão em que a permuta será paga é bancada do consultor, como
+        // trocar um insumo — e é dele a escolha, junto com o produtor.
+        { route: 'PUT /barters/:code/culture', policy: 'capability:barters.register' },
         { route: 'PUT /barters/:code/inputs', policy: 'capability:barters.register' },
         { route: 'PUT /barters/:code/note', policy: 'capability:barters.register' },
 
@@ -292,13 +296,14 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
           route: 'PUT /barter-versions/:code/close-on-goal',
           policy: 'capability:barter.manage',
         },
-        // A PRODUTIVIDADE ESTIMADA é da mesma alçada do preço da saca: as duas
+        // O ACERTO DE UMA CULTURA (cotação da saca, produtividade estimada,
+        // vencimento da CPR e meta de sacas) é da mesma alçada da publicação:
         // são as taxas do lançamento, e quem publica a tabela é quem as acerta.
-        // Ela decide quanta área de penhor cada permuta nova vai exigir, então
-        // não é campo de cadastro — é decisão de risco, e mora com quem gere o
-        // Barter.
+        // A produtividade decide quanta área de penhor cada permuta nova vai
+        // exigir, então não é campo de cadastro — é decisão de risco, e mora com
+        // quem gere o Barter.
         {
-          route: 'PUT /barter-versions/:code/estimated-yield',
+          route: 'PUT /barter-versions/:code/grains/:grainId',
           policy: 'capability:barter.manage',
         },
         // O SEGURO do lançamento é da mesma alçada, e pelo mesmo raciocínio:
@@ -318,11 +323,10 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/close', policy: 'capability:barter.manage' },
-        // O VENCIMENTO DA CPR é da SAFRA (ele muda conforme a cultura) e é a
-        // única coisa dela que se edita depois de aberta — daí a rota própria em
-        // vez de um `PUT /seasons/:code` genérico, que abriria a porta para
-        // reescrever o grão e o ano que as permutas já fechadas apontam.
-        { route: 'PUT /seasons/:code/cpr-due-date', policy: 'capability:barter.manage' },
+        // A SAFRA não tem mais o que editar depois de aberta: o grão saiu dela
+        // (as culturas são do lançamento) e com ele foi embora o vencimento da
+        // CPR, que era a única coisa que se acertava depois. Quem acerta a data
+        // agora é `PUT /barter-versions/:code/grains/:grainId`, acima.
         { route: 'POST /seasons/:code/versions', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/versions/import', policy: 'capability:barter.manage' },
 
@@ -357,7 +361,12 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /producers', policy: 'any-authenticated' },
         { route: 'GET /producers/:id', policy: 'any-authenticated' },
         { route: 'POST /producers', policy: 'capability:producers.manage' },
-        { route: 'PUT /producers/:id', policy: 'capability:producers.manage' },
+        // A EDIÇÃO do produtor é mais larga que o cadastro dele: ela é do admin
+        // E do CONSULTOR da carteira (`producers.edit`), porque quem visita a
+        // fazenda é quem sabe que o telefone mudou. Cadastrar e excluir
+        // continuam em `producers.manage`, e o que o consultor não alcança
+        // dentro da edição é regra sobre o recurso, no service.
+        { route: 'PUT /producers/:id', policy: 'capability:producers.edit' },
 
         // Unidades — a LEITURA é de qualquer autenticado (o consultor precisa
         // dela para escolher onde o produtor retira, o gerente para reconhecer

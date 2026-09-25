@@ -55,7 +55,7 @@ void main() {
     producerName: 'Antônio Carvalho',
     unitId: '3',
     unitName: 'Filial 02',
-    versionCode: 'S2026.02',
+    versionCode: 'B2026.02',
     items: const [
       SimulationItem(productId: '5', productName: 'NPK', unit: 'saco 50kg', quantity: 48),
     ],
@@ -84,14 +84,20 @@ void main() {
     ];
     AppData.currentVersion = BarterVersionModel(
       id: 'v1',
-      code: 'S2026.02',
+      code: 'B2026.02',
       number: 2,
-      seasonCode: 'S2026',
-      seasonName: 'Safra 2026',
-      grainId: '1',
-      grainName: 'Soja',
-      grainUnit: 'saca 60kg',
-      grainPrice: 100,
+      seasonCode: 'B2026',
+      seasonName: 'Barter 2026',
+      grains: const [
+        VersionGrainModel(
+          grainId: '1',
+          grainName: 'Soja',
+          grainUnit: 'saca 60kg',
+          price: 100,
+          estimatedYield: 60,
+        ),
+      ],
+      pricedInGrainId: '1',
       status: 'open',
       isOpen: true,
       startsAt: DateTime(2026, 2, 1),

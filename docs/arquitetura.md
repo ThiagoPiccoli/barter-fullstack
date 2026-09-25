@@ -26,24 +26,38 @@ lugar:
 
 E, acima disso, **quem decide os valores é a empresa, não a permuta**:
 
-> O **Barter é lançado**: a empresa abre uma **safra** sobre um grão (`S2026`) e
-> publica **versões** dela (`S2026.01`, `S2026.02`…). Cada versão carrega o
-> valor da saca e a tabela de preço/custo dos insumos, e vale por um período. A
-> permuta do consultor nasce **dentro da versão vigente** e guarda os valores
-> dela para sempre.
+> O **Barter é lançado**: a empresa abre uma **safra** — o ciclo (`B2026`) — e
+> publica **versões** dela (`B2026.01`, `B2026.02`…). Cada versão carrega as
+> **culturas** que aceita como pagamento (com a cotação da saca, a produção
+> estimada e o vencimento da cédula de cada uma) e UMA tabela de preço/custo dos
+> insumos, e vale por um período. A permuta do consultor nasce **dentro da
+> versão vigente**, numa das culturas dela, e guarda os valores para sempre.
 
 ```
-Safra  S2026 "Soja 2026"          (um grão, uma temporada — uma aberta por vez)
- ├─ Barter S2026.01  encerrada     (tabela de valores + vigência + metas)
- └─ Barter S2026.02  VIGENTE       ← só existe uma; publicar a próxima encerra esta
-      ├─ Permuta PRM-2026-014
-      └─ Permuta PRM-2026-015
+Safra  B2026 "Barter 2026/27"      (o CICLO — uma aberta por vez)
+ ├─ Barter B2026.01  encerrada      (culturas + tabela de valores + vigência + metas)
+ └─ Barter B2026.02  VIGENTE        ← só existe uma; publicar a próxima encerra esta
+      ├─ cultura SOJA   R$ 148,50/sc · 60 sc/ha  · vence 30/06
+      ├─ cultura MILHO  R$  64,50/sc · 170 sc/ha · vence 20/09
+      ├─ Permuta PRM-2026-014  (paga em soja)
+      └─ Permuta PRM-2026-015  (paga em milho)
 ```
+
+**AS CULTURAS COEXISTEM**, e a safra deixou de ser a cultura. Ela ERA: `S2026`
+era "soja 2026", e toda permuta dela só podia ser paga em soja. A lavoura não é
+assim — na mesma janela o produtor planta soja e milho —, e a única forma de
+oferecer as duas era abrir duas safras, o que fazia a pergunta "por quanto se
+permuta agora?" voltar a ter duas respostas. Hoje a cultura é do LANÇAMENTO, a
+tabela de insumos é uma só (o litro de glifosato custa os mesmos R$ 40 em
+qualquer grão) e o que muda de uma cultura para a outra é a cotação que converte
+custo em sacas, a produtividade que dimensiona o penhor e a data da entrega.
 
 Consequências que aparecem no código inteiro:
 
-- o consultor **não escolhe grão** (era a etapa 3 da tela de permuta) nem vê
-  preço: ele escolhe produtor e insumos, e o servidor faz o resto;
+- o consultor **escolhe a CULTURA** (e só ela: continua sem ver preço), entre as
+  que o lançamento aceita — é ele, com o produtor, quem sabe o que vai ser
+  plantado naquele talhão. Num rascunho a escolha ainda se troca, e as sacas e o
+  penhor são refeitos;
 - **insumo fora da tabela da versão não é permutável** — a versão define o que
   está na mesa;
 - publicar a próxima versão **não reescreve** o que já foi acordado: os itens da
@@ -142,13 +156,17 @@ pedido do consultor ─┤
                      └─ recusado ─▶ fica onde estava, com o motivo escrito
 ```
 
-A alteração **atravessa versões e não atravessa culturas**: a permuta fechada na
-primeira versão da soja continua alterável com a terceira no ar (ela não foi
-faturada, e o que falta nela é uma correção de insumos), mas com o Barter do
-milho aberto uma permuta de soja não se remonta, porque os insumos, os mínimos e
-o grão que a paga são outros. Os PREÇOS da remontagem são os da gestão em que a
-permuta foi fechada, e é para isso que existe `GET /barters/:code/version`: a
-tela precisa da tabela daquela versão, não da vigente.
+A alteração **atravessa versões enquanto o lançamento aberto aceitar a cultura
+da permuta**: a permuta paga em soja continua alterável com a terceira versão no
+ar (ela não foi faturada, e o que falta nela é uma correção de insumos); saindo o
+milho do lançamento, a permuta de milho deixa de se remontar, porque a cotação
+que a paga e a produtividade que dimensiona o penhor dela não existem mais
+naquela gestão. Repare que a pergunta mudou de forma junto com o domínio: era "as
+duas gestões são da mesma cultura?", porque cada gestão tinha uma; agora é "a
+gestão aberta ainda OFERECE esta cultura?". Os PREÇOS da remontagem são os da
+gestão em que a permuta foi fechada, e é para isso que existe `GET
+/barters/:code/version` (com `?grainId=` da cultura dela): a tela precisa da
+tabela daquela versão, convertida naquele grão, e não da vigente.
 
 O pedido **não move a permuta**: ela continua na fila em que estava, com uma
 bandeira que todo mundo enxerga — quem a tem na mesa precisa saber que os
@@ -367,6 +385,7 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | Capacidade | Quem tem |
 |---|---|
 | `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `audit.read` | admin |
+| `producers.edit` | admin **e consultor** — editar os dados do produtor da própria carteira |
 | `producers.readAll` | admin, gerente, comitê, faturista, emissor |
 | `barters.readAll` | admin, comitê |
 | `barters.readTeam` · `barters.opinion` | gerente |
@@ -749,7 +768,7 @@ Vale ler linha a linha; a sequência é:
 4. quantidades repetidas no payload são **consolidadas por produto**
 5. preços vêm **da versão** — o payload nem tem campo de preço, e o `whitelist`
    do ValidationPipe descartaria se tivesse; insumo fora da tabela da versão é
-   recusado ("Fora do Barter S2026.02")
+   recusado ("Fora do Barter B2026.02")
 6. **insumos obrigatórios por hectare**: `requiredPerHa × areaHa`, com
    tolerância de 0,005 — só para os insumos que a versão lançou
 7. **mínimos por categoria**: `percentOfTotal` ou `valuePerHa`, com tolerância
@@ -833,9 +852,15 @@ vigente**. Publicar a próxima encerra a anterior **na mesma transação** — s
 duas ficassem ativas por um instante, uma permuta registrada nesse intervalo
 nasceria na tabela errada, e permuta é registro histórico.
 
-Publicar uma versão é: **planilha .xlsx com os insumos + valor da saca digitado
-+ vigência + metas**. O valor da saca não vem do arquivo porque não vem do
-fornecedor — é a cotação com que a empresa decide receber.
+Repare que essa invariante SOBREVIVEU às culturas que coexistem, e é por causa
+delas: o motivo de haver duas safras abertas era oferecer dois grãos, e agora um
+lançamento só oferece quantos grãos a operação quiser. Ter duas culturas deixou
+de custar uma segunda gestão.
+
+Publicar uma versão é: **planilha .xlsx com os insumos + as culturas + vigência
++ metas**. As culturas não vêm do arquivo porque não vêm do fornecedor — cada
+uma é a cotação com que a empresa decide receber aquele grão, mais a produção
+estimada, o vencimento da cédula e a meta de sacas dela.
 
 A leitura da planilha ([version-import.ts](../api/src/seasons/version-import.ts))
 é escrita para a planilha REAL do fornecedor — 656 itens, quatro colunas
@@ -885,27 +910,35 @@ digitação.
 
 Duas coisas continuam sendo escritas no catálogo a cada publicação:
 `Product.currentPrice` (o *último valor publicado*) e um ponto em
-`PriceHistoryEntry` assinado `Barter S2026.02`. É o que mantém o relatório do
-produto e o gráfico de preço contando a história por gestão.
+`PriceHistoryEntry` assinado `Barter B2026.02` — para cada insumo e para cada
+CULTURA, porque a cotação da saca também é um preço que se acompanha. É o que
+mantém o relatório do produto e o gráfico contando a história por gestão.
 
 Correção pontual: `PUT /barter-versions/:code/prices/:productId` — só na versão
-vigente, e o `productId` do grão da safra ajusta o valor da saca pelo mesmo
-caminho. **Não existe mais `PUT /products/:id/price`**: com as duas portas
+vigente, e o `productId` de uma das culturas ajusta a cotação da saca DELA pelo
+mesmo caminho. **Não existe mais `PUT /products/:id/price`**: com as duas portas
 abertas, o catálogo e a versão discordariam, e quem precifica é a versão.
 
-O lançamento tem **duas taxas**, e as duas são obrigatórias: `grainPrice`, que
-leva o custo dos insumos a sacas, e `estimatedYield` — a **produtividade
-estimada** da cultura (sc/ha), que leva as sacas à área de lavoura do penhor (ver
-1.5c). Elas viajam juntas no código (`VersionRates`) justamente para não haver um
-caminho de publicação que carregue uma e esqueça a outra: a versão nasceria
+Cada cultura tem **duas taxas**, e as duas são obrigatórias: `price`, que leva o
+custo dos insumos a sacas daquele grão, e `estimatedYield` — a **produtividade
+estimada** (sc/ha), que leva as sacas à área de lavoura do penhor (ver 1.5c).
+Elas viajam juntas no código (`ResolvedGrain`) justamente para não haver um
+caminho de publicação que carregue uma e esqueça a outra: a cultura nasceria
 vigente, aceitando permuta e sem conseguir dimensionar a garantia dela.
 
-`PUT /barter-versions/:code/estimated-yield` acerta a produtividade de uma versão
-**já publicada**. Ela existe pela mesma razão do vencimento da safra: as versões
-anteriores ao campo nasceram sem ele e são as que estão vigentes no dia em que a
-migration sobe — e a alternativa seria republicar a tabela inteira, o que
-encerraria a versão e reiniciaria a contagem do realizado por causa de um número
-de dois dígitos.
+`PUT /barter-versions/:code/grains/:grainId` acerta uma cultura **já publicada**:
+a cotação, a produtividade, o vencimento da CPR e a meta de sacas. Ela existe
+porque republicar a tabela inteira por causa de um número de dois dígitos
+encerraria a versão vigente e reiniciaria a contagem do realizado. O vencimento é
+o único dos quatro que a versão ENCERRADA ainda aceita — ele vale para as cédulas
+que não saíram, e uma versão fechada continua tendo permutas faturadas esperando
+emissão.
+
+**A META DE SACAS é de cada cultura**, e só ela: vendas (R$) e número de permutas
+são da versão inteira. Sacas de soja e de milho não somam — são dois compromissos
+de entrega, com compradores, preços e calendários diferentes —, e um número único
+juntando os dois faria a barra do painel andar com o milho enquanto o admin lê
+compromisso de soja.
 
 ## 1.5c O documento: a Cédula de Produto Rural (CPR)
 
@@ -920,7 +953,7 @@ A regra que organiza o código inteiro é **de onde vem cada lacuna do modelo**:
 | Fonte | O que ela responde | Onde mora |
 |---|---|---|
 | A PERMUTA | emitente, CPF, sacas, produto, preço da saca, valor total, safra | `knownFrom()`, em [cpr.ts](../api/src/barters/cpr.ts) — resolvido no servidor, **leitura** na tela |
-| A SAFRA | o **vencimento** da entrega — ele muda conforme a CULTURA | `Season.cprDueDate`, escrito pelo admin ao abrir a safra |
+| A CULTURA do lançamento | o **vencimento** da entrega — ele muda de um grão para o outro | `VersionGrain.cprDueDate`, escrito pelo admin ao publicar (ou depois) |
 | O FATURAMENTO | os números das **notas fiscais** e das duplicatas (cláusula VII) | `BarterInvoice`, com o arquivo anexado — **leitura** na cédula |
 | A CREDORA | razão social, CNPJ, endereço, foro | CADASTRO ([creditor/](../api/src/creditor/)), do admin **ou do emissor** |
 | A PROPOSTA | CNH, filiação, e-mail, RG do cônjuge, avalistas, hipotecas | coletado e **não impresso** — ver abaixo |
@@ -932,16 +965,19 @@ informação a quem a tem, e uma vez só.**
 - **o VENCIMENTO** era um campo do formulário, digitado cédula a cédula por quem
   não tinha nada que dissesse qual era a data certa daquela cultura. Soja vence
   na colheita dela, milho safrinha no dele — e todas as cédulas de uma mesma
-  safra vencem no mesmo dia, porque é uma decisão comercial tomada uma vez.
+  CULTURA vencem no mesmo dia, porque é uma decisão comercial tomada uma vez.
   Enquanto foi campo, duas CPRs da mesma safra saíam com vencimentos diferentes e
-  a única maneira de descobrir era comparar os papéis. Hoje ele é da SAFRA, o
-  servidor o copia para a cédula a cada gravação, e ele **congela na emissão**.
-  O admin o acerta em dois momentos, os dois na aba *Lançamento*: ao **abrir a
-  safra** (`POST /seasons`, campo opcional — a safra abre antes de a colheita ter
-  data fechada) e depois dela, no cartão do vencimento
-  (`PUT /seasons/:code/cpr-due-date`). Mudá-lo alcança toda cédula da safra que
-  ainda **não** foi emitida, e por isso a tela confirma o alcance antes de
-  gravar; as emitidas ficam com a data que congelaram, porque estão assinadas.
+  a única maneira de descobrir era comparar os papéis. Ele foi então para a
+  SAFRA, e de lá para a CULTURA quando elas passaram a coexistir: uma data só
+  para soja e milho na mesma gestão seria uma delas errada. O servidor a copia
+  para a cédula a cada gravação, e ela **congela na emissão**. O admin a acerta
+  em dois momentos, os dois na aba *Lançamento*: ao **publicar** a versão (campo
+  opcional de cada cultura — o Barter abre antes de a colheita ter data fechada)
+  e depois dela, no cartão de vencimentos
+  (`PUT /barter-versions/:code/grains/:grainId`). Mudá-la alcança toda cédula
+  DAQUELA CULTURA que ainda **não** foi emitida, e por isso a tela confirma o
+  alcance antes de gravar; as emitidas ficam com a data que congelaram, porque
+  estão assinadas.
   A data viaja como **meio-dia UTC** do dia escolhido: o vencimento é um DIA, e
   meia-noite local a leste de Greenwich cai no dia anterior em UTC — a cédula
   sairia vencendo um dia antes do que o admin escolheu;
@@ -1010,7 +1046,7 @@ terra a empresa exige em garantia de toda permuta futura: baixá-la de 20% para
 A correção não foi mudar de tabela — foi separar por AUTORIDADE dentro dela:
 rota própria (`PUT /creditor/pledge-margin`), DTO próprio e capacidade própria
 (`pledge.policy`, só do admin). É o mesmo desenho de
-`PUT /seasons/:code/cpr-due-date` e `PUT /barter-versions/:code/estimated-yield`:
+`PUT /barter-versions/:code/grains/:grainId`:
 **o campo que tem dono ou ciclo próprio ganha porta própria**, em vez de viajar
 dentro de um formulário cujo dono é outro. A tela da credora é a mesma para os
 dois papéis, e o campo simplesmente não existe para quem não tem a capacidade.
@@ -1050,7 +1086,7 @@ Três consequências que aparecem no código:
 - **a repetição é resolvida por sugestão, não por cadastro.** O mesmo produtor
   emite cédula a cada safra, e o RG, o endereço e as matrículas são os mesmos da
   vez passada. A sugestão vem da **última cédula dele** (`previousCpr`), e não do
-  cadastro de produtor: quem escreve cadastro é o admin (`producers.manage`), e
+  cadastro de produtor: quem escreve o cadastro é o admin (`producers.manage`), e
   resolver a digitação dando a caneta ao consultor trocaria um incômodo por uma
   mudança de quem pode alterar cliente. Ela também só é oferecida enquanto NÃO há
   rascunho — depois disso, o que está na tela é de quem escreveu.
@@ -1290,6 +1326,27 @@ quem foi esta venda?" é a permuta, que guarda o consultor que a registrou
 (`CAPABILITY.producersManage`) — o consultor não se acrescenta a uma carteira,
 nem tira alguém dela.
 
+**OS DADOS DO PRODUTOR, PORÉM, SÃO GERIDOS PELO CONSULTOR** (`producers.edit`,
+`PUT /producers/:id`). Quem visita a fazenda é quem sabe que o telefone mudou,
+que a propriedade está com o nome errado e que o cliente passou a plantar noutro
+município; enquanto isso foi só do admin, corrigir um telefone virava um chamado
+— e o cadastro envelhecia em silêncio, que é pior do que ficar errado com alguém
+sabendo. Ele alcança os produtores da PRÓPRIA carteira, e quatro campos ficam de
+fora, cada um por um motivo (ver `assertEditable`, em
+[producers.service.ts](../api/src/producers/producers.service.ts)):
+
+| Campo | Por que continua do admin |
+|---|---|
+| CPF/CNPJ | é a IDENTIDADE do cadastro (a unicidade mora nele): trocá-lo transforma o cliente A no cliente B mantendo as permutas do A |
+| área cultivável | é o denominador de toda régua da permuta — mínimos por hectare, custo do seguro, investimento por hectare. Um arrendamento a mais é decisão de crédito, não atualização de contato |
+| regime de Funrural | é a opção formal do produtor perante o fisco, de onde sai a alíquota gravada em cada entrega |
+| a carteira | é a lista inteira num campo só: quem a escrevesse poderia se remover do próprio cliente — ou remover um colega — sem que ninguém decidisse isso |
+
+A recusa é por VALOR e não por presença (o formulário devolve o registro
+inteiro, e recusar o campo que veio igual travaria toda edição de telefone), e a
+frase diz **a quem pedir**: uma trava que só nega manda o consultor concluir que
+o app está quebrado. Cadastrar e excluir continuam em `producers.manage`.
+
 A exclusão é `Cascade` dos dois lados: sai o consultor, sai o vínculo dele — não
 o produtor. Um produtor pode ficar **sem nenhum** consultor e esperar
 realocação (é o estado que o antigo `SetNull` produzia); até lá, só a retaguarda
@@ -1326,12 +1383,13 @@ Com um gerente só, "cada um vê a sua fila" e "todo mundo vê tudo" produziriam
 exatamente a mesma tela. E a `PRM-2026-008` é retirada na Matriz, embora seja do
 Roberto: é o dataset mostrando que a retirada não tem relação com quem analisa.
 
-E conta a história do modelo de valores: duas safras **encerradas** (`T2025`
-de trigo e `M2026` de milho — é delas que vêm as permutas antigas pagas nesses
-grãos) e a safra de soja `S2026` **aberta**, com `S2026.01` encerrada logo após
-a publicação (o caso de quem republica antes de alguém usar) e `S2026.02`
-vigente, com as quatro metas definidas. Em produção nada disso existe: o admin
-abre a safra e publica a primeira versão pela planilha.
+E conta a história do modelo de valores: uma safra **encerrada** (`B2025`, o
+ciclo 2025/26, cuja versão aceitava trigo E milho ao mesmo tempo — é dela que vêm
+as permutas antigas pagas nesses dois grãos) e a safra `B2026` **aberta**, com
+`B2026.01` encerrada logo após a publicação (o caso de quem republica antes de
+alguém usar, e que abriu só com soja) e `B2026.02` vigente, aceitando **soja e
+milho**, com as metas definidas — a de sacas em cada cultura. Em produção nada
+disso existe: o admin abre a safra e publica a primeira versão pela planilha.
 
 Variáveis: [.env.example](../api/.env.example) documenta todas
 (`TOKEN_TTL_DAYS`, `CORS_ORIGINS`, `TRUST_PROXY`, `LOGIN_RATE_LIMIT`,
@@ -1374,8 +1432,8 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | PUT | `/classes/:id/rule` | admin | só a regra de mínimo; nome e lista não se alteram |
 | GET | `/barter-versions/current` | autenticado | a versão VIGENTE com a tabela; `null` = Barter fechado |
 | GET | `/barter-versions/:code` | admin | detalhe + metas × realizado |
-| PUT | `/barter-versions/:code/prices/:productId` | admin | correção pontual (o grão da safra ajusta a saca) |
-| PUT | `/barter-versions/:code/estimated-yield` | admin | produtividade estimada (sc/ha) da versão vigente — a taxa do penhor |
+| PUT | `/barter-versions/:code/prices/:productId` | admin | correção pontual (o `productId` de uma cultura ajusta a saca dela) |
+| PUT | `/barter-versions/:code/grains/:grainId` | admin | acerta uma CULTURA: cotação, produtividade (sc/ha), vencimento da CPR e meta de sacas |
 | POST | `/barter-versions/:code/close` | admin | encerra o Barter, mantém a safra |
 | GET/POST | `/seasons` | admin | safras com o histórico de versões |
 | POST | `/seasons/:code/close` | admin | encerra safra + versão vigente |
@@ -1411,7 +1469,6 @@ não há ninguém acima do admin para redefini-la pela aplicação.
 | PUT | `/barters/:code/cpr/registry-file` | **emissor** | a via carimbada que o cartório devolveu DEPOIS do ato |
 | GET | `/barters/:code/cpr/signed` | consultor, emissor, admin | baixa a cédula assinada |
 | GET | `/barters/:code/cpr/registry-file` | consultor, emissor, admin | baixa a via registrada |
-| PUT | `/seasons/:code/cpr-due-date` | admin | o VENCIMENTO da CPR daquela safra — ele muda conforme a cultura |
 | GET/PUT | `/creditor` | admin **e** emissor | a credora dos documentos — cadastro ÚNICO, sem `:id` e sem DELETE |
 | PUT | `/creditor/pledge-margin` | **admin** | a margem de segurança do penhor (%) — rota à parte porque a autoridade é outra |
 
@@ -1748,7 +1805,12 @@ regra do domínio:
 - **Barter fechado** — se `AppData.currentVersion` for null ou não estiver
   aberta, a tela inteira vira o aviso "Barter fechado", com um puxar-para-
   atualizar. Não há o que montar sem tabela de valores.
-- **Faixa do Barter vigente** no topo: `S2026.02 • pagamento em soja`, sem R$.
+- **Faixa do Barter vigente** no topo: `B2026.02 • pagamento em soja`, sem R$ —
+  e, quando o lançamento aceita mais de uma CULTURA, ela traz o **seletor**: é
+  ali que o consultor diz em qual o cliente paga. Trocar a cultura pede a tabela
+  de novo ao servidor (`?grainId=`), porque ela vem convertida em sacas de um
+  grão por vez; a permuta em rascunho já registrada troca pela API
+  (`PUT /barters/:code/culture`), e os insumos ficam.
 - **Etapa 1 — produtor**. Vem primeiro porque a **área da propriedade** define
   quais insumos são obrigatórios e em que quantidade. A lista é
   `AppData.producersForConsultant(consultantId)` — a carteira, incluindo os

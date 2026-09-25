@@ -1,5 +1,15 @@
-import { Transform, Type } from 'class-transformer';
+import { plainToInstance, Transform, Type } from 'class-transformer';
 import { MAX_VERSION_PRICES, parseNumber } from '../version-import';
+
+/**
+ * Quantas CULTURAS um lançamento aceita.
+ *
+ * O número não é uma regra de negócio — ninguém publica um Barter de vinte
+ * grãos —, é a trava que impede um payload defeituoso de virar uma versão com
+ * mil culturas dentro. Folgado de propósito: soja, milho, trigo, sorgo, feijão e
+ * arroz numa mesma janela já é mais do que a operação faz.
+ */
+export const MAX_VERSION_GRAINS = 12;
 
 /**
  * Número que pode chegar como TEXTO — e como o Brasil escreve.
@@ -38,6 +48,28 @@ const BooleanFromText = (): PropertyDecorator =>
     if (text === 'false') return false;
     return value;
   });
+
+/**
+ * As CULTURAS chegando como JSON num campo de texto (o multipart da planilha).
+ *
+ * O `plainToInstance` no fim é o ponto: sem ele os objetos chegariam à validação
+ * como objetos simples, e `@ValidateNested` não teria metadados para conferir —
+ * uma cotação negativa passaria pelo caminho do arquivo e seria recusada pelo do
+ * JSON. Texto ilegível é devolvido intacto, para o `@IsArray` reclamar com a
+ * mensagem da validação em vez de virar uma lista vazia em silêncio.
+ */
+const GrainsFromText = (): PropertyDecorator =>
+  Transform(({ value }: { value: unknown }) => {
+    if (typeof value !== 'string') return value;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return value;
+    }
+    if (!Array.isArray(parsed)) return parsed;
+    return plainToInstance(VersionGrainDto, parsed);
+  });
 import {
   ArrayMaxSize,
   ArrayMinSize,
@@ -57,17 +89,18 @@ import {
 } from 'class-validator';
 
 /**
- * Abertura de uma SAFRA: o Barter acontece sobre um grão, durante um ciclo.
+ * Abertura de uma SAFRA: o CICLO em que o Barter acontece.
  *
- * A `letter` é opcional porque tem sugestão automática (a primeira letra do
- * grão), mas é editável: soja e sorgo disputam o "S", e quem desempata é o
- * admin. Ver season-code.ts.
+ * NÃO HÁ GRÃO AQUI, e essa é a mudança: as culturas são do lançamento (ver
+ * `VersionGrainDto`), porque elas coexistem e mudam de uma versão para a outra —
+ * o Barter pode abrir só com soja e acrescentar o milho na versão seguinte, sem
+ * que a safra tenha deixado de ser a mesma.
+ *
+ * A `letter` continua opcional e continua editável: ela era a inicial do grão
+ * ("S de soja") e hoje é só a letra do ciclo (`B` de Barter, o padrão). Quem
+ * roda dois ciclos no mesmo ano — verão e inverno — os separa por ela.
  */
 export class OpenSeasonDto {
-  @IsInt()
-  @IsPositive()
-  grainId!: number;
-
   @IsInt()
   @Min(2000)
   @Max(2999)
@@ -81,38 +114,96 @@ export class OpenSeasonDto {
   @IsOptional()
   @Matches(/^[A-Za-z]{1,2}$/, { message: 'A letra da safra deve ter 1 ou 2 letras' })
   letter?: string;
+}
+
+/**
+ * UMA CULTURA do lançamento: o grão em que a permuta pode ser paga e as três
+ * coisas que mudam de um grão para o outro.
+ *
+ * As duas primeiras são as metades da mesma conversão — o preço leva o custo dos
+ * insumos a SACAS, a produtividade leva as sacas à ÁREA de lavoura que precisa
+ * garanti-las —, e por isso as duas são obrigatórias: uma cultura publicada sem
+ * produtividade é uma cultura em que nenhuma permuta pode ser registrada (`POST
+ * /barters` recusa), e recusar aqui é dizer isso enquanto o admin ainda está com
+ * a tela do lançamento aberta.
+ */
+export class VersionGrainDto {
+  @NumberFromText()
+  @IsInt()
+  @IsPositive()
+  grainId!: number;
+
+  /** A cotação da saca desta cultura nesta versão (R$). */
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive()
+  price!: number;
+
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
+  estimatedYield!: number;
 
   /**
-   * O VENCIMENTO DA CPR desta safra — a data em que a entrega do grão vence.
+   * O VENCIMENTO DA CPR desta cultura — a data em que a entrega vence.
    *
-   * Opcional na abertura porque a safra costuma abrir antes de a data estar
-   * acertada, e travar a abertura por causa dela empurraria o admin a chutar um
-   * dia. Enquanto ela faltar, nenhuma cédula da safra pode ser emitida, e
-   * `cprGaps()` diz isso com o recado endereçado a quem pode resolver. Ver
-   * `SeasonCprDueDateDto`, que é por onde ela se acerta depois.
+   * Opcional no lançamento porque o Barter costuma abrir antes de a data estar
+   * acertada, e travar a publicação por causa dela empurraria o admin a chutar um
+   * dia. Enquanto faltar, nenhuma cédula daquela cultura pode ser emitida, e
+   * `cprGaps()` diz isso com o recado endereçado a quem resolve. Ver
+   * `VersionGrainPatchDto`, que é por onde ela se acerta depois.
    */
   @IsOptional()
   @IsDateString({}, { message: 'Vencimento da CPR inválido' })
   cprDueDate?: string;
+
+  /** A meta de sacas desta cultura. Ver `BarterVersion.targetSales`. */
+  @IsOptional()
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive()
+  targetSacks?: number;
 }
 
 /**
- * O VENCIMENTO DA CPR de uma safra, acertado depois da abertura.
+ * O ACERTO de uma cultura já publicada: a cotação, a produtividade, o
+ * vencimento da CPR ou a meta de sacas.
  *
- * Rota própria porque a safra ABERTA não se edita de resto: o grão, o ano e o
- * código dela são o que as permutas já fechadas apontam, e um `PUT` genérico de
- * safra abriria a porta para mexer neles. Esta data é a única coisa da safra que
- * muda legitimamente depois — ela é decisão comercial, e a colheita se antecipa
- * ou atrasa.
+ * Rota própria pelo mesmo motivo que o vencimento da safra e o `closeOnGoal`
+ * tinham a sua: esses números nascem no lançamento, e mudar um deles no meio do
+ * Barter obrigaria a republicar a tabela inteira — o que encerraria a versão
+ * vigente e reiniciaria a contagem do realizado por causa de um campo.
  *
- * O QUE ELA NÃO FAZ é reescrever cédula emitida: `dueDate` é copiado para a
- * cédula a cada gravação e congela na emissão (ver `saveCpr`). Mudar a data aqui
- * vale para as cédulas que ainda não saíram, que é a leitura certa — o título
- * que já está com o produtor diz o que diz.
+ * TODOS OPCIONAIS porque os quatro se acertam separadamente (a colheita se
+ * antecipa, a diretoria revê a estimativa), e o service recusa o corpo vazio: um
+ * `PUT` que não muda nada gravaria uma linha de trilha dizendo que nada mudou.
+ *
+ * O QUE ELE NÃO FAZ é reescrever permuta registrada nem cédula emitida: a
+ * produtividade está congelada em `Barter.pledgeYield`, a cotação no item de
+ * grão, e o vencimento congela na emissão. Vale para o que ainda vai acontecer.
  */
-export class SeasonCprDueDateDto {
+export class VersionGrainPatchDto {
+  @IsOptional()
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive()
+  price?: number;
+
+  @IsOptional()
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
+  estimatedYield?: number;
+
+  @IsOptional()
   @IsDateString({}, { message: 'Vencimento da CPR inválido' })
-  cprDueDate!: string;
+  cprDueDate?: string;
+
+  @IsOptional()
+  @NumberFromText()
+  @IsNumber()
+  @IsPositive()
+  targetSacks?: number;
 }
 
 /** Uma linha da tabela de valores quando a versão é publicada por JSON. */
@@ -179,11 +270,9 @@ export class VersionLimitsDto {
   @IsPositive()
   targetSales?: number;
 
-  @IsOptional()
-  @NumberFromText()
-  @IsNumber()
-  @IsPositive()
-  targetSacks?: number;
+  // A META DE SACAS não está aqui: ela é de cada CULTURA (ver
+  // `VersionGrainDto.targetSacks`). Sacas de soja e de milho não somam, e um
+  // número único juntando as duas seria uma barra de progresso sem significado.
 
   @IsOptional()
   @NumberFromText()
@@ -203,24 +292,25 @@ export class VersionLimitsDto {
  * ImportVersionDto.
  */
 export class PublishVersionDto extends VersionLimitsDto {
-  @IsNumber()
-  @IsPositive()
-  grainPrice!: number;
-
   /**
-   * A PRODUTIVIDADE ESTIMADA da cultura (sc/ha) — obrigatória, como o preço da
-   * saca, e pelo mesmo motivo.
+   * AS CULTURAS deste lançamento — pelo menos uma, e quantas coexistirem.
    *
-   * As duas são as metades da mesma conversão: o preço leva o custo dos insumos
-   * a sacas, a produtividade leva as sacas à área de lavoura que precisa
-   * garanti-las. Publicar sem ela é publicar um Barter em que nenhuma permuta
-   * pode ser registrada (`POST /barters` recusa) — e recusar AQUI é dizer isso no
-   * único momento em que o admin está com a tela do lançamento aberta, em vez de
-   * deixar a descoberta para o primeiro consultor que tentar vender.
+   * É uma lista, e não um grão com uma cotação, porque as culturas convivem: na
+   * mesma janela o produtor fecha soja e milho, e o Barter aceita as duas com
+   * cotações, produtividades e vencimentos próprios (ver `VersionGrainDto`)
+   * sobre a MESMA tabela de insumos.
+   *
+   * O teto é folgado de propósito: ele não existe para limitar o negócio, e sim
+   * para que um payload defeituoso não vire uma versão com mil culturas.
    */
-  @IsNumber()
-  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
-  estimatedYield!: number;
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Escolha ao menos uma cultura para este Barter' })
+  @ArrayMaxSize(MAX_VERSION_GRAINS, {
+    message: `Um Barter não aceita mais de ${MAX_VERSION_GRAINS} culturas`,
+  })
+  @ValidateNested({ each: true })
+  @Type(() => VersionGrainDto)
+  grains!: VersionGrainDto[];
 
   /**
    * A MESMA constante que a planilha usa (MAX_VERSION_PRICES, em
@@ -248,16 +338,24 @@ export class PublishVersionDto extends VersionLimitsDto {
  * uma tabela nova".
  */
 export class ImportVersionDto extends VersionLimitsDto {
-  @NumberFromText()
-  @IsNumber()
-  @IsPositive()
-  grainPrice!: number;
-
-  /** A produtividade estimada (sc/ha) — ver `PublishVersionDto.estimatedYield`. */
-  @NumberFromText()
-  @IsNumber()
-  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
-  estimatedYield!: number;
+  /**
+   * AS CULTURAS, em JSON dentro de um campo de texto.
+   *
+   * No multipart todo campo é texto — o formulário vai junto com a planilha —, e
+   * uma lista de objetos não tem como chegar de outro jeito. O `GrainsFromText`
+   * a transforma em instâncias do DTO da cultura, para que a validação aninhada
+   * seja a MESMA do caminho JSON: uma cotação negativa é recusada com a mesma
+   * frase, tenha ela chegado por um formulário ou por um corpo de requisição.
+   */
+  @GrainsFromText()
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Escolha ao menos uma cultura para este Barter' })
+  @ArrayMaxSize(MAX_VERSION_GRAINS, {
+    message: `Um Barter não aceita mais de ${MAX_VERSION_GRAINS} culturas`,
+  })
+  @ValidateNested({ each: true })
+  @Type(() => VersionGrainDto)
+  grains!: VersionGrainDto[];
 
   @IsOptional()
   @Matches(/^(true|false)$/i, { message: 'carryOver deve ser true ou false' })
@@ -279,28 +377,6 @@ export class UpdateVersionPriceDto {
  * — o que encerraria a atual e reiniciaria a contagem do realizado só para
  * virar um interruptor.
  */
-/**
- * A PRODUTIVIDADE ESTIMADA de uma versão já publicada.
- *
- * Rota própria pelo mesmo motivo do `cprDueDate` da safra e do `closeOnGoal`: ela
- * é obrigatória no lançamento, mas as versões anteriores a este campo nasceram
- * sem ela — e elas são justamente as vigentes hoje, que travariam toda venda até
- * alguém republicar a tabela inteira só para informar um número. Republicar
- * encerraria a versão atual e reiniciaria a contagem do realizado: um preço de
- * dois dígitos por um campo de dois dígitos.
- *
- * O QUE ELA NÃO FAZ é reescrever permuta já registrada — a taxa é congelada em
- * `Barter.pledgeYield` no ato do registro. Corrigi-la aqui vale para as
- * próximas, que é a mesma leitura do vencimento da safra: o que já foi acordado
- * continua dizendo o que diz.
- */
-export class VersionEstimatedYieldDto {
-  @NumberFromText()
-  @IsNumber()
-  @IsPositive({ message: 'Informe a produtividade estimada da cultura (sacas por hectare)' })
-  estimatedYield!: number;
-}
-
 export class CloseOnGoalDto {
   @BooleanFromText()
   @IsBoolean({ message: 'Informe true para encerrar ao bater meta, ou false para manual' })

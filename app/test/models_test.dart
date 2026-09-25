@@ -10,7 +10,7 @@ import 'package:agrobarter_app/services/barter_math.dart';
 void main() {
   Map<String, dynamic> barterJson({String status = 'pending'}) => {
         'code': 'PRM-2026-001',
-        'versionCode': 'S2026.02',
+        'versionCode': 'B2026.02',
         'consultantId': 2,
         'consultantName': 'João Silva',
         'consultantBranch': 'Filial 02',
@@ -44,14 +44,31 @@ void main() {
 
   Map<String, dynamic> versionJson({bool withGoals = false}) => {
         'id': 4,
-        'code': 'S2026.02',
+        'code': 'B2026.02',
         'number': 2,
-        'seasonCode': 'S2026',
-        'seasonName': 'Soja 2026',
-        'grainId': 1,
-        'grainName': 'Soja',
-        'grainUnit': 'saca 60kg',
-        'grainPrice': 148.5,
+        'seasonCode': 'B2026',
+        'seasonName': 'Barter 2026/27',
+        // AS CULTURAS que este lançamento aceita, e em qual delas a tabela está
+        // convertida. Duas aqui de propósito: é o caso que o modelo passou a
+        // ter de responder.
+        'grains': [
+          {
+            'grainId': 1,
+            'grainName': 'Soja',
+            'grainUnit': 'saca 60kg',
+            'price': 148.5,
+            'estimatedYield': 60,
+            'cprDueDate': '2026-06-30T12:00:00.000Z',
+          },
+          {
+            'grainId': 2,
+            'grainName': 'Milho',
+            'grainUnit': 'saca 60kg',
+            'price': 64.5,
+            'estimatedYield': 170,
+          },
+        ],
+        'pricedInGrainId': 1,
         'status': 'active',
         'isOpen': true,
         'startsAt': '2026-01-08T00:00:00.000Z',
@@ -64,7 +81,13 @@ void main() {
           },
         ],
         if (withGoals) ...{
-          'realized': {'sales': 5520.0, 'sacks': 80.4, 'barters': 1},
+          'realized': {
+            'sales': 5520.0,
+            'sacks': [
+              {'grainId': 1, 'grainName': 'Soja', 'sacks': 80.4},
+            ],
+            'barters': 1,
+          },
           'goals': [
             {'kind': 'sales', 'target': 10000, 'realized': 5520.0, 'ratio': 0.552, 'met': false},
             {'kind': 'volumeExotico', 'target': 5, 'realized': 5, 'ratio': 1, 'met': true},
@@ -84,7 +107,7 @@ void main() {
 
     test('guarda a versão do Barter em que foi fechada', () {
       final barter = BarterModel.fromJson(barterJson(status: 'approved'));
-      expect(barter.versionCode, 'S2026.02');
+      expect(barter.versionCode, 'B2026.02');
     });
 
     /// O imposto sai da alíquota GRAVADA na permuta, não do cadastro do produtor
@@ -542,9 +565,14 @@ void main() {
   group('BarterVersionModel', () {
     test('lê a versão vigente com a tabela de valores', () {
       final version = BarterVersionModel.fromJson(versionJson());
-      expect(version.code, 'S2026.02');
+      expect(version.code, 'B2026.02');
+      // OS ATALHOS respondem pela cultura EM USO — a que a tabela converteu.
       expect(version.grainName, 'Soja');
       expect(version.grainPrice, 148.5);
+      // E as duas culturas chegam inteiras: é entre elas que o consultor
+      // escolhe.
+      expect(version.grains.map((g) => g.grainName), ['Soja', 'Milho']);
+      expect(version.grainFor('2')?.estimatedYield, 170);
       expect(version.isOpen, isTrue);
       expect(version.priceOf('5')?.perUnit, 115.0);
       // Insumo fora da tabela não é permutável nesta gestão.
@@ -618,7 +646,7 @@ void main() {
     /// enxerga, com a tabela em sacas".
     Map<String, dynamic> versionInSacks() => {
           'id': 4,
-          'code': 'S2026.02',
+          'code': 'B2026.02',
           'number': 2,
           'seasonCode': 'S2026',
           'grainName': 'Soja',
@@ -726,50 +754,43 @@ void main() {
         'versions': [versionJson()],
       });
       expect(season.isOpen, isTrue);
-      expect(season.versions.single.code, 'S2026.02');
+      expect(season.versions.single.code, 'B2026.02');
     });
 
-    /// O VENCIMENTO DA CPR é da SAFRA, e o app só o transporta: ele muda
-    /// conforme a CULTURA, e vale para todas as cédulas da temporada.
-    test('o vencimento da CPR chega com a safra', () {
-      final season = SeasonModel.fromJson({
-        'id': 3,
-        'code': 'S2026',
-        'name': 'Soja 2026',
-        'year': 2026,
+    /// O VENCIMENTO DA CPR é da CULTURA, e o app só o transporta: soja vence na
+    /// colheita da soja, milho safrinha no dele — e as duas convivem na mesma
+    /// gestão. Ele saiu da SAFRA junto com o grão, pelo mesmo motivo.
+    test('o vencimento da CPR chega com a cultura do lançamento', () {
+      final grain = VersionGrainModel.fromJson({
         'grainId': 1,
         'grainName': 'Soja',
-        'status': 'open',
-        'openedAt': '2026-01-05T00:00:00.000Z',
+        'grainUnit': 'saca 60kg',
+        'price': 148.5,
+        'estimatedYield': 60,
         'cprDueDate': '2026-06-30T12:00:00.000Z',
-        'versions': const [],
       });
 
       // O modelo guarda o instante em hora LOCAL, como todas as datas do app.
       // O que precisa sobreviver é o DIA — e é o meio-dia UTC que garante isso
       // em qualquer fuso (ver `cprDueDateInstant`).
-      expect(season.cprDueDate!.toUtc(), DateTime.utc(2026, 6, 30, 12));
-      expect(season.cprDueDate!.day, 30);
-      expect(season.cprDueDate!.month, 6);
+      expect(grain.cprDueDate!.toUtc(), DateTime.utc(2026, 6, 30, 12));
+      expect(grain.cprDueDate!.day, 30);
+      expect(grain.cprDueDate!.month, 6);
     });
 
-    /// SEM VENCIMENTO é um estado legítimo, e não um erro: a safra abre antes de
-    /// o calendário da colheita estar fechado. Quem cobra a falta é a cédula,
-    /// endereçando a pendência ao admin.
-    test('safra sem vencimento acertado não inventa uma data', () {
-      final season = SeasonModel.fromJson({
-        'id': 4,
-        'code': 'M2026',
-        'name': 'Milho 2026',
-        'year': 2026,
+    /// SEM VENCIMENTO é um estado legítimo, e não um erro: o Barter é lançado
+    /// antes de o calendário da colheita estar fechado. Quem cobra a falta é a
+    /// cédula, endereçando a pendência ao admin.
+    test('cultura sem vencimento acertado não inventa uma data', () {
+      final grain = VersionGrainModel.fromJson({
         'grainId': 2,
         'grainName': 'Milho',
-        'status': 'open',
-        'openedAt': '2026-01-05T00:00:00.000Z',
-        'versions': const [],
+        'grainUnit': 'saca 60kg',
+        'price': 64.5,
+        'estimatedYield': 170,
       });
 
-      expect(season.cprDueDate, isNull);
+      expect(grain.cprDueDate, isNull);
     });
 
     /// O DIA ESCOLHIDO NO CALENDÁRIO vira MEIO-DIA UTC, e não a meia-noite

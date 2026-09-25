@@ -40,10 +40,24 @@ export class ProducersController {
     return toProducerJson(await this.producersService.create(dto));
   }
 
+  /**
+   * A EDIÇÃO — do admin e do CONSULTOR da carteira.
+   *
+   * A capacidade aqui é `producersEdit`, e não `producersManage`, porque a porta
+   * é mais larga que o cadastro: quem visita a fazenda é quem sabe que o
+   * telefone mudou. O que o consultor NÃO alcança — o documento, a área
+   * cultivável, o regime de Funrural e a carteira — é regra sobre o RECURSO, e
+   * mora no service (ver `assertEditable`): ela depende do que está gravado, e
+   * não só de quem pede.
+   */
   @Put(':id')
-  @RequireCapability(CAPABILITY.producersManage)
-  async update(@Param('id', ParseIntPipe) id: number, @Body() dto: ProducerDto) {
-    return toProducerJson(await this.producersService.update(id, dto));
+  @RequireCapability(CAPABILITY.producersEdit)
+  async update(
+    @CurrentUser() user: User,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ProducerDto,
+  ) {
+    return toProducerJson(await this.producersService.update(user, id, dto));
   }
 
   @Delete(':id')

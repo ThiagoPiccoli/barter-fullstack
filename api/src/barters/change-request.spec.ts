@@ -236,9 +236,10 @@ describe('Pedido de alteração da permuta', () => {
 
   /* ── Até onde a alteração alcança: versões sim, culturas não ────────── */
 
-  const versionOf = (code: string, grainId: number | null, grainName: string) => ({
+  const cultureOf = (grainId: number | null, grainName: string) => ({ grainId, grainName });
+  const versionOf = (code: string, grains: { grainId: number | null; grainName: string }[]) => ({
     code,
-    season: { grainId, grainName },
+    grains,
   });
 
   /**
@@ -247,37 +248,48 @@ describe('Pedido de alteração da permuta', () => {
    * insumos. Amarrá-la à versão vigente faria de cada publicação de tabela um
    * prazo de validade para as permutas em aberto.
    */
-  it('a alteração atravessa versões da mesma cultura', () => {
+  it('a alteração atravessa versões enquanto a cultura estiver aberta', () => {
     expect(
-      cultureRefusal(versionOf('S2026.01', 1, 'Soja'), versionOf('S2026.03', 1, 'Soja')),
+      cultureRefusal(cultureOf(1, 'Soja'), versionOf('B2026.03', [cultureOf(1, 'Soja')])),
     ).toBeNull();
   });
 
   /**
-   * E não atravessa a CULTURA: com o Barter do milho no ar, uma permuta de soja
-   * seria remontada com os insumos, os mínimos e o grão de outro negócio.
+   * E a cultura da permuta pode ser QUALQUER UMA das que o lançamento aceita —
+   * que é o ponto das culturas que coexistem: a permuta de milho e a de soja
+   * são alteráveis no mesmo Barter, sem que uma tenha de esperar a outra fechar.
    */
-  it('a alteração não atravessa culturas, e a recusa diz quais são', () => {
-    const refusal = cultureRefusal(
-      versionOf('S2026.02', 1, 'Soja'),
-      versionOf('M2026.01', 2, 'Milho'),
-    );
-    expect(refusal).toContain('Soja');
-    expect(refusal).toContain('Milho');
-    expect(refusal).toContain('mesma cultura');
+  it('qualquer cultura do lançamento aberto vale', () => {
+    const aberto = versionOf('B2026.02', [cultureOf(1, 'Soja'), cultureOf(2, 'Milho')]);
+    expect(cultureRefusal(cultureOf(1, 'Soja'), aberto)).toBeNull();
+    expect(cultureRefusal(cultureOf(2, 'Milho'), aberto)).toBeNull();
   });
 
   /**
-   * Safra cujo GRÃO foi excluído do catálogo: o FK virou null e sobrou o nome
-   * congelado. Comparar por nome aí é a única comparação possível, e é melhor do
-   * que recusar toda permuta dessas safras.
+   * O que ela não atravessa é a cultura que SAIU do lançamento: sem cotação e
+   * sem produtividade, a permuta seria remontada com a régua de outro grão.
+   */
+  it('a cultura que saiu do lançamento recusa, e a recusa diz o que está aberto', () => {
+    const refusal = cultureRefusal(
+      cultureOf(2, 'Milho'),
+      versionOf('B2026.03', [cultureOf(1, 'Soja')]),
+    );
+    expect(refusal).toContain('Milho');
+    expect(refusal).toContain('Soja');
+    expect(refusal).toContain('B2026.03');
+  });
+
+  /**
+   * Grão EXCLUÍDO do catálogo: o FK virou null e sobrou o nome congelado.
+   * Comparar por nome aí é a única comparação possível, e é melhor do que
+   * recusar toda permuta paga naquele grão.
    */
   it('sem id do grão, a cultura é comparada pelo nome congelado', () => {
     expect(
-      cultureRefusal(versionOf('S2026.01', null, 'Soja'), versionOf('S2026.03', null, ' soja ')),
+      cultureRefusal(cultureOf(null, 'Soja'), versionOf('B2026.03', [cultureOf(null, ' soja ')])),
     ).toBeNull();
     expect(
-      cultureRefusal(versionOf('S2026.01', null, 'Soja'), versionOf('M2026.01', null, 'Milho')),
+      cultureRefusal(cultureOf(null, 'Soja'), versionOf('B2026.03', [cultureOf(null, 'Milho')])),
     ).not.toBeNull();
   });
 

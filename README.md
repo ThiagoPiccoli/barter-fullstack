@@ -19,6 +19,11 @@ de um grão** — as sacas são calculadas a partir do custo, nunca o inverso.
 O cálculo, os mínimos por hectare e os mínimos por categoria ("pastas") são
 validados **no servidor**; o app mostra a prévia, mas quem manda é a API.
 
+**Qual grão** é escolha do consultor com o produtor, entre as **culturas que o
+Barter aceita naquela gestão** — elas coexistem (soja no verão, milho safrinha),
+cada uma com a própria cotação da saca, produtividade estimada e vencimento de
+cédula, sobre a mesma tabela de insumos.
+
 ## Subindo tudo (desenvolvimento)
 
 Terminal 1 — API:
@@ -72,10 +77,10 @@ na tela de login só existem em build de debug.
 ## Testes
 
 ```bash
-cd api && npm test          # 281 testes de unidade (matemática, máquina de estados, desvio e pedido de fora do Barter, seguro por município, senha, sessão, políticas, cédula)
-cd api && npm run test:e2e  # 377 testes funcionais da API (auth, escopo, fluxo, seguro do lançamento, dossiê do comitê, notas do faturamento, cédula e emissão, credora, contrato de erro)
+cd api && npm test          # 285 testes de unidade (matemática, máquina de estados, culturas que coexistem, desvio e pedido de fora do Barter, seguro por município, senha, sessão, políticas, cédula)
+cd api && npm run test:e2e  # 394 testes funcionais da API (auth, escopo, fluxo, culturas do lançamento, edição do produtor pelo consultor, seguro, dossiê do comitê, notas do faturamento, cédula e emissão, credora, contrato de erro)
 cd api && npm run test:cov  # as duas suítes juntas, com cobertura
-cd app && flutter test      # 266 testes (matemática espelhada, parsers, formulários, extenso, redação e pacote .docx da cédula)
+cd app && flutter test      # 274 testes (matemática espelhada, parsers, formulários, seletor de cultura, extenso, redação e pacote .docx da cédula)
 ```
 
 > `test:cov` roda unidade **e** e2e numa execução só, e é isso que torna o
@@ -119,6 +124,28 @@ servidor recusa o envio por ela estar abaixo do mínimo.
 
 ## Decisões de arquitetura (resumo)
 
+- **AS CULTURAS COEXISTEM, e a safra é o ciclo**: o mesmo Barter aceita soja e
+  milho ao mesmo tempo, e o consultor escolhe — junto com o produtor — em qual
+  delas cada permuta é paga. A safra ERA a cultura (`S2026` era "soja 2026") e
+  isso obrigava a abrir duas safras para vender dois grãos, o que fazia "por
+  quanto se permuta agora?" voltar a ter duas respostas. Hoje as culturas são do
+  LANÇAMENTO (`VersionGrain`): cada uma com a cotação da saca, a produtividade
+  estimada que dimensiona o penhor, o vencimento da cédula e a meta de sacas
+  próprios, sobre **uma tabela de insumos só** — o litro de glifosato custa os
+  mesmos R$ 40 qualquer que seja o grão que o pague; o que muda é a cotação que
+  converte esse custo em sacas. A cultura da permuta é a **linha de pagamento**
+  dela (o item de grão), e não uma coluna ao lado: um segundo lugar dizendo o
+  mesmo é a primeira condição para os dois divergirem. Enquanto for rascunho ela
+  se troca (`PUT /barters/:code/culture`) — os insumos ficam, as sacas e o penhor
+  são refeitos.
+- **Os DADOS do produtor são do consultor; o CADASTRO continua do admin**: quem
+  visita a fazenda é quem sabe que o telefone mudou e que a propriedade está com
+  o nome errado, e enquanto isso foi só do admin a correção virava um chamado —
+  o cadastro envelhecia em silêncio. O consultor edita os produtores da própria
+  carteira (`producers.edit`); ficam de fora o CPF/CNPJ (a identidade do
+  cadastro), a área cultivável e o regime de Funrural (as duas réguas que medem
+  toda permuta dele) e a carteira (quem atende quem). Cadastrar e excluir
+  continuam em `producers.manage`.
 - **NestJS** no backend: módulos por recurso (controller fino → service com a
   regra → Prisma), DTOs com `class-validator` na borda, guards para
   autenticação/papel e um interceptor global para o envelope `{ data: ... }`

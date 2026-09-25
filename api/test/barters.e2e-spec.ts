@@ -160,6 +160,157 @@ describe('Barters (e2e)', () => {
   });
 
   /**
+   * AS CULTURAS COEXISTEM, e a permuta escolhe UMA.
+   *
+   * O Barter vigente do seed aceita soja e milho ao mesmo tempo, com cotações,
+   * produtividades e vencimentos próprios sobre a MESMA tabela de insumos. O que
+   * estes casos fixam é o que a escolha produz: as sacas saem da cotação daquela
+   * cultura, o penhor da produtividade dela, e o mesmo produtor pode fechar as
+   * duas — que é justamente o que uma safra por grão impedia.
+   */
+  describe('a cultura da permuta', () => {
+    const emMilho = { ...validPayload, grainId: 2 };
+
+    it('a mesma permuta paga em milho rende outra quantidade de sacas', async () => {
+      const consultor = await asUser(JOAO);
+      const soja = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', consultor)
+        .send(validPayload);
+      const milho = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', consultor)
+        .send(emMilho);
+
+      expect(soja.status).toBe(201);
+      expect(milho.status).toBe(201);
+
+      const graoDe = (body: {
+        data: { items: { kind: string; productName: string; quantity: number }[] };
+      }) => body.data.items.find((item) => item.kind === 'grain');
+
+      // O MESMO custo (R$ 11.946,00) e as MESMAS sacas em duas moedas: 148,50
+      // a saca de soja, 64,50 a de milho.
+      expect(graoDe(soja.body)).toMatchObject({ productName: 'Soja', quantity: 80.4444 });
+      expect(graoDe(milho.body)).toMatchObject({ productName: 'Milho', quantity: 185.2093 });
+    });
+
+    /**
+     * O PENHOR é dimensionado pela produtividade DAQUELA cultura: 60 sc/ha de
+     * soja e 170 de milho. Fosse a mesma taxa para as duas, a permuta de milho
+     * pediria quase três vezes a área que a lavoura precisa.
+     */
+    it('o penhor usa a produtividade da cultura escolhida', async () => {
+      const consultor = await asUser(JOAO);
+      const criada = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', consultor)
+        .send(emMilho);
+      await encaminhar(criada.body.data.code as string, consultor);
+
+      const detalhe = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${criada.body.data.code}`)
+        .set('Authorization', await asUser(ADMIN));
+      // 185,2093 sacas ÷ 170 sc/ha × 1,20 de margem = 1,31 ha.
+      expect(detalhe.body.data.pledgeAreaHa).toBeCloseTo(1.31, 2);
+    });
+
+    /** Cultura que o lançamento não aceita é recusada dizendo o que ele aceita. */
+    it('cultura fora do lançamento é recusada, nomeando as que estão abertas', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(JOAO))
+        .send({ ...validPayload, grainId: 3 });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Soja e Milho');
+    });
+
+    /** Sem cultura não há como pagar: o campo é obrigatório, e não tem padrão. */
+    it('permuta sem cultura é recusada', async () => {
+      const semCultura = { ...validPayload, grainId: undefined };
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', await asUser(JOAO))
+        .send(semCultura);
+
+      expect(response.status).toBe(422);
+      expect(JSON.stringify(response.body.message)).toContain('cultura');
+    });
+
+    /**
+     * A TROCA no rascunho: o produtor decide na conversa que aquele talhão vai
+     * de milho. Os insumos ficam, a moeda muda — e com ela as sacas e a
+     * produtividade que dimensiona o penhor.
+     */
+    it('o rascunho troca de cultura sem perder os insumos', async () => {
+      const consultor = await asUser(JOAO);
+      const criada = await request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', consultor)
+        .send(validPayload);
+      const code = criada.body.data.code as string;
+
+      const trocada = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/culture`)
+        .set('Authorization', consultor)
+        .send({ grainId: 2 });
+
+      expect(trocada.status).toBe(200);
+      const grao = trocada.body.data.items.find((item: { kind: string }) => item.kind === 'grain');
+      expect(grao).toMatchObject({ productName: 'Milho', quantity: 185.2093 });
+      // OS INSUMOS seguem os mesmos: trocar de cultura não é refazer a permuta.
+      const insumos = trocada.body.data.items
+        .filter((item: { kind: string }) => item.kind === 'input')
+        .map((item: { productId: number; quantity: number }) => [item.productId, item.quantity]);
+      expect(insumos).toEqual([
+        [5, 48],
+        [6, 300],
+        [7, 18],
+      ]);
+    });
+
+    /**
+     * Depois do encaminhamento a permuta está na mesa de alguém, e trocar a
+     * cultura por baixo mudaria o negócio que aquela pessoa está analisando. O
+     * caminho de lá é o pedido de alteração.
+     */
+    it('permuta encaminhada não troca de cultura', async () => {
+      const consultor = await asUser(JOAO);
+      const encaminhada = await registrarEEncaminhar(JOAO);
+      const code = encaminhada.body.data.code as string;
+
+      const response = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/culture`)
+        .set('Authorization', consultor)
+        .send({ grainId: 2 });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('já foi encaminhada');
+    });
+
+    /**
+     * AS DUAS CONVIVEM NO MESMO PRODUTOR, e é isto que a safra por grão
+     * impedia: soja no verão e milho safrinha, no mesmo cliente, na mesma
+     * gestão, cada uma com o seu vencimento de cédula.
+     */
+    it('o mesmo produtor fecha uma permuta de cada cultura na mesma gestão', async () => {
+      const soja = (await registrarEEncaminhar(JOAO, validPayload)).body.data;
+      const milho = (await registrarEEncaminhar(JOAO, emMilho)).body.data;
+
+      // A MESMA gestão, o MESMO produtor, duas culturas. Antes isto exigia duas
+      // safras abertas — e a pergunta "por quanto se permuta agora?" passava a
+      // ter duas respostas.
+      expect(soja.versionCode).toBe(milho.versionCode);
+      expect(soja.producerName).toBe(milho.producerName);
+
+      const graoDe = (data: { items: { kind: string; productName: string }[] }) =>
+        data.items.find((item) => item.kind === 'grain')!.productName;
+      expect([graoDe(soja), graoDe(milho)]).toEqual(['Soja', 'Milho']);
+    });
+  });
+
+  /**
    * FUNRURAL/SENAR: a entrega de grão é comercialização de produção rural, e as
    * DUAS FORMAS de recolhimento são escolhidas no fechamento da permuta.
    *
@@ -218,6 +369,7 @@ describe('Barters (e2e)', () => {
         .send({
           producerId: 4,
           unitId: UNIT.filial04,
+          grainId: 1,
           inputs: [
             { productId: 5, quantity: 32 },
             { productId: 6, quantity: 200 },
@@ -1907,21 +2059,22 @@ describe('Barters (e2e)', () => {
     });
 
     /**
-     * A ALTERAÇÃO ATRAVESSA VERSÕES, e não atravessa CULTURAS.
+     * A ALTERAÇÃO ATRAVESSA VERSÕES, enquanto o lançamento aberto ACEITAR a
+     * cultura da permuta.
      *
-     * A permuta fechada numa gestão anterior da soja continua alterável quando a
-     * seguinte já está no ar: ela não foi faturada, e o que falta nela é uma
-     * correção de insumos. Amarrá-la à versão vigente faria de cada publicação
-     * de tabela um prazo de validade para as permutas em aberto.
+     * A permuta paga em soja continua alterável quando a gestão seguinte já está
+     * no ar: ela não foi faturada, e o que falta nela é uma correção de insumos.
+     * Amarrá-la à versão vigente faria de cada publicação de tabela um prazo de
+     * validade para as permutas em aberto.
      */
-    it('a permuta de uma gestão anterior da MESMA cultura continua alterável', async () => {
-      // A soja S2026.03 entra no ar; a PRM-2026-005 continua sendo da S2026.02.
+    it('a permuta de uma gestão anterior continua alterável', async () => {
+      // A B2026.03 entra no ar, ainda com soja; a PRM-2026-005 continua sendo da
+      // B2026.02.
       const publicada = await request(app.getHttpServer())
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', await asUser(ADMIN))
         .send({
-          grainPrice: 150,
-          estimatedYield: 60,
+          grains: [{ grainId: 1, price: 150, estimatedYield: 60 }],
           prices: [
             { productId: 5, price: 120 },
             { productId: 6, price: 18.9 },
@@ -1932,13 +2085,13 @@ describe('Barters (e2e)', () => {
 
       const pedido = await pedir('PRM-2026-005', JOAO);
       expect(pedido.status).toBe(200);
-      expect(pedido.body.data.versionCode).toBe('S2026.02');
+      expect(pedido.body.data.versionCode).toBe('B2026.02');
 
       const liberado = await decidir('PRM-2026-005', ADMIN, { accept: true });
       expect(liberado.body.data.status).toBe('draft');
 
       // E a remontagem é precificada pela tabela DA PERMUTA (NPK a 115, da
-      // S2026.02), não pela que acabou de entrar (NPK a 120): o acordo foi
+      // B2026.02), não pela que acabou de entrar (NPK a 120): o acordo foi
       // fechado naquela gestão, e publicar a seguinte não o reescreve.
       const alterada = await request(app.getHttpServer())
         .put('/api/v1/barters/PRM-2026-005/inputs')
@@ -1961,17 +2114,19 @@ describe('Barters (e2e)', () => {
     });
 
     /**
-     * A CULTURA é o limite. Com o Barter da soja no ar, uma permuta de trigo não
-     * é mais o negócio da praça: os insumos, os mínimos e o grão que a paga são
-     * outros, e remontá-la ali seria montá-la com a régua errada.
+     * A CULTURA é o limite, e agora o limite é uma LISTA: a permuta se altera
+     * enquanto o Barter aberto ainda aceitar o grão que a paga. O trigo saiu do
+     * lançamento, e remontar uma permuta de trigo na gestão da soja seria
+     * montá-la com a régua errada — sem cotação e sem produtividade daquele grão.
      */
-    it('permuta de outra cultura não se altera', async () => {
-      // PRM-2026-008 é do trigo (S2026T.01), do Roberto; o Barter aberto é soja.
+    it('permuta de cultura que saiu do lançamento não se altera', async () => {
+      // PRM-2026-008 é do trigo (B2025.01), do Roberto; o Barter aberto paga em
+      // soja e milho.
       const response = await pedir('PRM-2026-008', ROBERTO);
 
       expect(response.status).toBe(422);
-      expect(response.body.message).toContain('mesma cultura');
       expect(response.body.message).toContain('Trigo');
+      expect(response.body.message).toContain('Soja');
     });
 
     /**

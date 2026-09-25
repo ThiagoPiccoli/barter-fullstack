@@ -102,7 +102,7 @@ describe('Products & Classes (e2e)', () => {
   it('corrigir o valor na versão alimenta a linha do tempo do produto', async () => {
     const admin = await asUser(ADMIN);
     const corrigido = await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/S2026.02/prices/1')
+      .put('/api/v1/barter-versions/B2026.02/prices/1')
       .set('Authorization', admin)
       .send({ price: 152.75 });
     expect(corrigido.status).toBe(200);
@@ -112,13 +112,13 @@ describe('Products & Classes (e2e)', () => {
       .set('Authorization', admin);
     expect(soja.body.data.currentPrice).toBe(152.75);
     expect(soja.body.data.priceHistory).toHaveLength(8);
-    expect(soja.body.data.priceHistory[7].changedBy).toBe('Barter S2026.02');
+    expect(soja.body.data.priceHistory[7].changedBy).toBe('Barter B2026.02');
   });
 
   it('reajuste não altera permutas antigas (snapshot nos itens)', async () => {
     const admin = await asUser(ADMIN);
     await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/S2026.02/prices/1')
+      .put('/api/v1/barter-versions/B2026.02/prices/1')
       .set('Authorization', admin)
       .send({ price: 999 });
 
@@ -208,10 +208,9 @@ describe('Products & Classes (e2e)', () => {
       const arquivo = Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
 
       await request(app.getHttpServer())
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', admin)
-        .field('grainPrice', '150')
-        .field('estimatedYield', '60')
+        .field('grains', JSON.stringify([{ grainId: 1, price: 150, estimatedYield: 60 }]))
         .attach('file', arquivo, 'tabela.xlsx')
         .expect(201);
 

@@ -488,9 +488,18 @@ class AppData {
 
   /// A versão vigente do Barter. Todo papel carrega — o consultor precisa dela
   /// para montar a permuta, e a retaguarda para saber o que está aberto.
-  static Future<void> refreshBarterVersion() async {
-    currentVersion = await _program.current();
+  static Future<void> refreshBarterVersion({String? grainId}) async {
+    currentVersion = await _program.current(grainId: grainId);
   }
+
+  /// A VERSÃO VIGENTE convertida por OUTRA CULTURA, sem tocar no cache.
+  ///
+  /// É o que a tela do consultor pede ao trocar o seletor de cultura: a tabela
+  /// inteira volta em sacas daquele grão. Ela não substitui [currentVersion]
+  /// porque a escolha é DAQUELA permuta — outra tela, aberta em seguida, começa
+  /// de novo na primeira cultura do lançamento.
+  static Future<BarterVersionModel?> versionPricedIn(String grainId) =>
+      _program.current(grainId: grainId);
 
   /// As safras com o histórico de versões (admin).
   static Future<void> refreshSeasons() async {
@@ -670,12 +679,14 @@ class AppData {
   static Future<BarterModel> createBarter({
     required String producerId,
     required String unitId,
+    required String grainId,
     required Map<String, double> inputQuantities,
     String note = '',
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
       unitId: unitId,
+      grainId: grainId,
       inputQuantities: inputQuantities,
       note: note,
     );
@@ -820,6 +831,13 @@ class AppData {
       final barter = await createBarter(
         producerId: simulation.producerId,
         unitId: simulation.unitId,
+        // A CULTURA guardada na simulação. As simulações montadas ANTES de as
+        // culturas coexistirem não a têm — e para elas a primeira cultura do
+        // lançamento é a resposta certa: era a única que existia quando elas
+        // foram montadas.
+        grainId: simulation.grainId.isNotEmpty
+            ? simulation.grainId
+            : (currentVersion?.grains.firstOrNull?.grainId ?? ''),
         inputQuantities: simulation.inputQuantities,
         note: note,
       );
@@ -970,11 +988,9 @@ class AppData {
     required String seasonCode,
     required String filename,
     required List<int> bytes,
-    required double grainPrice,
-    required double estimatedYield,
+    required List<VersionGrainInput> grains,
     DateTime? endsAt,
     double? targetSales,
-    double? targetSacks,
     int? targetBarters,
     bool closeOnGoal = false,
     bool insuranceRequired = false,
@@ -985,11 +1001,9 @@ class AppData {
       seasonCode: seasonCode,
       filename: filename,
       bytes: bytes,
-      grainPrice: grainPrice,
-      estimatedYield: estimatedYield,
+      grains: grains,
       endsAt: endsAt,
       targetSales: targetSales,
-      targetSacks: targetSacks,
       targetBarters: targetBarters,
       closeOnGoal: closeOnGoal,
       insuranceRequired: insuranceRequired,
@@ -1002,7 +1016,7 @@ class AppData {
     return version;
   }
 
-  /// Corrige um valor da versão vigente (o grão da safra inclusive).
+  /// Corrige um valor da versão vigente (a cotação de uma CULTURA inclusive).
   static Future<void> updateVersionPrice(String productId, double price) async {
     final version = currentVersion;
     if (version == null) return;
@@ -1038,19 +1052,11 @@ class AppData {
   }
 
   static Future<void> openSeason({
-    required String grainId,
     required int year,
     String? name,
     String? letter,
-    DateTime? cprDueDate,
   }) async {
-    await _program.openSeason(
-      grainId: grainId,
-      year: year,
-      name: name,
-      letter: letter,
-      cprDueDate: cprDueDate,
-    );
+    await _program.openSeason(year: year, name: name, letter: letter);
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
@@ -1065,11 +1071,30 @@ class AppData {
     return updated;
   }
 
-  /// ACERTA o vencimento da CPR de uma safra já aberta — a data de entrega de
-  /// todas as cédulas dela que ainda não foram emitidas.
-  static Future<void> setSeasonCprDueDate(String code, DateTime dueDate) async {
-    await _program.setCprDueDate(code, dueDate);
-    await refreshSeasons();
+  /// ACERTA UMA CULTURA da versão vigente: a cotação, a produtividade, o
+  /// vencimento da CPR ou a meta de sacas dela.
+  ///
+  /// O vencimento é a data de entrega de todas as cédulas DAQUELA CULTURA que
+  /// ainda não foram emitidas — as emitidas congelaram a delas. Recarrega safras
+  /// e versão vigente porque as duas mostram os números da cultura.
+  static Future<BarterVersionModel> updateVersionGrain(
+    String code,
+    String grainId, {
+    double? price,
+    double? estimatedYield,
+    DateTime? cprDueDate,
+    double? targetSacks,
+  }) async {
+    final updated = await _program.updateGrain(
+      code,
+      grainId,
+      price: price,
+      estimatedYield: estimatedYield,
+      cprDueDate: cprDueDate,
+      targetSacks: targetSacks,
+    );
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+    return updated;
   }
 
   /// A DECISÃO DO COMITÊ: aprovar, aprovar com RESSALVA ou negar. O cache
@@ -1323,7 +1348,22 @@ class AppData {
   /// precifica permuta nova. Esta é a de uma permuta específica, e guardá-la no
   /// mesmo lugar faria a tela de registro passar a montar com a tabela de uma
   /// gestão encerrada.
-  static Future<BarterVersionModel> barterVersion(String code) => _barters.versionOf(code);
+  /// A TABELA COM QUE UMA PERMUTA FOI FECHADA, na CULTURA dela: remontar um
+  /// rascunho de milho lendo a tabela em sacas de soja mostraria ao produtor um
+  /// total que o servidor não gravaria.
+  static Future<BarterVersionModel> barterVersion(String code, {String? grainId}) =>
+      _barters.versionOf(code, grainId: grainId);
+
+  /// TROCA A CULTURA de um rascunho — a permuta passa a ser paga em outro grão.
+  ///
+  /// Os insumos ficam; o que muda são as sacas (a cotação da cultura nova
+  /// converte o mesmo custo) e a produtividade que dimensiona o penhor. Quem
+  /// recalcula é o servidor, e o cache guarda a resposta dele.
+  static Future<BarterModel> setBarterCulture(String code, String grainId) async {
+    final updated = await _barters.setCulture(code, grainId);
+    _replaceBarter(updated);
+    return updated;
+  }
 
   /// A REESCRITA DOS INSUMOS do rascunho — a permuta remontada.
   ///
