@@ -7,6 +7,7 @@ import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'edit_forms.dart';
 
 /// O LANÇAMENTO do Barter, do lado do admin.
 ///
@@ -81,6 +82,19 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
     final season = _openSeason;
     if (season == null) {
       _toast('Abra uma safra antes de lançar um Barter.');
+      return;
+    }
+
+    // SEM GRÃO NO CATÁLOGO não há cultura a lançar — e o formulário abriria com
+    // um seletor vazio, sem dizer por quê. A conferência era da abertura da
+    // safra, enquanto era ela que tinha o grão; veio para cá junto com a
+    // escolha. A planilha cria INSUMOS; o grão é cadastro à parte, porque ele
+    // não é comprado — é a moeda da permuta.
+    if (AppData.grains.isEmpty) {
+      _toast(
+        'Cadastre um grão antes de publicar: aba Valores › Histórico › + › '
+        'Novo ${brand.copy.grain.toLowerCase()}.',
+      );
       return;
     }
 
@@ -1531,6 +1545,16 @@ class _PublishSheetState extends State<_PublishSheet> {
                           fontWeight: FontWeight.w700,
                           color: AppColors.textDark)),
                 ),
+                // CADASTRAR O GRÃO daqui de dentro. É aqui que a falta aparece:
+                // o admin abre o lançamento, procura o milho no seletor e ele
+                // não está no catálogo. Mandá-lo fechar o formulário, achar a
+                // aba certa e recomeçar a publicação é o caminho que ele já
+                // fazia — e que fazia a tela parecer quebrada.
+                TextButton.icon(
+                  onPressed: _createGrain,
+                  icon: const Icon(Icons.grass, size: 16),
+                  label: const Text('Cadastrar grão'),
+                ),
                 TextButton.icon(
                   onPressed: () => setState(() => _grains.add(_GrainDraft())),
                   icon: const Icon(Icons.add, size: 16),
@@ -1678,8 +1702,50 @@ class _PublishSheetState extends State<_PublishSheet> {
     );
   }
 
+  /// CADASTRA UM GRÃO sem sair da publicação, e já o escolhe.
+  ///
+  /// O formulário do produto é o mesmo da aba de cadastro (`NewProductScreen`),
+  /// e o que muda é o que acontece na volta: o grão recém-criado entra na linha
+  /// que estava vazia — ou numa nova, se todas já tiverem cultura. Cadastrar e
+  /// ter de escolher de novo, num seletor que acabou de mudar de tamanho, é o
+  /// tipo de passo que se esquece com o formulário inteiro preenchido atrás.
+  ///
+  /// O RASCUNHO da publicação sobrevive: esta tela é um `showModalBottomSheet`
+  /// e o cadastro entra por cima dela, sem desmontá-la. Os campos já digitados
+  /// continuam onde estavam.
+  Future<void> _createGrain() async {
+    // O QUE VOLTA é o produto salvo, e não a lista do catálogo: cancelar o
+    // cadastro devolve `null`, e ler "o último grão cadastrado" escolheria um
+    // grão que ninguém acabou de criar — justamente no caso em que o admin
+    // desistiu.
+    final novo = await Navigator.push<ProductModel>(
+      context,
+      MaterialPageRoute(builder: (_) => const NewProductScreen(type: ProductType.grain)),
+    );
+    if (novo == null || !mounted) return;
+
+    setState(() {
+      // O catálogo em memória já foi atualizado pelo cadastro; aqui só se
+      // aponta para o que nasceu. Ele entra na linha que estava vazia — ou numa
+      // nova, se todas já tiverem cultura.
+      if (_grains.any((draft) => draft.grainId == novo.id)) return;
+      final vaga = _grains.where((draft) => draft.grainId == null).firstOrNull;
+      if (vaga != null) {
+        vaga.grainId = novo.id;
+      } else {
+        _grains.add(_GrainDraft(grainId: novo.id));
+      }
+    });
+  }
+
   /// UMA CULTURA no formulário: o grão, a cotação, a produção estimada, o
   /// vencimento da entrega e a meta de sacas dela.
+  ///
+  /// O GRÃO vem do CATÁLOGO (os produtos do tipo grão), e o campo diz isso: a
+  /// lista é curta, e quem a vê pela primeira vez não tem como adivinhar se ela
+  /// é a safra, a cultura ou o produto. Com um grão só cadastrado, o seletor
+  /// mostraria uma escolha que não existe sem explicar onde se cadastram os
+  /// outros — e é aí que ele parece quebrado.
   ///
   /// O VENCIMENTO é opcional aqui de propósito: o Barter é lançado antes de a
   /// colheita ter data fechada, e travar a publicação por causa dele pararia a
@@ -1702,10 +1768,21 @@ class _PublishSheetState extends State<_PublishSheet> {
                 child: DropdownButtonFormField<String>(
                   initialValue: draft.grainId,
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Grão', isDense: true),
+                  decoration: InputDecoration(
+                    labelText: 'Grão do catálogo',
+                    isDense: true,
+                    helperText: grains.length > 1
+                        ? '${grains.length} grãos cadastrados'
+                        : 'Só um grão cadastrado — os outros entram em Valores › Histórico',
+                    helperMaxLines: 2,
+                  ),
                   items: [
                     for (final grain in grains)
-                      DropdownMenuItem(value: grain.id, child: Text(grain.name)),
+                      DropdownMenuItem(
+                        value: grain.id,
+                        child: Text('${grain.name} • ${grain.unit}',
+                            overflow: TextOverflow.ellipsis),
+                      ),
                   ],
                   onChanged: (value) => setState(() => draft.grainId = value),
                 ),

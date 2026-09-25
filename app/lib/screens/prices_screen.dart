@@ -66,8 +66,14 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
   }
 
   /// Cadastrar produto à mão continua existindo — a planilha cria os insumos,
-  /// mas o GRÃO precisa existir antes para a safra ser aberta. Fica no cabeçalho
-  /// da aba de histórico, e não como botão no meio da lista: é um ato raro.
+  /// mas o GRÃO precisa existir antes, porque é ele que o lançamento oferece
+  /// como cultura (ver `VersionGrain`).
+  ///
+  /// O botão vive no cabeçalho, e o cabeçalho é UM para as quatro abas: ele
+  /// ficava só na do Histórico, e quem precisava dele estava na do LANÇAMENTO —
+  /// descobrindo, com o formulário de publicar aberto, que o grão não existia.
+  /// Um ato raro pode ficar discreto; não pode ficar escondido justamente de
+  /// quem o procura.
   Future<void> _createProduct(ProductType type) async {
     await Navigator.push(
       context,
@@ -83,22 +89,21 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
       appBar: AppBar(
         title: Text(brand.copy.programTitle),
         actions: [
-          if (_tabController.index == 2)
-            PopupMenuButton<ProductType>(
-              tooltip: 'Cadastrar item',
-              icon: const Icon(Icons.add),
-              onSelected: _createProduct,
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: ProductType.grain,
-                  child: Text('Novo ${brand.copy.grain}'),
-                ),
-                PopupMenuItem(
-                  value: ProductType.input,
-                  child: Text('Novo ${brand.copy.input}'),
-                ),
-              ],
-            ),
+          PopupMenuButton<ProductType>(
+            tooltip: 'Cadastrar item',
+            icon: const Icon(Icons.add),
+            onSelected: _createProduct,
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: ProductType.grain,
+                child: Text('Novo ${brand.copy.grain}'),
+              ),
+              PopupMenuItem(
+                value: ProductType.input,
+                child: Text('Novo ${brand.copy.input}'),
+              ),
+            ],
+          ),
           const LogoutButton(),
         ],
         bottom: TabBar(
