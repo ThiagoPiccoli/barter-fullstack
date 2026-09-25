@@ -25,7 +25,7 @@ export function setupSwagger(app: INestApplication): void {
     .setTitle('Barter API')
     .setDescription(
       'Permuta de grãos por insumos. Os insumos retirados formam um custo em R$ ' +
-        'e esse custo é convertido em sacas do grão de pagamento — quem calcula é ' +
+        'e esse custo é convertido em sacas do grão de pagamento, e quem calcula é ' +
         'o servidor, nunca o cliente.\n\n' +
         'Toda resposta de sucesso vem envelopada em `{ "data": ... }`; as listas ' +
         'paginadas trazem também `meta` com `total`, `limit` e `offset`.',

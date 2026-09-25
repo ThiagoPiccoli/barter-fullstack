@@ -3,6 +3,8 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
+  IsDateString,
   IsIn,
   IsInt,
   IsNumber,
@@ -10,13 +12,28 @@ import {
   IsPositive,
   IsString,
   MaxLength,
+  Min,
   MinLength,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { PaginationQuery } from '../../common/pagination';
+import { CREDIT_FILE_KINDS, type CreditFileKind } from '../credit-file';
 import { BARTER_STATUS, BARTER_STATUSES, type BarterStatus } from '../barter-workflow';
 import { TAX_REGIMES, TAX_REGIME_MESSAGE } from '../tax-regime';
 import type { TaxRegime } from '../tax-regime';
+
+/**
+ * O TAMANHO MÍNIMO de um parecer — do consultor ou do gerente, e o mesmo para os
+ * dois de propósito: a exigência não é sobre quem escreve, é sobre o que um
+ * parecer é. Abaixo disto o campo vira um "ok" que serve só para liberar o
+ * botão, que é exatamente o que a obrigatoriedade existe para impedir.
+ *
+ * Ele é conferido em dois lugares e por dois motivos: aqui, no parecer do
+ * gerente, porque o texto vem no corpo; e no service, no encaminhamento, porque
+ * lá o texto válido pode ser o que já estava salvo no rascunho.
+ */
+export const MIN_OPINION_LENGTH = 10;
 
 export class BarterInputDto {
   @IsInt()
@@ -37,10 +54,41 @@ export class BarterInputDto {
  * quem diz por quanto vale a saca. Escolher grão era do tempo em que a permuta
  * carregava a própria cotação.
  */
+/**
+ * A TROCA DA CULTURA de um rascunho.
+ *
+ * Um campo só, e uma rota própria em vez de um campo dentro da reescrita dos
+ * insumos: são dois atos diferentes. Trocar insumo é refazer o que a permuta
+ * carrega; trocar cultura é trocar a moeda com que ela é paga — os insumos
+ * continuam os mesmos, e o que muda são as sacas e o penhor.
+ */
+export class BarterCultureDto {
+  @IsInt()
+  @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
+  grainId!: number;
+}
+
 export class CreateBarterDto {
   @IsInt()
   @IsPositive()
   producerId!: number;
+
+  /**
+   * A CULTURA em que esta permuta será paga — soja, milho, o que o Barter
+   * aceitar (ver `VersionGrain`).
+   *
+   * Ela é a primeira decisão da permuta e é do CONSULTOR, junto com o produtor:
+   * é ele quem sabe o que aquele cliente vai plantar naquele talhão. Antes não
+   * havia o que escolher — a safra tinha um grão só, e o servidor o impunha.
+   *
+   * OBRIGATÓRIA de propósito, mesmo quando o Barter tem uma cultura só. Um
+   * padrão silencioso ("se não disser, é a primeira") faria a permuta nascer
+   * numa cultura que ninguém escolheu no dia em que o admin lançasse a segunda —
+   * e o consultor descobriria isso pelo vencimento da cédula.
+   */
+  @IsInt()
+  @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
+  grainId!: number;
 
   /**
    * A UNIDADE em que o produtor vai retirar os insumos.
@@ -86,21 +134,135 @@ export class CreateBarterDto {
   @IsOptional()
   @IsIn(TAX_REGIMES, { message: TAX_REGIME_MESSAGE })
   taxRegime?: TaxRegime;
+
+  /**
+   * O PARECER DO CONSULTOR, quando ele já o tem na hora de registrar.
+   *
+   * Opcional AQUI e obrigatório no encaminhamento (ver `ForwardBarterDto`), e a
+   * diferença é o desenho todo do rascunho: montar os insumos e conhecer a
+   * resposta do produtor são dois momentos, e exigir o texto no registro
+   * obrigaria o consultor a inventar um parágrafo para poder salvar a permuta
+   * que ele acabou de simular. Sem ele, a permuta nasce em `draft` do mesmo
+   * jeito — só não anda.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  note?: string;
 }
 
 /**
- * A DECISÃO DO COMITÊ. Duas saídas, e só elas: quem lê o pedido e o parecer ou
- * aprova ou nega. Não há "devolver para o gerente" — o parecer já foi dado, e
- * uma permuta que anda para trás perde o dono da etapa.
+ * O PARECER DO CONSULTOR gravado no rascunho, sem encaminhar nada.
+ *
+ * É o único texto do fluxo que se REESCREVE, e é por isso que ele tem rota
+ * própria (`PUT /barters/:code/note`) em vez de caber no encaminhamento: o
+ * consultor salva o que tem hoje, conversa com o produtor amanhã e completa. Os
+ * outros textos do fluxo são assinaturas de etapas cumpridas e não se editam.
+ *
+ * Não há mínimo aqui, e há no encaminhamento: um rascunho pela metade é a razão
+ * de ser deste campo. Quem confere se há parecer suficiente é o ato que faz a
+ * permuta sair da mesa do consultor.
  */
-export class ReviewBarterDto {
-  @IsIn([BARTER_STATUS.approved, BARTER_STATUS.denied])
-  status!: Extract<BarterStatus, 'approved' | 'denied'>;
+export class SaveBarterNoteDto {
+  @IsString()
+  @MaxLength(2000)
+  note!: string;
+}
 
+/**
+ * O ENCAMINHAMENTO ao gerente — o ato que tira a permuta da mesa do consultor.
+ *
+ * O parecer é OBRIGATÓRIO, pelo mesmo motivo do parecer do gerente: sem texto,
+ * o botão vira um "seguir" disfarçado, e a peça que o comitê mais precisa ler
+ * (o que quem conhece o cliente tem a dizer sobre ele) volta a viver no
+ * telefonema.
+ *
+ * O campo é opcional no PAYLOAD e obrigatório no ATO: quem já salvou o parecer
+ * no rascunho encaminha sem reenviá-lo, e é o service que confere o texto
+ * gravado antes de deixar a permuta andar. Exigi-lo aqui obrigaria a tela a
+ * reenviar o que o servidor já tem — e a divergência entre os dois textos
+ * viraria uma pergunta sem dono.
+ */
+export class ForwardBarterDto {
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(2000)
   note?: string;
+}
+
+/**
+ * A frase que o comitê lê quando decide sem escrever. Uma só para os dois
+ * desfechos: as duas exigências têm o mesmo motivo, e dizê-lo de dois jeitos
+ * faria parecer que são regras diferentes.
+ */
+const REVIEW_NOTE_MESSAGE =
+  'Escreva o motivo da decisão (mínimo de 10 caracteres): a ressalva exigida, ou a razão da negativa';
+
+/**
+ * A DECISÃO DO COMITÊ. TRÊS saídas, e só elas: aprovar, aprovar COM RESSALVA ou
+ * negar. Não há "devolver para o gerente" — o parecer já foi dado, e uma permuta
+ * que anda para trás perde o dono da etapa.
+ *
+ * O TEXTO é obrigatório em duas delas, e a regra é a mesma nas duas: a decisão
+ * que cria trabalho para outra pessoa precisa dizer qual. A ressalva é uma
+ * exigência a cumprir (garantia real, seguro, aval) e alguém vai ter de
+ * providenciá-la; a negativa é uma resposta que o consultor vai levar ao
+ * produtor. Nos dois casos, "porque sim" manda a pessoa perguntar por telefone —
+ * e a resposta não fica no registro.
+ *
+ * A aprovação limpa segue com texto OPCIONAL: ela não tem o que explicar, e
+ * exigi-lo produziria quinhentos "ok" no histórico.
+ */
+export class ReviewBarterDto {
+  @IsIn([BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions, BARTER_STATUS.denied])
+  status!: Extract<BarterStatus, 'approved' | 'approvedWithConditions' | 'denied'>;
+
+  /**
+   * `ValidateIf` em vez de `IsOptional`: a obrigatoriedade depende do DESFECHO,
+   * e é aqui que ela cabe — no banco, uma coluna `NOT NULL` recusaria também a
+   * aprovação limpa (ver `reviewNote` no schema).
+   */
+  @ValidateIf((dto: ReviewBarterDto) => dto.status !== BARTER_STATUS.approved)
+  @IsString({ message: REVIEW_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: REVIEW_NOTE_MESSAGE })
+  // A mensagem do teto também fala do MOTIVO, e não só do tamanho: com o campo
+  // ausente as três conferências falham juntas, e quem lê a recusa precisa
+  // entender o que falta seja qual for a que chegar até a tela.
+  @MaxLength(1000, { message: 'Escreva o motivo da decisão em até 1000 caracteres' })
+  note?: string;
+
+  /**
+   * AS EXIGÊNCIAS: avalista, garantia real e seguro — as três coisas que o
+   * comitê define, agora legíveis por máquina.
+   *
+   * Elas viviam dentro de `note`, em prosa ("exigir aval do cônjuge", "com
+   * avalista", "condicionada a aval"), e isso bastava para quem lia a permuta e
+   * não bastava para mais nada: não havia como listar o que estava pendente de
+   * aval, e o emissor descobria a exigência lendo parágrafo na véspera de
+   * emitir o título.
+   *
+   * SÃO OPCIONAIS, e isso é deliberado em dois sentidos. Primeiro, a aprovação
+   * limpa não exige nada — e a negativa também não: exigir avalista de uma
+   * permuta negada seria pedir garantia para um negócio que não vai acontecer.
+   * Segundo, elas NÃO SUBSTITUEM o texto: `note` continua obrigatório na
+   * ressalva porque as caixas dizem O QUÊ e só ele diz QUAL — qual matrícula,
+   * qual valor segurado, quem se espera como avalista.
+   *
+   * Ausente vale `false`, e não "não mexer": esta é a decisão, e ela é tomada
+   * uma vez. Um cliente que não conheça os campos manda a decisão sem exigência
+   * nenhuma, que é exatamente o que ele quis dizer.
+   */
+  @IsOptional()
+  @IsBoolean()
+  requiresGuarantor?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresCollateral?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  requiresInsurance?: boolean;
 }
 
 /**
@@ -123,6 +285,313 @@ export class InvoiceBarterDto {
 }
 
 /**
+ * UMA NOTA FISCAL anexada ao faturamento — os dados que vêm junto com o arquivo.
+ *
+ * Ela chega por `multipart/form-data`, e por isso TODO CAMPO CHEGA COMO TEXTO:
+ * `value` leva `@Type(() => Number)` para virar número antes da validação, e
+ * `issuedAt` continua sendo texto ISO como nas outras datas do sistema. Sem o
+ * `@Type`, `@IsNumber` recusaria "1234.50" — um formulário correto recusado por
+ * uma diferença de transporte.
+ *
+ * O NÚMERO é o único obrigatório. Série, duplicata, data e valor são o que a
+ * nota tem, e nem toda operação preenche os quatro: há praça que não usa série,
+ * e venda que não gera duplicata. O ARQUIVO é obrigatório e não está aqui — ele
+ * é o corpo do upload, e quem o cobra é o controller.
+ */
+export class AttachInvoiceDto {
+  // A mensagem nas três conferências, pelo mesmo motivo de `RegisterCprDto`:
+  // com o campo ausente elas falham juntas.
+  @IsString({ message: 'Informe o número da nota fiscal' })
+  @MinLength(1, { message: 'Informe o número da nota fiscal' })
+  @MaxLength(60, { message: 'Informe o número da nota fiscal (até 60 caracteres)' })
+  number!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  series?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  duplicateNumber?: string;
+
+  @IsOptional()
+  @IsDateString({}, { message: 'Data de emissão da nota inválida' })
+  issuedAt?: string;
+
+  /**
+   * O valor DA NOTA, que pode não ser o total da permuta: retirada parcial é
+   * justamente o caso em que há mais de uma.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'O valor da nota precisa ser um número' })
+  @Min(0)
+  value?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+}
+
+/**
+ * UMA PEÇA DO DOSSIÊ DO COMITÊ anexada à permuta — o que vem junto com o
+ * arquivo (ver `barters/credit-file.ts`).
+ *
+ * Os dois campos são OPCIONAIS, e isso é o oposto da nota fiscal de propósito.
+ * Lá, o número é o que identifica o documento perante o fisco; aqui, o
+ * documento se identifica sozinho — é um PDF de consulta de crédito, com o nome
+ * do arquivo, a data e quem o anexou. Exigir classificação e comentário de quem
+ * está no meio de uma reunião trocaria "anexei os três" por três formulários.
+ *
+ * `kind` ausente vale `other`, que é a resposta honesta: o comitê juntou um
+ * documento e não disse qual dos dois tipos conhecidos ele é.
+ */
+export class AttachCreditFileDto {
+  @IsOptional()
+  @IsIn(CREDIT_FILE_KINDS, {
+    message: `Tipo de documento inválido. Use um destes: ${CREDIT_FILE_KINDS.join(', ')}`,
+  })
+  kind?: CreditFileKind;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+}
+
+/**
+ * O TAMANHO MÍNIMO de um pedido de alteração e da resposta a ele.
+ *
+ * O mesmo do parecer, e pela mesma razão: os dois textos existem para dizer o
+ * que aconteceu a quem vai agir depois. "mudou" e "não" são botões, não
+ * pedidos — e quem os recebe volta a ter de telefonar.
+ */
+const CHANGE_NOTE_MESSAGE = 'Explique o que precisa mudar nesta permuta (mínimo de 10 caracteres)';
+
+/**
+ * O PEDIDO DE ALTERAÇÃO feito pelo consultor — o caminho de volta da esteira
+ * (ver `barters/change-request.ts`).
+ *
+ * O texto é OBRIGATÓRIO, e é a peça inteira do pedido: quem vai lê-lo é o admin,
+ * que não estava na conversa com o produtor e não tem como adivinhar se o caso
+ * é "trocar 200 kg de um insumo" ou "o produtor desistiu". A decisão dele
+ * depende disso — liberar a permuta apaga o parecer do gerente e a decisão do
+ * comitê.
+ */
+export class RequestBarterChangeDto {
+  @IsString({ message: CHANGE_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: CHANGE_NOTE_MESSAGE })
+  @MaxLength(2000)
+  note!: string;
+}
+
+/** A frase que o admin lê quando recusa um pedido sem dizer por quê. */
+const DENY_NOTE_MESSAGE = 'Escreva o motivo da recusa (mínimo de 10 caracteres)';
+
+/**
+ * A DECISÃO DO ADMIN sobre o pedido: libera ou não.
+ *
+ * `accept` é booleano, e não um `status` como na decisão do comitê, porque aqui
+ * as saídas são mesmo duas — não há "libera com ressalva". O que muda entre
+ * elas é o EFEITO: liberar devolve a permuta ao rascunho do consultor; recusar
+ * deixa tudo onde está e devolve o motivo.
+ *
+ * O motivo é obrigatório na RECUSA e opcional na liberação, pela mesma regra da
+ * decisão do comitê: a resposta que cria trabalho (ou o encerra) para outra
+ * pessoa precisa dizer por quê. A liberação fala pelo próprio efeito — a
+ * permuta reaparece na mão de quem pediu.
+ */
+export class DecideBarterChangeDto {
+  @IsBoolean({ message: 'Diga se o pedido de alteração foi aceito (accept: true/false)' })
+  accept!: boolean;
+
+  @ValidateIf((dto: DecideBarterChangeDto) => !dto.accept)
+  @IsString({ message: DENY_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: DENY_NOTE_MESSAGE })
+  // O teto também fala do MOTIVO, e não só do tamanho: com o campo ausente as
+  // três conferências falham juntas, e a que chegar até a tela precisa dizer o
+  // que falta — a mesma razão da mensagem gêmea em `ReviewBarterDto`.
+  @MaxLength(1000, { message: 'Escreva o motivo da recusa em até 1000 caracteres' })
+  note?: string;
+}
+
+/**
+ * O VALOR NOVO DE UM ITEM da permuta, escrito pelo admin ao atender o pedido do
+ * consultor (ver `priceChangeRefusal` em `barters/change-request.ts`).
+ *
+ * O item vai por `id`, e não por `productId`: o que se está corrigindo é UMA
+ * LINHA daquela permuta, e os itens de fora do Barter — que são justamente os
+ * que mais mudam de valor — não têm produto nenhum no catálogo para apontar.
+ */
+export class BarterItemPriceDto {
+  @IsInt()
+  @IsPositive()
+  itemId!: number;
+
+  /**
+   * O valor em R$ por unidade. POSITIVO: um item a zero não é um desconto, é um
+   * item fora da permuta — e tirá-lo é remontar a permuta, que é o outro
+   * caminho (liberar o pedido e devolvê-la ao consultor).
+   */
+  @IsNumber()
+  @IsPositive({ message: 'O valor do item precisa ser maior que zero' })
+  unitValue!: number;
+}
+
+/**
+ * O ATENDIMENTO DO PEDIDO NO VALOR — a terceira saída do desvio.
+ *
+ * Em vez de devolver a permuta ao rascunho (e jogar fora o parecer do gerente e
+ * a decisão do comitê) para corrigir uma linha de R$, o admin corrige a linha e
+ * a permuta continua onde está. Ver `priceChangeRefusal`.
+ *
+ * A LISTA é só do que MUDA, e aqui isso é o oposto de `ReplaceBarterInputsDto`,
+ * que vai inteira — e a diferença é de natureza: ali a permuta está sendo
+ * REMONTADA, e ela passa pelas regras de mínimo como um conjunto; aqui ela está
+ * sendo CORRIGIDA, item a item, e mandar a lista inteira faria o admin
+ * reafirmar, a cada correção, o valor de tudo o que ele não quis tocar.
+ *
+ * A observação é OPCIONAL porque os FATOS já ficam gravados sem ela: o evento da
+ * linha do tempo diz qual item mudou, de quanto para quanto, e o item guarda o
+ * valor de tabela (`listValue`). O texto é para o que os números não dizem — a
+ * cotação que o fornecedor deu, a conversa com o produtor.
+ */
+export class ChangeBarterPricesDto {
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Diga qual item muda de valor' })
+  @ArrayMaxSize(200, { message: 'Uma permuta não pode ter mais de 200 insumos' })
+  @ValidateNested({ each: true })
+  @Type(() => BarterItemPriceDto)
+  prices!: BarterItemPriceDto[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/**
+ * O PEDIDO DE FORA DO BARTER — o consultor pedindo um produto que a tabela da
+ * versão não tem (ver `barters/product-request.ts`).
+ *
+ * O pedido é o PRODUTO e a QUANTIDADE, e é por isso que os dois são
+ * obrigatórios e o texto não: aqui, ao contrário do pedido de alteração, o
+ * essencial já está dito pelo próprio item. Exigir um parágrafo para pedir 20 t
+ * de ureia produziria quinhentos "o produtor quer" no histórico.
+ *
+ * Não há VALOR no payload, pela regra de sempre: preço nunca veio do cliente. O
+ * consultor não vê R$ (ver `CAPABILITY.pricesRead`) e o que ele está pedindo é
+ * justamente o item que ninguém precificou ainda.
+ */
+export class RequestBarterProductDto {
+  @IsString()
+  @MinLength(2, { message: 'Escreva o nome do produto que falta' })
+  @MaxLength(120)
+  productName!: string;
+
+  /**
+   * A unidade em que o consultor conhece o item (l, kg, sc, ha, un…). O admin
+   * corrige ao atender, se a embalagem do fornecedor for outra.
+   */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  unit!: string;
+
+  @IsNumber()
+  @IsPositive({ message: 'A quantidade pedida precisa ser maior que zero' })
+  quantity!: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/** A frase que o admin lê quando atende um pedido sem dizer por quanto. */
+const PRODUCT_VALUE_MESSAGE = 'Escreva o valor (R$ por unidade) com que este item entra na permuta';
+
+/**
+ * A DECISÃO DO ADMIN sobre o pedido de produto: incluir com um valor, ou
+ * recusar com o motivo.
+ *
+ * `accept` é booleano, como na decisão do desvio, porque as saídas são mesmo
+ * duas. O que ele carrega junto, e a outra não, é um NÚMERO: atender é
+ * precificar, e é o único ato deste sistema em que um valor entra numa permuta
+ * sem estar em tabela nenhuma.
+ *
+ * Nome, unidade e quantidade são CORREÇÕES opcionais do que o consultor
+ * escreveu, e o que fica gravado é o que o admin escreveu: a descrição do
+ * fornecedor é outra, a embalagem é em 20 l e não em litro, e é o item dele que
+ * vai ser separado no balcão. Ausentes, valem os do pedido.
+ */
+export class DecideBarterProductDto {
+  @IsBoolean({ message: 'Diga se o produto entra na permuta (accept: true/false)' })
+  accept!: boolean;
+
+  @ValidateIf((dto: DecideBarterProductDto) => dto.accept)
+  @IsNumber({}, { message: PRODUCT_VALUE_MESSAGE })
+  @IsPositive({ message: PRODUCT_VALUE_MESSAGE })
+  unitValue?: number;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  productName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(20)
+  unit?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @IsPositive({ message: 'A quantidade precisa ser maior que zero' })
+  quantity?: number;
+
+  /** O código do fornecedor, quando o admin o tem. Ver `BarterItem.productSku`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  sku?: string;
+
+  @ValidateIf((dto: DecideBarterProductDto) => !dto.accept)
+  @IsString({ message: DENY_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: DENY_NOTE_MESSAGE })
+  @MaxLength(1000, { message: 'Escreva o motivo da recusa em até 1000 caracteres' })
+  note?: string;
+}
+
+/**
+ * A REESCRITA DOS INSUMOS de um rascunho — o que o consultor faz depois de o
+ * admin liberar a alteração (ou antes de encaminhar pela primeira vez).
+ *
+ * A lista vai INTEIRA, e não em pedaços ("tire este, mude aquele"): a permuta é
+ * um conjunto que precisa passar pelas regras de mínimo como um todo, e um
+ * `PATCH` item a item deixaria a permuta em estados intermediários que nenhuma
+ * regra aceita. É o mesmo formato do registro, e de propósito — a tela que
+ * monta a permuta é a mesma.
+ *
+ * Repare no que NÃO está aqui: produtor, unidade e preços. Trocar o produtor
+ * seria outra permuta (a área dele é o denominador de tudo e já está congelada
+ * no registro); trocar a unidade é logística e não passa por pedido nenhum; e
+ * preço nunca veio do cliente.
+ */
+export class ReplaceBarterInputsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200, { message: 'Uma permuta não pode ter mais de 200 insumos' })
+  @ValidateNested({ each: true })
+  @Type(() => BarterInputDto)
+  inputs!: BarterInputDto[];
+}
+
+/**
  * O PARECER TÉCNICO do gerente sobre uma negociação do time dele.
  *
  * Repare no que NÃO existe aqui: um `status`. O parecer não aprova nem nega —
@@ -136,7 +605,9 @@ export class InvoiceBarterDto {
  */
 export class BarterOpinionDto {
   @IsString()
-  @MinLength(10, { message: 'Escreva o parecer técnico (mínimo de 10 caracteres)' })
+  @MinLength(MIN_OPINION_LENGTH, {
+    message: `Escreva o parecer técnico (mínimo de ${MIN_OPINION_LENGTH} caracteres)`,
+  })
   @MaxLength(2000)
   note!: string;
 }

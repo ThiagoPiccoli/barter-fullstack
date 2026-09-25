@@ -1,0 +1,321 @@
+import { BARTER_STATUS, stageOf, type BarterStatus } from './barter-workflow';
+
+/**
+ * O PEDIDO DE ALTERAÇÃO — o caminho de volta da esteira.
+ *
+ * A esteira (`barter-workflow.ts`) só anda para a frente, e é assim de
+ * propósito: cada posto recebe o que o anterior produziu e ninguém desfaz o ato
+ * de outro. Mas a permuta erra DEPOIS de sair da mão de quem a montou — o
+ * produtor troca um insumo na véspera da retirada, a quantidade saiu errada, a
+ * conversa mudou. Sem um caminho de volta, as saídas eram duas e as duas ruins:
+ * pedir ao comitê que NEGASSE (uma decisão de negócio usada como borracha, que
+ * fica na história como negativa e some das metas) ou registrar uma segunda
+ * permuta e deixar a primeira apodrecendo na fila de alguém.
+ *
+ * Este arquivo é a regra desse caminho, e ele mora FORA de `BARTER_STEPS` de
+ * propósito: aquela tabela é a esteira, e é ela que desenha a checklist de
+ * andamento (`progressOf`). Um "pedido de alteração" como etapa apareceria como
+ * um quinto degrau pendente em toda permuta do sistema — quando ele é o
+ * contrário de um degrau: um desvio que quase nenhuma permuta toma.
+ *
+ * ## Quem pede e quem decide
+ *
+ * Pede o CONSULTOR QUE REGISTROU — não o gerente, não o comitê. Os dois têm o
+ * próprio ato para praticar sobre a permuta (devolver não é um deles), e quem
+ * sabe que o combinado mudou é quem falou com o produtor.
+ *
+ * Decide o ADMIN. Ele não decide permuta (ver `CAPABILITY.bartersReview`), e
+ * continua não decidindo: o que ele decide aqui é se o TRABALHO JÁ FEITO pelos
+ * outros postos vai ser jogado fora — porque é isso que voltar ao rascunho faz
+ * com o parecer do gerente e com a decisão do comitê. É administração do
+ * processo, e não avaliação do negócio.
+ *
+ * ## Até quando
+ *
+ * Até o FATURAMENTO, e nem um passo além. A permuta faturada saiu para fora
+ * (nota emitida, cédula assinada, insumo retirado) e corrigi-la aqui só criaria
+ * uma divergência entre este sistema e o mundo — a correção de uma nota é ato
+ * do sistema que a emitiu.
+ *
+ * O RASCUNHO também fica de fora, pela razão oposta: ele já está na mão do
+ * consultor. Pedir permissão ao admin para mexer no que é seu seria burocracia
+ * inventada, e o "pedido" nasceria concedido.
+ */
+export const CHANGE_REQUEST_STATUS = {
+  /** Pedido feito, na mesa do admin. */
+  open: 'open',
+  /**
+   * Pedido RECUSADO pelo admin, com o motivo escrito.
+   *
+   * Ele sobrevive à decisão, e o aceite não: o aceite fala pelo próprio efeito
+   * (a permuta voltou a ser rascunho e está de novo com o consultor), enquanto
+   * a recusa precisa continuar visível — sem ela, o consultor veria apenas a
+   * permuta parada onde estava, sem nada dizendo que ele já pediu e ouviu não.
+   */
+  denied: 'denied',
+} as const;
+
+export type ChangeRequestStatus =
+  (typeof CHANGE_REQUEST_STATUS)[keyof typeof CHANGE_REQUEST_STATUS];
+
+/**
+ * Os atos do desvio, como eles são gravados na linha do tempo da permuta
+ * (`BarterEvent.action`).
+ *
+ * São três, e não dois, porque a linha do tempo conta O QUE ACONTECEU: "pedi",
+ * "aceitaram" e "recusaram" são três fatos com autores diferentes, e o segundo
+ * é o único que muda o estado da permuta.
+ */
+export const CHANGE_REQUEST_ACTION = {
+  changeRequested: 'changeRequested',
+  changeAccepted: 'changeAccepted',
+  changeDenied: 'changeDenied',
+  /**
+   * ATENDIDO NO VALOR: o admin não devolveu a permuta — ele mesmo corrigiu o
+   * que o consultor pediu. Ver `priceChangeRefusal`.
+   */
+  changeApplied: 'changeApplied',
+} as const;
+
+export type ChangeRequestAction =
+  (typeof CHANGE_REQUEST_ACTION)[keyof typeof CHANGE_REQUEST_ACTION];
+
+/** O rótulo de cada ato do desvio, na língua da operação. */
+export const CHANGE_REQUEST_LABELS: Record<ChangeRequestAction, string> = {
+  [CHANGE_REQUEST_ACTION.changeRequested]: 'Alteração solicitada',
+  [CHANGE_REQUEST_ACTION.changeAccepted]: 'Alteração liberada',
+  [CHANGE_REQUEST_ACTION.changeDenied]: 'Alteração recusada',
+  [CHANGE_REQUEST_ACTION.changeApplied]: 'Valores alterados pelo administrador',
+};
+
+/** O bastante de uma permuta para saber se ela aceita um pedido, e por quê. */
+export interface BarterAtRequest {
+  status: string;
+  changeRequestStatus?: string | null;
+}
+
+/**
+ * POR QUE esta permuta não aceita um pedido de alteração agora — ou `null`,
+ * quando aceita.
+ *
+ * Devolve a frase pronta, como `refusalFor` na esteira, e pelo mesmo motivo: a
+ * pessoa que bate na porta fechada precisa saber o que fazer em seguida, e essa
+ * resposta é do domínio, não da tela.
+ */
+export function changeRequestRefusal(barter: BarterAtRequest): string | null {
+  if (barter.changeRequestStatus === CHANGE_REQUEST_STATUS.open) {
+    return 'Já existe um pedido de alteração desta permuta aguardando o administrador';
+  }
+  if (barter.status === BARTER_STATUS.draft) {
+    return 'Esta permuta é um rascunho seu: altere-a e encaminhe de novo, sem pedir nada a ninguém';
+  }
+  // DO FATURAMENTO EM DIANTE, não há mais volta — e a conferência é pelo DEGRAU
+  // da esteira, não pelo estado.
+  //
+  // Ela já foi `=== invoiced`, e isso era uma comparação que envelheceu mal: no
+  // dia em que a emissão da cédula virou etapa, `invoiced` deixou de ser o fim
+  // da linha e três estados passaram a existir depois dele — todos escapando
+  // por esta porta. Uma permuta com o TÍTULO JÁ EMITIDO aceitava pedido de
+  // alteração, e o admin podia devolvê-la a rascunho: o papel continuaria com o
+  // produtor, e o registro que o originou viraria outro.
+  //
+  // Pelo degrau, um estado novo depois do faturamento entra fechado por
+  // construção. `denied` continua passando (ele está FORA da esteira,
+  // `stageOf` = -1), e é de propósito: refazer a permuta negada é justamente
+  // para o que este caminho serve.
+  if (stageOf(barter.status) >= stageOf(BARTER_STATUS.invoiced)) {
+    return 'Esta permuta já foi faturada, e o que saiu para fora não se corrige por aqui';
+  }
+  return null;
+}
+
+/**
+ * POR QUE não há o que decidir nesta permuta — ou `null`, quando há.
+ *
+ * A pergunta é só uma (existe pedido em aberto?), mas ela distingue dois casos
+ * na resposta: nunca houve pedido, ou houve e já foi decidido. Quem chega pelo
+ * segundo caminho é o admin que abriu a mesma tela em dois aparelhos, ou dois
+ * admins na mesma permuta — e "não há pedido nenhum" o mandaria procurar um
+ * defeito que não existe.
+ */
+export function changeDecisionRefusal(barter: BarterAtRequest): string | null {
+  if (barter.changeRequestStatus === CHANGE_REQUEST_STATUS.open) return null;
+  return barter.changeRequestStatus
+    ? 'Este pedido de alteração já foi decidido'
+    : 'Esta permuta não tem pedido de alteração em aberto';
+}
+
+/* ── A TERCEIRA SAÍDA: o admin atende mexendo no valor ─────────────────── */
+
+/**
+ * POR QUE o admin não pode alterar os valores desta permuta agora — ou `null`,
+ * quando pode.
+ *
+ * ## Por que existe uma terceira saída
+ *
+ * As duas primeiras respondem ao pedido com o mesmo grosso calibre: liberar
+ * (a permuta volta ao rascunho, e o parecer do gerente e a decisão do comitê são
+ * apagados) ou recusar. Mas a maior parte dos pedidos que chegam é de UM número:
+ * o valor de um insumo saiu diferente do que foi combinado com o produtor, o
+ * fornecedor deu outro preço para aquela quantidade, a tabela subiu entre a
+ * conversa e o registro. Devolver a permuta inteira ao começo da linha por causa
+ * de uma linha de R$ é jogar fora dois pareceres e uma decisão para corrigir o
+ * que o admin já tem na mão — e o consultor ainda teria de remontá-la e
+ * reencaminhá-la, para ela voltar a percorrer os mesmos três postos.
+ *
+ * Então o admin ATENDE: escreve o valor, o servidor recalcula as sacas, e a
+ * permuta continua exatamente onde estava, com quem estava.
+ *
+ * ## Só DENTRO do pedido
+ *
+ * Isto não é um poder de reprecificar permutas — é uma resposta. Sem pedido em
+ * aberto não há o que atender, e o admin que quisesse mexer no valor de uma
+ * permuta por conta própria estaria decidindo o negócio, que é justamente o que
+ * ele não faz (ver `CAPABILITY.bartersReview`). A conferência é a mesma da
+ * decisão, e é por isso que ela é `changeDecisionRefusal`: quem responde já
+ * sabia distinguir "nunca houve pedido" de "este pedido já foi decidido".
+ *
+ * ## O que continua valendo
+ *
+ * O GRÃO não se altera por aqui: a saca tem a cotação da versão, e mudá-la para
+ * uma permuta só seria abrir um Barter particular para um produtor. A linha do
+ * grão é o RESULTADO — ela é recalculada a partir do custo novo, como em todo o
+ * resto do sistema (ver `sacksToCover`).
+ *
+ * E o item guarda de onde o valor saiu (`BarterItem.listValue`): quem abrir a
+ * permuta depois precisa poder ver que aquele número não é o da tabela, e qual
+ * era o da tabela.
+ */
+export function priceChangeRefusal(barter: BarterAtRequest): string | null {
+  const refusal = changeDecisionRefusal(barter);
+  if (!refusal) return null;
+  return barter.changeRequestStatus
+    ? refusal
+    : 'O valor de uma permuta se altera ATENDENDO a um pedido do consultor, e não há pedido em aberto nesta';
+}
+
+/** O bastante de um item para saber se o valor dele pode ser reescrito. */
+export interface ItemAtPriceChange {
+  kind: string;
+  productName: string;
+}
+
+/**
+ * POR QUE o valor DESTE item não se altera — ou `null`, quando se altera.
+ *
+ * Um só motivo, e é o do grão: ele não é um item comprado, é a conta do
+ * pagamento. Ver `priceChangeRefusal`.
+ */
+export function itemPriceRefusal(item: ItemAtPriceChange): string | null {
+  return item.kind === 'grain'
+    ? `${item.productName} é o pagamento da permuta: as sacas saem do custo dos insumos e da cotação da versão, e não se digitam`
+    : null;
+}
+
+/** A CULTURA de uma permuta: o grão que a paga, lido da linha de pagamento. */
+export interface BarterCulture {
+  grainId: number | null;
+  grainName: string;
+}
+
+/** O bastante de uma gestão do Barter para saber quais culturas ela aceita. */
+export interface VersionAtCulture {
+  code: string;
+  grains: BarterCulture[];
+}
+
+/** Esta cultura é uma das que aquela gestão aceita? */
+function offers(version: VersionAtCulture, culture: BarterCulture): boolean {
+  return version.grains.some((grain) => {
+    // Pelo id do grão quando os dois têm: é ele que identifica a cultura. O nome
+    // é a saída para o grão excluído do catálogo (o FK vira null e sobra o nome
+    // congelado) — comparar nomes sempre seria frágil; nunca compará-los
+    // deixaria essas permutas fora de qualquer alteração.
+    if (grain.grainId !== null && culture.grainId !== null) {
+      return grain.grainId === culture.grainId;
+    }
+    return grain.grainName.trim().toLowerCase() === culture.grainName.trim().toLowerCase();
+  });
+}
+
+export function cultureRefusal(
+  culture: BarterCulture,
+  openVersion: VersionAtCulture,
+): string | null {
+  if (offers(openVersion, culture)) return null;
+  const open = openVersion.grains.map((grain) => grain.grainName).join(' e ');
+  return (
+    `Esta permuta é paga em ${culture.grainName}, e o Barter aberto hoje ` +
+    `(${openVersion.code}) aceita ${open || 'outra cultura'}. ` +
+    'A alteração vale enquanto o lançamento aberto aceitar a cultura da permuta'
+  );
+}
+
+/**
+ * O QUE O ACEITE APAGA da permuta que volta ao rascunho.
+ *
+ * Voltar ao rascunho é desfazer as etapas cumpridas, e desfazê-las é apagar o
+ * que elas escreveram: o parecer do gerente e a decisão do comitê falavam de
+ * uma permuta que está prestes a mudar, e mantê-los seria pendurar uma
+ * aprovação sobre insumos que ninguém aprovou. A tela leria "Decidida por
+ * Fulano" numa permuta em rascunho, e o comprovante imprimiria a decisão junto
+ * com os itens novos.
+ *
+ * Nada disso se perde: cada um desses atos tem EVENTO gravado
+ * (`BarterEvent`), com autor, texto e data, e a linha do tempo continua
+ * contando que houve parecer e que houve decisão. O que é apagado é o estado
+ * ATUAL — que passou a ser falso —, não a história.
+ *
+ * O parecer do CONSULTOR (`consultantNote`) sobrevive: é o texto dele sobre o
+ * próprio cliente, ele vai reencaminhar a permuta, e apagá-lo seria pedir que
+ * reescrevesse do zero o que continua valendo. `consultantSentAt` cai porque o
+ * envio, esse sim, deixou de ter acontecido.
+ */
+export const CLEARED_BY_CHANGE = {
+  consultantSentAt: null,
+  managerId: null,
+  managerName: null,
+  managerNote: null,
+  managerReviewedAt: null,
+  reviewNote: null,
+  reviewedBy: null,
+  reviewedById: null,
+  reviewedAt: null,
+  // AS EXIGÊNCIAS DO COMITÊ caem junto com a decisão que as criou, e pelo mesmo
+  // motivo dela: elas foram exigidas de uma permuta que está prestes a mudar.
+  // Mantidas, a tela do consultor mostraria "exige avalista" num rascunho que
+  // ninguém decidiu — e o comitê seguinte poderia decidir sem exigir nada,
+  // deixando na tela uma exigência de que ele nunca soube.
+  requiresGuarantor: false,
+  requiresCollateral: false,
+  requiresInsurance: false,
+} as const;
+
+/**
+ * O PEDIDO RESOLVIDO — os campos do desvio zerados na permuta.
+ *
+ * Vale para as duas saídas que ATENDEM o consultor: a liberação (a permuta
+ * voltou a ser rascunho) e o valor alterado pelo admin. Nas duas, quem conta a
+ * história a partir de agora é o efeito — o estado da permuta, ou os valores
+ * dela — mais o evento gravado na linha do tempo. Um pedido "atendido"
+ * pendurado ao lado seria um segundo lugar dizendo a mesma coisa, e os dois
+ * poderiam divergir.
+ *
+ * A RECUSA é a exceção, e por isso não usa isto: ela precisa continuar visível,
+ * porque sem ela o consultor veria apenas a permuta parada onde estava, sem
+ * nada dizendo que ele já pediu e ouviu não.
+ */
+export const RESOLVED_REQUEST = {
+  changeRequestStatus: null,
+  changeRequestNote: null,
+  changeRequestBy: null,
+  changeRequestById: null,
+  changeRequestAt: null,
+  changeRequestFrom: null,
+  changeRequestReply: null,
+} as const;
+
+/** O estado em que o pedido foi feito, para a linha do tempo poder dizê-lo. */
+export function requestedFrom(barter: { changeRequestFrom?: string | null }): BarterStatus | null {
+  return (barter.changeRequestFrom as BarterStatus | null | undefined) ?? null;
+}

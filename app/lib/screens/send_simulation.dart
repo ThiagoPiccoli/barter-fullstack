@@ -19,6 +19,7 @@ import '../services/barter_pdf.dart';
 import '../services/simulation_check.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
+import 'cpr_form_screen.dart';
 
 /// Encaminha [simulation] ao gerente do consultor. Devolve `true` quando a
 /// permuta foi registrada.
@@ -34,17 +35,16 @@ import '../widgets/common_widgets.dart';
 ///    decide.
 /// 3. **Envia** — e só depois do sucesso a simulação some.
 ///
-/// [alreadyConfirmed] é para quem chama vindo do construtor: o consultor acabou
-/// de montar a permuta e já disse que quer mandar, então o resumo não é
-/// perguntado de novo. Ele volta a aparecer se houver o que dizer — mudou o
-/// Barter, mudaram as sacas —, que é a única parte do diálogo que ele não
-/// acabou de ver na tela.
+/// O resumo do passo 3 é mostrado SEMPRE, inclusive a quem vem do construtor e
+/// acabou de dizer que quer mandar. Ele deixou de ser uma conferência do que já
+/// está na tela: é lá que se escreve o PARECER do consultor e se escolhe entre
+/// guardar o rascunho e encaminhar, e nenhuma das duas coisas está em outro
+/// lugar do app.
 Future<bool> sendSimulationToManager(
   BuildContext context, {
   required BarterSimulation simulation,
   required UserModel consultant,
   VoidCallback? onChanged,
-  bool alreadyConfirmed = false,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
 
@@ -57,7 +57,7 @@ Future<bool> sendSimulationToManager(
     // precisa dizer — senão o consultor acha que perdeu o trabalho.
     showErrorOn(
       messenger,
-      '${e.message} Sua simulação continua guardada — tente de novo quando tiver sinal.',
+      '${e.message} Sua simulação continua guardada. Tente de novo quando tiver sinal.',
     );
     return false;
   }
@@ -85,18 +85,42 @@ Future<bool> sendSimulationToManager(
     return false;
   }
 
-  // Quem já confirmou só é interrompido se houver o que dizer.
-  if (!alreadyConfirmed || check.needsReview) {
-    final confirmed = await _confirmSend(context, check, consultant);
-    if (!context.mounted || confirmed != true) return false;
-  }
+  // O RESUMO é SEMPRE mostrado agora, mesmo a quem acabou de confirmar no
+  // construtor: ele deixou de ser só uma conferência do que já está na tela e
+  // passou a pedir uma coisa que não está em lugar nenhum — o parecer do
+  // consultor, e a escolha entre guardar o rascunho e encaminhar. Pular o
+  // diálogo pularia a etapa.
+  final choice = await _confirmSend(context, check, consultant);
+  if (!context.mounted || choice == null) return false;
 
-  final result = await AppData.sendSimulation(check.rebuilt);
+  final result = await AppData.sendSimulation(
+    check.rebuilt,
+    note: choice.note,
+    forward: choice.forward,
+  );
   if (!context.mounted) return false;
 
   if (result.isSent) {
     onChanged?.call();
-    await _showSent(context, result);
+    // A CÉDULA É O PASSO SEGUINTE, e o fluxo emenda nele.
+    //
+    // Ela virou pré-requisito do encaminhamento, e o que o consultor precisa
+    // para preenchê-la é o que ele acabou de levantar na visita: a qualificação
+    // do produtor, as matrículas das lavouras, o nome do cônjuge. Mandá-lo
+    // fechar este diálogo, achar a permuta na lista e abrir a mesa da cédula
+    // seria pedir para ele voltar amanhã ao que está na mão dele agora.
+    if (await _showSent(context, result) && context.mounted) {
+      await openCprDesk(context, result.barter!);
+      // E O ENCAMINHAMENTO QUE A CÉDULA TINHA BARRADO acontece agora.
+      //
+      // Quem chega aqui pediu *Encaminhar* e ouviu que faltava a cédula. Sem
+      // esta volta, ele preencheria o documento e a permuta continuaria parada
+      // no rascunho dele — o mesmo desfecho de não ter preenchido, três telas
+      // depois.
+      if (context.mounted && choice.forward && result.isSentButNotForwarded) {
+        await _forwardAfterCpr(context, result.barter!, choice.note, onChanged);
+      }
+    }
     return true;
   }
   if (result.isUncertain) {
@@ -107,14 +131,72 @@ Future<bool> sendSimulationToManager(
   return false;
 }
 
+/// REGISTRAR PARA PEDIR — o segundo ponto em que uma simulação fala com o
+/// servidor, e ele existe por causa do PEDIDO DE FORA DO BARTER.
+///
+/// A falta de um item aparece enquanto o consultor monta a permuta: ele procura
+/// o adjuvante na lista e ele não está lá. Só que o pedido é amarrado a uma
+/// PERMUTA (ver `product-request.ts`, na API), e a simulação não é uma — ela
+/// mora no aparelho e o servidor não a conhece. Então pedir dali exige
+/// registrar a permuta como RASCUNHO antes, e é isso que esta função faz.
+///
+/// Rascunho, e nunca encaminhada: registrar para pedir não é mandar a permuta
+/// ao gerente. Ela continua na mão do consultor, que vai completá-la quando o
+/// item pedido entrar — e é por isso que `forward` é `false` e não é parâmetro.
+///
+/// Ela NÃO passa pelo resumo de `sendSimulationToManager`, e isso é escolha: o
+/// resumo existe para o consultor conferir a conta que combinou com o produtor
+/// antes de a permuta sair da mesa dele. Aqui ela não sai, e a conta ainda vai
+/// mudar de novo — o item pedido entra com um valor que ninguém acertou ainda.
+/// O que ele precisa saber antes de clicar (que a permuta será registrada) está
+/// escrito no próprio diálogo do pedido.
+///
+/// Devolve a permuta registrada e converte a recusa em [ApiException]: quem
+/// chama é o formulário do pedido, e é ele que já sabe mostrar erro sem fechar
+/// o que foi digitado.
+Future<BarterModel> registerToRequestProduct(BarterSimulation simulation) async {
+  final result = await AppData.sendSimulation(simulation, forward: false);
+  if (result.isSent) return result.barter!;
+
+  // `statusCode: 0` é o que o ApiClient usa para "não deu para falar com o
+  // servidor", e é a leitura certa das duas saídas que sobram: a incerta é
+  // literalmente isso, e a recusa chega aqui já em pt-BR, pronta para a tela.
+  throw ApiException(
+    0,
+    result.isUncertain
+        ? '${result.uncertainReason!} Confira em Minhas ${brand.copy.barterPluralTitle} '
+              'antes de pedir de novo.'
+        : '${result.refusal!} Sua simulação continua guardada.',
+  );
+}
+
+/// O QUE O CONSULTOR ESCOLHEU no resumo do envio: o parecer que ele escreveu, e
+/// se a permuta sai da mesa dele agora.
+///
+/// São duas saídas, e não um "ok": registrar e encaminhar viraram dois atos, e é
+/// aqui que a diferença aparece para quem usa. Quem já conversou com o produtor
+/// escreve o parecer e manda; quem ainda não, guarda o registro — com os valores
+/// do Barter de hoje congelados nele — e escreve depois.
+class _SendChoice {
+  final String note;
+  final bool forward;
+  const _SendChoice({required this.note, required this.forward});
+}
+
 /// O RESUMO antes de encaminhar — o momento em que a permuta deixa de ser
-/// simulação. Mostra o que vai ser registrado, e o que mudou desde que foi
-/// montada.
-Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserModel consultant) {
+/// simulação. Mostra o que vai ser registrado, o que mudou desde que foi
+/// montada, e pede o parecer de quem conhece o cliente.
+Future<_SendChoice?> _confirmSend(
+    BuildContext context, SimulationCheck check, UserModel consultant) {
   final sim = check.rebuilt;
-  return showDialog<bool>(
+  final noteCtrl = TextEditingController();
+  return showDialog<_SendChoice>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    // StatefulBuilder porque o botão de encaminhar LIGA com o que está sendo
+    // digitado: sem redesenhar o diálogo a cada letra, ele só acordaria quando
+    // alguém tocasse fora do campo.
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setLocal) => AlertDialog(
       icon: Icon(Icons.send_outlined, color: AppColors.primary, size: 40),
       title: const Text('Encaminhar ao gerente?'),
       content: SizedBox(
@@ -205,9 +287,13 @@ Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserMode
                 ),
                 child: Column(
                   children: [
+                    // O CÓDIGO antes do nome, aqui como em toda lista de
+                    // produto do app: esta é a última conferência antes de a
+                    // permuta virar registro, e é por ele que o consultor
+                    // confirma que o insumo é o que o produtor pediu.
                     for (final item in sim.items)
                       DialogLine(
-                        item.productName.isEmpty ? item.productId : item.productName,
+                        simulationItemLabel(item),
                         '${formatQty(item.quantity)} ${item.unit}',
                       ),
                   ],
@@ -227,7 +313,28 @@ Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserMode
                   bold: true,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
+              // O PARECER DO CONSULTOR — a peça que abre o processo, escrita por
+              // quem conhece o cliente. Ela é pedida AQUI, e não numa tela
+              // depois, porque é aqui que ele está pensando nesta permuta.
+              //
+              // O campo é opcional NA TELA e obrigatório NO ENVIO: sem texto o
+              // botão de encaminhar não liga, e o de guardar continua ligado —
+              // que é a saída de quem ainda vai conversar com o produtor.
+              TextField(
+                controller: noteCtrl,
+                minLines: 2,
+                maxLines: 5,
+                maxLength: 2000,
+                textCapitalization: TextCapitalization.sentences,
+                onChanged: (_) => setLocal(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Seu parecer',
+                  hintText: 'Safras anteriores, pontualidade, o que está plantado…',
+                  alignLabelWithHint: true,
+                  isDense: true,
+                ),
+              ),
               // O que ACONTECE COM ELE, e não como o sistema funciona por
               // dentro: "o servidor recalcula tudo ao registrar" era o app
               // contando a própria arquitetura a quem só quer encaminhar.
@@ -240,22 +347,112 @@ Future<bool?> _confirmSend(BuildContext context, SimulationCheck check, UserMode
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Encaminhar')),
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Revisar')),
+        // GUARDAR não é cancelar: a permuta é registrada, com os valores de
+        // hoje congelados, e fica como rascunho na lista dele. É o caminho de
+        // quem montou a conta antes de ter a conversa.
+        TextButton(
+          onPressed: () =>
+              Navigator.pop(ctx, _SendChoice(note: noteCtrl.text, forward: false)),
+          child: const Text('Guardar rascunho'),
+        ),
+        ElevatedButton(
+          onPressed: noteCtrl.text.trim().length < minOpinionLength
+              ? null
+              : () => Navigator.pop(ctx, _SendChoice(note: noteCtrl.text, forward: true)),
+          child: const Text('Encaminhar'),
+        ),
       ],
+      ),
     ),
   );
 }
 
-Future<void> _showSent(BuildContext context, SendResult result) {
+/// RETOMA O ENCAMINHAMENTO depois que a cédula foi preenchida.
+///
+/// Ele PERGUNTA antes de encaminhar, e não emenda sozinho: encaminhar não tem
+/// volta, e entre o pedido e agora o consultor passou por um formulário inteiro
+/// — pode ter descoberto ali que falta a matrícula de uma lavoura e querer
+/// segurar a permuta. O pedido de antes é intenção, não procuração.
+///
+/// E ele CONFERE antes de perguntar: oferecer um encaminhamento que o servidor
+/// vai recusar é a armadilha que este caminho todo existe para desarmar.
+Future<void> _forwardAfterCpr(
+  BuildContext context,
+  BarterModel barter,
+  String note,
+  VoidCallback? onChanged,
+) async {
+  final messenger = ScaffoldMessenger.of(context);
+
+  final CprDesk desk;
+  try {
+    desk = await AppData.barterCpr(barter.id);
+  } on ApiException {
+    // Não deu para conferir. Calar é melhor do que oferecer no escuro: a
+    // permuta está registrada, e o botão do detalhe continua lá.
+    return;
+  }
+  if (!context.mounted) return;
+
+  if (!desk.readyToForward) {
+    showInfoOn(
+      messenger,
+      'A cédula ainda tem pendências. A permuta ${barter.id} continua com você, '
+      'como rascunho — encaminhe pelo detalhe quando ela estiver completa.',
+    );
+    return;
+  }
+
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      icon: Icon(Icons.send_outlined, color: AppColors.atManager, size: 40),
+      title: const Text('Encaminhar agora?'),
+      content: Text(
+        'A cédula de ${barter.id} está preenchida. '
+        'Ela pode ir para ${barter.managerLabel} com o seu parecer.',
+        textAlign: TextAlign.center,
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Depois')),
+        ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Encaminhar')),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+
+  try {
+    final forwarded = await AppData.forwardBarter(barter.id, note);
+    onChanged?.call();
+    showInfoOn(messenger, 'Permuta ${barter.id} encaminhada a ${forwarded.managerLabel}.');
+  } on ApiException catch (e) {
+    showErrorOn(messenger, '${e.message} A permuta continua com você, como rascunho.');
+  }
+}
+
+/// O DESFECHO DO ENVIO. Devolve `true` quando o consultor quer emendar na
+/// cédula — ver a chamada, em [sendSimulationToManager].
+Future<bool> _showSent(BuildContext context, SendResult result) async {
   final barter = result.barter!;
   final producer = AppData.producerById(barter.producerId);
-  return showDialog(
+
+  // A CÉDULA SÓ É OFERECIDA A QUEM A PREENCHE e sobre permuta que parou no
+  // rascunho. Encaminhada, ela já passou pelo portão do servidor — a cédula
+  // está completa, e oferecer o formulário ali seria oferecer trabalho feito.
+  final offerCpr = AppData.can(Capability.bartersCprFill) && barter.isDraft;
+
+  final answer = await showDialog<bool>(
     context: context,
     barrierDismissible: false,
     builder: (ctx) => AlertDialog(
-      icon: Icon(Icons.swap_horiz, color: AppColors.approved, size: 48),
-      title: Text('${brand.copy.barterTitle} Enviada!'),
+      icon: Icon(
+        barter.isDraft ? Icons.edit_note_rounded : Icons.swap_horiz,
+        color: barter.isDraft ? AppColors.draft : AppColors.approved,
+        size: 48,
+      ),
+      title: Text(
+          barter.isDraft ? '${brand.copy.barterTitle} Guardada' : '${brand.copy.barterTitle} Enviada!'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -266,7 +463,7 @@ Future<void> _showSent(BuildContext context, SendResult result) {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
-                'Esta permuta já havia sido registrada no envio anterior — a '
+                'Esta permuta já havia sido registrada no envio anterior: a '
                 'resposta é que não chegou até você.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textMedium),
@@ -279,12 +476,45 @@ Future<void> _showSent(BuildContext context, SendResult result) {
           ),
           const SizedBox(height: 8),
           // COM QUEM ela está agora — a única pergunta que o consultor faz
-          // depois de enviar.
+          // depois de enviar. No rascunho a resposta é "com você", e ela vem
+          // com o que falta fazer: sem isso, uma permuta guardada some da
+          // cabeça de quem a guardou.
           Text(
-            'Está com ${barter.managerLabel}, esperando o parecer técnico.',
+            barter.isDraft
+                ? 'Está com você, como rascunho. Preencha a cédula (CPR) e o '
+                    'parecer para poder encaminhá-la ao gerente.'
+                : 'Está com ${barter.managerLabel}, esperando o parecer técnico.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: AppColors.textMedium),
           ),
+          // A PERMUTA ENTROU E NÃO FOI ENCAMINHADA — e o motivo aparece.
+          //
+          // O caso comum é a cédula: encaminhar exige a CPR preenchida, e quem
+          // envia a simulação sem tê-la feito para no rascunho. Enquanto isso
+          // era engolido, a tela dizia "guardada" sem dizer por quê — e o
+          // consultor descobriria dias depois, pelo gerente que nunca recebeu
+          // nada.
+          if (result.notForwardedReason != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.pendingBg,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppColors.pending.withValues(alpha: 0.35)),
+              ),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Icon(Icons.info_outline, size: 17, color: AppColors.pending),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Ela NÃO foi encaminhada: ${result.notForwardedReason}',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.35),
+                  ),
+                ),
+              ]),
+            ),
+          ],
           const SizedBox(height: 12),
           Container(
             padding: const EdgeInsets.all(10),
@@ -320,10 +550,23 @@ Future<void> _showSent(BuildContext context, SendResult result) {
             icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
             label: const Text('Gerar PDF'),
           ),
-        ElevatedButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        // *DEPOIS* continua existindo, e não é gentileza: a cédula pede coisas
+        // que nem sempre estão na mão na hora (a matrícula costuma vir por
+        // e-mail no dia seguinte), e um diálogo com saída única obrigaria o
+        // consultor a abrir um formulário que ele vai fechar em branco.
+        if (offerCpr) ...[
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Depois')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(ctx, true),
+            icon: const Icon(Icons.edit_document, size: 18),
+            label: const Text('Preencher a cédula'),
+          ),
+        ] else
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('OK')),
       ],
     ),
   );
+  return answer ?? false;
 }
 
 /// O DESFECHO INCERTO: o envio saiu, a resposta não voltou, e a conferência
@@ -339,7 +582,7 @@ Future<void> _showUncertain(BuildContext context, String reason) {
       icon: Icon(Icons.help_outline, color: AppColors.pending, size: 44),
       title: const Text('Não deu para confirmar'),
       content: Text(
-        '$reason\n\nA permuta PODE ter sido registrada — a conexão caiu antes de '
+        '$reason\n\nA permuta PODE ter sido registrada: a conexão caiu antes de '
         'o servidor responder. Sua simulação continua guardada.\n\n'
         'Antes de enviar de novo, confira a aba "No gerente": se a permuta já '
         'estiver lá, descarte esta simulação em vez de reenviá-la.',

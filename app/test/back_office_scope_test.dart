@@ -119,13 +119,83 @@ void main() {
       // As abas trazem a contagem entre parênteses — é o que as distingue de um
       // selo de estado dentro de um cartão da lista.
       expect(find.textContaining('A faturar ('), findsOneWidget);
-      expect(find.textContaining('Faturadas ('), findsOneWidget);
+      // "No emissor" e não "Faturadas": o rótulo diz ONDE A PERMUTA ESTÁ, porque
+      // faturar deixou de ser o fim da linha — a faturada ainda deve o título, e
+      // agora a aba diz com quem ele está. "A emitir CPR" é o nome da FILA, e
+      // quem a vê assim é só quem trabalha nela.
+      expect(find.textContaining('No emissor ('), findsOneWidget);
+      // E o fim da linha existe para ele também: o escopo do faturista alcança
+      // a permuta registrada, e sem esta aba ela sumiria da tela dele.
+      expect(find.textContaining('Concluídas ('), findsOneWidget);
       // As etapas anteriores não são dele — nem como aba vazia.
       expect(find.textContaining('No gerente ('), findsNothing);
       expect(find.textContaining('No comitê ('), findsNothing);
       expect(find.textContaining('Negadas ('), findsNothing);
       // "Todas", com duas etapas, seria a soma das duas ao lado.
       expect(find.textContaining('Todas ('), findsNothing);
+    });
+
+    /// A ABA É UM POSTO DA LINHA, e não um estado cru.
+    ///
+    /// "A faturar" é a mesa do faturista, e as DUAS aprovações estão nela: a
+    /// limpa e a com ressalva. Uma aba por estado lhe daria duas filas para o
+    /// mesmo trabalho, e a permuta com exigência — justamente a que ele precisa
+    /// ler antes de faturar — ficaria escondida na segunda.
+    testWidgets('a aprovada com ressalva está na mesma fila do faturista', (tester) async {
+      AppData.currentUser = staff(UserRole.biller, [
+        Capability.bartersInvoice,
+        Capability.bartersReadInvoicing,
+        Capability.pricesRead,
+      ]);
+      AppData.barters = [
+        barter('PRM-2026-004', 'approved'),
+        barter('PRM-2026-006', 'approvedWithConditions'),
+        barter('PRM-2026-001', 'invoiced'),
+      ];
+
+      await abrir(
+        tester,
+        const BartersScreen(isAdmin: true, consultantId: null),
+      );
+
+      expect(find.textContaining('A faturar (2)'), findsOneWidget);
+      // E não há uma segunda fila com o mesmo trabalho.
+      expect(find.textContaining('Com ressalva ('), findsNothing);
+      // O que distingue as duas é o SELO do cartão, que é onde a exigência
+      // aparece na lista.
+      expect(find.text('Com ressalva'), findsOneWidget);
+    });
+
+    /// O RASCUNHO abre a lista de quem REGISTRA, e só a dele: é o único estado
+    /// em que o consultor tem o que fazer, e a permuta pela metade não é fila de
+    /// mais ninguém.
+    testWidgets('a aba de rascunhos é de quem registra, e não da retaguarda', (tester) async {
+      AppData.currentUser = staff(UserRole.consultant, [Capability.bartersRegister]);
+      AppData.barters = [
+        barter('PRM-2026-009', 'draft'),
+        barter('PRM-2026-005', 'sentToManager'),
+      ];
+
+      await abrir(
+        tester,
+        const BartersScreen(isAdmin: true, consultantId: null),
+      );
+      expect(find.textContaining('Rascunhos (1)'), findsOneWidget);
+
+      // A RETAGUARDA não tem a aba: o servidor não devolveria nada nela.
+      //
+      // A `Key` é o que força uma tela NOVA: as abas são montadas uma vez, no
+      // primeiro build (`late final`), e sem ela o Flutter reaproveitaria o
+      // estado da tela do consultor — o teste passaria sem testar nada.
+      AppData.currentUser = staff(UserRole.committee, [
+        Capability.bartersReview,
+        Capability.pricesRead,
+      ]);
+      await abrir(
+        tester,
+        BartersScreen(key: UniqueKey(), isAdmin: true, consultantId: null),
+      );
+      expect(find.textContaining('Rascunhos ('), findsNothing);
     });
 
     /// O COMITÊ é o oposto: ele decide, e para decidir precisa ver o que vem
@@ -142,7 +212,20 @@ void main() {
         const BartersScreen(isAdmin: true, consultantId: null),
       );
 
-      for (final aba in ['Todas', 'No gerente', 'No comitê', 'A faturar', 'Faturadas', 'Negadas']) {
+      for (final aba in [
+        'Todas',
+        'No gerente',
+        'No comitê',
+        'A faturar',
+        // QUEM ACOMPANHA vê o posto, e não o degrau: "No emissor" é o trecho
+        // inteiro dele. "A emitir CPR" é o nome da FILA, e quem a vê assim é
+        // quem trabalha nela — ver `_worksIssuance`, na tela.
+        'No emissor',
+        // E a linha tem FIM: a permuta registrada acabou, e não pode dividir
+        // aba com a que ainda espera assinatura.
+        'Concluídas',
+        'Negadas',
+      ]) {
         expect(find.textContaining('$aba ('), findsOneWidget, reason: 'falta a aba "$aba"');
       }
     });
@@ -173,6 +256,36 @@ void main() {
       // As etapas de antes não aparecem nem como rótulo de um número zerado.
       expect(find.text('No comitê'), findsNothing);
       expect(find.text('No gerente'), findsNothing);
+    });
+
+    /// O PAINEL DO EMISSOR conta a fila DELE, e o que ele já concluiu — que é o
+    /// título REGISTRADO, e não a cédula emitida: emitir é meio caminho, e a
+    /// garantia só vale contra terceiros depois do registro.
+    testWidgets('o painel do emissor conta a cédula, não o faturamento alheio',
+        (tester) async {
+      final emissor = staff(UserRole.emitter, [
+        Capability.bartersCprIssue,
+        Capability.bartersReadIssuance,
+        Capability.bartersCprRead,
+        Capability.pricesRead,
+      ]);
+      AppData.currentUser = emissor;
+      // O cache do emissor É o que o servidor lhe manda: o que chegou à
+      // emissão, e nada antes.
+      AppData.barters = [
+        barter('PRM-2026-001', 'invoiced'),
+        barter('PRM-2026-002', 'cprSigned'),
+        barter('PRM-2026-003', 'cprRegistered'),
+      ];
+
+      await abrir(tester, BackOfficeMainScreen(user: emissor));
+
+      expect(find.text('Esperando você'), findsOneWidget);
+      expect(find.text('Registradas'), findsOneWidget);
+      // As etapas de antes não aparecem nem como rótulo de um número zerado.
+      expect(find.text('No comitê'), findsNothing);
+      expect(find.text('No gerente'), findsNothing);
+      expect(find.text('Faturadas'), findsNothing);
     });
 
     /// O comitê vê PARA TRÁS: o que está no gerente é a fila que vai cair na

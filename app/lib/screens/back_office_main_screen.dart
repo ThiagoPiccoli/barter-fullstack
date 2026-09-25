@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
-import '../branding/brand_wordmark.dart';
 import '../data/app_data.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
+import 'cpr_form_screen.dart';
+import 'invoicing_screen.dart';
 import 'barters_screen.dart';
+import 'creditor_screen.dart';
 
-/// Casa dos papéis de RETAGUARDA — gerente, comitê e faturista.
+/// Casa dos papéis de RETAGUARDA — gerente, comitê, faturista e EMISSOR.
 ///
 /// Os três são POSTOS da mesma linha de produção, e é por isso que continuam
 /// numa tela só: o que muda entre eles é a fila que pede ação e a palavra da
@@ -52,62 +55,108 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
   @override
   Widget build(BuildContext context) {
     // O que espera AÇÃO DE QUEM ESTÁ OLHANDO — o parecer do gerente, a decisão
-    // do comitê, o faturamento do faturista. Vira o número do selo na navegação:
+    // do comitê, o faturamento do faturista, a cédula do emissor. Vira o número
+    // do selo na navegação:
     // o trabalho precisa se anunciar de qualquer aba, e não só quando a pessoa
     // pensa em ir procurar.
     final post = _Post.of(widget.user);
     final waiting = post?.queue.length ?? 0;
 
-    return Scaffold(
+    return AdaptiveNavScaffold(
+      user: widget.user,
+      selectedIndex: _selectedIndex,
+      onSelect: (i) => setState(() => _selectedIndex = i),
       body: IndexedStack(index: _selectedIndex, children: _screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (i) => setState(() => _selectedIndex = i),
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.textLight,
-        selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-        unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: [
-          const BottomNavigationBarItem(
-            icon: Icon(Icons.insights_outlined),
-            activeIcon: Icon(Icons.insights),
-            label: 'Início',
-          ),
-          BottomNavigationBarItem(
-            icon: _PendingBadge(
-                count: waiting, color: post?.color, child: const Icon(Icons.swap_horiz_outlined)),
-            activeIcon: _PendingBadge(
-                count: waiting, color: post?.color, child: const Icon(Icons.swap_horiz)),
-            label: brand.copy.barterPluralTitle,
-          ),
-        ],
-      ),
+      destinations: [
+        const AdaptiveDestination(
+          icon: Icons.insights_outlined,
+          activeIcon: Icons.insights,
+          label: 'Início',
+        ),
+        AdaptiveDestination(
+          icon: Icons.swap_horiz_outlined,
+          activeIcon: Icons.swap_horiz,
+          label: brand.copy.barterPluralTitle,
+          badgeCount: waiting,
+          badgeColor: post?.color,
+        ),
+      ],
     );
   }
 }
 
-/// Selo com a contagem do que espera parecer. Some quando não há nada — um selo
-/// zerado treina o olho a ignorá-lo, e é justamente o contrário do que ele
-/// existe para fazer.
-class _PendingBadge extends StatelessWidget {
-  final int count;
+/// O atalho para o cadastro da EMPRESA (a credora), no painel de quem o mantém.
+///
+/// Ele carrega o cadastro ao aparecer, e não usa cache, porque o dono é
+/// compartilhado: admin e emissor escrevem a mesma linha, e uma cópia em
+/// memória mostraria a versão de quem abriu o app primeiro.
+///
+/// Quando falta alguma coisa, o cartão DIZ o quê. É a mesma lista que a tela da
+/// cédula mostra, do mesmo lugar — o emissor não deveria descobrir que o CNPJ
+/// está faltando só ao montar a décima cédula do dia.
+class _CreditorTile extends StatefulWidget {
+  const _CreditorTile();
 
-  /// A cor da ETAPA de quem está olhando — o mesmo índigo/âmbar/verde-azulado
-  /// que a permuta tem na lista. Um selo de cor fixa faria a fila do faturista
-  /// parecer a do gerente.
-  final Color? color;
-  final Widget child;
-  const _PendingBadge({required this.count, required this.child, this.color});
+  @override
+  State<_CreditorTile> createState() => _CreditorTileState();
+}
+
+class _CreditorTileState extends State<_CreditorTile> {
+  CprCreditor? _creditor;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final creditor = await AppData.creditor();
+      if (mounted) setState(() => _creditor = creditor);
+    } on ApiException {
+      // Silêncio de propósito: este é um atalho, não o conteúdo da tela. Um erro
+      // aqui não pode encher de vermelho o painel de quem veio ver a própria
+      // fila — o cartão simplesmente fica sem o resumo, e a tela de dentro
+      // mostra a falha com o "tentar novamente" dela.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (count == 0) return child;
-    return Badge(
-      label: Text('$count'),
-      backgroundColor: color ?? AppColors.atManager,
-      textColor: AppColors.onPrimary,
-      child: child,
+    final creditor = _creditor;
+    final pending = creditor != null && !creditor.isComplete;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        leading: Icon(
+          pending ? Icons.domain_disabled_outlined : Icons.domain,
+          color: pending ? AppColors.pending : AppColors.primary,
+        ),
+        title: const Text('Empresa (credora)',
+            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+        subtitle: Text(
+          creditor == null
+              ? 'Os dados que saem nas cédulas emitidas'
+              : pending
+                  ? 'Falta: ${creditor.gaps.join(', ')}'
+                  : creditor.name,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 12,
+            color: pending ? AppColors.pending : AppColors.textMedium,
+          ),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          await Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const CreditorScreen()),
+          );
+          await _load();
+        },
+      ),
     );
   }
 }
@@ -257,9 +306,42 @@ class _Post {
         actionLabel: 'Faturar',
         actionIcon: Icons.receipt_long_outlined,
         onAction: (context, barter, onChanged) =>
-            invoiceBarter(context, barter, onInvoiced: (_) => onChanged()),
+            openInvoicing(context, barter, onInvoiced: (_) => onChanged()),
         emptyTitle: 'Nada a faturar',
         emptyText: 'Nenhuma permuta aprovada esperando faturamento. Puxe para atualizar.',
+      );
+    }
+
+    // O EMISSOR — o posto que vem depois do faturamento.
+    //
+    // A fila dele tem os TRÊS degraus da cédula, e não só o primeiro: emitir,
+    // colher assinaturas e registrar acontecem em dias diferentes, e uma fila
+    // que mostrasse só "a emitir" esconderia dele as cédulas assinadas paradas
+    // esperando cartório — que é justamente o que estava invisível enquanto este
+    // posto não existia.
+    if (user.can(Capability.bartersCprIssue)) {
+      return _Post(
+        queue: AppData.issuanceQueue,
+        color: AppColors.invoiced,
+        surface: AppColors.invoicedBg,
+        icon: Icons.description_outlined,
+        headline: (count) => count == 1
+            ? '1 cédula em aberto'
+            : '$count cédulas em aberto',
+        // O número que dá tamanho ao trabalho dele é o que já foi REGISTRADO:
+        // é o fim da linha, e o único estado em que a garantia vale contra
+        // terceiros.
+        followStatus: BarterStatus.cprRegistered,
+        followLabel: 'Registradas',
+        followIcon: Icons.verified_outlined,
+        followColor: AppColors.approved,
+        actionLabel: 'Abrir cédula',
+        actionIcon: Icons.description_outlined,
+        onAction: (context, barter, onChanged) =>
+            openCprDesk(context, barter, onChanged: (_) => onChanged()),
+        emptyTitle: 'Nenhuma cédula em aberto',
+        emptyText: 'Nada faturado esperando emissão, assinatura ou registro. '
+            'Puxe para atualizar.',
       );
     }
 
@@ -337,28 +419,18 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandWordmark(size: 32, showTagline: false),
+        title: const MainAppBarTitle('Início'),
         actions: [
           const ChangePasswordButton(),
           const LogoutButton(),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: CircleAvatar(
-              backgroundColor: AppColors.primaryAccent,
-              radius: 18,
-              child: Text(
-                user.avatarInitials,
-                style: TextStyle(
-                    color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
+          AppBarUserAvatar(user: user),
         ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         color: AppColors.primary,
-        child: ListView(
+        child: BoundedContent(
+          child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             DashboardHeader(
@@ -382,6 +454,14 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
                 _EmptyQueueCard(post: post)
               else
                 _WorkQueueCard(post: post, onChanged: _onQueueChanged),
+              const SizedBox(height: 20),
+            ],
+            // A EMPRESA — só para quem mantém o timbre dos documentos, que na
+            // retaguarda é o faturista. Fica depois da fila pelo mesmo critério
+            // do painel abaixo: não pede ação, é cadastro que se visita quando
+            // algo está errado nele. Aparece antes só quando ESTÁ errado.
+            if (user.can(Capability.creditorManage)) ...[
+              const _CreditorTile(),
               const SizedBox(height: 20),
             ],
             // O QUE VEM VINDO — só para quem decide. Depois da fila porque não
@@ -429,6 +509,7 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
                       )),
             const SizedBox(height: 16),
           ],
+          ),
         ),
       ),
     );

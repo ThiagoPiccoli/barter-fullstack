@@ -21,11 +21,14 @@ void main() {
       });
 
   group('UserRole', () {
-    test('lê os cinco papéis do servidor', () {
+    test('lê os seis papéis do servidor', () {
       expect(UserRole.fromWire('admin'), UserRole.admin);
       expect(UserRole.fromWire('manager'), UserRole.manager);
       expect(UserRole.fromWire('committee'), UserRole.committee);
       expect(UserRole.fromWire('biller'), UserRole.biller);
+      // O EMISSOR — o posto da cédula, e o mais novo da esteira.
+      expect(UserRole.fromWire('emitter'), UserRole.emitter);
+      expect(UserRole.emitter.label, 'Emissor');
       expect(UserRole.fromWire('consultant'), UserRole.consultant);
     });
 
@@ -41,6 +44,7 @@ void main() {
       expect(UserRole.manager.isBackOffice, isTrue);
       expect(UserRole.committee.isBackOffice, isTrue);
       expect(UserRole.biller.isBackOffice, isTrue);
+      expect(UserRole.emitter.isBackOffice, isTrue);
       expect(UserRole.consultant.isBackOffice, isFalse);
     });
   });
@@ -72,6 +76,41 @@ void main() {
       expect(faturista.can(Capability.bartersReview), isFalse);
     });
 
+    /// A CÉDULA MUDOU DE MÃOS, e o app só precisou aprender três nomes de
+    /// capacidade: quem preenche, quem emite e quem lê. Nenhuma tela pergunta
+    /// "é faturista?" — e é por isso que a mudança coube numa versão do
+    /// servidor.
+    test('a cédula tem três mãos, e o app pergunta por capacidade', () {
+      final consultor = withCapabilities('consultant', [
+        Capability.bartersRegister,
+        Capability.bartersCprFill,
+        Capability.bartersCprRead,
+      ]);
+      expect(consultor.can(Capability.bartersCprFill), isTrue);
+      expect(consultor.can(Capability.bartersCprIssue), isFalse);
+
+      final emissor = withCapabilities('emitter', [
+        Capability.bartersCprIssue,
+        Capability.bartersCprRead,
+        Capability.bartersReadIssuance,
+        Capability.creditorManage,
+      ]);
+      expect(emissor.can(Capability.bartersCprIssue), isTrue);
+      // Quem confere o próprio texto não está conferindo nada.
+      expect(emissor.can(Capability.bartersCprFill), isFalse);
+      // E ele não fatura: o que o faturista produz é a nota, não o título.
+      expect(emissor.can(Capability.bartersInvoice), isFalse);
+
+      // O FATURISTA perdeu a cédula por inteiro — nem escreve, nem lê.
+      final faturista = withCapabilities('biller', [
+        Capability.bartersInvoice,
+        Capability.bartersReadInvoicing,
+      ]);
+      expect(faturista.can(Capability.bartersCprFill), isFalse);
+      expect(faturista.can(Capability.bartersCprRead), isFalse);
+      expect(faturista.can(Capability.creditorManage), isFalse);
+    });
+
     /// Falha FECHANDO: resposta sem o campo (servidor antigo, cache velho) não
     /// pode virar "pode tudo" — mostraria botões que a API recusaria.
     test('sem capacidades na resposta, não pode nada', () {
@@ -99,6 +138,7 @@ void main() {
       expect(destinationFor(user('manager')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('committee')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('biller')), isA<BackOfficeMainScreen>());
+      expect(destinationFor(user('emitter')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('consultant')), isA<ConsultantMainScreen>());
     });
 
@@ -107,7 +147,7 @@ void main() {
     /// faturista, que são os papéis novos e entrariam por um caminho que não
     /// existia quando essa trava foi escrita.
     test('senha provisória segura qualquer papel na troca de senha', () {
-      for (final role in ['admin', 'manager', 'committee', 'biller', 'consultant']) {
+      for (final role in ['admin', 'manager', 'committee', 'biller', 'emitter', 'consultant']) {
         expect(
           destinationFor(user(role, mustChangePassword: true)),
           isA<ChangePasswordScreen>(),

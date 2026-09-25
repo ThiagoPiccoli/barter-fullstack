@@ -73,10 +73,38 @@
     "major inteiro para trás no que gera o client e aplica as migrations. O",
     "escopo é o prisma porque é a única entrada do pacote na árvore.",
     "",
-    "REVISAR quando @nestjs/swagger, exceljs e prisma subirem as suas: um",
-    "override que sobreviveu ao problema que o motivou é dívida silenciosa."
+    "multer: o @nestjs/platform-express prende a 2.2.0 (versão exata), e as",
+    "<=2.2.0 têm quatro falhas de negação de serviço — nome de campo multipart",
+    "forjado, índice de array grande demais no nome do campo, descritor de",
+    "arquivo vazado em upload abortado, e uma corrida no fileFilter assíncrono.",
+    "",
+    "Este é o único override da lista que é ALCANÇÁVEL, e vale dizer com todas",
+    "as letras: há três rotas de upload (a nota fiscal e o SCR em",
+    "barters.controller.ts, a planilha do Barter em seasons.controller.ts), e",
+    "elas passam pelo multer. O que estreita o alcance é quem chega nelas — as",
+    "três exigem sessão válida e capacidade (faturista, consultor, admin), então",
+    "não é porta de desconhecido. A corrida do fileFilter não alcança de forma",
+    "nenhuma: não usamos fileFilter em lugar algum — a conferência de tipo é do",
+    "service, DEPOIS do upload (ver `requireAttachable`).",
+    "",
+    "A 2.4.0 é do MESMO major: subir é minor, não é trocar de biblioteca, e a",
+    "API que o platform-express usa (`multer(opts).single()`) não mudou. O",
+    "intervalo é ^2.4.0 para pegar os patches seguintes sem atravessar o major.",
+    "",
+    "E é aqui que o escopo paga por si: `npm audit fix --force` \"resolve\" isto",
+    "subindo o @nestjs/platform-express para a 12 — um major do framework",
+    "inteiro, com @nestjs/core e @nestjs/swagger de carona, para corrigir uma",
+    "dependência de terceiro. O escopo é o @nestjs/platform-express porque ele é",
+    "a única entrada do multer na árvore.",
+    "",
+    "REVISAR quando @nestjs/swagger, exceljs, prisma e @nestjs/platform-express",
+    "subirem as suas: um override que sobreviveu ao problema que o motivou é",
+    "dívida silenciosa."
   ],
   "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "^2.4.0"
+    },
     "@nestjs/swagger": {
       "js-yaml": "~5.2.2"
     },

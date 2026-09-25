@@ -6,16 +6,14 @@ import { PrismaClient } from '@prisma/client';
  * PrismaClient como provider do Nest. Prisma 7 conecta via driver adapter; a
  * DATABASE_URL é a mesma usada pelo CLI (prisma.config.ts).
  *
- * O banco é PostgreSQL. Antes era SQLite embutido no processo, e a troca
- * aconteceu ANTES da primeira carga real de propósito: sem dado de produção, o
- * custo foi reescrever migrations; com dado, seria janela de parada e script de
- * transferência. O que o SQLite não dava não era desempenho — era operação:
- * uma segunda instância da API sobre o mesmo arquivo não se coordena, então não
- * havia deploy sem downtime, réplica de leitura nem backup online.
+ * O banco é PostgreSQL em TODOS os ambientes — dev, teste e produção. Ele é um
+ * servidor à parte, e é isso que o sistema precisa dele: várias instâncias da
+ * API se coordenam sobre o mesmo dado, e é essa coordenação que sustenta deploy
+ * sem downtime, réplica de leitura e backup online.
  *
- * O pool fica com o `pg` (padrão de 10 conexões). Não há PRAGMA a ajustar aqui:
- * concorrência de leitura e escrita é o comportamento normal do Postgres, e era
- * justamente o que os PRAGMAs do SQLite tentavam emular.
+ * O pool fica com o `pg` (padrão de 10 conexões). Não há nada a ajustar aqui
+ * para concorrência: ler e escrever ao mesmo tempo é o comportamento normal do
+ * Postgres.
  *
  * O TAMANHO DO POOL é ajustável por DATABASE_POOL_MAX. O padrão de dez serve a
  * um processo só, que é o caso normal; a variável existe para quando houver

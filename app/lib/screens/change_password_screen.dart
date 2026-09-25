@@ -86,7 +86,9 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
         appBar: AppBar(
           title: Text(widget.forced ? 'Defina sua senha' : 'Alterar senha'),
           automaticallyImplyLeading: !widget.forced,
-          actions: [if (widget.forced) const LogoutButton()],
+          // `alwaysShow`: na troca OBRIGATÓRIA, sair é a única outra porta da
+          // tela. Ela não pode depender de haver ou não coluna lateral em volta.
+          actions: [if (widget.forced) const LogoutButton(alwaysShow: true)],
         ),
         body: Form(
           key: _formKey,
@@ -152,6 +154,11 @@ class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
                 obscure: _obscure,
                 onToggle: () => setState(() => _obscure = !_obscure),
                 validator: (v) => v != _next.text ? 'As senhas não conferem' : null,
+                // Mesma trava do botão: o Enter é outro caminho para o mesmo
+                // ato, e não um atalho que escapa das regras dele.
+                onSubmitted: () {
+                  if (!_saving) _save();
+                },
               ),
               const SizedBox(height: 8),
               SizedBox(
@@ -188,6 +195,11 @@ class _PasswordField extends StatelessWidget {
   final VoidCallback onToggle;
   final String? Function(String?) validator;
 
+  /// O ENTER DESTE CAMPO. Nulo (o caso dos primeiros) manda o foco ao campo
+  /// seguinte; preenchido (o último) executa o ato da tela — trocar a senha é o
+  /// que se veio fazer aqui, e o teclado é onde a mão está.
+  final VoidCallback? onSubmitted;
+
   const _PasswordField({
     required this.controller,
     required this.label,
@@ -195,6 +207,7 @@ class _PasswordField extends StatelessWidget {
     required this.obscure,
     required this.onToggle,
     required this.validator,
+    this.onSubmitted,
   });
 
   @override
@@ -204,6 +217,8 @@ class _PasswordField extends StatelessWidget {
       child: TextFormField(
         controller: controller,
         obscureText: obscure,
+        textInputAction: onSubmitted == null ? TextInputAction.next : TextInputAction.done,
+        onFieldSubmitted: onSubmitted == null ? null : (_) => onSubmitted!(),
         decoration: InputDecoration(
           labelText: label,
           prefixIcon: Icon(icon, size: 20),

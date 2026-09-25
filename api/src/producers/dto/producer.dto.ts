@@ -3,6 +3,7 @@ import {
   ArrayNotEmpty,
   ArrayUnique,
   IsArray,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -12,6 +13,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { TAX_REGIMES, TAX_REGIME_MESSAGE, type TaxRegime } from '../../barters/tax-regime';
 import { PaginationQuery } from '../../common/pagination';
 import { DOCUMENT_MESSAGE, DOCUMENT_PATTERN } from '../document';
 
@@ -25,23 +27,31 @@ export class ProducerDto {
    * Os consultores que atendem este produtor — a carteira dele, que pode ser
    * de mais de um (consultores dividem região).
    *
-   * PELO MENOS UM, e é regra de negócio, não formalidade: produtor sem
-   * consultor nenhum não aparece para quem registra permuta, e um cadastro que
-   * ninguém enxerga é um cadastro perdido. (O produtor CHEGA a esse estado por
-   * outro caminho — a exclusão do último consultor vinculado —, e aí é o admin
-   * quem realoca.)
+   * PELO MENOS UM quando ela vem, e é regra de negócio, não formalidade:
+   * produtor sem consultor nenhum não aparece para quem registra permuta, e um
+   * cadastro que ninguém enxerga é um cadastro perdido. (O produtor CHEGA a esse
+   * estado por outro caminho — a exclusão do último consultor vinculado —, e aí
+   * é o admin quem realoca.)
+   *
+   * OPCIONAL desde que o CONSULTOR passou a editar o produtor: a carteira
+   * continua sendo decisão do admin (ver `producersEdit` em policy.ts), e o
+   * formulário do consultor não tem esse campo — mandá-lo obrigatório o
+   * obrigaria a reenviar uma lista que ele não pode mudar. Ausente significa
+   * "não mexa em quem atende", e quem exige a lista no CADASTRO é o service, com
+   * a mesma frase de sempre: um produtor nasce na carteira de alguém.
    *
    * `ArrayUnique` porque o vínculo é uma linha só por par: repetir o mesmo id
    * no payload é engano de quem chama, e aceitá-lo em silêncio esbarraria na
    * chave primária composta como erro de banco.
    */
+  @IsOptional()
   @IsArray()
   @ArrayNotEmpty({ message: 'Escolha pelo menos um consultor para a carteira' })
   @ArrayUnique({ message: 'O mesmo consultor aparece duas vezes na carteira' })
   @Type(() => Number)
   @IsInt({ each: true })
   @IsPositive({ each: true })
-  consultantIds!: number[];
+  consultantIds?: number[];
 
   /** CPF ou CNPJ. A pontuação é livre; o que importa é a contagem de dígitos. */
   @IsString()
@@ -68,6 +78,24 @@ export class ProducerDto {
   @IsNumber()
   @IsPositive()
   areaHa!: number;
+
+  /**
+   * COMO ESTE PRODUTOR RECOLHE o Funrural: `comercializacao` (sobre a receita da
+   * venda) ou `folha` (sobre a folha de pagamento — e aí sobre a entrega fica só
+   * o Senar). Ver `barters/tax-regime.ts`.
+   *
+   * É dado de CADASTRO porque é o que ele é: a opção formal perante o fisco vale
+   * para o ano e para todas as entregas dele, e não para uma permuta. Cada
+   * permuta continua gravando o regime e a alíquota que aplicou.
+   *
+   * Opcional, e o ausente vale `comercializacao`: é o regime de quem não fez
+   * opção nenhuma, que é a maioria — e é o que os cadastros anteriores a este
+   * campo têm de verdade. Exigi-lo recusaria o formulário de qualquer cliente da
+   * API que ainda não conheça o campo.
+   */
+  @IsOptional()
+  @IsIn(TAX_REGIMES, { message: TAX_REGIME_MESSAGE })
+  taxRegime?: TaxRegime;
 }
 
 /**

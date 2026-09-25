@@ -3,7 +3,18 @@ import ExcelJS from 'exceljs';
 import request from 'supertest';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { MAX_VERSION_PRICES } from '../src/seasons/version-import';
-import { ADMIN, BACK_OFFICE, JOAO, UNIT, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  BACK_OFFICE,
+  COMITE,
+  GERENTE,
+  JOAO,
+  UNIT,
+  createTestApp,
+  forwardWithCpr,
+  loginAs,
+  resetDb,
+} from './utils';
 
 /**
  * O LANÇAMENTO do Barter, ponta a ponta.
@@ -26,12 +37,15 @@ describe('Barter — safra e versões (e2e)', () => {
   const http = () => request(app.getHttpServer());
 
   /**
-   * Permuta válida do Antônio (120 ha, carteira do João) — sem grão: é da
-   * safra. A retirada é na Filial 02, a unidade do próprio João.
+   * Permuta válida do Antônio (120 ha, carteira do João), paga em soja — a
+   * cultura é escolha do consultor, entre as que o lançamento aceita. A retirada
+   * é na Filial 02, a unidade do próprio João.
    */
   const permuta = {
     producerId: 1,
     unitId: UNIT.filial02,
+    // A CULTURA em que ela é paga — soja, a primeira do lançamento vigente.
+    grainId: 1,
     inputs: [
       { productId: 5, quantity: 48 },
       { productId: 6, quantity: 300 },
@@ -39,9 +53,44 @@ describe('Barter — safra e versões (e2e)', () => {
     ],
   };
 
-  /** Tabela mínima para publicar uma versão nova pelo corpo da requisição. */
+  /**
+   * Uma permuta nova percorrendo a esteira INTEIRA, do rascunho à decisão do
+   * comitê. Devolve a resposta da decisão.
+   *
+   * Ela aparece nos casos de meta porque a decisão do comitê é o único ato que
+   * mexe no realizado — e, portanto, o único capaz de bater uma meta. Chegar até
+   * lá exige os quatro passos: sem o parecer do gerente, o comitê não alcança a
+   * permuta.
+   */
+  const aprovarUmaPermuta = async (status: 'approved' | 'denied' = 'approved') => {
+    const consultor = await asUser(JOAO);
+    const criada = await http()
+      .post('/api/v1/barters')
+      .set('Authorization', consultor)
+      .send(permuta);
+    const code = criada.body.data.code as string;
+
+    await forwardWithCpr(app, consultor, code);
+    await http()
+      .post(`/api/v1/barters/${code}/opinion`)
+      .set('Authorization', await asUser(GERENTE))
+      .send({ note: 'Área conferida e histórico bom.' });
+
+    return http()
+      .post(`/api/v1/barters/${code}/review`)
+      .set('Authorization', await asUser(COMITE))
+      .send({ status, ...(status === 'denied' ? { note: 'Endividamento acima do limite.' } : {}) });
+  };
+
+  /**
+   * Tabela mínima para publicar uma versão nova pelo corpo da requisição — com
+   * UMA cultura (soja), que é o caso simples. Os testes sobre culturas que
+   * coexistem acrescentam a segunda na chamada.
+   */
+  const soja = { grainId: 1, price: 150, estimatedYield: 60 };
+  const milho = { grainId: 2, price: 64.5, estimatedYield: 170 };
   const tabela = (price: number) => ({
-    grainPrice: 150,
+    grains: [soja],
     prices: [
       { productId: 5, price },
       { productId: 6, price: 18.9 },
@@ -56,13 +105,21 @@ describe('Barter — safra e versões (e2e)', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
-      code: 'S2026.02',
-      seasonCode: 'S2026',
-      grainName: 'Soja',
+      code: 'B2026.02',
+      seasonCode: 'B2026',
       status: 'active',
       isOpen: true,
     });
     expect(response.body.data.prices).toHaveLength(5);
+
+    // AS CULTURAS que este Barter aceita, na ordem em que foram lançadas. A
+    // primeira é a que a tela mostra escolhida, e é por ela que a tabela abaixo
+    // está convertida (`pricedInGrainId`).
+    expect(response.body.data.grains.map((g: { grainName: string }) => g.grainName)).toEqual([
+      'Soja',
+      'Milho',
+    ]);
+    expect(response.body.data.pricedInGrainId).toBe(1);
 
     // A LENTE DE VALOR: o consultor recebe a mesma tabela medida em SACAS, que é
     // a unidade em que ele sempre montou a permuta. O numerador não vai — nem a
@@ -71,8 +128,45 @@ describe('Barter — safra e versões (e2e)', () => {
     expect(npk.price).toBeUndefined();
     // 115 ÷ 148,50 = 0,7744 sacas por saco de NPK.
     expect(npk.sacksPerUnit).toBeCloseTo(115 / 148.5, 6);
-    expect(response.body.data.grainPrice).toBeUndefined();
+    expect(response.body.data.grains[0].price).toBeUndefined();
     expect(response.body.data.targetSales).toBeUndefined();
+
+    // A PRODUTIVIDADE e o VENCIMENTO vão para ele, e não são valor: a primeira
+    // explica a área de penhor que a permuta dele vai exigir, o segundo é a data
+    // que ele combina com o produtor.
+    expect(response.body.data.grains[0]).toMatchObject({ grainId: 1, estimatedYield: 60 });
+    expect(response.body.data.grains[0].cprDueDate).not.toBeNull();
+  });
+
+  /**
+   * A MESMA TABELA, OUTRA CULTURA: é o que a tela do consultor faz quando ele
+   * troca o seletor de cultura. O insumo custa os mesmos R$ 115 nas duas — o que
+   * muda é a cotação que os converte, e por isso o mesmo NPK vale 0,77 saca de
+   * soja e 1,78 de milho.
+   */
+  it('a tabela é convertida pela cultura pedida', async () => {
+    const response = await http()
+      .get('/api/v1/barter-versions/current?grainId=2')
+      .set('Authorization', await asUser(JOAO));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.pricedInGrainId).toBe(2);
+    const npk = response.body.data.prices.find((p: { productId: number }) => p.productId === 5);
+    expect(npk.sacksPerUnit).toBeCloseTo(115 / 64.5, 6);
+  });
+
+  /**
+   * CULTURA QUE NÃO ESTÁ NO LANÇAMENTO cai na primeira, e a resposta DIZ isso em
+   * `pricedInGrainId`. O contrário — uma tabela convertida por uma cotação que
+   * não existe — mostraria sacas de um grão que este Barter não aceita.
+   */
+  it('cultura desconhecida cai na primeira, e a resposta diz qual usou', async () => {
+    const response = await http()
+      .get('/api/v1/barter-versions/current?grainId=3')
+      .set('Authorization', await asUser(JOAO));
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.pricedInGrainId).toBe(1);
   });
 
   /**
@@ -92,13 +186,13 @@ describe('Barter — safra e versões (e2e)', () => {
       .set('Authorization', await asUser(ADMIN));
 
     expect(response.status).toBe(200);
-    const safra = response.body.data.find((s: { code: string }) => s.code === 'S2026');
-    const vigente = safra.versions.find((v: { code: string }) => v.code === 'S2026.02');
+    const safra = response.body.data.find((s: { code: string }) => s.code === 'B2026');
+    const vigente = safra.versions.find((v: { code: string }) => v.code === 'B2026.02');
     // A cotação da saca e as metas — os campos que a lente fechada suprime, e
     // sem os quais a tela de lançamento não tem o que desenhar. A listagem não
     // carrega a tabela `prices` (é a rota da versão que a traz), então quem
     // responde por ela aqui é a versão em si.
-    expect(vigente.grainPrice).toBe(148.5);
+    expect(vigente.grains[0]).toMatchObject({ grainName: 'Soja', price: 148.5 });
     expect(vigente.targetSales).not.toBeUndefined();
     expect(vigente.targetBarters).not.toBeUndefined();
   });
@@ -109,11 +203,25 @@ describe('Barter — safra e versões (e2e)', () => {
       .set('Authorization', await asUser(ADMIN));
 
     expect(response.status).toBe(200);
-    expect(response.body.data.grainPrice).toBe(148.5);
+    expect(response.body.data.grains[0]).toMatchObject({ grainName: 'Soja', price: 148.5 });
     const npk = response.body.data.prices.find((p: { productId: number }) => p.productId === 5);
     expect(npk).toMatchObject({ price: 115 });
     expect(npk.sacksPerUnit).toBeUndefined();
   });
+
+  /**
+   * ENCAMINHA o rascunho ao gerente. A permuta nasce na mão do consultor, e a
+   * retaguarda — que é quem enxerga R$ — só a alcança depois de encaminhada.
+   * Nada aqui recalcula preço: o valor congelado é o do registro.
+   */
+  const encaminhar = async (code: string, auth: string) => {
+    // A CÉDULA vai junto: ela é pré-requisito do encaminhamento desde que a
+    // coleta passou a acontecer na visita, e não semanas depois. Aqui ela é
+    // preâmbulo — o que esta suíte testa é a safra e o congelamento do preço.
+    const encaminhada = await forwardWithCpr(app, auth, code, 'Cliente conhecido, área conferida.');
+    expect(encaminhada.status).toBe(200);
+    return encaminhada;
+  };
 
   it('a permuta nasce amarrada à versão vigente e congela o preço', async () => {
     const response = await http()
@@ -122,7 +230,7 @@ describe('Barter — safra e versões (e2e)', () => {
       .send(permuta);
 
     expect(response.status).toBe(201);
-    expect(response.body.data.versionCode).toBe('S2026.02');
+    expect(response.body.data.versionCode).toBe('B2026.02');
     // O grão vem da safra: o consultor não escolheu nada. Para ele a permuta é
     // "tantos insumos -> tantas sacas", e é isso que a resposta traz.
     const grainDoConsultor = response.body.data.items.find(
@@ -132,6 +240,7 @@ describe('Barter — safra e versões (e2e)', () => {
     expect(grainDoConsultor.unitValue).toBeUndefined();
 
     // O valor CONGELADO é o que a retaguarda lê de volta — é ela que vê R$.
+    await encaminhar(response.body.data.code as string, await asUser(JOAO));
     const daRetaguarda = await http()
       .get(`/api/v1/barters/${response.body.data.code}`)
       .set('Authorization', await asUser(ADMIN));
@@ -145,15 +254,15 @@ describe('Barter — safra e versões (e2e)', () => {
     it('fecha a anterior, numera em sequência e passa a precificar as permutas novas', async () => {
       const admin = await asUser(ADMIN);
       const publicada = await http()
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', admin)
         .send(tabela(200));
 
       expect(publicada.status).toBe(201);
-      expect(publicada.body.data).toMatchObject({ code: 'S2026.03', number: 3, status: 'active' });
+      expect(publicada.body.data).toMatchObject({ code: 'B2026.03', number: 3, status: 'active' });
 
       const anterior = await http()
-        .get('/api/v1/barter-versions/S2026.02')
+        .get('/api/v1/barter-versions/B2026.02')
         .set('Authorization', admin);
       expect(anterior.body.data.status).toBe('closed');
       expect(anterior.body.data.closedBy).toBe('Carlos Mendes');
@@ -163,11 +272,12 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
-      expect(permutaNova.body.data.versionCode).toBe('S2026.03');
+      expect(permutaNova.body.data.versionCode).toBe('B2026.03');
       // A QUANTIDADE é a resposta que o consultor recebe — ela não é moeda.
       const grain = permutaNova.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
       expect(grain.quantity).toBe(106.84);
       // O valor da saca aplicado sai na leitura da retaguarda.
+      await encaminhar(permutaNova.body.data.code as string, await asUser(JOAO));
       const daRetaguarda = await http()
         .get(`/api/v1/barters/${permutaNova.body.data.code}`)
         .set('Authorization', admin);
@@ -203,10 +313,10 @@ describe('Barter — safra e versões (e2e)', () => {
       });
 
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', admin)
         .send({
-          grainPrice: 150,
+          grains: [soja],
           prices: insumos.map((produto, i) => ({ productId: produto.id, price: 10 + i })),
         });
 
@@ -221,10 +331,10 @@ describe('Barter — safra e versões (e2e)', () => {
      */
     it('recusa o mesmo produto duas vezes na tabela, dizendo qual', async () => {
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', await asUser(ADMIN))
         .send({
-          grainPrice: 150,
+          grains: [soja],
           prices: [
             { productId: 5, price: 100 },
             { productId: 6, price: 18.9 },
@@ -249,14 +359,14 @@ describe('Barter — safra e versões (e2e)', () => {
       const sacasAntes = antes.body.data.items.find((i: { kind: string }) => i.kind === 'grain');
 
       await http()
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', await asUser(ADMIN))
         .send(tabela(999));
 
       const depois = await http()
         .get(`/api/v1/barters/${antes.body.data.code}`)
         .set('Authorization', await asUser(JOAO));
-      expect(depois.body.data.versionCode).toBe('S2026.02');
+      expect(depois.body.data.versionCode).toBe('B2026.02');
       expect(depois.body.data.items).toEqual(antes.body.data.items);
       expect(depois.body.data.items.find((i: { kind: string }) => i.kind === 'grain')).toEqual(
         sacasAntes,
@@ -266,7 +376,7 @@ describe('Barter — safra e versões (e2e)', () => {
     it('insumo fora da tabela da versão não é permutável', async () => {
       // A tabela nova não traz a semente (produto 9), que a anterior trazia.
       await http()
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', await asUser(ADMIN))
         .send(tabela(115));
 
@@ -276,14 +386,14 @@ describe('Barter — safra e versões (e2e)', () => {
         .send({ ...permuta, inputs: [...permuta.inputs, { productId: 9, quantity: 1 }] });
 
       expect(response.status).toBe(422);
-      expect(response.body.message).toContain('Fora do Barter S2026.03');
+      expect(response.body.message).toContain('Fora do Barter B2026.03');
     });
   });
 
   describe('encerramento', () => {
     it('Barter encerrado recusa permuta nova, com mensagem que o consultor entende', async () => {
       await http()
-        .post('/api/v1/barter-versions/S2026.02/close')
+        .post('/api/v1/barter-versions/B2026.02/close')
         .set('Authorization', await asUser(ADMIN));
 
       const response = await http()
@@ -297,10 +407,10 @@ describe('Barter — safra e versões (e2e)', () => {
 
     it('versão encerrada não aceita mais correção de preço', async () => {
       const admin = await asUser(ADMIN);
-      await http().post('/api/v1/barter-versions/S2026.02/close').set('Authorization', admin);
+      await http().post('/api/v1/barter-versions/B2026.02/close').set('Authorization', admin);
 
       const response = await http()
-        .put('/api/v1/barter-versions/S2026.02/prices/5')
+        .put('/api/v1/barter-versions/B2026.02/prices/5')
         .set('Authorization', admin)
         .send({ price: 120 });
       expect(response.status).toBe(422);
@@ -308,7 +418,7 @@ describe('Barter — safra e versões (e2e)', () => {
 
     it('encerrar a safra encerra junto a versão vigente', async () => {
       const admin = await asUser(ADMIN);
-      const response = await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
+      const response = await http().post('/api/v1/seasons/B2026/close').set('Authorization', admin);
 
       expect(response.status).toBe(200);
       expect(response.body.data.status).toBe('closed');
@@ -324,7 +434,7 @@ describe('Barter — safra e versões (e2e)', () => {
     it('corrige um insumo da versão vigente e passa a valer na próxima permuta', async () => {
       const admin = await asUser(ADMIN);
       const response = await http()
-        .put('/api/v1/barter-versions/S2026.02/prices/5')
+        .put('/api/v1/barter-versions/B2026.02/prices/5')
         .set('Authorization', admin)
         .send({ price: 120 });
 
@@ -336,6 +446,7 @@ describe('Barter — safra e versões (e2e)', () => {
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
+      await encaminhar(nova.body.data.code as string, await asUser(JOAO));
       const registrada = await http()
         .get(`/api/v1/barters/${nova.body.data.code}`)
         .set('Authorization', admin);
@@ -343,14 +454,21 @@ describe('Barter — safra e versões (e2e)', () => {
       expect(item).toMatchObject({ unitValue: 120 });
     });
 
-    it('o valor da saca é corrigido pelo mesmo caminho (o grão é o produto da safra)', async () => {
+    /**
+     * A COTAÇÃO DE UMA CULTURA entra pela mesma porta do insumo: o `productId`
+     * do grão. Com mais de uma cultura no lançamento, é ele que diz qual delas
+     * está sendo corrigida — e a outra não é tocada.
+     */
+    it('o valor da saca é corrigido pelo mesmo caminho, cultura por cultura', async () => {
       const response = await http()
-        .put('/api/v1/barter-versions/S2026.02/prices/1')
+        .put('/api/v1/barter-versions/B2026.02/prices/1')
         .set('Authorization', await asUser(ADMIN))
         .send({ price: 160 });
 
       expect(response.status).toBe(200);
-      expect(response.body.data.grainPrice).toBe(160);
+      const [soja2, milho2] = response.body.data.grains;
+      expect(soja2).toMatchObject({ grainId: 1, price: 160 });
+      expect(milho2).toMatchObject({ grainId: 2, price: 64.5 });
     });
   });
 
@@ -359,76 +477,312 @@ describe('Barter — safra e versões (e2e)', () => {
       const response = await http()
         .post('/api/v1/seasons')
         .set('Authorization', await asUser(ADMIN))
-        .send({ grainId: 2, year: 2027 });
+        .send({ year: 2027 });
 
       expect(response.status).toBe(422);
-      expect(response.body.message).toContain('Soja 2026');
+      expect(response.body.message).toContain('Barter 2026/27');
     });
 
-    it('encerrada a anterior, a safra nova nasce com o código do grão e do ano', async () => {
+    /**
+     * A SAFRA NÃO TEM MAIS GRÃO: ela é o CICLO. O código nasce da letra do ciclo
+     * (o `B` de Barter, o padrão) e do ano, e as culturas chegam depois, no
+     * lançamento — que é o que permite acrescentar o milho a um Barter que já
+     * está no ar sem abrir uma segunda safra.
+     */
+    it('encerrada a anterior, a safra nova nasce com o código do ciclo e do ano', async () => {
       const admin = await asUser(ADMIN);
-      await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
+      await http().post('/api/v1/seasons/B2026/close').set('Authorization', admin);
 
       const response = await http()
         .post('/api/v1/seasons')
         .set('Authorization', admin)
-        .send({ grainId: 2, year: 2027 });
+        .send({ year: 2027 });
 
       expect(response.status).toBe(201);
       expect(response.body.data).toMatchObject({
-        code: 'M2027',
-        name: 'Milho 2027',
-        grainName: 'Milho',
+        code: 'B2027',
+        name: 'Barter 2027',
         status: 'open',
       });
+      // O grão saiu do contrato da safra junto com o campo: quem responde "em
+      // que se paga?" é a versão.
+      expect(response.body.data.grainName).toBeUndefined();
+    });
+
+    /**
+     * O VENCIMENTO DA CPR nasce COM A CULTURA, no lançamento — e não mais com a
+     * safra.
+     *
+     * Ele é da CULTURA porque muda com ela: soja vence na colheita da soja,
+     * milho safrinha no dele. Enquanto morou na safra, a safra ERA a cultura; com
+     * as duas convivendo na mesma gestão, uma data só para ambas seria uma
+     * delas errada.
+     *
+     * OPCIONAL de propósito: o Barter é lançado antes de a colheita ter data
+     * fechada, e travar a publicação por isso pararia a venda por um campo que a
+     * cédula sabe cobrar sozinha, de quem o resolve.
+     */
+    it('a cultura pode nascer com o vencimento da CPR, e sem ele também', async () => {
+      const admin = await asUser(ADMIN);
+      const response = await http()
+        .post('/api/v1/seasons/B2026/versions')
+        .set('Authorization', admin)
+        .send({
+          ...tabela(115),
+          grains: [{ ...soja, cprDueDate: '2027-06-30T12:00:00.000Z' }, milho],
+        });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.grains[0].cprDueDate).toBe('2027-06-30T12:00:00.000Z');
+      // E a que veio sem data abre igual, com o campo nulo — a pendência aparece
+      // na cédula, endereçada ao admin.
+      expect(response.body.data.grains[1].cprDueDate).toBeNull();
+    });
+
+    /** Data que não é data não vira vencimento de título executável. */
+    it('vencimento inválido no lançamento é recusado', async () => {
+      const response = await http()
+        .post('/api/v1/seasons/B2026/versions')
+        .set('Authorization', await asUser(ADMIN))
+        .send({ ...tabela(115), grains: [{ ...soja, cprDueDate: '30/06/2027' }] });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Vencimento da CPR inválido');
     });
 
     it('a primeira versão da safra nova é a .01', async () => {
       const admin = await asUser(ADMIN);
-      await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
-      await http()
-        .post('/api/v1/seasons')
-        .set('Authorization', admin)
-        .send({ grainId: 2, year: 2027 });
+      await http().post('/api/v1/seasons/B2026/close').set('Authorization', admin);
+      await http().post('/api/v1/seasons').set('Authorization', admin).send({ year: 2027 });
 
       const response = await http()
-        .post('/api/v1/seasons/M2027/versions')
+        .post('/api/v1/seasons/B2027/versions')
         .set('Authorization', admin)
         .send(tabela(115));
-      expect(response.body.data.code).toBe('M2027.01');
+      expect(response.body.data.code).toBe('B2027.01');
     });
   });
 
   describe('metas', () => {
     it('o detalhe traz o realizado contra as metas definidas', async () => {
       const response = await http()
-        .get('/api/v1/barter-versions/S2026.02')
+        .get('/api/v1/barter-versions/B2026.02')
         .set('Authorization', await asUser(ADMIN));
 
       expect(response.status).toBe(200);
-      // Só as quatro metas do seed viram barra; o realizado sai das aprovadas.
-      expect(response.body.data.goals.map((g: { kind: string }) => g.kind)).toEqual([
-        'sales',
-        'sacks',
-        'barters',
+      // As metas do seed viram barra, e as de SACAS são UMA POR CULTURA: soja e
+      // milho não somam, e cada uma tem a sua. O realizado sai das aprovadas.
+      expect(
+        response.body.data.goals.map((g: { kind: string; grainName?: string }) => [
+          g.kind,
+          g.grainName,
+        ]),
+      ).toEqual([
+        ['sales', undefined],
+        ['sacks', 'Soja'],
+        ['sacks', 'Milho'],
+        ['barters', undefined],
       ]);
       expect(response.body.data.realized.barters).toBe(3);
       expect(response.body.data.goals.every((g: { met: boolean }) => !g.met)).toBe(true);
+
+      // E o REALIZADO em sacas também é por cultura: as permutas aprovadas do
+      // seed são todas de soja, e a barra do milho começa no zero em vez de
+      // sumir da tela.
+      expect(response.body.data.realized.sacks).toEqual([
+        { grainId: 1, grainName: 'Soja', sacks: expect.any(Number) },
+      ]);
     });
 
-    it('a meta não fecha o Barter sozinha — quem encerra é o admin', async () => {
+    it('no modo manual (o padrão) a meta não fecha o Barter — quem encerra é o admin', async () => {
       const admin = await asUser(ADMIN);
       // Meta de uma permuta só, com três já aprovadas na versão.
       await http()
-        .post('/api/v1/seasons/S2026/versions')
+        .post('/api/v1/seasons/B2026/versions')
         .set('Authorization', admin)
         .send({ ...tabela(115), targetBarters: 1 });
 
+      await aprovarUmaPermuta();
+
+      const versão = await http()
+        .get('/api/v1/barter-versions/B2026.03')
+        .set('Authorization', admin);
+      expect(versão.body.data.goals[0].met).toBe(true);
+      expect(versão.body.data.status).toBe('active');
+      expect(versão.body.data.closeOnGoal).toBe(false);
+
+      // E o Barter segue aceitando permuta: a meta avisou, e mais nada.
       const permutaNova = await http()
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
         .send(permuta);
       expect(permutaNova.status).toBe(201);
+    });
+
+    /**
+     * O ENCERRAMENTO AUTOMÁTICO, ponta a ponta — a outra metade da opção.
+     *
+     * O que estes casos protegem: quem fecha o Barter é a APROVAÇÃO que cruzou a
+     * meta. Não há relógio, o fechamento tem hora e ator, e o `closedBy` explica
+     * o motivo para quem abrir a versão meses depois.
+     */
+    describe('encerrar ao bater meta', () => {
+      it('a aprovação que bate a meta encerra o Barter na hora', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1, closeOnGoal: true });
+
+        const aprovada = await aprovarUmaPermuta();
+        expect(aprovada.status).toBe(200);
+
+        const versão = await http()
+          .get('/api/v1/barter-versions/B2026.03')
+          .set('Authorization', admin);
+        expect(versão.body.data.status).toBe('closed');
+        expect(versão.body.data.isOpen).toBe(false);
+        expect(versão.body.data.closedAt).toBeTruthy();
+        // O MOTIVO fica gravado: ninguém clicou em nada, e a versão precisa
+        // dizer por que fechou.
+        expect(versão.body.data.closedBy).toBe('Automático: meta de permutas atingida (1)');
+
+        // E o consultor para de registrar permuta na hora.
+        //
+        // A mensagem é a de "não há Barter aberto", e não a de "este Barter está
+        // fechado": encerrada a única versão ativa da safra, não existe versão
+        // vigente para nomear. É a mesma frase de quando nada foi lançado ainda,
+        // e é a verdade da tela — o consultor está esperando o próximo
+        // lançamento.
+        const tardeDemais = await http()
+          .post('/api/v1/barters')
+          .set('Authorization', await asUser(JOAO))
+          .send(permuta);
+        expect(tardeDemais.status).toBe(422);
+        expect(tardeDemais.body.message).toContain('Não há Barter aberto');
+      });
+
+      it('a permuta que a aprovação fechou continua aprovada: o Barter fecha DEPOIS dela', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1, closeOnGoal: true });
+
+        const aprovada = await aprovarUmaPermuta();
+        expect(aprovada.body.data.status).toBe('approved');
+        // Ela é a permuta que bateu a meta, e o realizado a conta.
+        const versão = await http()
+          .get('/api/v1/barter-versions/B2026.03')
+          .set('Authorization', admin);
+        expect(versão.body.data.realized.barters).toBe(1);
+      });
+
+      it('permuta NEGADA não fecha nada — ela não soma na meta', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1, closeOnGoal: true });
+
+        await aprovarUmaPermuta('denied');
+
+        const versão = await http()
+          .get('/api/v1/barter-versions/B2026.03')
+          .set('Authorization', admin);
+        expect(versão.body.data.status).toBe('active');
+        expect(versão.body.data.realized.barters).toBe(0);
+      });
+
+      it('encerrar ao bater meta SEM meta é recusado — seria uma opção que nunca acontece', async () => {
+        const response = await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', await asUser(ADMIN))
+          .send({ ...tabela(115), closeOnGoal: true });
+
+        expect(response.status).toBe(422);
+        expect(response.body.message).toContain('ao menos uma meta');
+      });
+
+      it('o admin liga o automático na versão vigente, sem republicar a tabela', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 2 });
+
+        const ligado = await http()
+          .put('/api/v1/barter-versions/B2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: true });
+        expect(ligado.status).toBe(200);
+        expect(ligado.body.data.closeOnGoal).toBe(true);
+        // Meta de duas permutas, nenhuma aprovada ainda: ligar não fecha.
+        expect(ligado.body.data.status).toBe('active');
+
+        const desligado = await http()
+          .put('/api/v1/barter-versions/B2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: false });
+        expect(desligado.body.data.closeOnGoal).toBe(false);
+      });
+
+      /**
+       * Ligar a opção com a meta JÁ batida encerra na hora. É a leitura literal
+       * de "encerre ao bater meta" — a alternativa seria um Barter aberto, com a
+       * meta batida e a opção ligada, esperando uma aprovação que talvez nunca
+       * venha.
+       */
+      it('ligar o automático com a meta já batida encerra na hora', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', admin)
+          .send({ ...tabela(115), targetBarters: 1 });
+
+        await aprovarUmaPermuta();
+
+        const ligado = await http()
+          .put('/api/v1/barter-versions/B2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: true });
+        expect(ligado.status).toBe(200);
+        expect(ligado.body.data.status).toBe('closed');
+        expect(ligado.body.data.closedBy).toBe('Automático: meta de permutas atingida (1)');
+      });
+
+      it('versão sem meta não aceita o automático, e versão encerrada não muda de modo', async () => {
+        const admin = await asUser(ADMIN);
+        await http()
+          .post('/api/v1/seasons/B2026/versions')
+          .set('Authorization', admin)
+          .send(tabela(115));
+
+        const semMeta = await http()
+          .put('/api/v1/barter-versions/B2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: true });
+        expect(semMeta.status).toBe(422);
+        expect(semMeta.body.message).toContain('não tem meta');
+
+        await http().post('/api/v1/barter-versions/B2026.03/close').set('Authorization', admin);
+        const encerrada = await http()
+          .put('/api/v1/barter-versions/B2026.03/close-on-goal')
+          .set('Authorization', admin)
+          .send({ enabled: false });
+        expect(encerrada.status).toBe(422);
+        expect(encerrada.body.message).toContain('Só a versão vigente');
+      });
+
+      it('consultor e retaguarda não mudam o modo de encerramento', async () => {
+        for (const email of [JOAO, ...BACK_OFFICE]) {
+          const response = await http()
+            .put('/api/v1/barter-versions/B2026.02/close-on-goal')
+            .set('Authorization', await asUser(email))
+            .send({ enabled: true });
+          expect(response.status).toBe(403);
+        }
+      });
     });
   });
 
@@ -448,15 +802,14 @@ describe('Barter — safra e versões (e2e)', () => {
       ]);
 
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
-        .field('grainPrice', '152,50')
+        .field('grains', JSON.stringify([{ ...soja, price: '152,50' }]))
         .attach('file', arquivo, 'tabela-setembro.xlsx');
 
       expect(response.status).toBe(201);
       expect(response.body.data).toMatchObject({
-        code: 'S2026.03',
-        grainPrice: 152.5,
+        code: 'B2026.03',
         sourceFile: 'tabela-setembro.xlsx',
       });
       expect(response.body.data.prices).toHaveLength(2);
@@ -486,9 +839,9 @@ describe('Barter — safra e versões (e2e)', () => {
       ]);
 
       await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach('file', arquivo, 'tabela.xlsx')
         .expect(201);
 
@@ -509,9 +862,9 @@ describe('Barter — safra e versões (e2e)', () => {
       const admin = await asUser(ADMIN);
       const arquivo = await planilha([['B-1', 'INOCULANTE SEM PISTA', '', 'INOCULANTES', 90]]);
       await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', admin)
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach('file', arquivo, 'tabela.xlsx')
         .expect(201);
 
@@ -527,9 +880,9 @@ describe('Barter — safra e versões (e2e)', () => {
 
       // A carga seguinte traz o mesmo item ilegível: a revisão do admin fica.
       await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', admin)
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach(
           'file',
           await planilha([['B-1', 'INOCULANTE SEM PISTA', '', 'INOCULANTES', 95]]),
@@ -548,9 +901,9 @@ describe('Barter — safra e versões (e2e)', () => {
       const arquivo = await planilha([['X', 'Sem preço', 'litro', '', null]]);
 
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach('file', arquivo, 'tabela.xlsx');
 
       expect(response.status).toBe(422);
@@ -560,14 +913,14 @@ describe('Barter — safra e versões (e2e)', () => {
       const current = await http()
         .get('/api/v1/barter-versions/current')
         .set('Authorization', await asUser(JOAO));
-      expect(current.body.data.code).toBe('S2026.02');
+      expect(current.body.data.code).toBe('B2026.02');
     });
 
     it('arquivo que não é .xlsx é recusado', async () => {
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach('file', Buffer.from('nome;preco'), 'tabela.csv');
 
       expect(response.status).toBe(422);
@@ -594,9 +947,9 @@ describe('Barter — safra e versões (e2e)', () => {
 
       it('data de encerramento no passado', async () => {
         const response = await http()
-          .post('/api/v1/seasons/S2026/versions/import')
+          .post('/api/v1/seasons/B2026/versions/import')
           .set('Authorization', await asUser(ADMIN))
-          .field('grainPrice', '150')
+          .field('grains', JSON.stringify([soja]))
           .field('endsAt', '2020-01-01T00:00:00.000Z')
           .attach('file', await fantasma(), 'tabela.xlsx');
 
@@ -608,12 +961,12 @@ describe('Barter — safra e versões (e2e)', () => {
 
       it('safra já encerrada', async () => {
         const admin = await asUser(ADMIN);
-        await http().post('/api/v1/seasons/S2026/close').set('Authorization', admin);
+        await http().post('/api/v1/seasons/B2026/close').set('Authorization', admin);
 
         const response = await http()
-          .post('/api/v1/seasons/S2026/versions/import')
+          .post('/api/v1/seasons/B2026/versions/import')
           .set('Authorization', admin)
-          .field('grainPrice', '150')
+          .field('grains', JSON.stringify([soja]))
           .attach('file', await fantasma(), 'tabela.xlsx');
 
         expect(response.status).toBe(422);
@@ -646,9 +999,9 @@ describe('Barter — safra e versões (e2e)', () => {
       expect(await pastas()).not.toContain('Pasta Inédita');
 
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', admin)
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach(
           'file',
           await planilha([['GRA-0001', 'Insumo de Código Tomado', 'litro', 'Pasta Inédita', 99]]),
@@ -678,9 +1031,9 @@ describe('Barter — safra e versões (e2e)', () => {
       ]);
 
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .attach('file', await planilha(linhas), 'tabela-cheia.xlsx');
 
       expect(response.status).toBe(201);
@@ -693,9 +1046,9 @@ describe('Barter — safra e versões (e2e)', () => {
       ]);
 
       const response = await http()
-        .post('/api/v1/seasons/S2026/versions/import')
+        .post('/api/v1/seasons/B2026/versions/import')
         .set('Authorization', await asUser(ADMIN))
-        .field('grainPrice', '150')
+        .field('grains', JSON.stringify([soja]))
         .field('carryOver', 'true')
         .attach('file', arquivo, 'so-o-que-mudou.xlsx');
 
@@ -714,13 +1067,13 @@ describe('Barter — safra e versões (e2e)', () => {
         expect(
           (
             await http()
-              .post('/api/v1/seasons/S2026/versions')
+              .post('/api/v1/seasons/B2026/versions')
               .set('Authorization', auth)
               .send(tabela(115))
           ).status,
         ).toBe(403);
         expect(
-          (await http().post('/api/v1/barter-versions/S2026.02/close').set('Authorization', auth))
+          (await http().post('/api/v1/barter-versions/B2026.02/close').set('Authorization', auth))
             .status,
         ).toBe(403);
       }
@@ -732,7 +1085,7 @@ describe('Barter — safra e versões (e2e)', () => {
           .get('/api/v1/barter-versions/current')
           .set('Authorization', await asUser(email));
         expect(response.status).toBe(200);
-        expect(response.body.data.code).toBe('S2026.02');
+        expect(response.body.data.code).toBe('B2026.02');
       }
     });
   });

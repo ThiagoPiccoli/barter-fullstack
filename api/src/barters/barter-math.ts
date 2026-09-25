@@ -9,6 +9,19 @@
 /** Tolerância de centavos ao comparar valores em R$ (mesma do app). */
 export const MONEY_EPSILON = 0.01;
 
+/**
+ * Tolerância (ha) ao comparar a área penhorada com a exigida — o `MONEY_EPSILON`
+ * da terra.
+ *
+ * Ela existe pelo mesmo motivo do de centavos, e com um caso concreto: a área
+ * exigida sai arredondada a duas casas e as lavouras são digitadas com duas
+ * casas, então somas como `12,5 + 11,5` produzem `23,999999999999996` em ponto
+ * flutuante. Sem a folga, o consultor que digitou exatamente a área pedida
+ * levaria uma recusa por um centésimo de hectare que não existe — um metro
+ * quadrado de discussão.
+ */
+export const AREA_EPSILON = 0.01;
+
 /** Um insumo escolhido, já precificado pelo servidor. */
 export interface PricedInput {
   productId: number;
@@ -82,4 +95,37 @@ export function minQuantityFor(requiredPerHa: number, areaHa: number): number {
  */
 export function roundQuantity(quantity: number): number {
   return Math.round(quantity * 100) / 100;
+}
+
+/**
+ * A ÁREA DE LAVOURA (ha) que esta permuta precisa penhorar.
+ *
+ *     (sacas ÷ produtividade) × (1 + margem / 100)
+ *
+ * É a conversão que fecha o ciclo do escambo: o custo dos insumos vira sacas
+ * (`sacksToCover`), e as sacas viram a terra que precisa produzi-las. A primeira
+ * parte é a ÁREA ESTIMADA — o que a lavoura precisa ter se tudo correr bem; a
+ * margem é a folga que a credora exige porque nem tudo corre bem.
+ *
+ * ARREDONDA PARA CIMA, e essa é a única decisão aqui que não é aritmética: este
+ * número é o piso de uma GARANTIA. Arredondar 23,471 para 23,47 entrega um
+ * milésimo de hectare de graça, e a direção do erro importa quando o que está do
+ * outro lado é o que sobra se o produtor não entregar. Duas casas porque é a
+ * precisão em que a área da matrícula é digitada (ver `CprArea.areaHa`) — pedir
+ * um número mais fino do que o que se pode responder seria pedir o impossível.
+ *
+ * Zero quando não há sacas ou não há produtividade: não é "sem exigência", é
+ * "não dá para calcular". Quem lê a ausência e decide o que ela significa é
+ * `cprGapsOf` — aqui não se inventa uma área a partir de uma divisão por zero.
+ */
+export function pledgeAreaFor(sacks: number, yieldPerHa: number, marginPercent: number): number {
+  if (!(sacks > 0) || !(yieldPerHa > 0)) {
+    return 0;
+  }
+  const estimated = sacks / yieldPerHa;
+  const required = estimated * (1 + Math.max(marginPercent, 0) / 100);
+  // O recuo de 1e-9 antes do teto: sem ele, um `required` que deu 23,470000000001
+  // por ponto flutuante viraria 23,48 — o arredondamento para cima inventando um
+  // centésimo de hectare que a conta não pediu.
+  return Math.ceil(required * 100 - 1e-9) / 100;
 }

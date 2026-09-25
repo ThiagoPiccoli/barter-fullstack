@@ -4,8 +4,11 @@ import '../theme/app_theme.dart';
 import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
+import 'cpr_form_screen.dart';
+import 'invoicing_screen.dart';
 import 'barter_screen.dart';
 import 'send_simulation.dart';
 
@@ -68,29 +71,68 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// se o app não carregou. "Todas" sai junto — com duas etapas, ela seria a
   /// soma das duas que estão ao lado.
   ///
+  /// O EMISSOR tem o recorte mais estreito, um degrau adiante: a faturada (a
+  /// fila dele) e a CÉDULA, que junta os três degraus do documento numa aba só
+  /// — "em que pé está a CPR?" é uma pergunta única, e três abas com duas
+  /// permutas cada dividiriam a fila em pedaços que ele leria juntos.
+  ///
   /// Quem decide o recorte continua sendo o servidor; esta lista só evita
   /// desenhar o que ele não vai responder.
-  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadInvoicing)
-      ? const [BarterStatus.approved, BarterStatus.invoiced]
-      : const [
+  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadIssuance)
+      ? const [BarterStatus.invoiced, BarterStatus.cprIssued]
+      : AppData.can(Capability.bartersReadInvoicing)
+      // O FATURISTA ganhou "Concluídas" pelo mesmo motivo de quem acompanha, e
+      // com um agravante: o escopo dele no servidor (`lineFrom(invoice)`) traz
+      // as permutas até o registro, e sem esta aba a registrada não caía em
+      // nenhuma das duas — sumia da tela, sem "Todas" para recolhê-la.
+      ? const [BarterStatus.approved, BarterStatus.invoiced, BarterStatus.cprRegistered]
+      : [
           null,
-          // Na ordem da LINHA DE PRODUÇÃO: gerente → comitê → faturamento. A
-          // lista lida da esquerda para a direita conta o caminho da permuta, e
-          // é por isso que "Negadas" fica no fim: ela é saída lateral, não um
-          // degrau adiante.
+          // O RASCUNHO abre a lista de quem registra, e só a dele: é o único
+          // estado em que o consultor tem o que fazer, e a permuta pela metade
+          // não é fila de mais ninguém. Para a retaguarda a aba nem existe — o
+          // servidor não devolveria nada nela.
+          if (AppData.can(Capability.bartersRegister)) BarterStatus.draft,
+          // Na ordem da LINHA DE PRODUÇÃO: consultor → gerente → comitê →
+          // faturamento. A lista lida da esquerda para a direita conta o caminho
+          // da permuta, e é por isso que "Negadas" fica no fim: ela é saída
+          // lateral, não um degrau adiante.
           BarterStatus.sentToManager,
           BarterStatus.pending,
           BarterStatus.approved,
           BarterStatus.invoiced,
+          // CONCLUÍDAS fecha a linha, e é o que faltava para ela ter FIM na
+          // tela de quem acompanha: enquanto a última aba era a faturada, a
+          // permuta registrada (que acabou) e a que espera assinatura (que não
+          // acabou) caíam no mesmo lugar, e "o que ainda está em pé?" não tinha
+          // resposta sem abrir uma por uma.
+          BarterStatus.cprRegistered,
           BarterStatus.denied,
         ];
 
+  /// Esta pessoa TRABALHA na emissão, ou só ACOMPANHA?
+  ///
+  /// É a diferença entre "A emitir CPR" e "No emissor", e ela não é de palavra:
+  /// para o emissor, a aba é a FILA DELE e mostra só o degrau em que ele age;
+  /// para quem acompanha (admin, comitê, gerente, consultor), a pergunta é
+  /// "onde está a permuta?", e a resposta é o TRECHO inteiro do emissor —
+  /// emitida e assinada ainda estão com ele.
+  bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance);
+
   String _tabLabel(BarterStatus? status) => switch (status) {
         null => 'Todas',
+        BarterStatus.draft => 'Rascunhos',
         BarterStatus.sentToManager => 'No gerente',
         BarterStatus.pending => 'No comitê',
-        BarterStatus.approved => 'A faturar',
-        BarterStatus.invoiced => 'Faturadas',
+        BarterStatus.approved || BarterStatus.approvedWithConditions => 'A faturar',
+        BarterStatus.invoiced => _worksIssuance ? 'A emitir CPR' : 'No emissor',
+        // Os degraus intermediários da cédula sob UMA aba: para quem varre a
+        // lista, "em que pé está a CPR?" é uma pergunta só, e abas com duas
+        // permutas cada dividiriam a fila do emissor em pedaços que ele leria
+        // juntos de qualquer jeito.
+        BarterStatus.cprIssued || BarterStatus.cprSigned => 'Cédula',
+        // A REGISTRADA sai dessa aba: ela não é "em que pé está", é o fim.
+        BarterStatus.cprRegistered => 'Concluídas',
         BarterStatus.denied => 'Negadas',
       };
 
@@ -159,11 +201,36 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     widget.onChanged?.call();
   }
 
+  /// A permuta cai NESTA aba?
+  ///
+  /// A aba é um POSTO da linha, e não um estado cru: "A faturar" é a mesa do
+  /// faturista, e as duas aprovações estão nela — a limpa e a com ressalva. Uma
+  /// aba por estado daria ao faturista duas filas para o mesmo trabalho, e a
+  /// ressalva (que ele precisa ver) ficaria escondida na segunda. O que
+  /// distingue as duas é o SELO do cartão, que é onde a exigência aparece.
+  /// A CÉDULA é o outro caso, pelo mesmo raciocínio: os degraus intermediários
+  /// do documento (emitida, assinada) são UMA aba. Eles não são filas
+  /// diferentes — são o andamento do mesmo papel, e o selo do cartão é onde o
+  /// pé de cada um aparece.
+  ///
+  /// "NO EMISSOR" é o trecho inteiro, e não o degrau: para quem acompanha, a
+  /// permuta emitida e a assinada continuam na mesa dele, e listar só a faturada
+  /// responderia "onde está?" com um terço da fila. Para o EMISSOR a mesma aba é
+  /// exata — é a fila dele, e o que já andou está na aba ao lado. Ver
+  /// [_worksIssuance].
+  bool _inTab(BarterModel barter, BarterStatus tab) => switch (tab) {
+        BarterStatus.approved => barter.awaitsInvoice,
+        BarterStatus.invoiced when !_worksIssuance =>
+          barter.wasInvoiced && !barter.isCprRegistered,
+        BarterStatus.cprIssued => barter.isCprIssued,
+        _ => barter.status == tab,
+      };
+
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
         ? List<BarterModel>.from(AppData.barters)
         : AppData.barters.where((b) => b.consultantId == widget.consultantId).toList();
-    if (status != null) list = list.where((b) => b.status == status).toList();
+    if (status != null) list = list.where((b) => _inTab(b, status)).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
       list = list
@@ -201,7 +268,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           ],
         ),
       ),
-      body: Column(
+      body: BoundedContent(
+        child: Column(
         children: [
           if (_hasSimulations) const OfflineBanner(),
           Padding(
@@ -237,6 +305,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -387,6 +456,106 @@ class _BarterCard extends StatelessWidget {
                   ),
                 ],
               ),
+              // O INVESTIMENTO POR HECTARE fica AQUI, na lista, porque é aqui
+              // que se compara: as duas pílulas acima dizem o TAMANHO desta
+              // permuta, e o tamanho sozinho não distingue R$ 400 mil numa
+              // fazenda de 2.000 ha de R$ 400 mil numa de 300. No detalhe ele
+              // também está, mas lá há uma permuta só na tela — e uma régua
+              // sem régua ao lado não compara nada.
+              //
+              // Ele só chega a quem pode compará-lo (admin, comitê e faturista):
+              // para os outros o campo nem vem no JSON, e a linha não existe.
+              if (barter.sacksPerHa != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.straighten, size: 13, color: AppColors.textLight),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Investimento ',
+                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                    ),
+                    Text(
+                      formatSacksPerHa(barter.sacksPerHa!),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                    if (barter.producerAreaHa != null && barter.producerAreaHa! > 0)
+                      Text(
+                        ' • ${formatQty(barter.producerAreaHa!)} ha',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                      ),
+                  ],
+                ),
+              ],
+              // O IMPOSTO DA ENTREGA na própria lista.
+              //
+              // Ele já estava no detalhe, e chegar lá custa um toque por
+              // permuta — mas a pergunta que ele responde é de comparação
+              // ("quais das minhas permutas saem pela folha?"), e comparação se
+              // faz na lista. Ele também muda o que o produtor de fato entrega:
+              // duas permutas do mesmo tamanho com regimes diferentes pedem
+              // sacas diferentes na colheita, e sem esta linha as duas se leem
+              // idênticas aqui.
+              //
+              // Em SACAS para quem não vê R$, como em todo o resto do app: é a
+              // unidade em que o consultor enxerga a permuta.
+              if (barter.hasTax) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.receipt_long_outlined, size: 13, color: AppColors.textLight),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'Funrural/Senar ${barter.taxRateLabel} • '
+                        '${barter.taxRegime.shortLabel.toLowerCase()}',
+                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      isAdmin
+                          ? '+ ${formatCurrency(barter.taxAmount)}'
+                          : '+ ${formatSacks(barter.taxInSacks)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              // A BANDEIRA do pedido de alteração, na lista: quem tem a permuta
+              // na mesa precisa ver isto ANTES de abri-la para trabalhar nela —
+              // os insumos podem mudar, e o parecer (ou a decisão) que ele daria
+              // hoje seria refeito amanhã.
+              if (barter.hasOpenChangeRequest) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Icon(Icons.edit_note_outlined, size: 13, color: AppColors.pending),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'Alteração solicitada por '
+                        '${barter.changeRequestBy ?? barter.consultantName}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.pending,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -479,9 +648,30 @@ class _BarterCard extends StatelessWidget {
                   width: double.infinity,
                   child: ElevatedButton.icon(
                     onPressed: () =>
-                        invoiceBarter(context, barter, onInvoiced: (_) => onChanged()),
+                        openInvoicing(context, barter, onInvoiced: (_) => onChanged()),
                     icon: const Icon(Icons.receipt_long_outlined, size: 16),
                     label: const Text('Faturar', style: TextStyle(fontSize: 13)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.invoiced,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+              ],
+              // O ATO DO EMISSOR, direto do cartão. O rótulo é genérico de
+              // propósito — qual dos três atos é o da vez depende do estado, e
+              // quem resolve isso é a própria tela da cédula.
+              if (AppData.can(Capability.bartersCprIssue) &&
+                  !barter.isCprRegistered &&
+                  barter.wasInvoiced) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () =>
+                        openCprDesk(context, barter, onChanged: (_) => onChanged()),
+                    icon: const Icon(Icons.description_outlined, size: 16),
+                    label: const Text('Abrir cédula', style: TextStyle(fontSize: 13)),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.invoiced,
                       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -582,7 +772,7 @@ class _SimulationList extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 'Monte a permuta em "Nova ${brand.copy.barterTitle}" e guarde. A '
-                'simulação fica neste aparelho e funciona sem internet — o envio '
+                'simulação fica neste aparelho e funciona sem internet: o envio '
                 'ao gerente pode ser feito na hora ou aqui, quando você tiver sinal.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 13, color: AppColors.textMedium),
@@ -732,9 +922,11 @@ class _SimulationCardState extends State<_SimulationCard> {
                 ),
                 child: Column(
                   children: [
+                    // Com o CÓDIGO na frente, como em toda lista de produto
+                    // do app — é por ele que o insumo é procurado e conferido.
                     for (final item in shown)
                       DialogLine(
-                        item.productName.isEmpty ? item.productId : item.productName,
+                        simulationItemLabel(item),
                         '${formatQty(item.quantity)} ${item.unit}',
                       ),
                     if (rest > 0)
@@ -780,7 +972,7 @@ class _SimulationCardState extends State<_SimulationCard> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      simulation.unitName.isEmpty ? '—' : simulation.unitName,
+                      simulation.unitName.isEmpty ? 'unidade não informada' : simulation.unitName,
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                       overflow: TextOverflow.ellipsis,
                     ),

@@ -31,11 +31,11 @@ jobs:
 
     # O BANCO DO CI.
     #
-    # A API deixou de falar com um arquivo SQLite e passou a falar com um
-    # Postgres, e o runner não tem um. Sem este serviço o `prisma generate`
-    # morria na primeira linha (`prisma.config.ts` exige DATABASE_URL) e o
-    # portão inteiro caía ANTES de rodar lint, build ou teste algum — vermelho
-    # desde a migração, com o `distribute.yml` pulando por consequência.
+    # A API fala com um Postgres, e o runner não vem com um. Sem este serviço o
+    # `prisma generate` morre na primeira linha (`prisma.config.ts` exige
+    # DATABASE_URL) e o portão inteiro cai ANTES de rodar lint, build ou teste
+    # algum — vermelho sem ter avaliado nada, com o `distribute.yml` pulando por
+    # consequência.
     # A VERSÃO acompanha a de produção (Neon, Postgres 18), e é nessa direção
     # que ela deve ser mantida. O ambiente de teste nasceu no 18 e o CI estava
     # no 16: a saída certa para essa diferença é subir o portão até onde o

@@ -90,8 +90,14 @@ class BarterSimulation {
   /// qual o envio confere se a conta mudou.
   final double simulatedSacks;
 
-  /// O grão em que a simulação foi paga, para o cartão dizer "sc de soja" sem
-  /// depender do catálogo carregado.
+  /// A CULTURA em que a simulação foi montada — o grão que vai pagá-la.
+  ///
+  /// Ela é ESCOLHA do consultor desde que o Barter passou a aceitar mais de uma
+  /// (ver `VersionGrainModel`), e por isso viaja guardada: a simulação fica no
+  /// aparelho até o envio, e enviá-la sem a cultura faria a permuta nascer numa
+  /// que ninguém escolheu. O nome vai junto do id para o cartão dizer "sc de
+  /// soja" sem depender do catálogo carregado.
+  final String grainId;
   final String grainName;
 
   /// COMO o Funrural desta entrega vai ser recolhido — a escolha do fechamento,
@@ -117,6 +123,7 @@ class BarterSimulation {
     required this.versionCode,
     required this.items,
     required this.simulatedSacks,
+    this.grainId = '',
     this.grainName = '',
     this.taxRegime = TaxRegime.comercializacao,
     required this.createdAt,
@@ -127,6 +134,7 @@ class BarterSimulation {
     String? versionCode,
     List<SimulationItem>? items,
     double? simulatedSacks,
+    String? grainId,
     String? grainName,
     TaxRegime? taxRegime,
     DateTime? updatedAt,
@@ -141,6 +149,7 @@ class BarterSimulation {
         versionCode: versionCode ?? this.versionCode,
         items: items ?? this.items,
         simulatedSacks: simulatedSacks ?? this.simulatedSacks,
+        grainId: grainId ?? this.grainId,
         grainName: grainName ?? this.grainName,
         taxRegime: taxRegime ?? this.taxRegime,
         createdAt: createdAt,
@@ -171,6 +180,7 @@ class BarterSimulation {
         'versionCode': versionCode,
         'items': [for (final item in items) item.toJson()],
         'simulatedSacks': simulatedSacks,
+        'grainId': grainId,
         'grainName': grainName,
         'taxRegime': taxRegime.apiValue,
         'createdAt': createdAt.toIso8601String(),
@@ -207,6 +217,7 @@ class BarterSimulation {
       versionCode: '${json['versionCode'] ?? ''}',
       items: items,
       simulatedSacks: toQuantity(json['simulatedSacks']),
+      grainId: '${json['grainId'] ?? ''}',
       grainName: '${json['grainName'] ?? ''}',
       // Simulação montada por uma versão anterior do app não tem o campo: cai
       // na comercialização, que é o que vale para quem não fez a opção formal

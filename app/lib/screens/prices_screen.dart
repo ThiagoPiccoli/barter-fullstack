@@ -5,6 +5,7 @@ import '../models/models.dart';
 import '../data/app_data.dart';
 import '../widgets/class_avatar.dart';
 import '../widgets/filter_bar.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_program_screen.dart';
 import 'product_report_screen.dart';
@@ -112,7 +113,8 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
           ],
         ),
       ),
-      body: Column(
+      body: BoundedContent(
+        child: Column(
         children: [
           if (_showsSearch)
             Padding(
@@ -139,6 +141,7 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -252,7 +255,7 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
           sortLabel: _sortLabel,
           onSort: (value) => setState(() => _sort = value),
           sortOptions: const {
-            _ValueSort.name: 'Nome (A–Z)',
+            _ValueSort.name: 'Nome (A a Z)',
             _ValueSort.priceDesc: 'Maior preço',
             _ValueSort.priceAsc: 'Menor preço',
           },
@@ -273,7 +276,7 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
               if (index == 0) {
                 return Column(
                   children: [
-                    _GrainPriceCard(version: version, onUpdate: widget.onUpdate),
+                    _GrainPricesCard(version: version, onUpdate: widget.onUpdate),
                     const SizedBox(height: 12),
                   ],
                 );
@@ -335,14 +338,29 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
   }
 }
 
-/// O valor da saca — a cotação que converte custo de insumo em grão.
-class _GrainPriceCard extends StatelessWidget {
+/// AS COTAÇÕES DAS CULTURAS — uma por grão que este Barter aceita.
+///
+/// São várias porque as culturas coexistem: o mesmo lançamento paga em soja e
+/// em milho, sobre a MESMA tabela de insumos, e é a cotação de cada uma que
+/// converte o custo em sacas daquele grão. Corrigir uma não toca a outra.
+class _GrainPricesCard extends StatelessWidget {
   final BarterVersionModel version;
   final VoidCallback onUpdate;
-  const _GrainPriceCard({required this.version, required this.onUpdate});
+  const _GrainPricesCard({required this.version, required this.onUpdate});
 
   @override
   Widget build(BuildContext context) {
+    return Column(
+      children: [
+        for (final grain in version.grains) ...[
+          _card(context, grain),
+          if (grain != version.grains.last) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+
+  Widget _card(BuildContext context, VersionGrainModel grain) {
     return Card(
       color: AppColors.grainBg,
       child: Padding(
@@ -363,24 +381,26 @@ class _GrainPriceCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Saca de ${version.grainName.toLowerCase()}',
+                  Text('Saca de ${grain.grainName.toLowerCase()}',
                       style: TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                  Text('Cotação do Barter ${version.code}',
+                  Text(
+                      'Cotação do Barter ${version.code}'
+                      '${grain.estimatedYield > 0 ? ' • ${grain.estimatedYield.toStringAsFixed(0)} sc/ha' : ''}',
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                 ],
               ),
             ),
-            Text(formatCurrency(version.grainPrice),
+            Text(formatCurrency(grain.price),
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.grain)),
-            if (version.isOpen && version.grainId.isNotEmpty)
+            if (version.isOpen && grain.grainId.isNotEmpty)
               IconButton(
                 tooltip: 'Corrigir',
                 onPressed: () => showVersionPriceDialog(
                   context,
-                  productId: version.grainId,
-                  productName: 'Saca de ${version.grainName.toLowerCase()}',
-                  price: version.grainPrice,
+                  productId: grain.grainId,
+                  productName: 'Saca de ${grain.grainName.toLowerCase()}',
+                  price: grain.price,
                   onUpdated: onUpdate,
                 ),
                 icon: Icon(Icons.edit_outlined, size: 18, color: AppColors.grain),
@@ -574,7 +594,7 @@ class _HistoryListState extends State<_HistoryList> {
           sortLabel: _sortLabel,
           onSort: (value) => setState(() => _sort = value),
           sortOptions: const {
-            _HistorySort.name: 'Nome (A–Z)',
+            _HistorySort.name: 'Nome (A a Z)',
             _HistorySort.price: 'Maior valor',
             _HistorySort.up: 'Maior alta',
             _HistorySort.down: 'Maior queda',
@@ -663,7 +683,7 @@ class _HistoryCard extends StatelessWidget {
   bool get _inCurrentVersion {
     final version = AppData.currentVersion;
     if (version == null) return false;
-    return version.grainId == product.id || version.priceOf(product.id) != null;
+    return version.grainFor(product.id) != null || version.priceOf(product.id) != null;
   }
 
   @override

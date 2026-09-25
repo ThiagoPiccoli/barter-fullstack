@@ -90,9 +90,18 @@ export class ProducersService {
 
   /** Cadastro é ato do admin: todo produtor nasce na carteira de alguém. */
   async create(dto: ProducerDto): Promise<ProducerWithConsultants> {
-    await this.ensureConsultants(dto.consultantIds);
+    // A CARTEIRA é opcional no DTO (o formulário do consultor não a tem) e
+    // obrigatória AQUI: um produtor que nasce sem consultor nenhum não aparece
+    // para quem registra permuta. A frase é a mesma da validação de entrada,
+    // porque é a mesma regra — o que muda é só onde ela cabe.
+    const consultantIds = dto.consultantIds ?? [];
+    if (consultantIds.length === 0) {
+      throw new UnprocessableEntityException('Escolha pelo menos um consultor para a carteira');
+    }
+    await this.ensureConsultants(consultantIds);
     await this.ensureDocumentIsFree(dto.document);
-    const { consultantIds, ...fields } = dto;
+    const fields = { ...dto, consultantIds: undefined };
+    delete (fields as { consultantIds?: unknown }).consultantIds;
     return this.prisma.producer.create({
       data: {
         ...this.withDocumentDigits(fields),
@@ -103,33 +112,124 @@ export class ProducersService {
   }
 
   /**
-   * A lista de consultores do payload SUBSTITUI a que estava lá — quem sai do
+   * A EDIÇÃO, com DOIS donos e alcances diferentes.
+   *
+   * O ADMIN edita qualquer produtor e todos os campos, inclusive a carteira: a
+   * lista de consultores do payload SUBSTITUI a que estava lá — quem sai do
    * formulário sai da carteira. Vínculo que permanece não é reescrito: apagar e
-   * recriar todos zeraria o `assignedAt` de quem já atendia o produtor, e a
-   * data de quando o compartilhamento começou é justamente o que se quer saber
+   * recriar todos zeraria o `assignedAt` de quem já atendia o produtor, e a data
+   * de quando o compartilhamento começou é justamente o que se quer saber
    * depois.
+   *
+   * O CONSULTOR edita os produtores da PRÓPRIA CARTEIRA, e só os dados de
+   * contato e endereço deles — ver `assertEditable`, que é onde a lista do que
+   * ele não toca está escrita com o porquê de cada um. Ele não mexe na carteira:
+   * a ausência de `consultantIds` significa "não mexa em quem atende", e mandá-la
+   * sem poder é recusado com a frase que diz a quem pedir.
+   *
+   * A carteira AUSENTE preserva a atual para os dois, e não é permissividade: é
+   * a diferença entre "não mandei este campo" e "mandei este campo vazio", que a
+   * validação de entrada já recusa.
    */
-  async update(id: number, dto: ProducerDto): Promise<ProducerWithConsultants> {
+  async update(actor: User, id: number, dto: ProducerDto): Promise<ProducerWithConsultants> {
     const current = await this.ensureExists(id);
-    await this.ensureConsultants(dto.consultantIds);
+    const manages = can(actor, CAPABILITY.producersManage);
+
+    if (!manages) {
+      if (!this.isAttendedBy(current, actor.id)) {
+        throw new ForbiddenException('Este produtor não pertence à sua carteira');
+      }
+      this.assertEditable(current, dto);
+    }
+
+    if (dto.consultantIds && !manages) {
+      throw new ForbiddenException(
+        'Quem atende o produtor é definido pelo administrador. Peça a ele para mudar a carteira',
+      );
+    }
+
     await this.ensureDocumentIsFree(dto.document, id);
 
     const { consultantIds, ...fields } = dto;
-    const existing = new Set(current.consultants.map((link) => link.consultantId));
+    const wallet = await this.walletUpdateOf(current, consultantIds);
 
     return this.prisma.producer.update({
       where: { id },
-      data: {
-        ...this.withDocumentDigits(fields),
-        consultants: {
-          deleteMany: { consultantId: { notIn: consultantIds } },
-          create: consultantIds
-            .filter((consultantId) => !existing.has(consultantId))
-            .map((consultantId) => ({ consultantId })),
-        },
-      },
+      data: { ...this.withDocumentDigits(fields), ...wallet },
       include: WITH_CONSULTANTS,
     });
+  }
+
+  /**
+   * O QUE O CONSULTOR NÃO REESCREVE no cadastro do cliente dele.
+   *
+   * Os três são recusados por VALOR, e não por presença: o formulário manda o
+   * registro inteiro de volta, e recusar o campo que veio igual ao que já está
+   * gravado travaria toda edição de telefone. O que se recusa é a MUDANÇA.
+   *
+   * - o DOCUMENTO é a identidade do cadastro (a unicidade mora nele, ver
+   *   `documentDigits`): trocá-lo transforma o cliente A no cliente B mantendo as
+   *   permutas do A;
+   * - a ÁREA CULTIVÁVEL é o denominador de toda régua da permuta — os mínimos por
+   *   hectare, o custo do seguro, o investimento por hectare. Um arrendamento a
+   *   mais muda quanto insumo o Barter exige daquele cliente, e isso é decisão de
+   *   crédito, não atualização de contato;
+   * - o REGIME DE FUNRURAL é a opção formal do produtor perante o fisco, e é dela
+   *   que sai a alíquota gravada em cada entrega.
+   *
+   * Os três continuam existindo e continuam se corrigindo — pelo admin, que é
+   * quem responde pelo cadastro. A frase diz isso, porque quem a lê precisa saber
+   * o que fazer, e não só que não pode.
+   */
+  private assertEditable(current: ProducerWithConsultants, dto: ProducerDto): void {
+    const locked: string[] = [];
+
+    if (documentDigitsOf(dto.document) !== current.documentDigits) locked.push('o CPF/CNPJ');
+    if (dto.areaHa !== current.areaHa) locked.push('a área cultivável');
+    if ((dto.taxRegime ?? current.taxRegime) !== current.taxRegime) {
+      locked.push('o regime de Funrural');
+    }
+
+    if (locked.length === 0) return;
+    // "QUEM ALTERA … É O ADMINISTRADOR" em vez de "… é alterado por …": os três
+    // campos têm gêneros diferentes ("o CPF/CNPJ", "a área cultivável"), e
+    // qualquer particípio concordaria com um e erraria o outro. A frase também
+    // diz o que fazer — uma recusa que só nega manda o consultor concluir que o
+    // app está quebrado.
+    const lista =
+      locked.length > 1
+        ? `${locked.slice(0, -1).join(', ')} e ${locked[locked.length - 1]}`
+        : locked[0];
+    throw new ForbiddenException(
+      `Quem altera ${lista} é o administrador. Peça a ele para corrigir e ` +
+        'edite o restante normalmente',
+    );
+  }
+
+  /**
+   * A parte da gravação que mexe na CARTEIRA — ou nada, quando o payload não a
+   * traz.
+   *
+   * Separada porque ela é a única parte da edição que é de outro dono, e porque
+   * a forma dela é peculiar: `deleteMany` + `create` do que falta, para não
+   * reescrever o vínculo que permanece.
+   */
+  private async walletUpdateOf(
+    current: ProducerWithConsultants,
+    consultantIds: number[] | undefined,
+  ): Promise<Prisma.ProducerUpdateInput> {
+    if (!consultantIds) return {};
+    await this.ensureConsultants(consultantIds);
+
+    const existing = new Set(current.consultants.map((link) => link.consultantId));
+    return {
+      consultants: {
+        deleteMany: { consultantId: { notIn: consultantIds } },
+        create: consultantIds
+          .filter((consultantId) => !existing.has(consultantId))
+          .map((consultantId) => ({ consultantId })),
+      },
+    };
   }
 
   /** Grava junto a forma canônica do documento, que é onde mora a unicidade. */
@@ -199,7 +299,7 @@ export class ProducersService {
 
     throw new UnprocessableEntityException(
       named.length > 0
-        ? `Escolha apenas consultores para a carteira — ${named.join(', ')} não é consultor`
+        ? `Escolha apenas consultores para a carteira: ${named.join(', ')} não é consultor`
         : 'Escolha um consultor válido para a carteira',
     );
   }

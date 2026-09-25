@@ -200,7 +200,7 @@ export function parseSheet(matrix: string[][]): ImportResult {
     const previous =
       (skuKey !== undefined ? seenBySku.get(skuKey) : undefined) ?? seenByName.get(nameKey);
     if (previous !== undefined) {
-      errors.push(`Linha ${line} (${name}): repetido — já aparece na linha ${previous}.`);
+      errors.push(`Linha ${line} (${name}): repetido, já aparece na linha ${previous}.`);
       continue;
     }
     if (skuKey !== undefined) seenBySku.set(skuKey, line);
@@ -231,7 +231,7 @@ export function parseSheet(matrix: string[][]): ImportResult {
   // não tem.
   if (rows.length > MAX_VERSION_PRICES) {
     errors.push(
-      `A tabela tem ${rows.length} produtos — o limite é ${MAX_VERSION_PRICES} por versão.`,
+      `A tabela tem ${rows.length} produtos, e o limite é ${MAX_VERSION_PRICES} por versão.`,
     );
   }
   return { rows, errors };
@@ -352,7 +352,7 @@ export async function readWorkbook(buffer: Buffer): Promise<string[][]> {
 
   if (sheet.rowCount > MAX_SHEET_ROWS) {
     throw new Error(
-      `A planilha tem ${sheet.rowCount} linhas — o limite é ${MAX_SHEET_ROWS}. ` +
+      `A planilha tem ${sheet.rowCount} linhas, e o limite é ${MAX_SHEET_ROWS}. ` +
         'Confira se o arquivo é a tabela de valores mesmo.',
     );
   }
@@ -366,7 +366,7 @@ export async function readWorkbook(buffer: Buffer): Promise<string[][]> {
   const cells = sheet.rowCount * width;
   if (cells > MAX_SHEET_CELLS) {
     throw new Error(
-      `A planilha tem ${sheet.rowCount} linhas × ${width} colunas — grande demais para ler ` +
+      `A planilha tem ${sheet.rowCount} linhas × ${width} colunas, grande demais para ler ` +
         `de uma vez (o limite é ${MAX_SHEET_CELLS.toLocaleString('pt-BR')} células). ` +
         'Confira se o arquivo é a tabela de valores mesmo.',
     );

@@ -23,6 +23,7 @@ void main() {
         classes: [row('c1')],
         producers: [row('10')],
         units: [row('3')],
+        insuranceRates: [row('r1')],
       );
 
   group('OfflinePackage', () {
@@ -36,6 +37,17 @@ void main() {
       expect(restored.classes, hasLength(1));
       expect(restored.producers, hasLength(1));
       expect(restored.units, hasLength(1));
+      // A BASE DE SEGUROS viaja com o resto: sem ela, o aparelho sem sinal
+      // mostraria "praça sem taxa cadastrada" para todo produtor, e a permuta
+      // pareceria impossível de registrar.
+      expect(restored.insuranceRates, hasLength(1));
+    });
+
+    /// O PACOTE ANTIGO — gravado antes de o seguro existir — continua abrindo,
+    /// com a base vazia. Ela é reposta na primeira sincronização com sinal.
+    test('pacote sem a base de seguros abre com ela vazia', () {
+      final antigo = Map<String, dynamic>.from(package().toJson())..remove('insuranceRates');
+      expect(OfflinePackage.fromJson(antigo).insuranceRates, isEmpty);
     });
 
     test('guarda o JSON como veio da API, sem reescrevê-lo', () {

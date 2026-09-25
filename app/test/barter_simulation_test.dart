@@ -27,7 +27,7 @@ void main() {
   BarterSimulation simulation({
     String id = 'sim-1',
     String consultantId = '2',
-    String versionCode = 'S2026.02',
+    String versionCode = 'B2026.02',
     List<SimulationItem>? items,
     double simulatedSacks = 80,
     TaxRegime taxRegime = TaxRegime.comercializacao,
@@ -57,7 +57,7 @@ void main() {
 
   /// Uma versão do Barter com a tabela que os testes pedirem.
   BarterVersionModel version({
-    String code = 'S2026.02',
+    String code = 'B2026.02',
     bool isOpen = true,
     double grainPrice = 100,
     Map<String, double> prices = const {'5': 100.0, '9': 50.0},
@@ -66,12 +66,20 @@ void main() {
         id: 'v1',
         code: code,
         number: 2,
-        seasonCode: 'S2026',
-        seasonName: 'Safra 2026',
-        grainId: '1',
-        grainName: 'Soja',
-        grainUnit: 'saca 60kg',
-        grainPrice: grainPrice,
+        seasonCode: 'B2026',
+        seasonName: 'Barter 2026',
+        // A CULTURA em que esta versão paga. É lista porque elas coexistem —
+        // aqui basta uma, que é o caso dos números deste teste.
+        grains: [
+          VersionGrainModel(
+            grainId: '1',
+            grainName: 'Soja',
+            grainUnit: 'saca 60kg',
+            price: grainPrice,
+            estimatedYield: 60,
+          ),
+        ],
+        pricedInGrainId: '1',
         status: isOpen ? 'open' : 'closed',
         isOpen: isOpen,
         startsAt: DateTime(2026, 2, 1),
@@ -104,7 +112,7 @@ void main() {
       expect(restored.consultantId, '2');
       expect(restored.producerName, 'Antônio Carvalho');
       expect(restored.unitId, '3');
-      expect(restored.versionCode, 'S2026.02');
+      expect(restored.versionCode, 'B2026.02');
       expect(restored.simulatedSacks, 80);
       expect(restored.grainName, 'Soja');
       expect(restored.items.map((i) => i.productName), ['NPK', 'Glifosato']);
@@ -290,12 +298,12 @@ void main() {
       // valores subiram: os insumos são os mesmos, mas cobri-los custa mais
       // sacas — e é isso que o consultor precisa ver antes de encaminhar.
       final result = check(
-        simulation(versionCode: 'S2026.02', simulatedSacks: 58),
+        simulation(versionCode: 'B2026.02', simulatedSacks: 58),
         v: version(code: 'S2026.03', prices: const {'5': 120.0, '9': 60.0}),
       );
 
       expect(result.versionChanged, isTrue);
-      expect(result.previousVersionCode, 'S2026.02');
+      expect(result.previousVersionCode, 'B2026.02');
       expect(result.rebuilt.versionCode, 'S2026.03');
       // 48 × 120 + 20 × 60 = 6.960 → 69,6 sacas.
       expect(result.currentSacks, closeTo(69.6, 0.001));
@@ -334,7 +342,7 @@ void main() {
       // Sem valor acordado nesta gestão o insumo não é permutável, e o servidor
       // recusaria a permuta inteira por causa dele.
       final result = check(
-        simulation(versionCode: 'S2026.02'),
+        simulation(versionCode: 'B2026.02'),
         v: version(code: 'S2026.03', prices: const {'5': 100.0}),
       );
 
@@ -351,7 +359,7 @@ void main() {
       // `stopReason` é a porta que o envio consulta. Enquanto ela não existia, o
       // envio olhava só `blocker` e a permuta passava daqui para tomar um 422.
       final result = check(
-        simulation(versionCode: 'S2026.02'),
+        simulation(versionCode: 'B2026.02'),
         v: version(code: 'S2026.03', prices: const {'5': 100.0}),
       );
 
@@ -362,7 +370,7 @@ void main() {
     });
 
     test('sem insumo derrubado a porta do envio fica aberta', () {
-      final result = check(simulation(versionCode: 'S2026.02'), v: version(code: 'S2026.03'));
+      final result = check(simulation(versionCode: 'B2026.02'), v: version(code: 'S2026.03'));
 
       expect(result.dropped, isEmpty);
       expect(result.stopReason, isNull);

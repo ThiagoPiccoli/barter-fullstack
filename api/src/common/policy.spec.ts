@@ -48,6 +48,49 @@ describe('Tabela de capacidades', () => {
     expect(rolesWith(CAPABILITY.bartersInvoice)).toEqual([ROLE.biller]);
   });
 
+  /**
+   * LER a cédula e PREENCHER a cédula são duas perguntas.
+   *
+   * O admin ganhou a segunda via do documento — ele já enxerga a operação
+   * inteira e já responde pelo timbre dela, e pedir a outra pessoa uma cópia do
+   * papel que ele administra não fazia sentido. O que ele NÃO ganhou é o ato:
+   * preencher a cédula continua com quem apura a matrícula do imóvel, e faturar
+   * continua sendo do faturista.
+   *
+   * Este teste é o que segura as duas metades separadas. Dar `bartersInvoice`
+   * ao admin — que era o atalho óbvio para o mesmo pedido — quebra aqui.
+   */
+  it('a cédula tem três mãos: o consultor preenche, o emissor emite, o admin lê', () => {
+    // LER é de quem preenche, de quem emite e de quem administra. São três
+    // perguntas diferentes sobre o mesmo documento, e a mesma porta responde às
+    // três.
+    expect(rolesWith(CAPABILITY.bartersCprRead).sort()).toEqual(
+      [ROLE.admin, ROLE.emitter, ROLE.consultant].sort(),
+    );
+
+    // ESCREVER é só do consultor — é ele quem tem a matrícula da lavoura, o
+    // nome do cônjuge e o SCR. O faturista PERDEU isso, e é aqui que a perda
+    // fica travada: devolvê-la a ele quebra este teste.
+    expect(rolesWith(CAPABILITY.bartersCprFill)).toEqual([ROLE.consultant]);
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersCprFill)).toBe(false);
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersCprRead)).toBe(false);
+
+    // EMITIR é só do emissor, e ele não escreve o que confere: quem confere o
+    // próprio texto não está conferindo nada.
+    expect(rolesWith(CAPABILITY.bartersCprIssue)).toEqual([ROLE.emitter]);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersCprFill)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersCprIssue)).toBe(false);
+
+    // O ADMIN lê e não age: nem fatura, nem emite.
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCprRead)).toBe(true);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersInvoice)).toBe(false);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCprIssue)).toBe(false);
+
+    // E não vazou para quem não tem nada com o documento.
+    expect(can({ role: ROLE.committee }, CAPABILITY.bartersCprRead)).toBe(false);
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersCprRead)).toBe(false);
+  });
+
   it('registrar permuta é só do consultor', () => {
     expect(rolesWith(CAPABILITY.bartersRegister)).toEqual([ROLE.consultant]);
   });
@@ -86,19 +129,124 @@ describe('Tabela de capacidades', () => {
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersReview,
         CAPABILITY.pricesRead,
+        CAPABILITY.bartersInvestmentPerHa,
+        // O DOSSIÊ é a terceira coisa que ele ganhou, e ela anda junto com a
+        // decisão: ler os anexos que já estão na permuta e juntar o que se
+        // apurou sobre o cliente (Serasa, endividamento interno) é parte de
+        // decidir crédito, não uma atribuição nova.
+        CAPABILITY.bartersCreditRead,
+        CAPABILITY.bartersCreditAttach,
       ].sort(),
     );
     expect(can({ role: ROLE.committee }, CAPABILITY.bartersInvoice)).toBe(false);
 
+    // O FATURISTA FATURA, E É SÓ ISSO. Ele ENCOLHEU nesta versão, e o encolhimento
+    // é a decisão: a cédula saiu das mãos dele (preencher foi para o consultor,
+    // emitir para o emissor) e `creditorManage` foi junto com o documento —
+    // o timbre segue quem emite o papel, não quem emite a nota.
     expect([...ROLE_CAPABILITIES[ROLE.biller]].sort()).toEqual(
       [
         CAPABILITY.bartersReadInvoicing,
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersInvoice,
         CAPABILITY.pricesRead,
+        CAPABILITY.bartersInvestmentPerHa,
       ].sort(),
     );
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersReview)).toBe(false);
+
+    // `creditorManage` é a ÚNICA capacidade que um posto da linha divide com o
+    // admin, e ela é do EMISSOR: a credora é o timbre dos documentos que ele
+    // leva a registro (razão social, CNPJ, endereço, foro da CPR), não uma
+    // decisão de negócio nem uma concessão de acesso. Quem percebe o CNPJ com um
+    // dígito trocado é quem confere o título, e mandá-lo abrir chamado com o
+    // admin para corrigir o próprio timbre trocaria um campo de texto por um
+    // processo.
+    expect(rolesWith(CAPABILITY.creditorManage).sort()).toEqual([ROLE.admin, ROLE.emitter].sort());
+    expect(can({ role: ROLE.biller }, CAPABILITY.creditorManage)).toBe(false);
+    expect(can({ role: ROLE.committee }, CAPABILITY.creditorManage)).toBe(false);
+    expect(can({ role: ROLE.manager }, CAPABILITY.creditorManage)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.creditorManage)).toBe(false);
+  });
+
+  /**
+   * O EMISSOR — o posto que a cédula ganhou, e o mais estreito da retaguarda.
+   *
+   * Ele enxerga um degrau adiante do faturista (`bartersReadIssuance`), confere
+   * e emite o título (`bartersCprIssue`) e responde pelo timbre dele
+   * (`creditorManage`). O que ele NÃO faz é escrever a cédula: quem confere o
+   * próprio texto não está conferindo nada.
+   */
+  it('o emissor emite o título e não escreve o que confere', () => {
+    expect([...ROLE_CAPABILITIES[ROLE.emitter]].sort()).toEqual(
+      [
+        CAPABILITY.producersReadAll,
+        CAPABILITY.bartersReadIssuance,
+        CAPABILITY.bartersCprIssue,
+        CAPABILITY.bartersCprRead,
+        CAPABILITY.creditorManage,
+        CAPABILITY.pricesRead,
+        CAPABILITY.bartersInvestmentPerHa,
+      ].sort(),
+    );
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersCprFill)).toBe(false);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersInvoice)).toBe(false);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReview)).toBe(false);
+  });
+
+  /**
+   * O ESCOPO DA EMISSÃO é do emissor e de mais ninguém — e ele NÃO acumula com
+   * o do faturamento, pelo mesmo motivo do escopo de time do gerente: um papel
+   * com os dois enxergaria mais do que o próprio trecho da linha.
+   */
+  it('o escopo da emissão é do emissor, e não se acumula com o do faturamento', () => {
+    expect(rolesWith(CAPABILITY.bartersReadIssuance)).toEqual([ROLE.emitter]);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReadInvoicing)).toBe(false);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReadAll)).toBe(false);
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersReadIssuance)).toBe(false);
+  });
+
+  /**
+   * O DOSSIÊ DA ANÁLISE DE CRÉDITO — a única leitura de anexo restrita do
+   * sistema.
+   *
+   * Nota fiscal, cédula assinada e comprovante de registro vão para quem alcança
+   * a permuta; a consulta ao Serasa e o endividamento do produtor dentro da
+   * cooperativa, não. A diferença é a natureza da peça: as primeiras são
+   * documentos da operação, e estas são a vida financeira de um cliente,
+   * colhida para uma decisão de crédito.
+   *
+   * E a ESCRITA é mais estreita ainda do que a leitura — ela não é do admin.
+   * Quem junta prova a uma decisão é quem decide; a leitura do admin existe para
+   * auditar isso, e ele escrever ali seria escrever dentro da fundamentação de
+   * uma decisão que não é dele.
+   */
+  it('o dossiê do comitê é lido pelo comitê e pelo admin, e escrito só pelo comitê', () => {
+    expect(rolesWith(CAPABILITY.bartersCreditRead).sort()).toEqual(
+      [ROLE.admin, ROLE.committee].sort(),
+    );
+    expect(rolesWith(CAPABILITY.bartersCreditAttach)).toEqual([ROLE.committee]);
+
+    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.biller }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.emitter }, CAPABILITY.bartersCreditRead)).toBe(false);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCreditAttach)).toBe(false);
+  });
+
+  /**
+   * A BASE DE SEGUROS é do admin, e é SEPARADA da caneta do preço do Barter.
+   *
+   * As duas decidem quanto a permuta custa ao produtor e hoje moram na mesma
+   * mão, mas são atos diferentes: publicar a tabela de valores é decisão
+   * comercial da safra; manter a base de seguros é transcrever a cotação que a
+   * seguradora mandou. O dia em que a segunda for do escritório de crédito, é
+   * esta linha que muda.
+   */
+  it('a base de seguros é do admin, e ninguém mais escreve nela', () => {
+    expect(rolesWith(CAPABILITY.insuranceManage)).toEqual([ROLE.admin]);
+    expect(can({ role: ROLE.committee }, CAPABILITY.insuranceManage)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.insuranceManage)).toBe(false);
   });
 
   it('o gerente enxerga o TIME dele e escreve UMA coisa: o parecer', () => {
@@ -119,9 +267,25 @@ describe('Tabela de capacidades', () => {
    */
   it('o consultor é o único papel sem acesso a valores', () => {
     expect(rolesWith(CAPABILITY.pricesRead).sort()).toEqual(
-      [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.biller].sort(),
+      [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.biller, ROLE.emitter].sort(),
     );
     expect(can({ role: ROLE.consultant }, CAPABILITY.pricesRead)).toBe(false);
+  });
+
+  /**
+   * O INVESTIMENTO POR HECTARE (sc/ha) é de quem COMPARA permutas.
+   *
+   * O recorte não é o mesmo de `pricesRead`, e a diferença é o gerente: ele vê
+   * R$ (avalia a negociação do time dele) e não vê sc/ha — para ele a permuta é
+   * uma, e uma régua de comparação sem com quem comparar é ruído na tela. Quem
+   * a tem são os três que olham a operação de cima: admin, comitê e faturista.
+   */
+  it('o sc/ha é de quem compara permutas — o gerente e o consultor não o veem', () => {
+    expect(rolesWith(CAPABILITY.bartersInvestmentPerHa).sort()).toEqual(
+      [ROLE.admin, ROLE.committee, ROLE.biller, ROLE.emitter].sort(),
+    );
+    expect(can({ role: ROLE.manager }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
+    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
   });
 
   /**

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:agrobarter_app/models/models.dart';
+import 'package:agrobarter_app/repositories/barter_program_repository.dart';
 import 'package:agrobarter_app/services/barter_math.dart';
 
 /// O parse do JSON da API é o ponto em que uma mudança no servidor chega ao
@@ -9,7 +10,7 @@ import 'package:agrobarter_app/services/barter_math.dart';
 void main() {
   Map<String, dynamic> barterJson({String status = 'pending'}) => {
         'code': 'PRM-2026-001',
-        'versionCode': 'S2026.02',
+        'versionCode': 'B2026.02',
         'consultantId': 2,
         'consultantName': 'João Silva',
         'consultantBranch': 'Filial 02',
@@ -43,14 +44,31 @@ void main() {
 
   Map<String, dynamic> versionJson({bool withGoals = false}) => {
         'id': 4,
-        'code': 'S2026.02',
+        'code': 'B2026.02',
         'number': 2,
-        'seasonCode': 'S2026',
-        'seasonName': 'Soja 2026',
-        'grainId': 1,
-        'grainName': 'Soja',
-        'grainUnit': 'saca 60kg',
-        'grainPrice': 148.5,
+        'seasonCode': 'B2026',
+        'seasonName': 'Barter 2026/27',
+        // AS CULTURAS que este lançamento aceita, e em qual delas a tabela está
+        // convertida. Duas aqui de propósito: é o caso que o modelo passou a
+        // ter de responder.
+        'grains': [
+          {
+            'grainId': 1,
+            'grainName': 'Soja',
+            'grainUnit': 'saca 60kg',
+            'price': 148.5,
+            'estimatedYield': 60,
+            'cprDueDate': '2026-06-30T12:00:00.000Z',
+          },
+          {
+            'grainId': 2,
+            'grainName': 'Milho',
+            'grainUnit': 'saca 60kg',
+            'price': 64.5,
+            'estimatedYield': 170,
+          },
+        ],
+        'pricedInGrainId': 1,
         'status': 'active',
         'isOpen': true,
         'startsAt': '2026-01-08T00:00:00.000Z',
@@ -63,7 +81,13 @@ void main() {
           },
         ],
         if (withGoals) ...{
-          'realized': {'sales': 5520.0, 'sacks': 80.4, 'barters': 1},
+          'realized': {
+            'sales': 5520.0,
+            'sacks': [
+              {'grainId': 1, 'grainName': 'Soja', 'sacks': 80.4},
+            ],
+            'barters': 1,
+          },
           'goals': [
             {'kind': 'sales', 'target': 10000, 'realized': 5520.0, 'ratio': 0.552, 'met': false},
             {'kind': 'volumeExotico', 'target': 5, 'realized': 5, 'ratio': 1, 'met': true},
@@ -83,7 +107,7 @@ void main() {
 
     test('guarda a versão do Barter em que foi fechada', () {
       final barter = BarterModel.fromJson(barterJson(status: 'approved'));
-      expect(barter.versionCode, 'S2026.02');
+      expect(barter.versionCode, 'B2026.02');
     });
 
     /// O imposto sai da alíquota GRAVADA na permuta, não do cadastro do produtor
@@ -205,6 +229,89 @@ void main() {
       expect(faturada.invoicedAt, isNotNull);
       // Faturar não desfaz a aprovação — ela continua contando nos painéis.
       expect(faturada.wasApproved, isTrue);
+    });
+
+    /// O RASCUNHO — o começo da linha, e o único estado que é do consultor.
+    ///
+    /// O que este teste prende é a diferença entre ESCRITO e ENVIADO: os dois
+    /// campos do parecer são independentes, e é dessa diferença que a tela dele
+    /// tira o "está com você" em vez de "esperando o gerente".
+    test('rascunho: parecer escrito não é permuta encaminhada', () {
+      final vazio = BarterModel.fromJson(barterJson(status: 'draft')
+        ..['waitingFor'] = 'consultant'
+        ..['statusLabel'] = 'Rascunho'
+        ..['managerId'] = null
+        ..['managerName'] = null);
+      expect(vazio.isDraft, isTrue);
+      expect(vazio.statusLabel, 'Rascunho');
+      expect(vazio.waitingFor, UserRole.consultant);
+      expect(vazio.hasConsultantOpinion, isFalse);
+      // Sem destinatário: ele é gravado no encaminhamento, não no registro. E
+      // a tela diz isso por extenso, em vez de um traço: quem lê precisa saber
+      // que ninguém foi escolhido ainda, e não que o dado sumiu.
+      expect(vazio.managerLabel, 'não definido');
+
+      final escrito = BarterModel.fromJson(barterJson(status: 'draft')
+        ..['consultantNote'] = 'Cliente de cinco safras, sem atraso.');
+      expect(escrito.hasConsultantOpinion, isTrue);
+      // ESCRITO, e não enviado: a data do encaminhamento é o que separa os dois,
+      // e ela não é inventada a partir do texto.
+      expect(escrito.consultantSentAt, isNull);
+      expect(escrito.isDraft, isTrue);
+
+      final enviado = BarterModel.fromJson(barterJson(status: 'sentToManager')
+        ..['consultantNote'] = 'Cliente de cinco safras, sem atraso.'
+        ..['consultantSentAt'] = '2026-05-08T14:20:00.000Z');
+      expect(enviado.isDraft, isFalse);
+      expect(enviado.consultantSentAt, isNotNull);
+    });
+
+    /// A APROVAÇÃO COM RESSALVA é a mesma FILA da aprovação limpa, e um estado
+    /// diferente dela. Ler só `approved` faria a permuta com exigência sumir da
+    /// tela de quem tem de faturá-la — e é [awaitsInvoice] que as telas usam.
+    test('aprovada com ressalva: mesma fila do faturista, exigência à mostra', () {
+      final comRessalva = BarterModel.fromJson(barterJson(status: 'approvedWithConditions')
+        ..['waitingFor'] = 'biller'
+        ..['statusLabel'] = 'Aprovada com ressalva — a faturar'
+        ..['reviewedBy'] = 'Comitê de Permutas'
+        ..['reviewNote'] = 'Exigir seguro agrícola e aval do cônjuge.');
+
+      expect(comRessalva.status, BarterStatus.approvedWithConditions);
+      expect(comRessalva.hasConditions, isTrue);
+      // A FILA: ela conta como aprovada em todo painel, e é trabalho do
+      // faturista como qualquer outra aprovação.
+      expect(comRessalva.awaitsInvoice, isTrue);
+      expect(comRessalva.wasApproved, isTrue);
+      expect(comRessalva.waitingFor, UserRole.biller);
+      expect(comRessalva.reviewNote, contains('seguro agrícola'));
+
+      // E a aprovação LIMPA não vira ressalva por ter observação.
+      final limpa = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['reviewNote'] = 'Ata: reunião de 12/05.');
+      expect(limpa.hasConditions, isFalse);
+    });
+
+    /// O INVESTIMENTO POR HECTARE só chega a quem pode compará-lo, então o app
+    /// precisa distinguir "não veio" de "é zero". Zero seria uma afirmação — e
+    /// falsa.
+    test('sc/ha ausente é null, e não zero', () {
+      final semMetrica = BarterModel.fromJson(barterJson(status: 'approved'));
+      expect(semMetrica.sacksPerHa, isNull);
+      expect(semMetrica.producerAreaHa, isNull);
+
+      final comMetrica = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['producerAreaHa'] = 120
+        ..['sacksPerHa'] = 0.67037);
+      expect(comMetrica.producerAreaHa, 120);
+      expect(comMetrica.sacksPerHa, closeTo(0.67037, 0.00001));
+
+      // Permuta anterior ao campo de área: o servidor manda a área que tem (0) e
+      // `null` no lugar da divisão que não dá para fazer.
+      final semArea = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['producerAreaHa'] = 0
+        ..['sacksPerHa'] = null);
+      expect(semArea.producerAreaHa, 0);
+      expect(semArea.sacksPerHa, isNull);
     });
 
     /// A LINHA DO TEMPO só vem no detalhe. Na listagem ela não vem, e a tela
@@ -405,16 +512,67 @@ void main() {
       final barter = BarterModel.fromJson(json);
 
       expect(barter.unitId, isEmpty);
-      expect(barter.unitLabel, '—');
+      expect(barter.unitLabel, 'não informada');
+    });
+  });
+
+  /// O PENHOR — a área de lavoura que a permuta exige em garantia.
+  ///
+  /// O app NÃO calcula a área: ela chega pronta do servidor, porque depende das
+  /// sacas (que mudam quando um produto de fora do Barter é deferido) e de duas
+  /// taxas congeladas no registro. O que estas provas travam é o outro lado —
+  /// que o app saiba distinguir "não exige garantia" de "esta permuta é anterior
+  /// à regra", e que a frase que explica o número não minta sobre a conta.
+  group('o penhor da permuta', () {
+    test('a área e as taxas chegam prontas do servidor', () {
+      final barter = BarterModel.fromJson({
+        ...barterJson(),
+        'pledgeAreaHa': 24.0,
+        'pledgeYield': 60.0,
+        'pledgeMarginPercent': 20.0,
+      });
+
+      expect(barter.hasPledge, isTrue);
+      expect(barter.pledgeAreaLabel, '24,00 ha');
+      expect(barter.pledgeBasisLabel, 'produção estimada de 60 sc/ha + 20% de margem de segurança');
+    });
+
+    /// SEM MARGEM, a frase não inventa um "+ 0%": zero é a credora dizendo que
+    /// não exige folga, e escrever isso por extenso faria parecer que houve um
+    /// acréscimo de nada.
+    test('sem margem, a explicação fala só da produção estimada', () {
+      final barter = BarterModel.fromJson({
+        ...barterJson(),
+        'pledgeAreaHa': 20.0,
+        'pledgeYield': 60.0,
+        'pledgeMarginPercent': 0.0,
+      });
+
+      expect(barter.pledgeBasisLabel, 'produção estimada de 60 sc/ha');
+    });
+
+    /// A PERMUTA ANTERIOR À REGRA — e a resposta da tela a ela é CALAR.
+    ///
+    /// É o mesmo caso da permuta sem alíquota registrada: mostrar "0,00 ha" seria
+    /// o app afirmando que esta permuta não precisa de garantia nenhuma, que é o
+    /// oposto do que a ausência significa. Vale também para a LISTAGEM, que não
+    /// carrega os itens e por isso não traz o bloco.
+    test('permuta sem penhor dimensionado não mostra área nenhuma', () {
+      expect(BarterModel.fromJson(barterJson()).hasPledge, isFalse);
     });
   });
 
   group('BarterVersionModel', () {
     test('lê a versão vigente com a tabela de valores', () {
       final version = BarterVersionModel.fromJson(versionJson());
-      expect(version.code, 'S2026.02');
+      expect(version.code, 'B2026.02');
+      // OS ATALHOS respondem pela cultura EM USO — a que a tabela converteu.
       expect(version.grainName, 'Soja');
       expect(version.grainPrice, 148.5);
+      // E as duas culturas chegam inteiras: é entre elas que o consultor
+      // escolhe.
+      expect(version.grains.map((g) => g.grainName), ['Soja', 'Milho']);
+      expect(version.grainFor('2')?.estimatedYield, 170);
       expect(version.isOpen, isTrue);
       expect(version.priceOf('5')?.perUnit, 115.0);
       // Insumo fora da tabela não é permutável nesta gestão.
@@ -437,6 +595,30 @@ void main() {
       expect(version.goals[1].kind, GoalKind.sales); // desconhecida → leitura mais comum
       expect(version.anyGoalMet, isTrue);
       expect(version.realizedBarters, 1);
+    });
+
+    /// O MODO de encerramento por meta. Ausente vale MANUAL: é o padrão do
+    /// servidor, e é o que uma versão publicada antes desta opção sempre foi.
+    test('o modo de encerramento vem do servidor, e ausente é manual', () {
+      expect(BarterVersionModel.fromJson(versionJson()).closeOnGoal, isFalse);
+
+      final automatico = versionJson()..['closeOnGoal'] = true;
+      expect(BarterVersionModel.fromJson(automatico).closeOnGoal, isTrue);
+    });
+
+    /// A versão que fechou sozinha guarda o MOTIVO no mesmo campo de quem
+    /// encerrou — é o que o histórico do lançamento exibe.
+    test('a versão encerrada por meta diz por que fechou', () {
+      final fechada = versionJson()
+        ..['status'] = 'closed'
+        ..['isOpen'] = false
+        ..['closeOnGoal'] = true
+        ..['closedAt'] = '2026-03-02T10:00:00.000Z'
+        ..['closedBy'] = 'Automático — meta de vendas atingida (1000000.00)';
+
+      final version = BarterVersionModel.fromJson(fechada);
+      expect(version.isOpen, isFalse);
+      expect(version.closedBy, contains('meta de vendas atingida'));
     });
   });
 
@@ -464,7 +646,7 @@ void main() {
     /// enxerga, com a tabela em sacas".
     Map<String, dynamic> versionInSacks() => {
           'id': 4,
-          'code': 'S2026.02',
+          'code': 'B2026.02',
           'number': 2,
           'seasonCode': 'S2026',
           'grainName': 'Soja',
@@ -572,7 +754,67 @@ void main() {
         'versions': [versionJson()],
       });
       expect(season.isOpen, isTrue);
-      expect(season.versions.single.code, 'S2026.02');
+      expect(season.versions.single.code, 'B2026.02');
+    });
+
+    /// O VENCIMENTO DA CPR é da CULTURA, e o app só o transporta: soja vence na
+    /// colheita da soja, milho safrinha no dele — e as duas convivem na mesma
+    /// gestão. Ele saiu da SAFRA junto com o grão, pelo mesmo motivo.
+    test('o vencimento da CPR chega com a cultura do lançamento', () {
+      final grain = VersionGrainModel.fromJson({
+        'grainId': 1,
+        'grainName': 'Soja',
+        'grainUnit': 'saca 60kg',
+        'price': 148.5,
+        'estimatedYield': 60,
+        'cprDueDate': '2026-06-30T12:00:00.000Z',
+      });
+
+      // O modelo guarda o instante em hora LOCAL, como todas as datas do app.
+      // O que precisa sobreviver é o DIA — e é o meio-dia UTC que garante isso
+      // em qualquer fuso (ver `cprDueDateInstant`).
+      expect(grain.cprDueDate!.toUtc(), DateTime.utc(2026, 6, 30, 12));
+      expect(grain.cprDueDate!.day, 30);
+      expect(grain.cprDueDate!.month, 6);
+    });
+
+    /// SEM VENCIMENTO é um estado legítimo, e não um erro: o Barter é lançado
+    /// antes de o calendário da colheita estar fechado. Quem cobra a falta é a
+    /// cédula, endereçando a pendência ao admin.
+    test('cultura sem vencimento acertado não inventa uma data', () {
+      final grain = VersionGrainModel.fromJson({
+        'grainId': 2,
+        'grainName': 'Milho',
+        'grainUnit': 'saca 60kg',
+        'price': 64.5,
+        'estimatedYield': 170,
+      });
+
+      expect(grain.cprDueDate, isNull);
+    });
+
+    /// O DIA ESCOLHIDO NO CALENDÁRIO vira MEIO-DIA UTC, e não a meia-noite
+    /// local, porque meia-noite a leste de Greenwich cai no dia ANTERIOR em UTC
+    /// — e a cédula sairia vencendo um dia antes do que o admin escolheu.
+    test('o vencimento escolhido vira meio-dia UTC do mesmo dia', () {
+      // O que o `showDatePicker` devolve: meia-noite, em hora local.
+      final escolhido = DateTime(2026, 6, 30);
+
+      final instante = cprDueDateInstant(escolhido);
+
+      expect(instante.isUtc, isTrue);
+      expect(instante, DateTime.utc(2026, 6, 30, 12));
+      // O DIA é o mesmo em UTC, que é a única coisa que precisa sobreviver.
+      expect(instante.toIso8601String(), startsWith('2026-06-30'));
+    });
+
+    /// A virada do mês e do ano é onde o erro de fuso apareceria primeiro: 1º de
+    /// janeiro à meia-noite a leste de Greenwich é 31 de dezembro em UTC.
+    test('a virada do ano não anda um dia para trás', () {
+      expect(
+        cprDueDateInstant(DateTime(2027, 1, 1)).toIso8601String(),
+        startsWith('2027-01-01'),
+      );
     });
   });
 

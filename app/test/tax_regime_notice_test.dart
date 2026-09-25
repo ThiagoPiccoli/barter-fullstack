@@ -6,15 +6,16 @@ import 'package:agrobarter_app/models/barter_simulation.dart';
 import 'package:agrobarter_app/models/models.dart';
 import 'package:agrobarter_app/screens/barter_screen.dart';
 
-/// O SELETOR DO FUNRURAL, na tela de verdade.
+/// O AVISO DO FUNRURAL, na tela de verdade.
 ///
-/// A escolha do regime não é preferência de exibição: ela é gravada na permuta
-/// e vira o `taxRate` congelado do comprovante. Enquanto os segmentos diziam só
-/// a alíquota, o nome da opção não selecionada ficava invisível e descobri-lo
-/// custava tocar nela — que é o mesmo gesto de declará-la.
+/// O regime não é escolha de quem fecha a permuta: é a opção formal que o
+/// produtor fez perante o fisco, e ela mora no cadastro dele. A etapa 3 LÊ esse
+/// cadastro e diz, em voz alta, qual imposto vai incidir e quanto ele dá em
+/// sacas. Enquanto isto foi um seletor de duas opções, a tela convidava a marcar
+/// a alíquota menor numa permuta específica.
 ///
-/// Estes testes rodam a etapa 3 inteira num telefone estreito, que é onde os
-/// dois rótulos por segmento têm chance de estourar a linha.
+/// Estes testes rodam a etapa 3 inteira num telefone estreito, que é onde o
+/// aviso tem chance de estourar a linha.
 void main() {
   UserModel consultor() => UserModel(
     id: '2',
@@ -30,7 +31,10 @@ void main() {
   );
 
   /// Antônio é PF: 1,63% na comercialização, 0,20% na folha.
-  ProducerModel produtor({String document = '123.456.789-09'}) => ProducerModel(
+  ProducerModel produtor({
+    String document = '123.456.789-09',
+    TaxRegime taxRegime = TaxRegime.comercializacao,
+  }) => ProducerModel(
     id: '10',
     name: 'Antônio Carvalho',
     consultantIds: const ['2'],
@@ -39,6 +43,7 @@ void main() {
     farmName: 'Fazenda Boa Vista',
     city: 'Mandaguari/PR',
     areaHa: 120,
+    taxRegime: taxRegime,
     avatarInitials: 'AC',
     createdAt: DateTime(2020, 1, 1),
   );
@@ -50,7 +55,7 @@ void main() {
     producerName: 'Antônio Carvalho',
     unitId: '3',
     unitName: 'Filial 02',
-    versionCode: 'S2026.02',
+    versionCode: 'B2026.02',
     items: const [
       SimulationItem(productId: '5', productName: 'NPK', unit: 'saco 50kg', quantity: 48),
     ],
@@ -79,14 +84,20 @@ void main() {
     ];
     AppData.currentVersion = BarterVersionModel(
       id: 'v1',
-      code: 'S2026.02',
+      code: 'B2026.02',
       number: 2,
-      seasonCode: 'S2026',
-      seasonName: 'Safra 2026',
-      grainId: '1',
-      grainName: 'Soja',
-      grainUnit: 'saca 60kg',
-      grainPrice: 100,
+      seasonCode: 'B2026',
+      seasonName: 'Barter 2026',
+      grains: const [
+        VersionGrainModel(
+          grainId: '1',
+          grainName: 'Soja',
+          grainUnit: 'saca 60kg',
+          price: 100,
+          estimatedYield: 60,
+        ),
+      ],
+      pricedInGrainId: '1',
       status: 'open',
       isOpen: true,
       startsAt: DateTime(2026, 2, 1),
@@ -127,30 +138,31 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('cada segmento diz a alíquota E o nome da forma', (tester) async {
+  testWidgets('o aviso diz o regime do cadastro e a alíquota dele', (tester) async {
     await abrirEtapa3(tester);
 
-    // As duas alíquotas de PF, visíveis sem tocar em nada: é o percentual que a
-    // pessoa do outro lado do balcão pergunta.
-    expect(find.text('1,63%'), findsOneWidget);
-    expect(find.text('0,20%'), findsOneWidget);
-
-    // E o nome de CADA UMA, inclusive o da que não está marcada — descobri-lo
-    // não pode custar o gesto que a declara.
-    expect(find.text('Comercialização'), findsOneWidget);
-    expect(find.text('Folha'), findsOneWidget);
+    // Antônio é PF e está na comercialização: 1,63%. O aviso diz DE ONDE o
+    // número vem, que é o que faz dele um fato e não uma escolha.
+    expect(find.textContaining('No cadastro, este produtor recolhe'), findsOneWidget);
+    expect(find.textContaining('1,63%'), findsOneWidget);
   });
 
-  testWidgets('a linha de baixo explica a forma marcada, além do quanto', (tester) async {
+  /// NÃO HÁ o que trocar aqui: corrigir o regime é ato do admin, no cadastro do
+  /// produtor, e vale da próxima permuta em diante.
+  testWidgets('a etapa 3 não oferece trocar o imposto', (tester) async {
     await abrirEtapa3(tester);
 
-    // 48 sacos × R$ 100 = R$ 4.800; a R$ 100 a saca, 48 sacas. 1,63% disso são
+    expect(find.byType(SegmentedButton<TaxRegime>), findsNothing);
+    expect(find.text('Folha'), findsNothing);
+  });
+
+  testWidgets('o aviso diz quanto o imposto dá em sacas', (tester) async {
+    await abrirEtapa3(tester);
+
+    // 48 sacos x R$ 100 = R$ 4.800; a R$ 100 a saca, 48 sacas. 1,63% disso são
     // 0,78 saca, que o formato do app arredonda para uma casa. O consultor não
-    // vê R$ em lugar nenhum — o imposto sai em grão, como o resto da permuta.
-    expect(find.textContaining('+ 0,8 sc soja de Funrural/Senar'), findsOneWidget);
-    // `description` deixou de ser código morto: era a única frase do app que
-    // dizia a diferença entre as duas formas, e ela não aparecia em tela alguma.
-    expect(find.textContaining('O Funrural sai da receita de cada venda'), findsOneWidget);
+    // vê R$ em lugar nenhum: o imposto sai em grão, como o resto da permuta.
+    expect(find.textContaining('+ 0,8 sc soja'), findsOneWidget);
   });
 
   /// O CABEÇALHO DO PRODUTOR não pode estourar a linha.
@@ -173,12 +185,47 @@ void main() {
     });
   }
 
-  testWidgets('CNPJ troca as duas alíquotas de uma vez', (tester) async {
+  /// PF ou PJ não é pergunta: sai do documento do produtor, e muda a alíquota.
+  testWidgets('CNPJ paga outro percentual, e o aviso mostra o dele', (tester) async {
     AppData.producers = [produtor(document: '12.345.678/0001-90')];
     await abrirEtapa3(tester);
 
-    expect(find.text('2,23%'), findsOneWidget);
-    expect(find.text('0,25%'), findsOneWidget);
-    expect(find.text('1,63%'), findsNothing);
+    expect(find.textContaining('2,23%'), findsOneWidget);
+    expect(find.textContaining('1,63%'), findsNothing);
+  });
+
+  /// O REGIME É DO PRODUTOR, e a permuta nasce com o dele.
+  ///
+  /// A opção pela folha é feita uma vez, perante o fisco, e vale para todas as
+  /// entregas — perguntá-la a cada fechamento era pedir ao consultor que
+  /// respondesse de memória, e a segunda permuta do mesmo produtor saía num
+  /// regime diferente da primeira sem nada ter mudado no mundo.
+  ///
+  /// A simulação retomada é o caso contrário e continua valendo: ela carrega a
+  /// escolha do dia em que foi montada, e retomá-la não pode trocá-la por
+  /// baixo de quem já decidiu.
+  testWidgets('a permuta nasce no regime do cadastro do produtor', (tester) async {
+    AppData.producers = [produtor(taxRegime: TaxRegime.folha)];
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    // Sem simulação: a tela começa na etapa 1, e o regime entra junto com o
+    // produtor escolhido.
+    await tester.pumpWidget(MaterialApp(home: NewBarterScreen(consultant: consultor())));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Antônio Carvalho'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Filial 02').first);
+    await tester.pumpAndSettle();
+
+    // Um insumo qualquer, para o rodapé do imposto aparecer.
+    await tester.enterText(find.byType(TextField).last, '10');
+    await tester.pumpAndSettle();
+
+    // A FOLHA, sem ninguém ter escolhido nada: ela veio do cadastro junto com o
+    // produtor. Para o CPF dele, sobra o Senar de 0,20%.
+    expect(find.textContaining('folha'), findsOneWidget);
+    expect(find.textContaining('0,20%'), findsOneWidget);
   });
 }

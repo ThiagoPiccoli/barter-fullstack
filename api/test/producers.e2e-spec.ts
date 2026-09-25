@@ -73,6 +73,65 @@ describe('Producers — carteira (e2e)', () => {
     expect(asAdmin.body.data.consultantIds).toEqual([CONSULTANT.joao]);
   });
 
+  /**
+   * O REGIME DE RECOLHIMENTO é dado do produtor: a opção pela folha é feita uma
+   * vez, perante o fisco, e vale para todas as entregas dele. É daqui que cada
+   * permuta nova o herda (ver `Producer.taxRegime`).
+   */
+  describe('regime de recolhimento do Funrural', () => {
+    const cadastrar = async (taxRegime?: string) =>
+      request(app.getHttpServer())
+        .post('/api/v1/producers')
+        .set('Authorization', `Bearer ${await loginAs(app, ADMIN)}`)
+        .send({
+          name: 'Produtor da Folha',
+          consultantIds: [CONSULTANT.joao],
+          document: 'CPF 888.888.888-88',
+          farmName: 'Fazenda da Folha',
+          city: 'Maringá/PR',
+          areaHa: 90,
+          ...(taxRegime === undefined ? {} : { taxRegime }),
+        });
+
+    it('o cadastro guarda a opção do produtor', async () => {
+      const response = await cadastrar('folha');
+      expect(response.status).toBe(201);
+      expect(response.body.data.taxRegime).toBe('folha');
+    });
+
+    /** Quem não fez opção nenhuma cai na comercialização — que é a maioria. */
+    it('sem opção declarada, o produtor recolhe sobre a comercialização', async () => {
+      const response = await cadastrar();
+      expect(response.body.data.taxRegime).toBe('comercializacao');
+    });
+
+    it('regime que não existe é recusado', async () => {
+      const response = await cadastrar('presumido');
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('recolhimento');
+    });
+
+    it('a edição troca o regime do produtor já cadastrado', async () => {
+      const admin = `Bearer ${await loginAs(app, ADMIN)}`;
+      // Antônio Carvalho (id 1) está na comercialização no dataset.
+      const response = await request(app.getHttpServer())
+        .put('/api/v1/producers/1')
+        .set('Authorization', admin)
+        .send({
+          name: 'Antônio Carvalho',
+          consultantIds: [CONSULTANT.joao],
+          document: 'CPF 123.456.789-00',
+          farmName: 'Fazenda Boa Vista',
+          city: 'Maringá/PR',
+          areaHa: 120,
+          taxRegime: 'folha',
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.taxRegime).toBe('folha');
+    });
+  });
+
   it('produtor precisa nascer na carteira de pelo menos um consultor válido', async () => {
     const admin = await loginAs(app, ADMIN);
     const create = (consultantIds: unknown) =>
@@ -264,6 +323,142 @@ describe('Producers — carteira (e2e)', () => {
         where: { producerId_consultantId: { producerId: 1, consultantId: CONSULTANT.ana } },
       });
       expect(novo!.assignedAt.getTime()).toBeGreaterThanOrEqual(antes.getTime() - 1000);
+    });
+  });
+
+  /**
+   * OS DADOS DO PRODUTOR SÃO GERIDOS PELO CONSULTOR — e até onde.
+   *
+   * Quem visita a fazenda é quem sabe que o telefone mudou, que o cliente
+   * arrendou do outro lado do rio e que o nome da fazenda saiu errado no
+   * cadastro. Enquanto isso foi só do admin, a correção de um telefone virava um
+   * chamado, e o cadastro envelhecia em silêncio.
+   *
+   * O que ele NÃO alcança é o outro lado da mesma regra, e é o que estes testes
+   * fixam: a identidade do cadastro (o documento), as duas réguas que medem
+   * toda permuta dele (a área e o regime de Funrural) e a carteira — quem atende
+   * quem é decisão de quem administra.
+   */
+  describe('o consultor gere os dados do produtor da carteira dele', () => {
+    /** Antônio Carvalho (id 1), da carteira do João, como está no seed. */
+    const antonio = {
+      name: 'Antônio Carvalho',
+      document: 'CPF 123.456.789-00',
+      farmName: 'Fazenda Boa Vista',
+      city: 'Maringá/PR',
+      areaHa: 120,
+    };
+
+    const editar = async (id: number, email: string, body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .put(`/api/v1/producers/${id}`)
+        .set('Authorization', `Bearer ${await loginAs(app, email)}`)
+        .send(body);
+
+    it('o consultor corrige contato e endereço do próprio cliente', async () => {
+      const response = await editar(1, JOAO, {
+        ...antonio,
+        phone: '(44) 99999-1234',
+        farmName: 'Fazenda Boa Vista II',
+        city: 'Mandaguari/PR',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({
+        phone: '(44) 99999-1234',
+        farmName: 'Fazenda Boa Vista II',
+        city: 'Mandaguari/PR',
+      });
+      // E a carteira fica como estava: ele não mandou o campo, e o servidor não
+      // o inventa.
+      expect(response.body.data.consultantIds).toEqual([CONSULTANT.joao]);
+    });
+
+    it('produtor de carteira alheia continua fora do alcance dele', async () => {
+      // Helena Prado (id 2) é atendida só pela Ana.
+      const response = await editar(2, JOAO, { ...antonio, name: 'Helena Prado' });
+      expect(response.status).toBe(403);
+      expect(response.body.message).toContain('não pertence à sua carteira');
+    });
+
+    /**
+     * A ÁREA é o denominador de toda régua da permuta — os mínimos por hectare,
+     * o custo do seguro, o investimento por hectare. Um arrendamento a mais muda
+     * quanto insumo o Barter exige daquele cliente: é decisão de crédito, não
+     * atualização de contato.
+     */
+    it('a área cultivável não é dele, e a recusa diz a quem pedir', async () => {
+      const response = await editar(1, JOAO, { ...antonio, areaHa: 400 });
+
+      expect(response.status).toBe(403);
+      // A frase diz o que é e A QUEM PEDIR: uma recusa que só nega manda o
+      // consultor concluir que o app está quebrado.
+      expect(response.body.message).toBe(
+        'Quem altera a área cultivável é o administrador. ' +
+          'Peça a ele para corrigir e edite o restante normalmente',
+      );
+    });
+
+    /** O documento é a IDENTIDADE do cadastro: trocá-lo faz o cliente A virar B. */
+    it('o CPF/CNPJ não é dele', async () => {
+      const response = await editar(1, JOAO, { ...antonio, document: 'CPF 111.222.333-44' });
+
+      expect(response.status).toBe(403);
+      expect(response.body.message).toContain('CPF/CNPJ');
+    });
+
+    /** A opção perante o fisco vale para o ano e para todas as entregas dele. */
+    it('o regime de Funrural não é dele', async () => {
+      const response = await editar(1, JOAO, { ...antonio, taxRegime: 'folha' });
+
+      expect(response.status).toBe(403);
+      expect(response.body.message).toContain('Funrural');
+    });
+
+    /**
+     * A CARTEIRA é a lista inteira num campo só: um consultor que a escrevesse
+     * poderia se remover do próprio cliente — ou remover um colega — sem que
+     * ninguém tivesse decidido isso.
+     */
+    it('a carteira continua sendo do admin', async () => {
+      const response = await editar(1, JOAO, {
+        ...antonio,
+        consultantIds: [CONSULTANT.joao, CONSULTANT.ana],
+      });
+
+      expect(response.status).toBe(403);
+      expect(response.body.message).toContain('administrador');
+    });
+
+    /** Cadastrar e excluir continuam onde estavam. */
+    it('cadastrar e excluir continuam fora do alcance do consultor', async () => {
+      const token = `Bearer ${await loginAs(app, JOAO)}`;
+      const criado = await request(app.getHttpServer())
+        .post('/api/v1/producers')
+        .set('Authorization', token)
+        .send({ ...antonio, document: 'CPF 999.888.777-66', consultantIds: [CONSULTANT.joao] });
+      expect(criado.status).toBe(403);
+
+      const excluido = await request(app.getHttpServer())
+        .delete('/api/v1/producers/1')
+        .set('Authorization', token);
+      expect(excluido.status).toBe(403);
+    });
+
+    /** E o admin continua alcançando tudo — inclusive o que o consultor não alcança. */
+    it('o admin continua alterando a área, o documento e a carteira', async () => {
+      const response = await editar(1, ADMIN, {
+        ...antonio,
+        areaHa: 400,
+        taxRegime: 'folha',
+        consultantIds: [CONSULTANT.joao, CONSULTANT.ana],
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ areaHa: 400, taxRegime: 'folha' });
+      expect(response.body.data.consultantIds.sort()).toEqual(
+        [CONSULTANT.joao, CONSULTANT.ana].sort(),
+      );
     });
   });
 

@@ -125,15 +125,20 @@ class ApiClient {
   /// admin olhando a barra de progresso, não uma tela que precisa responder ao
   /// toque. O resto do contrato é o mesmo — token, envelope e mensagem de erro
   /// em pt-BR passam pelo mesmo tratamento.
+  /// [method] existe porque nem todo upload CRIA: o SCR da cédula é UM (o novo
+  /// substitui o anterior, que é uma fotografia vencida), e a rota dele é `PUT`.
+  /// O padrão continua sendo `POST`, que é o caso das coleções — a planilha do
+  /// Barter e as notas fiscais, que são várias por permuta.
   Future<dynamic> upload(
     String path, {
     required String filename,
     required List<int> bytes,
     Map<String, String> fields = const {},
+    String method = 'POST',
     Duration timeout = const Duration(seconds: 60),
   }) async {
     final uri = Uri.parse('$baseUrl/api/v1$path');
-    final request = http.MultipartRequest('POST', uri)
+    final request = http.MultipartRequest(method, uri)
       ..headers['Accept'] = 'application/json'
       ..fields.addAll(fields)
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
@@ -164,6 +169,67 @@ class ApiClient {
     }
     if (decoded is Map<String, dynamic> && decoded.containsKey('data')) return decoded['data'];
     return decoded;
+  }
+
+  /// BAIXA um ARQUIVO da API — a nota fiscal anexada ao faturamento e o SCR da
+  /// cédula.
+  ///
+  /// Ela não passa pelo `_send` porque a resposta NÃO é JSON: são os bytes do
+  /// documento, com o nome e o tipo nos cabeçalhos. O resto do contrato é o
+  /// mesmo — o token vai junto, a sessão expirada derruba do mesmo jeito, e o
+  /// erro chega em pt-BR.
+  ///
+  /// O NOME sai do `Content-Disposition`, que é o que o servidor manda: ele é o
+  /// nome com que o arquivo foi anexado, e é por ele que quem anexou o
+  /// reconhece. Sem o cabeçalho, sobra o fim do caminho — feio, mas honesto.
+  Future<({List<int> bytes, String filename, String contentType})> download(
+    String path, {
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    final uri = Uri.parse('$baseUrl/api/v1$path');
+    http.Response response;
+    try {
+      response = await http
+          .get(uri, headers: {
+            'Accept': '*/*',
+            if (_token != null) 'Authorization': 'Bearer $_token',
+          })
+          .timeout(timeout);
+    } on TimeoutException {
+      throw const ApiException(0, 'O download do arquivo demorou demais. Tente novamente.');
+    } on http.ClientException catch (error) {
+      throw ApiException(
+        0,
+        isConnectionFailure(error)
+            ? 'Sem conexão com o servidor. Verifique sua rede.'
+            : 'Falha ao baixar o arquivo.',
+      );
+    }
+
+    if (response.statusCode >= 400) {
+      if (response.statusCode == 401 && _token != null) {
+        _token = null;
+        onSessionExpired?.call();
+      }
+      // O corpo do ERRO é JSON (é a resposta normal da API), mesmo numa rota que
+      // devolve bytes no caminho feliz.
+      final decoded = response.body.isEmpty ? null : _tryDecode(response.body);
+      throw ApiException(response.statusCode, _errorMessage(response.statusCode, decoded));
+    }
+
+    return (
+      bytes: response.bodyBytes,
+      filename: _filenameFrom(response.headers['content-disposition']) ??
+          path.split('/').last,
+      contentType: response.headers['content-type'] ?? 'application/octet-stream',
+    );
+  }
+
+  /// O nome do arquivo dentro de `attachment; filename="nota.pdf"`.
+  static String? _filenameFrom(String? disposition) {
+    if (disposition == null) return null;
+    final match = RegExp('filename="([^"]+)"').firstMatch(disposition);
+    return match?.group(1);
   }
 
   /// [unwrap] falso devolve o envelope cru (`{data, meta}`) — quem pagina

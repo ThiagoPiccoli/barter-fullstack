@@ -1,7 +1,11 @@
 /**
- * Os PAPÉIS do sistema, em um só lugar. `role` é String no banco (SQLite não
- * tem enum), então a lista abaixo é a única definição do que vale — guard,
+ * Os PAPÉIS do sistema, em um só lugar. `role` é String no banco, e não `enum`
+ * do Postgres, então a lista abaixo é a única definição do que vale — guard,
  * seed, serializador e app conferem por aqui.
+ *
+ * Eles estão na ORDEM DA ESTEIRA depois do admin: o consultor monta, o gerente
+ * opina, o comitê decide, o faturista fatura e o emissor emite a cédula. Ver
+ * `barters/barter-workflow.ts`, que é onde o caminho mora.
  *
  * Os identificadores são em inglês para acompanhar os dois que já existiam
  * (`admin`, `consultant`): o valor gravado é chave técnica, e o nome que a
@@ -14,8 +18,25 @@ export const ROLE = {
   manager: 'manager',
   /** Comitê: instância de análise das permutas (visão de retaguarda). */
   committee: 'committee',
-  /** Faturista: cuida do faturamento das permutas (visão de retaguarda). */
+  /** Faturista: fatura a permuta aprovada e anexa as notas (retaguarda). */
   biller: 'biller',
+  /**
+   * EMISSOR: emite a Cédula de Produto Rural, colhe as assinaturas e a registra.
+   *
+   * É o posto que vem DEPOIS do faturamento, e nasceu de uma correção: a cédula
+   * era do faturista, e não é. Faturar é emitir nota — ato fiscal, contra o
+   * estoque e a nota de venda. Emitir CPR é pôr em circulação um TÍTULO DE
+   * CRÉDITO: ele é conferido, assinado por gente (às vezes por um casal, às
+   * vezes com avalista) e levado a registro. São dois ofícios, com duas
+   * responsabilidades diferentes, e enquanto foram um só o segundo acontecia
+   * "junto com" o primeiro — isto é, sem etapa, sem prazo e sem quem responda
+   * por ele.
+   *
+   * O que ele NÃO faz é preencher a cédula: as informações são do CONSULTOR, que
+   * é quem conhece o produtor, a lavoura e as matrículas. O emissor CONFERE na
+   * hora de gerar — ver `bartersCprIssue` em policy.ts.
+   */
+  emitter: 'emitter',
   /** Consultor: registra permutas para a PRÓPRIA carteira de produtores. */
   consultant: 'consultant',
 } as const;
@@ -30,6 +51,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   [ROLE.manager]: 'Gerente',
   [ROLE.committee]: 'Comitê',
   [ROLE.biller]: 'Faturista',
+  [ROLE.emitter]: 'Emissor',
   [ROLE.consultant]: 'Consultor',
 };
 
@@ -64,7 +86,9 @@ export type ManagedRole = Exclude<Role, typeof ROLE.admin>;
  * uma conta por pessoa.
  *
  * O FATURISTA não está aqui de propósito: faturar é ofício de gente, várias
- * pessoas fazem, e cada uma responde pelo que emitiu.
+ * pessoas fazem, e cada uma responde pelo que emitiu. O EMISSOR pelo mesmo
+ * motivo — quem assina a conferência de um título responde por ela com o
+ * próprio nome.
  */
 export const SINGLE_ACCOUNT_ROLES: readonly Role[] = [ROLE.committee];
 

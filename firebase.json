@@ -8,11 +8,22 @@
     "a navegação do lado do cliente — sem ele, recarregar a página numa tela",
     "interna pediria ao Hosting um arquivo que não existe e voltaria 404.",
     "",
-    "Os `headers` existem para o app ATUALIZAR. O Flutter web guarda os assets",
-    "em cache agressivo pelo service worker, e o par index.html +",
+    "Os `headers` fazem DUAS coisas, e vale separá-las.",
+    "",
+    "A primeira é o app ATUALIZAR. O Flutter web guarda os assets em cache",
+    "agressivo pelo service worker, e o par index.html +",
     "flutter_service_worker.js é o único caminho por onde uma versão nova se",
     "anuncia: cacheado, o testador ficaria preso na build antiga até limpar o",
-    "navegador na mão."
+    "navegador na mão.",
+    "",
+    "A segunda é a PROTEÇÃO DO NAVEGADOR, e ela pesa mais aqui do que pesaria",
+    "num site qualquer. A API tem helmet (ver api/src/app.setup.ts) e este site",
+    "não tinha nada — só que é ELE que guarda o token de sessão, e no navegador",
+    "o `flutter_secure_storage` cai no `flutter_secure_storage_web`, que grava",
+    "no armazenamento da página, com a chave de cifra ao lado. Não há Keychain",
+    "nem cofre do Android para onde fugir (ver docs/DEPLOY.md). Então aqui o",
+    "token está ao alcance de qualquer script que rode nesta origem, e a moldura",
+    "invisível por cima da tela de login é um ataque que o app nativo não tem."
   ],
   "hosting": {
     "public": "app/build/web",
@@ -24,6 +35,63 @@
       }
     ],
     "headers": [
+      {
+        "_comment": [
+          "Os cabeçalhos de segurança, em TODO arquivo servido. O Hosting aplica",
+          "todas as regras que casam com o caminho pedido, então este bloco",
+          "convive com os de Cache-Control abaixo — as chaves são outras.",
+          "",
+          "X-Frame-Options e o `frame-ancestors` da CSP dizem a MESMA coisa (esta",
+          "página não é emoldurável) para gerações diferentes de navegador. É a",
+          "defesa contra o clickjacking: sem ela, um site qualquer põe este app",
+          "num iframe invisível e colhe cliques que o usuário acha que está dando",
+          "em outro lugar — e aqui os cliques aprovam permuta.",
+          "",
+          "nosniff impede o navegador de ADIVINHAR o tipo de um arquivo e tratar",
+          "como script o que foi servido como outra coisa.",
+          "",
+          "Referrer-Policy fecha o vazamento pelo cabeçalho `Referer`: as telas",
+          "do app trazem código de permuta e id de produtor na URL, e `no-referrer`",
+          "impede que eles saiam para qualquer destino que o app abra.",
+          "",
+          "Permissions-Policy desliga o que este app não usa. Ele não pede câmera,",
+          "microfone nem localização em lugar nenhum — declarar isso custa uma",
+          "linha e fecha a porta para o dia em que uma dependência resolver pedir.",
+          "",
+          "O QUE FICOU DE FORA, DE PROPÓSITO: a CSP tem só `frame-ancestors`, e",
+          "não `script-src`. Um `script-src` é o que realmente conteria um XSS —",
+          "que é o ataque que alcança o token guardado nesta origem —, mas o",
+          "dart2js gera código dinamicamente e só roda sob CSP quando o build é",
+          "feito com `flutter build web --csp`, que NÃO é o comando do",
+          "docs/DEPLOY.md. Escrever a diretiva agora quebraria o site inteiro na",
+          "próxima publicação, sem ninguém relacionar uma coisa à outra. O passo",
+          "certo é trocar o comando de build e só então apertar esta linha; até",
+          "lá, `frame-ancestors` sozinho é o que dá para garantir sem mentir."
+        ],
+        "source": "**",
+        "headers": [
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "no-referrer"
+          },
+          {
+            "key": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+          }
+        ]
+      },
       {
         "source": "/index.html",
         "headers": [

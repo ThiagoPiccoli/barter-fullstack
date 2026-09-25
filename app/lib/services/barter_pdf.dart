@@ -6,9 +6,11 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../branding/active_brand.dart';
+import '../data/app_data.dart';
 import '../models/models.dart';
 import '../theme/app_theme.dart';
-import '../widgets/common_widgets.dart' show formatCurrency, formatDate, formatQty, formatSacks;
+import '../widgets/common_widgets.dart'
+    show formatCurrency, formatDate, formatQty, formatSacks, formatSacksPerHa;
 
 /// Comprovante de permuta em PDF, para controle e assinatura das partes.
 ///
@@ -67,7 +69,7 @@ class BarterPdf {
         margin: const pw.EdgeInsets.fromLTRB(40, 36, 40, 36),
         footer: (ctx) => _footer(ctx),
         build: (ctx) => [
-          _header(barter),
+          _header(barter, showValues),
           pw.SizedBox(height: 18),
           _parties(barter, producer),
           pw.SizedBox(height: 18),
@@ -80,17 +82,6 @@ class BarterPdf {
           _grainsTable(barter, showValues),
           pw.SizedBox(height: 18),
           _totalBox(barter, showValues),
-          // O IMPOSTO da entrega, logo abaixo do total: a entrega de grão é
-          // comercialização de produção rural, e o comprovante que não o
-          // menciona deixa o produtor descobrir a diferença na nota fiscal.
-          //
-          // Só nas permutas que têm alíquota registrada — as anteriores ao campo
-          // não têm, e imprimir a de hoje nelas seria afirmar um imposto que não
-          // foi aplicado.
-          if (barter.hasTax) ...[
-            pw.SizedBox(height: 8),
-            _taxLine(barter, showValues),
-          ],
           // O parecer vem ANTES da observação do administrador porque é essa a
           // ordem em que os dois foram escritos — o comprovante conta a
           // história da permuta na sequência em que ela aconteceu.
@@ -135,16 +126,45 @@ class BarterPdf {
       .replaceAll('≈', '~')
       .replaceAll('→', '->');
 
-  static pw.Widget _header(BarterModel barter) {
+  /// O CABEÇALHO: a marca, o código da permuta, o estado — e o IMPOSTO.
+  ///
+  /// O imposto subiu para cá, e ele era uma linha discreta embaixo do total. A
+  /// entrega de grão é comercialização de produção rural: o Funrural e o Senar
+  /// incidem sobre ela, e o percentual muda o que o produtor de fato entrega.
+  /// Impresso no rodapé do quadro de totais, ele era a última coisa lida do
+  /// documento — quando era lido; aqui ele acompanha o código e o estado, que é
+  /// onde quem pega o papel olha primeiro.
+  ///
+  /// Só nas permutas que têm alíquota REGISTRADA. As anteriores ao campo não
+  /// têm, e imprimir a de hoje nelas seria afirmar um imposto que ninguém
+  /// aplicou.
+  static pw.Widget _header(BarterModel barter, bool showValues) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(14),
       decoration: pw.BoxDecoration(
         color: _primary,
         borderRadius: pw.BorderRadius.circular(8),
       ),
-      child: pw.Row(
+      child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: _headerRow(barter),
+          ),
+          if (barter.hasTax) ...[
+            pw.SizedBox(height: 10),
+            pw.Container(height: 0.5, color: _onPrimaryMuted),
+            pw.SizedBox(height: 6),
+            _taxLine(barter, showValues),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static List<pw.Widget> _headerRow(BarterModel barter) {
+    return [
           pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
@@ -199,9 +219,7 @@ class BarterPdf {
               _statusChip(barter),
             ],
           ),
-        ],
-      ),
-    );
+    ];
   }
 
   static pw.Widget _statusChip(BarterModel barter) {
@@ -219,6 +237,20 @@ class BarterPdf {
       case BarterStatus.sentToManager:
         color = _c(AppColors.atManagerBg);
         break;
+      case BarterStatus.approvedWithConditions:
+        color = _c(AppColors.approvedWithConditionsBg);
+        break;
+      case BarterStatus.draft:
+        color = _c(AppColors.draftBg);
+        break;
+      // O trecho da CÉDULA divide a cor do faturamento — ver [StatusBadge].
+      case BarterStatus.cprIssued:
+      case BarterStatus.cprSigned:
+        color = _c(AppColors.invoicedBg);
+        break;
+      case BarterStatus.cprRegistered:
+        color = _c(AppColors.approvedBg);
+        break;
       case BarterStatus.invoiced:
         color = _c(AppColors.invoicedBg);
         break;
@@ -231,7 +263,14 @@ class BarterPdf {
     );
   }
 
-  /// Bloco com as duas partes da permuta (consultor e produtor) e as datas.
+  /// Bloco com as duas partes da permuta e as datas.
+  ///
+  /// O PRODUTOR vem à ESQUERDA, e o consultor à direita. O documento é lido
+  /// primeiro por quem assume o compromisso e por quem confere de quem ele é —
+  /// e é o nome do produtor, o documento e a propriedade que respondem a essa
+  /// pergunta. O consultor é quem registrou; ele importa, mas depois. A ordem
+  /// é a mesma das assinaturas no fim da página, o que faz o papel se ler de
+  /// cima a baixo na mesma sequência.
   static pw.Widget _parties(BarterModel barter, ProducerModel? producer) {
     return pw.Container(
       padding: const pw.EdgeInsets.all(12),
@@ -249,14 +288,13 @@ class BarterPdf {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    _partyLabel('CONSULTOR'),
-                    _kv('Nome', barter.consultantName),
-                    _kv('Unidade', barter.consultantBranch),
-                    // A RETIRADA no comprovante é o que o produtor leva: é o
-                    // endereço onde ele vai buscar os insumos. Sem isso, o
-                    // documento descreve a troca inteira e omite o único dado
-                    // de que ele precisa para executá-la.
-                    _kv('Retirada em', barter.unitLabel),
+                    _partyLabel('PRODUTOR'),
+                    _kv('Nome', barter.producerName),
+                    if (producer != null) ...[
+                      _kv('Documento', producer.document),
+                      _kv('Propriedade', producer.location),
+                      _kv('Área cultivável', producer.areaLabel),
+                    ],
                   ],
                 ),
               ),
@@ -265,13 +303,14 @@ class BarterPdf {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
-                    _partyLabel('PRODUTOR'),
-                    _kv('Nome', barter.producerName),
-                    if (producer != null) ...[
-                      _kv('Documento', producer.document),
-                      _kv('Propriedade', producer.location),
-                      _kv('Área cultivável', producer.areaLabel),
-                    ],
+                    _partyLabel('CONSULTOR'),
+                    _kv('Nome', barter.consultantName),
+                    _kv('Unidade', barter.consultantBranch),
+                    // A RETIRADA no comprovante é o que o produtor leva: é o
+                    // endereço onde ele vai buscar os insumos. Sem isso, o
+                    // documento descreve a troca inteira e omite o único dado
+                    // de que ele precisa para executá-la.
+                    _kv('Retirada em', barter.unitLabel),
                   ],
                 ),
               ),
@@ -343,6 +382,11 @@ class BarterPdf {
     final hasRef = barter.referenceValue > 0;
     final grain = barter.referenceGrainName.toLowerCase();
     final headers = [
+      // O CÓDIGO abre a tabela, e não é enfeite: é por ele que o insumo é
+      // separado no depósito, conferido na retirada e batido contra a nota — e
+      // dois produtos de nomes parecidos só se distinguem por ele. Primeira
+      // coluna porque é a chave da linha, e é por ela que se procura.
+      'Cód.',
       'Insumo',
       'Qtd.',
       'Unidade',
@@ -352,7 +396,12 @@ class BarterPdf {
     ];
     final rows = barter.inputs
         .map((i) => [
-              _s(i.productName),
+              _s(AppData.skuOf(i) ?? '-'),
+              // O item de FORA DO BARTER sai MARCADO no comprovante: ele não
+              // está na tabela de valores da gestão, e quem for conferir o
+              // preço não vai encontrá-lo lá. A marca é a única coisa que
+              // explica isso a quem lê o papel meses depois.
+              _s(i.offBarter ? '${i.productName} (fora do Barter)' : i.productName),
               formatQty(i.quantity),
               _s(i.unit),
               if (hasRef) formatSacks(i.total / barter.referenceValue),
@@ -362,6 +411,7 @@ class BarterPdf {
         .toList();
     // Linha de total da seção.
     rows.add([
+      '',
       'TOTAL',
       formatQty(barter.totalInputQty),
       '',
@@ -369,12 +419,13 @@ class BarterPdf {
       if (showValues) '',
       if (showValues) formatCurrency(barter.inputCost),
     ]);
-    return _table(headers, rows, accent: _input);
+    return _table(headers, rows, accent: _input, textColumns: 2);
   }
 
   /// Tabela do grão de pagamento (normalmente uma linha só).
   static pw.Widget _grainsTable(BarterModel barter, bool showValues) {
     final headers = [
+      'Cód.',
       'Grão',
       'Sacas',
       'Unidade',
@@ -383,6 +434,7 @@ class BarterPdf {
     ];
     final rows = barter.grains
         .map((g) => [
+              _s(AppData.skuOf(g) ?? '-'),
               _s(g.productName),
               formatSacks(g.quantity),
               _s(g.unit),
@@ -390,10 +442,22 @@ class BarterPdf {
               if (showValues) formatCurrency(g.total),
             ])
         .toList();
-    return _table(headers, rows, accent: _grain);
+    return _table(headers, rows, accent: _grain, textColumns: 2);
   }
 
-  static pw.Widget _table(List<String> headers, List<List<String>> rows, {required PdfColor accent}) {
+  /// A tabela de uma seção.
+  ///
+  /// [textColumns] é quantas colunas da ESQUERDA são texto e ficam alinhadas à
+  /// esquerda; as demais são números e vão para a direita, onde as casas se
+  /// alinham e a coluna se soma de olho. Ela é parâmetro porque a tabela dos
+  /// insumos passou a abrir com o CÓDIGO — duas colunas de texto antes dos
+  /// números, e não uma.
+  static pw.Widget _table(
+    List<String> headers,
+    List<List<String>> rows, {
+    required PdfColor accent,
+    int textColumns = 1,
+  }) {
     return pw.TableHelper.fromTextArray(
       headers: headers,
       data: rows,
@@ -403,7 +467,7 @@ class BarterPdf {
       cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       border: pw.TableBorder.all(color: _line, width: 0.5),
       cellAlignments: {
-        for (var i = 1; i < headers.length; i++) i: pw.Alignment.centerRight,
+        for (var i = textColumns; i < headers.length; i++) i: pw.Alignment.centerRight,
       },
       oddRowDecoration: pw.BoxDecoration(color: _zebra),
     );
@@ -423,30 +487,69 @@ class BarterPdf {
         borderRadius: pw.BorderRadius.circular(8),
         border: pw.Border.all(color: _primary, width: 0.8),
       ),
-      child: pw.Row(
-        crossAxisAlignment: pw.CrossAxisAlignment.center,
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
-          pw.Expanded(
-            child: pw.Text('TOTAL A ENTREGAR NA COLHEITA',
-                style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
-          ),
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.end,
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
             children: [
-              pw.Text(
-                hasRef
-                    ? '${formatSacks(barter.sacksToDeliver)} de ${barter.referenceGrainName.toLowerCase()}'
-                    : '-',
-                style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: _primary),
+              pw.Expanded(
+                child: pw.Text('TOTAL A ENTREGAR NA COLHEITA',
+                    style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
               ),
-              pw.Text(
-                showValues
-                    ? 'equivale a ${formatCurrency(barter.inputCost)} em insumos'
-                    : 'para cobrir os ${barter.inputs.length} insumo(s) retirado(s)',
-                style: pw.TextStyle(fontSize: 8, color: _textMedium),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.end,
+                children: [
+                  pw.Text(
+                    hasRef
+                        ? '${formatSacks(barter.sacksToDeliver)} de ${barter.referenceGrainName.toLowerCase()}'
+                        : '-',
+                    style:
+                        pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: _primary),
+                  ),
+                  pw.Text(
+                    showValues
+                        ? 'equivale a ${formatCurrency(barter.inputCost)} em insumos'
+                        : 'para cobrir os ${barter.inputs.length} insumo(s) retirado(s)',
+                    style: pw.TextStyle(fontSize: 8, color: _textMedium),
+                  ),
+                ],
               ),
             ],
           ),
+          // O INVESTIMENTO POR HECTARE, no quadro do total e em destaque.
+          //
+          // Ele era uma linha de cadastro no bloco do produtor, ao lado da área,
+          // e lá ele se lia como mais um dado do cliente. Não é: é a RÉGUA da
+          // permuta — a única medida que compara esta lavoura com qualquer
+          // outra, de qualquer tamanho —, e o lugar dela é junto do número que
+          // ela mede.
+          //
+          // Sem a área ao lado: ela já está impressa no bloco do produtor, e
+          // repeti-la aqui competia com o número que este quadro existe para
+          // destacar. (A área que DIVIDE é a congelada no registro, e não a do
+          // cadastro de hoje — é o servidor quem faz essa conta, pelo mesmo
+          // motivo do preço do item: um comprovante reimpresso depois de o
+          // produtor arrendar mais terra não pode mostrar outro investimento.)
+          if (barter.sacksPerHa != null) ...[
+            pw.SizedBox(height: 8),
+            pw.Divider(color: _primary, height: 4, thickness: 0.5),
+            pw.SizedBox(height: 6),
+            pw.Row(
+              crossAxisAlignment: pw.CrossAxisAlignment.center,
+              children: [
+                pw.Expanded(
+                  child: pw.Text('INVESTIMENTO NA LAVOURA',
+                      style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                ),
+                pw.Text(
+                  _s(formatSacksPerHa(barter.sacksPerHa!)),
+                  style:
+                      pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: _primary),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -454,10 +557,12 @@ class BarterPdf {
 
   /// FUNRURAL E SENAR sobre a entrega — a alíquota registrada com a permuta.
   ///
-  /// Uma linha, e não uma caixa em destaque: o compromisso do documento é o
-  /// total a entregar, e o imposto é informação de apoio. Diz "estimativa" por
-  /// honestidade — o recolhimento é do produtor (ou do adquirente, por
-  /// sub-rogação) e acontece na nota, não aqui.
+  /// Ela mora no CABEÇALHO (ver [_header]): o imposto muda o que o produtor de
+  /// fato entrega, e o documento que só o menciona no rodapé o deixa ser
+  /// descoberto na nota fiscal.
+  ///
+  /// Diz "estimativa" por honestidade — o recolhimento é do produtor (ou do
+  /// adquirente, por sub-rogação) e acontece na nota, não aqui.
   static pw.Widget _taxLine(BarterModel barter, bool showValues) {
     final value = showValues
         ? formatCurrency(barter.taxAmount)
@@ -466,13 +571,13 @@ class BarterPdf {
       children: [
         pw.Expanded(
           child: pw.Text(
-            _s('Funrural + Senar (${barter.taxRateLabel}) sobre a entrega, '
-                '${barter.taxRegime.label.toLowerCase()} - estimativa'),
-            style: pw.TextStyle(fontSize: 8, color: _textMedium),
+            _s('Funrural + Senar ${barter.taxRateLabel} sobre a entrega '
+                '(${barter.taxRegime.label.toLowerCase()})'),
+            style: pw.TextStyle(fontSize: 8, color: _onPrimaryMuted),
           ),
         ),
-        pw.Text(_s(value),
-            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _textMedium)),
+        pw.Text(_s('+ $value - estimativa'),
+            style: pw.TextStyle(fontSize: 8, fontWeight: pw.FontWeight.bold, color: _onPrimary)),
       ],
     );
   }

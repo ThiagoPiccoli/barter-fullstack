@@ -4,8 +4,8 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
-import '../branding/brand_wordmark.dart';
 import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
 import 'prices_screen.dart';
@@ -36,26 +36,33 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return AdaptiveNavScaffold(
+      user: widget.admin,
+      selectedIndex: _selectedIndex,
+      onSelect: (i) => setState(() => _selectedIndex = i),
       body: IndexedStack(index: _selectedIndex, children: _screens),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (i) => setState(() => _selectedIndex = i),
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: AppColors.textLight,
-        selectedLabelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-        unselectedLabelStyle: const TextStyle(fontSize: 11),
-        items: [
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard_outlined), activeIcon: Icon(Icons.dashboard), label: 'Dashboard'),
-          BottomNavigationBarItem(icon: Icon(Icons.swap_horiz_outlined), activeIcon: const Icon(Icons.swap_horiz), label: brand.copy.barterPluralTitle),
-          BottomNavigationBarItem(
-              icon: const Icon(Icons.price_change_outlined),
-              activeIcon: const Icon(Icons.price_change),
-              label: brand.copy.programTitle),
-          BottomNavigationBarItem(icon: Icon(Icons.groups_outlined), activeIcon: Icon(Icons.groups), label: 'Cadastros'),
-        ],
-      ),
+      destinations: [
+        const AdaptiveDestination(
+          icon: Icons.dashboard_outlined,
+          activeIcon: Icons.dashboard,
+          label: 'Dashboard',
+        ),
+        AdaptiveDestination(
+          icon: Icons.swap_horiz_outlined,
+          activeIcon: Icons.swap_horiz,
+          label: brand.copy.barterPluralTitle,
+        ),
+        AdaptiveDestination(
+          icon: Icons.price_change_outlined,
+          activeIcon: Icons.price_change,
+          label: brand.copy.programTitle,
+        ),
+        const AdaptiveDestination(
+          icon: Icons.groups_outlined,
+          activeIcon: Icons.groups,
+          label: 'Cadastros',
+        ),
+      ],
     );
   }
 }
@@ -118,7 +125,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     // Sacas a receber agrupadas por grão de pagamento (soja, milho, trigo...).
     final byGrain = <String, double>{};
     for (final b in approvedList) {
-      final name = b.referenceGrainName.isEmpty ? '—' : b.referenceGrainName;
+      final name = b.referenceGrainName.isEmpty ? 'sem grão' : b.referenceGrainName;
       byGrain[name] = (byGrain[name] ?? 0) + b.totalGrainQty;
     }
     final grainEntries = byGrain.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
@@ -147,25 +154,18 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const BrandWordmark(size: 32, showTagline: false),
+        title: const MainAppBarTitle('Dashboard'),
         actions: [
           const ChangePasswordButton(),
           const LogoutButton(),
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: CircleAvatar(
-              backgroundColor: AppColors.primaryAccent,
-              radius: 18,
-              child: Text(admin.avatarInitials,
-                  style: TextStyle(color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.bold)),
-            ),
-          ),
+          AppBarUserAvatar(user: admin),
         ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         color: AppColors.primary,
-        child: ListView(
+        child: BoundedContent(
+          child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             DashboardHeader(
@@ -193,19 +193,28 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             ),
             const SizedBox(height: 20),
 
-            if (topInputs.isNotEmpty) ...[
-              Text('${brand.copy.inputPluralTitle} Mais Retirados',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-              const SizedBox(height: 12),
-              _RankingBars(entries: topInputs, formatValue: formatCurrency, color: AppColors.input),
-              const SizedBox(height: 20),
-            ],
-
-            if (grainEntries.isNotEmpty) ...[
-              Text('Sacas a Receber por ${brand.copy.grainTitle}',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-              const SizedBox(height: 12),
-              _GrainBreakdownCard(entries: grainEntries, total: sacksReceivable),
+            // Os dois lados da mesma história — o insumo retirado, que origina o
+            // custo, e a saca que vai cobri-lo. Lidos juntos quando a tela
+            // permite; empilhados quando não permite.
+            if (topInputs.isNotEmpty || grainEntries.isNotEmpty) ...[
+              AdaptiveColumns(
+                children: [
+                  if (topInputs.isNotEmpty)
+                    _DashboardSection(
+                      title: '${brand.copy.inputPluralTitle} Mais Retirados',
+                      child: _RankingBars(
+                          entries: topInputs,
+                          formatValue: formatCurrency,
+                          color: AppColors.input),
+                    ),
+                  if (grainEntries.isNotEmpty)
+                    _DashboardSection(
+                      title: 'Sacas a Receber por ${brand.copy.grainTitle}',
+                      child: _GrainBreakdownCard(
+                          entries: grainEntries, total: sacksReceivable),
+                    ),
+                ],
+              ),
               const SizedBox(height: 20),
             ],
 
@@ -229,7 +238,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
                 // porque continua sendo a pergunta do painel ("o que está
                 // parado, e há quanto tempo?"), mas o título não pode chamar de
                 // ação de quem está olhando o que é trabalho de outra pessoa.
-                Text('No Comitê – Esperando Decisão',
+                Text('No Comitê, Esperando Decisão',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 TextButton(
                   onPressed: () => onNavigate(1),
@@ -247,23 +256,34 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
               ...pendingList.map((b) => _PendingActionCard(barter: b)),
             const SizedBox(height: 20),
 
-            if (branchEntries.isNotEmpty) ...[
-              Text('Volume por Filial',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-              const SizedBox(height: 12),
-              _RankingBars(entries: branchEntries, formatValue: formatSacks, color: AppColors.primaryAccent),
-              const SizedBox(height: 20),
-            ],
-
-            Text('Atividade Recente',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-            const SizedBox(height: 12),
-            ...AppData.barters
-                .where((b) => b.status != BarterStatus.pending)
-                .take(3)
-                .map((b) => MiniBarterCard(barter: b, isAdmin: true)),
+            // O rodapé do painel: o volume por filial e o que andou. Nenhum dos
+            // dois pede ação, e é por isso que podem dividir a mesma faixa.
+            AdaptiveColumns(
+              children: [
+                if (branchEntries.isNotEmpty)
+                  _DashboardSection(
+                    title: 'Volume por Filial',
+                    child: _RankingBars(
+                        entries: branchEntries,
+                        formatValue: formatSacks,
+                        color: AppColors.primaryAccent),
+                  ),
+                _DashboardSection(
+                  title: 'Atividade Recente',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: AppData.barters
+                        .where((b) => b.status != BarterStatus.pending)
+                        .take(3)
+                        .map((b) => MiniBarterCard(barter: b, isAdmin: true))
+                        .toList(),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: 16),
           ],
+          ),
         ),
       ),
     );
@@ -273,6 +293,31 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     final now = DateTime.now();
     const months = ['', 'jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
     return '${now.day} ${months[now.month]} ${now.year}';
+  }
+}
+
+/// Um bloco do painel: o título e o que ele apresenta.
+///
+/// Existe para o bloco poder virar coluna dentro de [AdaptiveColumns] — solto na
+/// lista, o título e o conteúdo eram dois irmãos separados por um `SizedBox`, e
+/// não havia o que colocar lado a lado.
+class _DashboardSection extends StatelessWidget {
+  final String title;
+  final Widget child;
+  const _DashboardSection({required this.title, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title,
+            style: TextStyle(
+                fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+        const SizedBox(height: 12),
+        child,
+      ],
+    );
   }
 }
 
@@ -416,7 +461,7 @@ class _GrainBreakdownCard extends StatelessWidget {
                   SizedBox(
                     width: 42,
                     child: Text(
-                      total > 0 ? '${(entries[i].value / total * 100).round()}%' : '—',
+                      total > 0 ? '${(entries[i].value / total * 100).round()}%' : '0%',
                       textAlign: TextAlign.end,
                       style: TextStyle(fontSize: 12, color: AppColors.textLight),
                     ),
@@ -657,7 +702,7 @@ class _PendingActionCard extends StatelessWidget {
                   Text(
                       barter.hasSacks
                           ? formatSacks(barter.sacksToDeliver)
-                          : '—',
+                          : 'a definir',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),
                   Text(barter.referenceGrainName.toLowerCase(),
                       style: TextStyle(fontSize: 10, color: AppColors.textLight)),
@@ -762,9 +807,16 @@ class _LegendItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // `MainAxisSize.min` nos dois eixos, e não por economia: o [Wrap] que
+    // hospeda a legenda entrega a cada item a largura INTEIRA do cartão como
+    // folga. Com o `Row` no padrão (`max`), cada item esticava até a borda,
+    // caía sozinho numa linha e empurrava o número para o meio do cartão —
+    // cinco linhas de legenda no lugar da faixa única que o `spaceAround`
+    // pressupõe.
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Row(children: [
+        Row(mainAxisSize: MainAxisSize.min, children: [
           Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
           const SizedBox(width: 4),
           Text(label, style: TextStyle(fontSize: 11, color: AppColors.textMedium)),

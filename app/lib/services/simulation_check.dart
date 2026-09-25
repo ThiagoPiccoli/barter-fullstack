@@ -22,10 +22,36 @@ class SendResult {
   /// conferir a lista antes de reenviar.
   final String? uncertainReason;
 
-  const SendResult._({this.barter, this.reconciled = false, this.refusal, this.uncertainReason});
+  /// A permuta ENTROU, mas não foi encaminhada — e por quê.
+  ///
+  /// É um quarto desfecho, e ele nasceu com o portão da cédula: encaminhar
+  /// passou a exigir a CPR preenchida, e uma simulação enviada por quem ainda
+  /// não a preencheu registra a permuta e para no rascunho. Enquanto isso era
+  /// engolido em silêncio, a tela dizia "enviada" e o consultor descobriria dias
+  /// depois, pelo gerente que nunca recebeu nada.
+  ///
+  /// Null quando o encaminhamento não foi nem tentado (`forward: false`) ou deu
+  /// certo — nos dois casos não há o que explicar.
+  final String? notForwardedReason;
 
-  factory SendResult.sent(BarterModel barter, {bool reconciled = false}) =>
-      SendResult._(barter: barter, reconciled: reconciled);
+  const SendResult._({
+    this.barter,
+    this.reconciled = false,
+    this.refusal,
+    this.uncertainReason,
+    this.notForwardedReason,
+  });
+
+  factory SendResult.sent(
+    BarterModel barter, {
+    bool reconciled = false,
+    String? notForwardedReason,
+  }) =>
+      SendResult._(
+        barter: barter,
+        reconciled: reconciled,
+        notForwardedReason: notForwardedReason,
+      );
 
   factory SendResult.refused(String message) => SendResult._(refusal: message);
 
@@ -33,6 +59,9 @@ class SendResult {
 
   bool get isSent => barter != null;
   bool get isUncertain => uncertainReason != null;
+
+  /// A permuta ficou REGISTRADA E PARADA: entrou, mas não chegou ao gerente.
+  bool get isSentButNotForwarded => isSent && notForwardedReason != null;
 }
 
 /// O que aconteceu com uma simulação entre montar e enviar.

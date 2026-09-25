@@ -1,30 +1,26 @@
 /**
  * Os CÓDIGOS do Barter — a identidade pública da safra e das suas versões.
  *
- *   Safra   S2026        letra do grão + ano
- *   Versão  S2026.01     safra + sequência de dois dígitos
- *22
- * A letra do grão é o que faz o código ser lido de bate-pronto ("S de soja"),
- * e por isso ela é sugerida a partir do nome mas pode ser DITADA pelo admin:
- * soja e sorgo começam com a mesma letra, e quem resolve o empate é quem
- * conhece a operação, não uma regra de desempate inventada aqui.
+ *   Safra   B2026        letra do ciclo + ano
+ *   Versão  B2026.01     safra + sequência de dois dígitos
+ *
+ * A letra ERA a inicial do grão ("S de soja"), e deixou de ser quando as
+ * culturas passaram a coexistir dentro do lançamento (ver `VersionGrain`): uma
+ * safra que aceita soja e milho não tem inicial. Hoje ela é a letra do CICLO, o
+ * `B` de Barter por padrão, e continua editável — quem roda dois ciclos no mesmo
+ * ano (verão e inverno) os separa por ela, que é a única coisa que o código
+ * precisa distinguir.
  */
 
-/** Sugestão de letra para um grão: a primeira, sem acento e em maiúscula. */
-export function letterFor(grainName: string): string {
-  const normalized = grainName
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^A-Za-z]/g, '');
-  return normalized.slice(0, 1).toUpperCase() || 'X';
-}
+/** A letra do ciclo quando o admin não dita outra. */
+export const DEFAULT_SEASON_LETTER = 'B';
 
-/** Código da safra: `S2026`. */
+/** Código da safra: `B2026`. */
 export function seasonCode(letter: string, year: number): string {
   return `${letter.toUpperCase()}${year}`;
 }
 
-/** Código da versão: `S2026.01`, `S2026.02`… */
+/** Código da versão: `B2026.01`, `B2026.02`… */
 export function versionCode(season: string, number: number): string {
   return `${season}.${String(number).padStart(2, '0')}`;
 }

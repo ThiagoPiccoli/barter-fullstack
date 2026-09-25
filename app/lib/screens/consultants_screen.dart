@@ -1,8 +1,12 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/api/api_client.dart';
+import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import 'creditor_screen.dart';
 import 'producer_profile_screen.dart';
 import 'consultant_profile_screen.dart';
 import 'edit_forms.dart';
@@ -13,12 +17,32 @@ import 'edit_forms.dart';
 /// precisa de um consultor, o consultor precisa de uma unidade e de um gerente,
 /// o gerente entrega ao comitê, e o comitê ao faturista. Lida da esquerda para
 /// a direita, a fila de segmentos conta o caminho da permuta.
-enum _Registry { producers, consultants, managers, committee, billers, units }
+///
+/// `creditor` fecha a fila e é de outra natureza: não é gente nem lugar — é a
+/// PRÓPRIA EMPRESA, como ela se identifica nos documentos que emite. Ela vem por
+/// último porque é a única que não participa do caminho de uma permuta; ela é o
+/// timbre do papel em que o caminho termina.
+/// `insurance` entra depois das unidades e antes da empresa: ela é a outra
+/// coisa que não é gente — é o CUSTO DO LUGAR, a base que diz quanto vale
+/// segurar um hectare em cada praça. Vem colada às unidades porque as duas são
+/// geografia, e antes da credora pelo mesmo motivo dela: o timbre fecha a fila.
+enum _Registry {
+  producers,
+  consultants,
+  managers,
+  committee,
+  billers,
+  emitters,
+  units,
+  insurance,
+  creditor,
+}
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
-/// (quem registra permuta), GERENTES (quem dá o parecer), COMITÊ (quem decide),
-/// FATURISTAS (quem fatura) e UNIDADES (os locais de retirada), com busca em
-/// cada lista.
+/// (quem registra permuta e preenche a cédula), GERENTES (quem dá o parecer),
+/// COMITÊ (quem decide), FATURISTAS (quem fatura e anexa as notas), EMISSORES
+/// (quem emite a cédula, colhe as assinaturas e a registra) e UNIDADES (os
+/// locais de retirada), com busca em cada lista.
 ///
 /// O COMITÊ é o único segmento que não é uma lista: ele é uma reunião, e o
 /// cadastro é um só (ver CommitteeRepository). Ou ele existe — e o segmento
@@ -60,7 +84,12 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           _Registry.managers => const EditStaffScreen(role: UserRole.manager),
           _Registry.committee => const EditStaffScreen(role: UserRole.committee),
           _Registry.billers => const EditStaffScreen(role: UserRole.biller),
+          _Registry.emitters => const EditStaffScreen(role: UserRole.emitter),
           _Registry.units => const EditUnitScreen(),
+          _Registry.insurance => const EditInsuranceRateScreen(),
+          // A credora não tem "novo": ela é uma só, e o formulário dela é a
+          // própria aba. O FAB some neste segmento — ver `showFab`.
+          _Registry.creditor => const CreditorScreen(),
         },
       ),
     );
@@ -100,11 +129,24 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             b.branch.toLowerCase().contains(q) ||
             b.email.toLowerCase().contains(q))
         .toList();
+    final emitters = AppData.emitters
+        .where((e) =>
+            q.isEmpty ||
+            e.name.toLowerCase().contains(q) ||
+            e.branch.toLowerCase().contains(q) ||
+            e.email.toLowerCase().contains(q))
+        .toList();
     final units = AppData.units
         .where((u) =>
             q.isEmpty ||
             u.name.toLowerCase().contains(q) ||
             u.city.toLowerCase().contains(q))
+        .toList();
+    final rates = AppData.insuranceRates
+        .where((r) =>
+            q.isEmpty ||
+            r.city.toLowerCase().contains(q) ||
+            (r.note ?? '').toLowerCase().contains(q))
         .toList();
 
     final (hint, count, fab) = switch (_tab) {
@@ -127,7 +169,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       // do botão muda com isso — "cadastrar" enquanto não há, e nada depois,
       // porque não existe um segundo para criar.
       _Registry.committee => (
-          'Buscar não se aplica — o comitê é um cadastro só',
+          'Buscar não se aplica: o comitê é um cadastro só',
           AppData.committee == null ? 'sem cadastro' : '1 comitê',
           'Cadastrar comitê',
         ),
@@ -136,16 +178,43 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           '${billers.length} faturista(s)',
           'Novo faturista',
         ),
+      // SEM EMISSOR, toda permuta faturada para em "a emitir a CPR" — e é a
+      // contagem zerada aqui que conta isso ao admin antes de alguém reclamar.
+      _Registry.emitters => (
+          'Buscar emissor, unidade ou e-mail...',
+          emitters.isEmpty
+              ? 'nenhum emissor — as cédulas não saem sem um'
+              : '${emitters.length} emissor(es)',
+          'Novo emissor',
+        ),
       _Registry.units => (
           'Buscar unidade ou cidade...',
           '${units.length} unidade(s)',
           'Nova unidade',
         ),
+      // A BASE VAZIA é um aviso, e não uma contagem: com o seguro ligado no
+      // lançamento, toda permuta de praça sem taxa é recusada no registro — e
+      // quem descobre isso é o consultor, com o produtor na frente.
+      _Registry.insurance => (
+          'Buscar município ou observação...',
+          rates.isEmpty
+              ? 'nenhuma praça cadastrada — o Barter com seguro recusa permuta sem taxa'
+              : '${rates.length} praça(s)',
+          'Nova praça',
+        ),
+      // A credora não se busca nem se cria: é a própria empresa, e o cadastro é
+      // um só — aberto desde a instalação, vazio ou preenchido.
+      _Registry.creditor => (
+          'Buscar não se aplica: a credora é a sua empresa',
+          'A empresa como ela aparece nas cédulas emitidas',
+          'Empresa',
+        ),
     };
 
     // O comitê já cadastrado não ganha botão de "novo": ele é único, e um botão
     // que só serve para levar a um 422 é pior do que botão nenhum.
-    final showFab = _tab != _Registry.committee || AppData.committee == null;
+    final showFab =
+        _tab != _Registry.creditor && (_tab != _Registry.committee || AppData.committee == null);
 
     return Scaffold(
       appBar: AppBar(
@@ -159,58 +228,68 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
               label: Text(fab),
             )
           : null,
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-            child: _SegmentedToggle(
-              tab: _tab,
-              counts: {
-                _Registry.producers: AppData.producers.length,
-                _Registry.consultants: AppData.consultants.length,
-                _Registry.managers: AppData.managers.length,
-                _Registry.committee: AppData.committee == null ? 0 : 1,
-                _Registry.billers: AppData.billers.length,
-                _Registry.units: AppData.units.length,
-              },
-              onChanged: _setTab,
-            ),
-          ),
-          if (_tab != _Registry.committee)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-            child: SearchField(
-              controller: _searchCtrl,
-              hint: hint,
-              onChanged: (v) => setState(() => _search = v),
-              onClear: () => setState(() {
-                _search = '';
-                _searchCtrl.clear();
-              }),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                count,
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
+      body: BoundedContent(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+              child: _SegmentedToggle(
+                tab: _tab,
+                counts: {
+                  _Registry.producers: AppData.producers.length,
+                  _Registry.consultants: AppData.consultants.length,
+                  _Registry.managers: AppData.managers.length,
+                  _Registry.committee: AppData.committee == null ? 0 : 1,
+                  _Registry.billers: AppData.billers.length,
+                  _Registry.emitters: AppData.emitters.length,
+                  _Registry.units: AppData.units.length,
+                  _Registry.insurance: AppData.insuranceRates.length,
+                  // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
+                  // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
+                  _Registry.creditor: 1,
+                },
+                onChanged: _setTab,
               ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: switch (_tab) {
-              _Registry.producers => _buildProducerList(producers),
-              _Registry.consultants => _buildConsultantList(consultants),
-              _Registry.managers => _buildManagerList(managers),
-              _Registry.committee => _buildCommittee(),
-              _Registry.billers => _buildBillerList(billers),
-              _Registry.units => _buildUnitList(units),
-            },
-          ),
-        ],
+            if (_tab != _Registry.committee && _tab != _Registry.creditor)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: SearchField(
+                controller: _searchCtrl,
+                hint: hint,
+                onChanged: (v) => setState(() => _search = v),
+                onClear: () => setState(() {
+                  _search = '';
+                  _searchCtrl.clear();
+                }),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  count,
+                  style: TextStyle(fontSize: 12, color: AppColors.textMedium, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: switch (_tab) {
+                _Registry.producers => _buildProducerList(producers),
+                _Registry.consultants => _buildConsultantList(consultants),
+                _Registry.managers => _buildManagerList(managers),
+                _Registry.committee => _buildCommittee(),
+                _Registry.billers => _buildBillerList(billers),
+                _Registry.emitters => _buildEmitterList(emitters),
+                _Registry.units => _buildUnitList(units),
+                _Registry.insurance => _buildInsuranceList(rates),
+                _Registry.creditor => const CreditorScreen(embedded: true),
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -381,7 +460,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Text(
             'O comitê é uma reunião: o acesso é um só, e quem participa entra com ele. '
-            'A decisão de cada permuta sai assinada pelo comitê — a ata (quem estava e o '
+            'A decisão de cada permuta sai assinada pelo comitê. A ata (quem estava e o '
             'que foi acordado) vai na observação da decisão.',
             style: TextStyle(fontSize: 11, color: AppColors.textLight),
           ),
@@ -424,6 +503,214 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
         );
       },
     );
+  }
+
+  /// Os EMISSORES — o posto da cédula.
+  ///
+  /// O cartão conta quantas CPRs cada um emitiu, que é a medida do trabalho
+  /// dele: o faturista mede em notas, o emissor em títulos.
+  Widget _buildEmitterList(List<UserModel> list) {
+    if (list.isEmpty) {
+      return const _EmptyState(label: 'Nenhum emissor cadastrado');
+    }
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_emissores'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final e = list[i];
+        final emitidas = AppData.barters.where((p) => p.cprEmittedBy == e.name).length;
+        return _PersonCard(
+          initials: e.avatarInitials,
+          name: e.name,
+          subtitle: e.branch,
+          accent: AppColors.invoiced,
+          badgeIcon: Icons.description,
+          chips: [
+            if (emitidas > 0)
+              _StatChip(label: '$emitidas CPR(s) emitida(s)', color: AppColors.invoiced),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditStaffScreen(user: e, role: UserRole.emitter),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// AS PRAÇAS da base de seguros. O cartão mostra o valor por hectare e
+  /// quantos produtores da carteira estão naquele município — que é a leitura
+  /// que interessa ao admin: uma praça sem produtor é cadastro adiantado, e um
+  /// produtor sem praça é permuta que vai ser recusada no registro.
+  ///
+  /// A CARGA DA PLANILHA fica no topo da lista, e não no botão flutuante: o FAB
+  /// é o cadastro de UMA praça, e a planilha é o caminho oposto — a cotação
+  /// inteira da seguradora, com dezenas de linhas, que chega uma vez por safra.
+  Widget _buildInsuranceList(List<InsuranceRateModel> list) {
+    final semTaxa = AppData.producers
+        .where((p) => AppData.insuranceRateFor(p.city) == null)
+        .length;
+
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_seguros'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      // +1 pelo cabeçalho da carga, que rola junto com a lista.
+      itemCount: list.length + 1,
+      itemBuilder: (_, i) {
+        if (i == 0) return _insuranceHeader(semTaxa);
+        final rate = list[i - 1];
+        final produtores =
+            AppData.producers.where((p) => AppData.insuranceRateFor(p.city)?.id == rate.id).length;
+        return _PersonCard(
+          initials: 'R\$',
+          name: rate.city,
+          subtitle: rate.note?.isNotEmpty == true
+              ? rate.note!
+              : 'Seguro agrícola — valor por hectare',
+          accent: AppColors.atManager,
+          badgeIcon: Icons.shield,
+          chips: [
+            _StatChip(
+              label: rate.showsCurrency
+                  ? '${formatCurrency(rate.valuePerHa)}/ha'
+                  : '${rate.sacksPerHa.toStringAsFixed(2).replaceAll('.', ',')} sc/ha',
+              color: AppColors.atManager,
+            ),
+            if (produtores > 0)
+              _StatChip(label: '$produtores produtor(es)', color: AppColors.primary),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => EditInsuranceRateScreen(rate: rate)),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// O cabeçalho do segmento: a carga da planilha e o aviso das praças que
+  /// faltam.
+  Widget _insuranceHeader(int semTaxa) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (semTaxa > 0)
+            Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.pending.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, size: 18, color: AppColors.pending),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '$semTaxa produtor(es) em município sem taxa cadastrada. Com o seguro '
+                      'ligado no lançamento, a permuta deles é recusada no registro.',
+                      style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          OutlinedButton.icon(
+            onPressed: _importInsuranceSheet,
+            icon: const Icon(Icons.upload_file, size: 18),
+            label: const Text('Carregar planilha da seguradora'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// A CARGA DA PLANILHA, com a pergunta que decide tudo: acrescentar ou
+  /// SUBSTITUIR a base.
+  ///
+  /// Ela é feita antes do arquivo, e não depois, porque é a decisão — e a de
+  /// substituir APAGA as praças que não estiverem no arquivo. O padrão é a que
+  /// não apaga nada: o caminho destrutivo se escolhe, não se cai nele.
+  Future<void> _importInsuranceSheet() async {
+    final replace = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Carregar planilha'),
+        content: const Text(
+          'A planilha precisa ter a coluna do município e uma de valor por hectare. '
+          'Quando ela traz as três da seguradora, vale a do "Reajuste para Safra" — a '
+          'que já tem a subvenção e o custo financeiro dentro.\n\n'
+          'ACRESCENTAR mantém as praças que não estiverem no arquivo e atualiza as que '
+          'estiverem. SUBSTITUIR troca a base inteira: o que não vier na planilha é '
+          'apagado — é a carga da cotação nova da safra.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Substituir a base'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Acrescentar'),
+          ),
+        ],
+      ),
+    );
+    if (replace == null || !mounted) return;
+
+    final file = await FilePicker.pickFile(
+      dialogTitle: 'Planilha de seguros por município',
+      type: FileType.custom,
+      allowedExtensions: const ['xlsx'],
+    );
+    if (file == null) return;
+    // Os BYTES, e não o caminho: no Android/iOS o arquivo escolhido fica num
+    // diretório temporário que pode sumir antes do envio. Mesma razão da carga
+    // da tabela do Barter.
+    final bytes = await file.readAsBytes();
+    if (!mounted) return;
+
+    try {
+      final result = await AppData.importInsuranceRates(
+        filename: file.name,
+        bytes: bytes,
+        replace: replace,
+      );
+      if (!mounted) return;
+      setState(() {});
+      // A COLUNA USADA vai na mensagem, e não só a contagem: a planilha da
+      // seguradora tem três valores por hectare, e a carga escolheu um. Ver o
+      // título que ela leu é como o admin percebe — no mesmo minuto, e não na
+      // primeira permuta cara demais — que o arquivo deste ano veio diferente.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text(
+            'Base atualizada: ${result.imported} praça(s), pela coluna '
+            '"${result.priceColumnHeader}"'
+            '${result.ignored > 0 ? ' • ${result.ignored} linha(s) de planilha ignorada(s)' : ''}.',
+          ),
+        ),
+      );
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
   }
 
   /// As UNIDADES de retirada. O cartão mostra quantas permutas são retiradas em
@@ -495,7 +782,10 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.managers: ('Gerentes', Icons.assignment_ind),
     _Registry.committee: ('Comitê', Icons.groups_2),
     _Registry.billers: ('Faturistas', Icons.receipt_long),
+    _Registry.emitters: ('Emissores', Icons.description),
     _Registry.units: ('Unidades', Icons.store),
+    _Registry.insurance: ('Seguros', Icons.shield_outlined),
+    _Registry.creditor: ('Empresa', Icons.domain),
   };
 
   /// A cor de cada segmento é a da ETAPA dele no fluxo — o mesmo índigo do
@@ -508,7 +798,10 @@ class _SegmentedToggle extends StatelessWidget {
         _Registry.managers => AppColors.atManager,
         _Registry.committee => AppColors.pending,
         _Registry.billers => AppColors.invoiced,
+        _Registry.emitters => AppColors.invoiced,
         _Registry.units => AppColors.primaryMedium,
+        _Registry.insurance => AppColors.atManager,
+        _Registry.creditor => AppColors.textMedium,
       };
 
   @override
@@ -750,7 +1043,7 @@ class _NoCommitteeHint extends StatelessWidget {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'O comitê é uma REUNIÃO, e o acesso dele é um só — não se cadastra um '
+                  'O comitê é uma REUNIÃO, e o acesso dele é um só: não se cadastra um '
                   'integrante por vez. Crie o cadastro e passe a senha de primeira entrada '
                   'a quem conduz a reunião.',
                   style: TextStyle(fontSize: 12, color: AppColors.textMedium),

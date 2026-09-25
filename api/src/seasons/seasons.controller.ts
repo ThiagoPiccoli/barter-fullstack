@@ -25,7 +25,7 @@ import { SeasonsService } from './seasons.service';
 const SHEET_LIMIT_BYTES = 5 * 1024 * 1024;
 
 /**
- * A SAFRA — a temporada em que o Barter acontece, sobre um grão.
+ * A SAFRA — o ciclo em que o Barter acontece.
  *
  * Só quem lança o Barter enxerga esta rota: para o consultor, safra é
  * consequência (ele vê a versão vigente em /barter-versions/current).
@@ -45,6 +45,11 @@ export class SeasonsController {
   async store(@CurrentUser() admin: User, @Body() dto: OpenSeasonDto) {
     return toSeasonJson(await this.seasons.open(admin, dto), admin);
   }
+
+  // O VENCIMENTO DA CPR não está mais aqui: ele é de cada CULTURA, e as culturas
+  // são do lançamento (ver `PUT /barter-versions/:code/grains/:grainId`). A
+  // safra deixou de ter grão, e com ele foi embora a única coisa dela que se
+  // editava depois de aberta.
 
   /** Encerra a safra e a versão vigente dela. */
   @Post(':code/close')
@@ -71,8 +76,9 @@ export class SeasonsController {
 
   /**
    * Publica a próxima versão a partir da PLANILHA (.xlsx) — o caminho do admin
-   * no app. O arquivo traz os insumos; o valor da saca, a vigência e as metas
-   * vêm nos campos do formulário.
+   * no app. O arquivo traz os insumos; as culturas (com cotação, produtividade,
+   * vencimento e meta de cada uma), a vigência e as metas da versão vêm nos
+   * campos do formulário.
    */
   @Post(':code/versions/import')
   @RequireCapability(CAPABILITY.barterManage)

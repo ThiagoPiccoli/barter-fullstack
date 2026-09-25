@@ -9,6 +9,7 @@ import {
   SEED_PASSWORD,
   MANAGER,
   UNIT,
+  attachInvoice,
   createTestApp,
   loginAs,
   resetDb,
@@ -165,22 +166,31 @@ describe('Auditoria (e2e)', () => {
       .send({ status: 'approved', note: 'ok pelo comitê' })
       .expect(200);
 
+    // A NOTA vem antes do faturamento, e é ela própria um ato da trilha: anexar
+    // deixa rastro pelo mesmo critério do resto — o que se anexa aqui é a prova
+    // da dívida que a cédula vai afirmar, e a remoção dela apaga essa prova.
+    const faturista = `Bearer ${await loginAs(app, FATURISTA)}`;
+    await attachInvoice(app, faturista, 'PRM-2026-002');
+
     await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-002/invoice')
-      .set('Authorization', `Bearer ${await loginAs(app, FATURISTA)}`)
+      .set('Authorization', faturista)
       .send({ note: 'NF 4471' })
       .expect(200);
 
     const rows = await trail('?targetType=barter');
-    expect(rows).toHaveLength(2);
-    // Mais recentes primeiro: o faturamento veio depois da decisão.
+    expect(rows).toHaveLength(3);
+    // Mais recentes primeiro: o faturamento veio depois da nota, que veio depois
+    // da decisão.
     expect(rows.map((r) => [r.action, r.actorName])).toEqual([
       ['barter.invoiced', 'Patrícia Lemos'],
+      ['barter.invoice-attached', 'Patrícia Lemos'],
       ['barter.reviewed', 'Comitê de Permutas'],
     ]);
-    expect(rows[0].detail).toBe('faturada — NF 4471');
-    expect(rows[1].targetLabel).toBe('PRM-2026-002');
-    expect(rows[1].detail).toBe('aprovada — ok pelo comitê');
+    expect(rows[0].detail).toBe('faturada com 1 nota(s) — NF 4471');
+    expect(rows[1].detail).toContain('nota fiscal 55.318/1 anexada');
+    expect(rows[2].targetLabel).toBe('PRM-2026-002');
+    expect(rows[2].detail).toBe('aprovada: ok pelo comitê');
   });
 
   /**

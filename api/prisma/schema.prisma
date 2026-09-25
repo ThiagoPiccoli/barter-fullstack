@@ -1,12 +1,12 @@
 // Schema do Barter — permuta de grãos por insumos.
 //
 // Observações de domínio:
-// - Os "enums" são String: role admin|consultant|manager|committee|biller,
-//   type grain|input, kind grain|input, status sentToManager|pending|approved|
-//   denied|invoiced,
-//   ruleType none|percentOfTotal|valuePerHa. Vieram assim do SQLite, que não
-//   tem enum, e continuam assim de propósito — a validação mora nos DTOs
-//   (`@IsIn`) e um valor novo não pede migration nem deploy coordenado.
+// - Os "enums" são String: role admin|consultant|manager|committee|biller|
+//   emitter, type grain|input, kind grain|input, status sentToManager|pending|
+//   approved|denied|invoiced|cprIssued|cprSigned|cprRegistered,
+//   ruleType none|percentOfTotal|valuePerHa. São String de propósito, e não
+//   `enum` do Postgres — a validação mora nos DTOs (`@IsIn`) e um valor novo
+//   não pede migration nem deploy coordenado entre banco e aplicação.
 // - Permuta é registro HISTÓRICO: nomes/preços ficam desnormalizados
 //   (snapshots) e os FKs usam SetNull para o histórico sobreviver a exclusões.
 
@@ -18,9 +18,10 @@ datasource db {
   provider = "postgresql"
 }
 
-/// Usuário que loga no app: admin (administra o sistema), gerente, comitê e
-/// faturista (os três postos da linha de análise) ou consultant (registra
-/// permutas para a própria carteira). Produtor NÃO é usuário.
+/// Usuário que loga no app: admin (administra o sistema), gerente, comitê,
+/// faturista e emissor (os quatro postos da retaguarda) ou consultant (registra
+/// permutas para a própria carteira e preenche a cédula). Produtor NÃO é
+/// usuário.
 model User {
   id        Int      @id @default(autoincrement())
   fullName  String
@@ -169,22 +170,42 @@ model Unit {
 /// consultores (ver ProducerConsultant). Fica sem nenhum — aguardando
 /// realocação — quando o último consultor vinculado é excluído.
 model Producer {
-  id           Int      @id @default(autoincrement())
-  name         String
+  id             Int     @id @default(autoincrement())
+  name           String
   /// CPF/CNPJ como o admin digitou — é o que aparece na tela e no comprovante.
-  document     String
+  document       String
   /// O mesmo documento reduzido a dígitos. É ELE que carrega a unicidade:
   /// comparar o texto cru deixaria "CPF 123.456.789-00" e "12345678900"
   /// passarem como produtores diferentes, que é exatamente o cadastro em
   /// duplicidade que a regra existe para impedir.
-  documentDigits String @unique
-  phone        String?
-  farmName     String
-  city         String
+  documentDigits String  @unique
+  phone          String?
+  farmName       String
+  city           String
   /// Área cultivável (ha): base das exigências mínimas por hectare.
-  areaHa       Float
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  areaHa         Float
+
+  /// COMO ESTE PRODUTOR RECOLHE o Funrural: `comercializacao` (sobre a receita
+  /// da venda) ou `folha` (sobre a folha de pagamento — e aí sobre a entrega
+  /// fica só o Senar). Ver `src/barters/tax-regime.ts`.
+  ///
+  /// Mora no CADASTRO, e não na permuta, porque é o que ele é: a opção formal
+  /// que o produtor fez (ou não fez) perante o fisco vale para o ano inteiro e
+  /// para todas as entregas dele. Enquanto a pergunta era feita permuta a
+  /// permuta, o consultor respondia de memória a cada fechamento — e a segunda
+  /// permuta do mesmo produtor saía num regime diferente da primeira sem
+  /// ninguém ter mudado nada no mundo real.
+  ///
+  /// A permuta continua GRAVANDO o regime e a alíquota que aplicou
+  /// (`Barter.taxRegime`/`taxRate`): daqui sai o valor do dia, e o que já foi
+  /// fechado não se reescreve quando o produtor faz a opção no ano seguinte.
+  ///
+  /// O padrão é `comercializacao` — é o regime de quem não fez opção nenhuma,
+  /// e é o que os cadastros anteriores a este campo têm de verdade.
+  taxRegime String @default("comercializacao")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   /// Os consultores que atendem este produtor. Quem escreve esta lista é o
   /// admin (ver CAPABILITY.producersManage).
@@ -226,6 +247,60 @@ model ProducerConsultant {
   @@id([producerId, consultantId])
   // A pergunta da listagem do consultor: "quais produtores são meus?".
   @@index([consultantId])
+}
+
+/// O SEGURO AGRÍCOLA por MUNICÍPIO — quanto custa segurar um hectare em cada
+/// praça onde a empresa permuta.
+///
+/// O seguro é uma proteção de preço de praça, não de cliente: o que o define é
+/// o RISCO DO LUGAR — o regime de chuva, o histórico de granizo, a seca que
+/// volta a cada três anos naquela região. Por isso a base é por município, e não
+/// por produtor: dois vizinhos da mesma linha pagam o mesmo por hectare, e é
+/// exatamente isso que a seguradora cota.
+///
+/// A CONTA é a mais simples do sistema, e é a leitura literal da regra:
+///
+///     custo do seguro = área cultivável do produtor × valor por hectare
+///
+/// Ele NÃO é produto de catálogo, e essa distinção é deliberada. O catálogo é a
+/// lista do FORNECEDOR de insumos, carregada da planilha dele e precificada por
+/// versão do Barter (ver `VersionPrice`); o seguro é contratado de uma
+/// seguradora, cotado por região e não tem unidade de venda nem embalagem. Posto
+/// no catálogo, ele apareceria no relatório de preço do produto, na carga
+/// seguinte e no seletor de insumos do consultor — que é justamente onde ele não
+/// deve estar, porque não é ele quem escolhe: quem decide se esta safra leva
+/// seguro é o admin, no lançamento (ver `BarterVersion.insuranceRequired`).
+///
+/// A CHAVE é o município NORMALIZADO, pelo mesmo motivo de `Unit.nameKey` e de
+/// `Producer.documentDigits`: sobre o texto cru, "Campo Mourão/PR", "campo
+/// mourao/pr" e "Campo Mourao / PR" seriam três praças com três preços, e a
+/// permuta encontraria uma delas por acaso de digitação. O cadastro do produtor
+/// escreve o município como "Maringá/PR", e é essa forma que se compara.
+model InsuranceRate {
+  id Int @id @default(autoincrement())
+
+  /// O município como o admin o escreveu — é o que a tela mostra e o que sai na
+  /// linha do seguro dentro da permuta ("Seguro agrícola — Maringá/PR").
+  city String
+
+  /// O mesmo município reduzido à forma canônica. É ELE que carrega a unicidade
+  /// e é por ele que a permuta acha a taxa do produtor.
+  cityKey String @unique
+
+  /// Quanto custa segurar UM HECTARE nesta praça (R$/ha).
+  ///
+  /// Maior que zero sempre: uma taxa zerada não é "seguro de graça", é linha
+  /// pela metade — e ela produziria uma permuta com seguro contratado cujo custo
+  /// não existe. Quem recusa o zero é o DTO, e não o banco, pelo mesmo motivo de
+  /// sempre: a frase que o admin lê é do domínio.
+  valuePerHa Float
+
+  /// O que o admin tem a dizer sobre esta linha (a seguradora, a vigência da
+  /// cotação, a cultura a que ela se refere). Opcional — a maioria não tem.
+  note String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 /// CLASSE do insumo — a taxonomia com que o FORNECEDOR organiza a lista de
@@ -270,14 +345,14 @@ model ProductClass {
 /// o último valor publicado — é o que alimenta o relatório de preço do produto
 /// e a linha do tempo — mas quem precifica uma permuta é a versão vigente.
 model Product {
-  id            Int            @id @default(autoincrement())
+  id            Int           @id @default(autoincrement())
   name          String
   unit          String
   type          String
   currentPrice  Float
-  requiredPerHa Float          @default(0)
+  requiredPerHa Float         @default(0)
   classId       Int?
-  productClass  ProductClass?  @relation(fields: [classId], references: [id], onDelete: SetNull)
+  productClass  ProductClass? @relation(fields: [classId], references: [id], onDelete: SetNull)
 
   /// Código do produto na planilha do fornecedor. É a chave de casamento da
   /// carga em massa: sem ele, "Ureia 45%" e "UREIA 45 %" viram dois cadastros a
@@ -299,43 +374,62 @@ model Product {
   priceHistory  PriceHistoryEntry[]
   items         BarterItem[]
   versionPrices VersionPrice[]
-  seasons       Season[]            @relation("SeasonGrain")
+
+  /// Os lançamentos que aceitam ESTE grão como pagamento (só produtos
+  /// `type: "grain"` têm). Era `seasons`, quando a safra é que tinha um grão.
+  versionGrains VersionGrain[] @relation("VersionGrain")
 }
 
-/// SAFRA (temporada): o Barter acontece SOBRE um grão, durante um ciclo.
-/// `code` é a raiz do código das versões: letra do grão + ano (ex.: S2026 →
-/// versões S2026.01, S2026.02...).
+/// SAFRA (temporada): o CICLO em que o Barter acontece. `code` é a raiz do
+/// código das versões (ex.: B2026 → versões B2026.01, B2026.02...).
 ///
-/// O grão fica desnormalizado (nome e unidade) porque a safra é registro
-/// histórico: excluir o produto do catálogo não pode apagar a memória de que
-/// aquela temporada era de soja.
+/// ELA NÃO É MAIS A CULTURA, e essa é a mudança deste modelo. A safra TINHA um
+/// grão — era "soja 2026", e toda permuta registrada nela só podia ser paga em
+/// soja —, e a lavoura não é assim: na mesma janela o produtor planta soja e
+/// milho, e o Barter precisa aceitar as duas ao mesmo tempo, com o cliente
+/// escolhendo em qual delas paga. Enquanto o grão morou aqui, a única forma de
+/// oferecer duas culturas era abrir duas safras — e aí "em qual gestão esta
+/// permuta caiu?" voltava a ter duas respostas, que é justamente o que a regra
+/// de uma safra aberta existe para evitar.
+///
+/// As CULTURAS agora moram na versão (ver `VersionGrain`): elas coexistem, cada
+/// uma com a própria cotação da saca, produtividade estimada e vencimento de
+/// CPR, sobre UMA tabela de insumos — porque o insumo custa o mesmo em R$
+/// qualquer que seja o grão com que ele vai ser pago.
+///
+/// O que sobrou aqui é o que a safra sempre foi por baixo do nome do grão: o
+/// ciclo, o ano e o código que numera as versões.
 model Season {
-  id        Int      @id @default(autoincrement())
-  code      String   @unique
-  name      String
-  year      Int
-  grainId   Int?
-  grain     Product? @relation("SeasonGrain", fields: [grainId], references: [id], onDelete: SetNull)
-  grainName String
-  grainUnit String
-  status    String   @default("open")
-  openedAt  DateTime @default(now())
-  closedAt  DateTime?
+  id       Int       @id @default(autoincrement())
+  code     String    @unique
+  name     String
+  year     Int
+  status   String    @default("open")
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
 
   versions BarterVersion[]
 }
 
-/// O BARTER LANÇADO — uma versão da safra (S2026.01, S2026.02...).
+/// O BARTER LANÇADO — uma versão da safra (B2026.01, B2026.02...).
 ///
-/// É ela que responde "com que valores se permuta hoje": o valor da saca do
-/// grão e a tabela de preços dos insumos. Uma correção de valores no meio da
-/// safra não reescreve a versão vigente — publica a próxima, e a anterior
-/// fecha. É isso que mantém legível o que foi acordado em cada momento.
+/// É ela que responde "com que valores se permuta hoje": AS CULTURAS aceitas
+/// (com a cotação da saca de cada uma) e a tabela de preços dos insumos. Uma
+/// correção de valores no meio da safra não reescreve a versão vigente —
+/// publica a próxima, e a anterior fecha. É isso que mantém legível o que foi
+/// acordado em cada momento.
+///
+/// A TABELA DE INSUMOS É UMA SÓ para todas as culturas, e isso é uma afirmação
+/// sobre o domínio: o litro de glifosato custa os mesmos R$ 40 quer ele vá ser
+/// pago em soja ou em milho. O que muda de uma cultura para a outra é a
+/// COTAÇÃO — e é por ela que o mesmo insumo vale 0,33 saca de soja e 0,69 de
+/// milho. Uma tabela por cultura duplicaria o lançamento inteiro para expressar
+/// uma divisão que o preço da saca já faz.
 ///
 /// A VIGÊNCIA tem duas naturezas de propósito: `endsAt` é uma data que o admin
 /// marcou e por isso TRAVA (a API recusa permuta depois dela); as metas abaixo
-/// apenas medem — quem encerra por meta é o admin, para nada fechar sozinho de
-/// madrugada. Ver isOpenAt() em version-progress.ts.
+/// medem, e o que elas fazem ao serem batidas é ESCOLHA da versão —
+/// `closeOnGoal`. Ver isOpenAt() em version-progress.ts.
 model BarterVersion {
   id       Int    @id @default(autoincrement())
   seasonId Int
@@ -344,21 +438,69 @@ model BarterVersion {
   code     String @unique
   status   String @default("active")
 
-  /// Valor (R$) da saca do grão nesta versão — a taxa que converte o custo dos
-  /// insumos em sacas. É digitado pelo admin ao publicar, não vem da planilha.
-  grainPrice Float
+  /// AS CULTURAS que este lançamento aceita — ver `VersionGrain`. Pelo menos
+  /// uma, e é a publicação que garante isso: versão sem cultura nenhuma seria
+  /// uma tabela de insumos que ninguém tem como pagar.
+  grains VersionGrain[]
+
+  /// ESTE LANÇAMENTO LEVA SEGURO AGRÍCOLA?
+  ///
+  /// É a chave do seguro, e ela é do ADMIN, no lançamento — a mesma mão que
+  /// publica a tabela de valores e a produtividade estimada. Não é do consultor
+  /// e não é do produtor: contratar seguro para a carteira inteira é decisão
+  /// comercial da safra (a empresa fechou apólice com a seguradora, ou não), e
+  /// deixá-la permuta a permuta faria o mesmo Barter ser vendido de dois jeitos
+  /// na mesma praça, no mesmo dia, conforme quem atendeu.
+  ///
+  /// Ligado, TODA permuta desta versão nasce com a linha do seguro, precificada
+  /// pelo MUNICÍPIO DO PRODUTOR (ver `InsuranceRate`): o custo entra na conta
+  /// como qualquer insumo retirado e é pago em sacas, porque é isso que ele é —
+  /// um custo que a empresa adianta e o produtor devolve na colheita.
+  ///
+  /// E o município sem taxa cadastrada RECUSA o registro, em vez de deixar a
+  /// permuta nascer sem a linha. É a mesma recusa de `estimatedYield` 0 e pelo
+  /// mesmo motivo: aqui ela é grátis (ninguém retirou nada ainda, e o admin
+  /// resolve em uma linha de cadastro), e descobrir lá na frente que a permuta
+  /// não tem seguro numa safra que tem seria descobrir com o insumo já na
+  /// fazenda.
+  ///
+  /// `false` nas versões anteriores a este campo, e isso é a verdade sobre elas:
+  /// foram lançadas sem seguro nenhum, e ligá-lo retroativamente acrescentaria
+  /// custo a permutas que já foram acordadas, aprovadas e faturadas.
+  insuranceRequired Boolean @default(false)
 
   startsAt DateTime  @default(now())
   endsAt   DateTime?
 
   /// Metas de encerramento (null = sem meta). Medem o realizado das permutas
-  /// APROVADAS da versão; ao atingir, o painel avisa e o admin decide.
+  /// APROVADAS da versão; ao atingir, o painel avisa e `closeOnGoal` diz se o
+  /// Barter fecha junto.
   ///
   /// Não há meta de lucro: sem custo na lista de preços, ela seria a de vendas
   /// com outro nome.
+  ///
+  /// A META DE SACAS NÃO ESTÁ AQUI — ela é de cada cultura
+  /// (`VersionGrain.targetSacks`). Sacas de soja e sacas de milho não somam:
+  /// são grãos diferentes, com preço, peso e comprador diferentes, e um número
+  /// único juntando os dois seria uma medida sem significado físico — a barra do
+  /// painel andaria com o milho e o admin leria compromisso de soja. As outras
+  /// duas somam sem problema: R$ é R$, e permuta é permuta.
   targetSales   Float?
-  targetSacks   Float?
   targetBarters Int?
+
+  /// O QUE FAZER quando a meta bater: encerrar o Barter (true) ou só avisar e
+  /// esperar o admin encerrar (false, o padrão).
+  ///
+  /// Ligado, o fechamento acontece no instante da APROVAÇÃO que cruzou a meta —
+  /// não há relógio nem rotina de madrugada. É o único momento em que o
+  /// realizado cresce (ver COUNTS_AS_REALIZED em version-progress.ts), então o
+  /// ato humano que bateu a meta é também o que fecha a versão, e a trilha
+  /// aponta para ele.
+  ///
+  /// Só faz sentido com pelo menos uma meta definida, e o DTO recusa a
+  /// combinação vazia: "encerrar ao bater meta" sem meta é uma versão que nunca
+  /// fecharia, com uma opção ligada dizendo o contrário.
+  closeOnGoal Boolean @default(false)
 
   /// De onde a tabela veio (nome do arquivo) e a observação do lançamento.
   sourceFile String?
@@ -372,6 +514,94 @@ model BarterVersion {
   barters Barter[]
 
   @@unique([seasonId, number])
+}
+
+/// UMA CULTURA aceita pelo Barter lançado — o grão em que a permuta pode ser
+/// paga, com tudo o que muda de um grão para o outro.
+///
+/// Ela existe porque as culturas COEXISTEM. O Barter é uma janela de venda, e
+/// dentro dela o produtor decide o que planta: fecha a soja em setembro, o
+/// milho safrinha em janeiro, e às vezes os dois no mesmo dia, em talhões
+/// diferentes. O grão morava na safra (ver `Season`) e isso obrigava a escolher
+/// uma cultura por gestão — quem quisesse oferecer duas abria duas safras, e a
+/// pergunta "por quanto se permuta hoje?" passava a ter duas respostas.
+///
+/// O QUE É POR CULTURA é o que este modelo lista, e cada campo tem um porquê
+/// diferente de não ser da versão inteira:
+///
+/// - `price` é a cotação da saca. É ela que converte o custo dos insumos em
+///   sacas, e soja e milho não valem o mesmo;
+/// - `estimatedYield` é a produtividade estimada (sc/ha). É ela que converte as
+///   sacas em ÁREA a penhorar, e 60 sc/ha de soja não é 120 sc/ha de milho;
+/// - `cprDueDate` é o vencimento da entrega. Ele é um FATO do calendário da
+///   cultura — a soja vence na colheita dela, o milho safrinha na dele;
+/// - `targetSacks` é a meta de sacas, que só existe por grão (ver
+///   `BarterVersion.targetSales`).
+///
+/// O QUE NÃO É POR CULTURA ficou na versão, e a lista é curta de propósito: a
+/// tabela de insumos (o preço em R$ não muda com o grão), o seguro agrícola (é
+/// do lançamento, cotado por praça) e a vigência.
+///
+/// O GRÃO fica desnormalizado (nome e unidade) pelo mesmo motivo de tudo o mais
+/// neste schema: excluir o produto do catálogo não pode apagar a memória de que
+/// aquele lançamento aceitava soja.
+model VersionGrain {
+  id        Int           @id @default(autoincrement())
+  versionId Int
+  version   BarterVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  grainId   Int?
+  grain     Product? @relation("VersionGrain", fields: [grainId], references: [id], onDelete: SetNull)
+  grainName String
+  grainUnit String
+
+  /// Valor (R$) da saca desta cultura nesta versão — a taxa que converte o
+  /// custo dos insumos em sacas. É digitado pelo admin ao publicar, não vem da
+  /// planilha do fornecedor (ela é de insumo).
+  price Float
+
+  /// A PRODUTIVIDADE ESTIMADA desta cultura, em sacas por hectare — a taxa que
+  /// converte as sacas da permuta em HECTARES a penhorar.
+  ///
+  /// Ela é a outra metade da conversão que `price` começa: o preço da saca leva
+  /// o custo dos insumos a sacas, e a produtividade leva as sacas à área de
+  /// lavoura que precisa nascer para pagá-las.
+  ///
+  /// OBRIGATÓRIA na publicação (ver `VersionGrainDto`). Enquanto ela for 0,
+  /// `POST /barters` recusa a cultura: sem produtividade não há área exigida, e
+  /// uma permuta que passasse sem ela entraria na esteira sem garantia
+  /// dimensionada — que é exatamente o que o penhor existe para impedir.
+  estimatedYield Float @default(0)
+
+  /// O VENCIMENTO DA CPR desta cultura — a data em que a entrega do grão vence.
+  ///
+  /// Ele não é dado da cédula, e por isso não mora nela: todas as cédulas da
+  /// mesma cultura, na mesma gestão, vencem no mesmo dia. Enquanto foi campo do
+  /// formulário, quem o digitava era o faturista, cédula por cédula, sem nada
+  /// que dissesse qual era a data certa daquela cultura — duas CPRs da mesma
+  /// safra saíam com vencimentos diferentes e ninguém tinha como saber qual
+  /// estava certa.
+  ///
+  /// Estava na SAFRA, e veio para cá junto com o grão: ele era "o vencimento da
+  /// cultura da safra", e a safra deixou de ter cultura.
+  ///
+  /// Nulável porque o lançamento pode acontecer antes de a data estar acertada —
+  /// e aí `cprGaps()` cobra, com o recado endereçado a quem pode resolver (o
+  /// admin, no lançamento), e não ao consultor, que não tem esse campo.
+  cprDueDate DateTime?
+
+  /// A META DE SACAS desta cultura (null = sem meta). Ver
+  /// `BarterVersion.targetSales` para por que ela não é da versão.
+  targetSacks Float?
+
+  /// A ORDEM em que as culturas aparecem para quem escolhe — a primeira é o
+  /// padrão da tela. É conteúdo, e não apresentação: o admin lança "soja e, se
+  /// quiser, milho", e inverter isso muda o que o consultor vê primeiro.
+  position Int @default(0)
+
+  /// Uma linha por cultura em cada versão: o mesmo grão duas vezes seriam duas
+  /// cotações para a mesma pergunta, e nada no documento diria qual vale.
+  @@unique([versionId, grainId])
 }
 
 /// Uma LINHA da tabela de valores da versão: o preço de um insumo naquele
@@ -417,17 +647,33 @@ model PriceHistoryEntry {
 /// o que aparece no detalhe e no comprovante: o documento precisa dizer em qual
 /// gestão o acordo foi feito, mesmo que a versão seja removida do banco.
 ///
-/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de três postos:
+/// A CULTURA da permuta — soja ou milho, agora que a versão aceita as duas — NÃO
+/// é coluna daqui, e isso é deliberado: ela é a LINHA DO GRÃO (o `BarterItem` de
+/// `kind: "grain"`), que já guarda o produto, o nome, a unidade e a cotação
+/// congelados. Uma coluna ao lado seria um segundo lugar dizendo o mesmo, e os
+/// dois poderiam divergir na primeira remontagem de rascunho. O que ESTÁ aqui é
+/// o que a escolha da cultura PRODUZIU e não se lê do item: a produtividade com
+/// que o penhor foi dimensionado (`pledgeYield`).
 ///
-///     sentToManager → pending → approved → invoiced
-///      (gerente)     (comitê)  (faturista)
-///                        ↘ denied
+/// O CAMINHO dela é o `status`, e ele é uma LINHA DE PRODUÇÃO de cinco postos:
 ///
-/// `sentToManager` é onde ela nasce: o consultor a registrou e ela está na mesa
-/// do GERENTE DELE, esperando o parecer técnico. Escrito o parecer, ela vai ao
-/// COMITÊ (`pending`), que lê o pedido do consultor e o parecer do gerente e
-/// decide — é a única instância que aprova ou nega. Aprovada, ela cai na fila do
-/// FATURISTA, que fatura (`invoiced`) e encerra a linha.
+///     draft → sentToManager → pending → approved              → invoiced →
+///  (consultor)  (gerente)    (comitê)   approvedWithConditions  (faturista)
+///                                ↘ denied
+///
+///     → cprIssued → cprSigned → cprRegistered
+///        (emissor)   (emissor)    (emissor)
+///
+/// `draft` é onde ela nasce: o consultor a montou, e ela ainda é DELE — não está
+/// na mesa de ninguém e nenhuma fila da retaguarda a enxerga. Escrito o parecer
+/// do consultor, ele a encaminha ao GERENTE (`sentToManager`), que dá o parecer
+/// técnico. Daí ela vai ao COMITÊ (`pending`), que lê o pedido e os dois
+/// pareceres e decide — é a única instância que aprova, aprova com ressalva ou
+/// nega. Aprovada (com ou sem ressalva), ela cai na fila do FATURISTA, que
+/// fatura e anexa as notas (`invoiced`). Aí começa o trecho do EMISSOR: ele
+/// confere a cédula que o consultor preencheu e a emite (`cprIssued`), colhe as
+/// assinaturas (`cprSigned`) e a leva a registro (`cprRegistered`), que é o fim
+/// da linha.
 ///
 /// Quem guarda esse caminho — quem move o quê, de onde para onde, e o que
 /// responder a quem chega fora de hora — é `src/barters/barter-workflow.ts`. O
@@ -462,7 +708,92 @@ model Barter {
   unit     Unit?  @relation(fields: [unitId], references: [id], onDelete: SetNull)
   unitName String @default("")
 
-  status String @default("sentToManager")
+  /// A ÁREA CULTIVÁVEL do produtor (ha) no momento do registro.
+  ///
+  /// Snapshot pelo mesmo motivo do preço do item e da alíquota: ela é o
+  /// DENOMINADOR do investimento por hectare (sc/ha), e o produtor arrenda mais
+  /// terra na safra seguinte. Lida do cadastro na hora de mostrar, a mesma
+  /// permuta passaria a exibir um investimento por hectare menor sem que nada
+  /// nela tivesse mudado — e quem aprovou 12 sc/ha veria 9 no dia da auditoria.
+  ///
+  /// 0 nas permutas anteriores a este campo: sem área registrada não há sc/ha, e
+  /// a leitura devolve `null` em vez de dividir por zero e afirmar um número.
+  producerAreaHa Float @default(0)
+
+  /// O PENHOR desta permuta — as duas taxas com que a área de garantia foi
+  /// dimensionada, congeladas no registro.
+  ///
+  /// `pledgeYield` é a produtividade estimada (sc/ha) da versão em que ela nasceu
+  /// e `pledgeMarginPercent` é a margem de segurança da credora naquele dia.
+  /// Juntas com as sacas do item de grão, elas produzem a área exigida:
+  ///
+  ///     área exigida = (sacas ÷ pledgeYield) × (1 + pledgeMarginPercent / 100)
+  ///
+  /// SÃO SNAPSHOT pelo mesmo motivo de `taxRate` e `producerAreaHa`: as duas
+  /// mudam (a versão seguinte revê a produtividade, a diretoria revê a margem), e
+  /// lidas na hora de conferir fariam uma permuta já encaminhada passar a exigir
+  /// mais área do que as lavouras que alguém já anotou — sem que nada nela
+  /// tivesse mudado.
+  ///
+  /// A ÁREA EXIGIDA NÃO É COLUNA, e isso é deliberado: ela é derivada, como os
+  /// quilos e o valor total da cédula. As SACAS mudam depois do registro — deferir
+  /// um produto de fora do Barter recalcula a linha do grão (ver `repriceGrain`)
+  /// —, e uma área exigida gravada continuaria dizendo o número da semana
+  /// passada num campo que parece atual.
+  ///
+  /// `pledgeYield` 0 é a MARCA DAS PERMUTAS ANTERIORES À REGRA, e é o que as
+  /// isenta: a partir deste campo, `POST /barters` recusa versão sem
+  /// produtividade, então toda permuta nova nasce com ela preenchida. Zero não é
+  /// "sem produtividade", é "nasceu antes de o penhor ser dimensionado" — e
+  /// cobrar área dessas travaria a emissão de títulos já aprovados por causa de
+  /// uma regra que não existia quando eles foram fechados.
+  pledgeYield         Float @default(0)
+  pledgeMarginPercent Float @default(0)
+
+  /// O SEGURO AGRÍCOLA desta permuta — o município que o precificou e a taxa
+  /// (R$/ha) com que ele foi cotado, congelados no registro.
+  ///
+  /// SÃO SNAPSHOT pelo mesmo motivo de `taxRate`, `producerAreaHa` e das duas
+  /// taxas do penhor: a base por município é cadastro vivo (o admin recota a
+  /// praça quando a seguradora recota), e o produtor muda de município quando
+  /// arrenda do outro lado do rio. Lidas na hora de mostrar, uma permuta já
+  /// encaminhada passaria a custar mais sacas do que as que o consultor
+  /// combinou com o produtor — sem que nada nela tivesse mudado.
+  ///
+  /// O CUSTO NÃO É COLUNA, e isso é deliberado: ele é derivado, como a área do
+  /// penhor e os quilos da cédula. Ele vive na LINHA do seguro
+  /// (`BarterItem.insurance`), que é onde o custo da permuta mora inteiro — e
+  /// tê-lo também aqui criaria dois lugares dizendo o mesmo número, que é a
+  /// primeira condição para eles divergirem.
+  ///
+  /// `insuranceRatePerHa` 0 é "esta permuta não tem seguro", e é o que dizem
+  /// tanto as permutas anteriores à regra quanto as de um Barter lançado sem
+  /// seguro (ver `BarterVersion.insuranceRequired`). As duas são o mesmo fato —
+  /// não há seguro a cobrar —, e é por isso que não há um terceiro campo
+  /// distinguindo-as: quem quer saber por que não há olha a versão.
+  insuranceCity      String @default("")
+  insuranceRatePerHa Float  @default(0)
+
+  status String @default("draft")
+
+  /// O PARECER DO CONSULTOR e o momento em que ele encaminhou a permuta.
+  ///
+  /// É a peça que faltava no começo da linha. O consultor é quem conhece o
+  /// cliente — safras anteriores, pontualidade, o que está plantado —, e nada
+  /// disso chegava escrito: a permuta ia ao gerente como uma lista de insumos, e
+  /// o que o consultor sabia ficava no telefonema que ele dava depois.
+  ///
+  /// Ele é gravado no ENCAMINHAMENTO, mas pode ser escrito antes: enquanto a
+  /// permuta é `draft`, o consultor salva o texto quantas vezes quiser (ver
+  /// `PUT /barters/:code/note`). É o único texto do fluxo que se reescreve — os
+  /// outros são assinaturas de etapas cumpridas. O que não se reescreve, aqui
+  /// como nos outros, é o EVENTO: `consultantSentAt` marca o encaminhamento, e
+  /// o texto que foi junto fica congelado no BarterEvent.
+  ///
+  /// Null nas permutas anteriores a este campo — elas nasceram já na mesa do
+  /// gerente, e inventar um parecer para elas seria assinar em nome de alguém.
+  consultantNote   String?
+  consultantSentAt DateTime?
 
   /// O IMPOSTO DA ENTREGA — a entrega de grão é comercialização de produção
   /// rural, e sobre ela incidem o Funrural e o Senar.
@@ -513,27 +844,170 @@ model Barter {
   ///
   /// `reviewedBy` é snapshot pelo mesmo motivo de `managerName` — a decisão
   /// continua assinada depois que a conta for excluída.
+  ///
+  /// `reviewNote` é OPCIONAL no schema e OBRIGATÓRIO em duas das três saídas: a
+  /// negativa e a aprovação com ressalva não existem sem texto (ver
+  /// `ReviewBarterDto`). Quem valida isso é a entrada, e não o banco, porque a
+  /// obrigatoriedade depende do DESFECHO — uma coluna `NOT NULL` recusaria
+  /// também a aprovação limpa, que não tem o que explicar, e reescreveria as
+  /// decisões já gravadas sem observação.
   reviewNote   String?
   reviewedBy   String?
   reviewedById Int?
   reviewedAt   DateTime?
 
-  /// O FATURAMENTO — o último posto da linha, e o único que mexe com dinheiro
-  /// para fora.
+  /// AS EXIGÊNCIAS DO COMITÊ: avalista, garantia real e seguro.
+  ///
+  /// Quem define as três é o comitê, e elas viviam DENTRO de `reviewNote` — num
+  /// parágrafo em português, escrito de um jeito diferente a cada reunião
+  /// ("exigir aval do cônjuge", "com avalista", "condicionada a aval"). Isso
+  /// bastava para quem lia a permuta e não bastava para mais nada: não havia
+  /// como listar o que estava pendente de aval, o emissor descobria a exigência
+  /// lendo prosa na véspera de emitir o título, e a que fosse esquecida no meio
+  /// do texto não era esquecida por ninguém em particular.
+  ///
+  /// São TRÊS CAMPOS, e não um tipo de ressalva: elas se acumulam. A mesma
+  /// decisão pede avalista E garantia real com frequência, e um campo único
+  /// obrigaria a eleger a principal — que é uma pergunta que o comitê não faz.
+  ///
+  /// O TEXTO CONTINUA OBRIGATÓRIO na ressalva, e não foi substituído por elas:
+  /// as caixas dizem O QUÊ, e só o texto diz QUAL — qual matrícula, qual valor
+  /// segurado, quem se espera como avalista. Uma ressalva que fosse só três
+  /// booleanos mandaria o consultor de volta ao telefone, que é de onde este
+  /// campo veio.
+  ///
+  /// `false` nas permutas anteriores a estes campos e em toda decisão que não
+  /// exigiu nada. Repare que elas NÃO travam o faturamento: a ressalva é
+  /// condição do negócio e quem cobra o cumprimento é a operação, como já
+  /// dizia `approvedWithConditions`. O que mudou é que agora ela é legível por
+  /// máquina.
+  ///
+  /// O SEGURO exigido aqui é outra coisa do seguro da versão
+  /// (`BarterVersion.insuranceRequired`), e vale distinguir: aquele é o seguro
+  /// DO LANÇAMENTO, já precificado e cobrado dentro da permuta; este é uma
+  /// exigência da DECISÃO, feita quando o Barter não tem seguro e o comitê
+  /// entende que este negócio, com este cliente, não anda sem ele.
+  requiresGuarantor  Boolean @default(false)
+  requiresCollateral Boolean @default(false)
+  requiresInsurance  Boolean @default(false)
+
+  /// O FATURAMENTO — o posto que mexe com dinheiro para fora.
   ///
   /// Os campos são os mesmos da decisão, de propósito: quem fez, quando, e o que
   /// anotou. O faturista não avalia e não devolve — ele só carimba o que o comitê
   /// aprovou —, então não há aqui nenhum campo de "resultado": ou a permuta foi
   /// faturada, e estas colunas dizem por quem, ou ela não foi.
+  ///
+  /// O QUE ELE PRODUZ são as notas, e elas são lista à parte (`invoices`): uma
+  /// permuta sai em mais de um carregamento, e cada retirada gera a sua.
   invoicedBy   String?
   invoicedById Int?
   invoicedAt   DateTime?
   invoiceNote  String?
 
-  createdAt    DateTime  @default(now())
+  /// A EMISSÃO DA CÉDULA — os três atos do emissor, cada um com a sua marca.
+  ///
+  /// Eles moram na PERMUTA, e não em `BarterCpr`, pelo mesmo motivo de
+  /// `invoicedBy` e `reviewedBy` morarem aqui: são as assinaturas das ETAPAS, e
+  /// etapa é da esteira. A cédula guarda o CONTEÚDO do documento (quem é o
+  /// emitente, que lavoura é a garantia); a permuta guarda por onde ela andou.
+  ///
+  /// `cprEmittedBy` é snapshot em texto pelo mesmo motivo dos outros: a
+  /// conferência continua assinada depois que a conta for excluída. E não há
+  /// campo de "resultado" em nenhum dos três — a recusa da emissão não é um
+  /// estado, é um 422 com a lista do que falta (ver `cprGaps`): o emissor não
+  /// devolve a permuta, ele diz que o papel ainda não está pronto.
+  cprEmittedBy    String?
+  cprEmittedById  Int?
+  cprEmittedAt    DateTime?
+  cprEmissionNote String?
+
+  /// A COLETA DE ASSINATURAS: quando ela se completou e o que houve nela (quem
+  /// assinou, se faltou o cônjuge, se foi por assinatura eletrônica).
+  cprSignedAt      DateTime?
+  cprSignatureNote String?
+
+  /// O REGISTRO do título — a data, onde ele foi registrado e sob que número.
+  ///
+  /// O PROTOCOLO é obrigatório no ato (ver `RegisterCprDto`), e é o que
+  /// diferencia "levamos ao cartório" de "está registrado": sem número, não há
+  /// como provar o registro nem como pedir a certidão depois.
+  cprRegisteredAt   DateTime?
+  cprRegistryNumber String?
+  cprRegistryPlace  String?
+
+  /// O PEDIDO DE ALTERAÇÃO — o único caminho de VOLTA da esteira, e ele tem
+  /// dono nas duas pontas: pede o consultor que registrou, decide o admin.
+  ///
+  /// Ele existe porque a permuta erra depois de sair da mão de quem a montou:
+  /// o produtor troca um insumo na véspera da retirada, a área muda, a
+  /// quantidade saiu errada. Sem este caminho, as saídas eram pedir ao comitê
+  /// que negasse (uma decisão de negócio usada como borracha, e que fica na
+  /// história como negativa) ou registrar uma segunda permuta e deixar a
+  /// primeira apodrecendo na fila de alguém.
+  ///
+  /// `changeRequestStatus` é o que existe de estado próprio: `open` (pedido na
+  /// mesa do admin) ou `denied` (recusado, e o texto da recusa fica visível ao
+  /// consultor). ACEITO não é um valor: o aceite devolve a permuta a `draft`, e
+  /// é o `status` dela que passa a contar a história — um pedido "aceito"
+  /// pendurado numa permuta que voltou a ser rascunho seria um segundo lugar
+  /// dizendo a mesma coisa, e os dois poderiam divergir.
+  ///
+  /// `changeRequestFrom` é de onde ela veio, e é o que a RECUSA restaura: o
+  /// pedido não tira a permuta da fila em que está (o gerente que ia dar o
+  /// parecer continua podendo dar), então recusar precisa devolvê-la
+  /// exatamente ao estado que ela tinha — e não a um estado deduzido.
+  ///
+  /// Por que campos na permuta, e não uma tabela de pedidos: o que a operação
+  /// precisa saber é se ESTA permuta tem um pedido em aberto agora, e a
+  /// história de todos eles já é gravada em `BarterEvent`, que é onde a
+  /// trajetória mora. Uma tabela daria consulta por pedido, que ninguém faz.
+  changeRequestStatus String?
+  changeRequestNote   String?
+  changeRequestBy     String?
+  changeRequestById   Int?
+  changeRequestAt     DateTime?
+  changeRequestFrom   String?
+  /// A resposta do admin ao pedido — obrigatória na recusa, que é a única em
+  /// que ela sobrevive: o aceite fala pelo próprio efeito (a permuta voltou a
+  /// ser rascunho, e o consultor a tem de novo nas mãos).
+  changeRequestReply  String?
+
+  createdAt DateTime @default(now())
 
   items  BarterItem[]
   events BarterEvent[]
+
+  /// OS PEDIDOS DE FORA DO BARTER feitos nesta permuta — o consultor pedindo um
+  /// produto que a tabela da versão não tem. Ver BarterProductRequest.
+  ///
+  /// Lista, e não um campo de estado como o pedido de alteração, porque a
+  /// pergunta é outra: ali interessa se ESTA permuta tem um pedido em aberto
+  /// agora (um de cada vez, e o anterior some quando o seguinte nasce); aqui
+  /// cada pedido é um item que entra — ou não — na permuta, e dois pedidos
+  /// diferentes convivem sem nenhuma relação entre si.
+  productRequests BarterProductRequest[]
+
+  /// AS NOTAS FISCAIS desta permuta — o que o faturamento produziu, com o
+  /// arquivo de cada uma anexado.
+  ///
+  /// LISTA, e não um número de nota na permuta, porque a operação é assim: o
+  /// produtor retira os insumos em mais de um carregamento, cada retirada sai
+  /// com a sua nota, e às vezes uma delas é cancelada e reemitida. Enquanto o
+  /// número foi um campo de texto (e era, dentro da cédula), a segunda nota não
+  /// tinha onde entrar — e a cédula citava uma só como origem de uma dívida
+  /// formada por três.
+  invoices BarterInvoice[]
+
+  /// AS PEÇAS DA ANÁLISE DE CRÉDITO que o comitê juntou para decidir esta
+  /// permuta — a consulta ao Serasa, o endividamento dentro da cooperativa. Ver
+  /// BarterCreditFile, inclusive para quem as enxerga.
+  creditFiles BarterCreditFile[]
+
+  /// A CÉDULA DE PRODUTO RURAL desta permuta, quando o consultor já começou a
+  /// preenchê-la. Uma só, e opcional: a permuta existe e anda sem CPR até o
+  /// faturamento — é a EMISSÃO que a exige, não o registro.
+  cpr BarterCpr?
 
   @@index([versionId])
   @@index([unitId])
@@ -543,6 +1017,10 @@ model Barter {
   // define é o ESTADO ("as que esperam decisão", "as aprovadas a faturar"), e
   // esta é a consulta que as duas telas fazem o tempo todo.
   @@index([status, createdAt])
+  // A fila do admin: os pedidos de alteração em aberto. Ela é pequena e some
+  // sozinha (o pedido decidido sai do `open`), mas é varrida sobre a tabela
+  // inteira de permutas toda vez que o admin abre a tela.
+  @@index([changeRequestStatus, changeRequestAt])
 }
 
 /// O HISTÓRICO DA PERMUTA — cada passagem dela de um estado para o outro.
@@ -593,6 +1071,14 @@ model BarterEvent {
 /// Item da permuta com snapshots imutáveis de nome/unidade/preço. O preço é
 /// congelado aqui — e não lido da tabela da versão — porque publicar a versão
 /// seguinte não pode reescrever o que já foi acordado.
+///
+/// A LINHA DE `kind: "grain"` É A CULTURA DA PERMUTA. Ela sempre foi o
+/// pagamento — quantas sacas cobrem o custo —, e desde que a versão passou a
+/// aceitar mais de um grão (ver `VersionGrain`) ela é também a resposta a "em
+/// que o produtor paga esta?": `productId` diz qual cultura foi escolhida,
+/// `unitValue` a cotação com que ela foi convertida, e as duas ficam congeladas
+/// como todo o resto. É por essa linha que a alteração de rascunho confere se a
+/// cultura continua aberta e que a meta de sacas sabe de qual grão ela é.
 model BarterItem {
   id          Int      @id @default(autoincrement())
   barterId    Int
@@ -601,9 +1087,744 @@ model BarterItem {
   product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
   kind        String
   productName String
+  /// O CÓDIGO do produto no momento do registro (o `sku` do catálogo).
+  ///
+  /// Snapshot pelo mesmo motivo do nome e do preço: é por ele que o estoque, a
+  /// nota e a conferência no balcão encontram o item, e ele precisa continuar
+  /// dizendo o que dizia no dia do acordo — inclusive depois que o cadastro for
+  /// recodificado ou o produto excluído (o FK vira null e sobra este texto).
+  ///
+  /// `null` nos itens anteriores a este campo e nos produtos sem código: um
+  /// traço na tela é honesto, um código inventado não.
+  productSku  String?
   unit        String
   quantity    Float
   unitValue   Float
+
+  /// Este item veio de FORA DO BARTER — de um pedido do consultor que o admin
+  /// atendeu (ver BarterProductRequest), e não da tabela de valores da versão.
+  ///
+  /// É o fato, gravado como fato: `requestId` ao lado é a PISTA de qual pedido o
+  /// trouxe, e vira null se o pedido sumir. A marca não pode sumir junto — ela é
+  /// o que explica, no comprovante e na conferência do balcão, um item que não
+  /// está na lista de preços da praça e cujo valor ninguém encontra na tabela.
+  ///
+  /// `productId` é null nestes itens: eles não entram no catálogo. O catálogo é
+  /// a lista do FORNECEDOR, carregada da planilha dele; um item pedido para uma
+  /// permuta só não é um produto da praça, e cadastrá-lo faria o relatório de
+  /// preço e a carga seguinte tropeçarem num produto que ninguém vende.
+  offBarter Boolean               @default(false)
+  requestId Int?
+  request   BarterProductRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  /// Esta linha é o SEGURO AGRÍCOLA — não um insumo retirado.
+  ///
+  /// Ela é `kind: "input"` de propósito, e a marca ao lado é o que a distingue.
+  /// `kind` responde "esta linha forma custo ou paga a permuta?", e o seguro
+  /// forma custo como qualquer outra coisa que a empresa adianta: ele soma no
+  /// total, vira sacas e dimensiona o penhor junto com o restante. Um terceiro
+  /// `kind` obrigaria toda soma do sistema — a remontagem do rascunho, o
+  /// recálculo do grão, o comprovante, o app — a aprender que existe uma
+  /// terceira espécie de linha que também é custo; e a primeira que esquecesse
+  /// simplesmente deixaria o seguro de fora da conta, em silêncio.
+  ///
+  /// É a mesma escolha de `offBarter`, e pelo mesmo motivo: o que ela explica é
+  /// uma linha cujo valor não está em tabela de preço nenhuma. `quantity` é a
+  /// área cultivável do produtor (ha) e `unitValue` é a taxa do município —
+  /// juntas, elas são a conta inteira, legível no comprovante sem nota de
+  /// rodapé.
+  ///
+  /// `productId` null, como nos itens de fora do Barter: o seguro não é produto
+  /// do catálogo do fornecedor (ver `InsuranceRate`).
+  insurance Boolean @default(false)
+
+  /// O VALOR DE TABELA deste item, quando o admin escreveu outro por cima.
+  ///
+  /// Null é o caso normal: o item vale o que a versão do Barter diz, e
+  /// `unitValue` é a única verdade. Preenchido, ele guarda o que a tabela dizia
+  /// ANTES de o admin atender um pedido de alteração mexendo no valor (ver
+  /// `POST /barters/:code/change-request/prices`) — e é o que permite à tela
+  /// mostrar "R$ 110,00 (tabela: R$ 120,00)" em vez de um número sem história.
+  ///
+  /// Guardado só na PRIMEIRA sobrescrita: o que interessa é de onde o valor
+  /// saiu, e não a lista de tentativas. Uma segunda correção do mesmo item
+  /// continua tendo partido da tabela.
+  listValue Float?
+
+  @@index([requestId])
+}
+
+/// O PEDIDO DE FORA DO BARTER — o consultor pede um produto que a tabela da
+/// versão não tem, e o admin o adiciona ÀQUELA permuta, com o valor que acertou.
+///
+/// Ele existe porque a tabela do Barter é uma lista fechada e a lavoura não é: o
+/// produtor precisa de um adjuvante específico, de um serviço que não foi
+/// lançado, de uma semente que o fornecedor só cota sob encomenda. Sem este
+/// caminho, as saídas eram duas e as duas ruins — deixar o item fora da permuta
+/// (e o produtor compra à vista em outro lugar, que é a venda que o Barter
+/// existe para trazer) ou lançar o produto na versão vigente para todo mundo,
+/// transformando uma negociação pontual em preço de praça.
+///
+/// ELE É DA PERMUTA, e não do produtor nem do catálogo. O valor acertado aqui
+/// vale para ESTA permuta e morre com ela: foi cotado para esta quantidade,
+/// nesta data, neste negócio. Outra permuta do mesmo produtor pede de novo — e
+/// é assim que se percebe que o item passou a ser rotina e merece entrar na
+/// próxima versão do Barter.
+///
+/// Quem pede é o CONSULTOR que registrou; quem decide é o ADMIN, e o que ele
+/// decide é um VALOR — diferente do pedido de alteração, em que ele decide se o
+/// trabalho dos outros postos será refeito. Aqui ele não desfaz nada: o item
+/// entra na permuta onde ela está.
+model BarterProductRequest {
+  id       Int    @id @default(autoincrement())
+  barterId Int
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O QUE o consultor pediu, escrito por ele: o nome do produto, a unidade em
+  /// que ele o conhece e quanto o produtor quer. Texto livre de propósito — ele
+  /// está pedindo justamente o que não existe em lista nenhuma para escolher.
+  ///
+  /// O admin pode corrigir os três ao atender (a descrição do fornecedor é outra,
+  /// a embalagem é em 20 l e não em litro), e o que fica gravado é o que ELE
+  /// escreveu: é esse o item que entra na permuta e é por ele que o produtor vai
+  /// perguntar no balcão.
+  productName String
+  unit        String
+  quantity    Float
+
+  /// O CÓDIGO do fornecedor, quando o admin o tem na hora de atender. É a mesma
+  /// chave de `BarterItem.productSku`, e serve à mesma pessoa: quem separa o
+  /// item no depósito e o bate contra a nota.
+  sku String?
+
+  /// O que o consultor tem a dizer sobre o pedido, quando tem.
+  ///
+  /// OPCIONAL, ao contrário do pedido de alteração: ali o texto é o pedido
+  /// inteiro (sem ele o admin não sabe sequer do que se trata); aqui o pedido é
+  /// o produto e a quantidade, e eles falam por si. Exigir um parágrafo para
+  /// pedir 20 t de ureia produziria quinhentos "o produtor quer" no histórico.
+  note String?
+
+  /// `open` (na mesa do admin), `added` (atendido: o item está na permuta) ou
+  /// `denied` (recusado, com o motivo em `reply`).
+  ///
+  /// As duas decisões SOBREVIVEM, e aqui isso é diferente do pedido de
+  /// alteração — onde o aceite some porque o efeito dele (a permuta virou
+  /// rascunho) conta a história sozinho. O atendido precisa continuar existindo
+  /// porque ele é a ORIGEM de um item da permuta: é ele que diz de onde veio um
+  /// insumo que não está na tabela do Barter, e é dele que a remontagem do
+  /// rascunho tira o item de volta (ver `replaceInputs`).
+  status String @default("open")
+
+  requestedBy   String
+  requestedById Int?
+  requestedAt   DateTime @default(now())
+
+  /// A RESPOSTA DO ADMIN: quem, quando, e o motivo — obrigatório na recusa, como
+  /// em toda resposta que fecha a porta de alguém.
+  decidedBy   String?
+  decidedById Int?
+  decidedAt   DateTime?
+  reply       String?
+
+  /// O VALOR (R$ por unidade) que o admin acertou para este item nesta permuta.
+  /// Null enquanto o pedido não foi atendido — e um valor "provisório" antes
+  /// disso seria um preço que ninguém combinou.
+  unitValue Float?
+
+  /// O item que este pedido virou. Lista, e não um só, pelo que o schema
+  /// permite: na prática é um item — e é `replaceInputs` que o recria quando o
+  /// consultor remonta o rascunho, sempre um por pedido atendido.
+  items BarterItem[]
+
+  // A fila do admin: os pedidos de produto em aberto, varridos sobre a tabela
+  // inteira toda vez que ele abre a tela.
+  @@index([status, requestedAt])
+  @@index([barterId])
+}
+
+/// UM ARQUIVO ANEXADO ao registro — hoje a nota fiscal do faturamento e o SCR
+/// do produtor.
+///
+/// O CONTEÚDO fica no banco, e essa é uma escolha, não uma falta de opção. Os
+/// dois anexos são pequenos (um DANFE em PDF, um relatório do Bacen de duas
+/// páginas), são POUCOS por permuta e são PROVA: eles precisam existir enquanto
+/// o título existir. Guardá-los aqui os põe dentro do mesmo backup, da mesma
+/// transação e do mesmo controle de acesso do resto — um bucket exigiria
+/// credencial, ciclo de vida próprio e uma segunda resposta para "quem pode ler
+/// este arquivo?", que é justamente a pergunta que já tem dono aqui (o escopo da
+/// permuta).
+///
+/// O TAMANHO é travado na entrada (ver MAX_ATTACHMENT_BYTES em barters.service),
+/// e não no banco: o limite é sobre a requisição, que é onde ele dói.
+///
+/// É TABELA À PARTE, e não colunas dentro da nota, porque `Bytes` numa tabela
+/// consultada em lista viria junto em toda leitura — a listagem de permutas
+/// carregaria megabytes de PDF para desenhar uma linha de tabela. Aqui o
+/// conteúdo só é lido por quem pede o arquivo.
+model BarterFile {
+  id Int @id @default(autoincrement())
+
+  /// O nome COM QUE O ARQUIVO CHEGOU. É o que a tela mostra e o que o download
+  /// devolve — quem anexou reconhece o próprio arquivo pelo nome que deu a ele.
+  fileName String
+
+  /// O tipo declarado (`application/pdf`, `image/jpeg`…). Guardado porque é o
+  /// que o download precisa devolver: sem ele, o navegador baixa um arquivo que
+  /// não sabe abrir.
+  contentType String
+
+  /// O tamanho em bytes, guardado para a tela não precisar ler o conteúdo só
+  /// para dizer "2,4 MB" numa lista.
+  size Int
+
+  content Bytes
+
+  /// Quem anexou, congelado em texto pelo mesmo motivo de `Barter.invoicedBy`.
+  uploadedBy   String
+  uploadedById Int?
+  uploadedAt   DateTime @default(now())
+
+  /// Os donos possíveis de um arquivo hoje. São relações 1-1 (o `@unique` mora
+  /// do lado de lá), e um arquivo tem no máximo uma delas: ele é a nota fiscal,
+  /// ou o SCR, ou a cédula assinada, ou o comprovante do registro.
+  ///
+  /// As relações da cédula são NOMEADAS porque são três para o mesmo modelo, e
+  /// sem nome o Prisma não teria como saber qual coluna é qual.
+  invoice     BarterInvoice?
+  cprScr      BarterCpr?        @relation("CprScr")
+  cprSigned   BarterCpr?        @relation("CprSigned")
+  cprRegistry BarterCpr?        @relation("CprRegistry")
+  /// …ou uma das peças da ANÁLISE DE CRÉDITO que o comitê juntou à permuta.
+  credit      BarterCreditFile?
+}
+
+/// UMA PEÇA DA ANÁLISE DE CRÉDITO — o que o comitê junta à permuta para decidir:
+/// a consulta ao Serasa, o endividamento do produtor dentro da cooperativa, e o
+/// que mais a reunião tiver pedido.
+///
+/// Ela existe porque a decisão do comitê era tomada sobre documentos que não
+/// estavam aqui. A permuta chegava com o pedido do consultor e o parecer do
+/// gerente; o resto — a consulta de crédito, o extrato do que o produtor já deve
+/// à cooperativa, a certidão que alguém puxou — circulava por e-mail entre os
+/// integrantes e morria na caixa de quem convocou a reunião. Meses depois, a
+/// pergunta "com base em quê vocês aprovaram isto?" não tinha onde ser
+/// respondida: o registro guardava a decisão e não guardava a prova.
+///
+/// LISTA, e não um par de anexos fixos, pelo mesmo motivo das lavouras da
+/// cédula: os dois documentos que a operação nomeia hoje (Serasa e endividamento
+/// interno) são os do caso comum, e a reunião que pede um terceiro não tem onde
+/// pôr a certidão de ônus que o gerente trouxe.
+///
+/// QUEM VÊ é o comitê e o admin, e SÓ eles. Este é o único anexo do sistema com
+/// leitura restrita, e a restrição é a própria natureza da peça: consulta de
+/// crédito e endividamento são a vida financeira do produtor, colhidas para uma
+/// decisão de crédito. O consultor que atende o cliente não as vê — não por
+/// desconfiança, mas porque elas não são dele: ele leva ao produtor a decisão,
+/// não o dossiê que a fundamentou. Ver `bartersCreditRead` em policy.ts.
+///
+/// NÃO É O SCR. O SCR (`BarterCpr.scrFile`) é peça do TÍTULO: ele acompanha a
+/// cédula, é exigido para emiti-la e quem o anexa é quem a preenche. Este é
+/// insumo da DECISÃO, e ele acontece antes — muitas vezes sobre uma permuta que
+/// vai ser negada, e que portanto nunca terá cédula nenhuma.
+model BarterCreditFile {
+  id       Int    @id @default(autoincrement())
+  barterId Int
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// QUE PEÇA é esta — `serasa`, `indebtedness` ou `other`. Ver
+  /// `barters/credit-file.ts`, que é onde a lista e os rótulos moram.
+  ///
+  /// String, e não `enum` do Postgres, pelo mesmo motivo dos outros "enums"
+  /// deste schema: a reunião nomeia uma peça nova e isso não pode pedir
+  /// migration.
+  kind String
+
+  /// O que o comitê tem a dizer sobre este documento (a data da consulta, o
+  /// valor apurado, de onde o extrato veio). Opcional.
+  note String?
+
+  /// O ARQUIVO. Anexá-lo É o ato, como na nota fiscal: a rota exige o arquivo, e
+  /// um registro sem documento seria o e-mail de volta.
+  ///
+  /// `onDelete: Cascade` e `@unique`: o arquivo pertence a esta peça e a mais
+  /// nada. Diferente do SCR, que é `SetNull` porque a cédula sobrevive à perda
+  /// do anexo com uma pendência a mostrar — aqui não há o que sobreviver: sem o
+  /// documento, a peça não é nada.
+  fileId Int        @unique
+  file   BarterFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  attachedBy   String
+  attachedById Int?
+  attachedAt   DateTime @default(now())
+
+  @@index([barterId])
+}
+
+/// UMA NOTA FISCAL do faturamento desta permuta, com o arquivo dela.
+///
+/// Ela é o que o posto do faturista PRODUZ, e é a origem da dívida que a cédula
+/// afirma (cláusula VII). Enquanto o número da nota foi um campo de texto dentro
+/// da CPR, três coisas estavam erradas ao mesmo tempo: quem o digitava não era
+/// quem emitia a nota, só cabia UMA, e não havia o documento — só o número.
+///
+/// A CHAVE do mundo real é número + série, e ela não é única aqui de propósito:
+/// a unicidade da nota fiscal é do emissor dela (a empresa, perante o fisco), e
+/// não deste sistema. Uma trava aqui recusaria, por exemplo, a nota reemitida
+/// com o mesmo número em outra série — e o erro apareceria como "não foi
+/// possível anexar", sem dizer por quê.
+model BarterInvoice {
+  id       Int    @id @default(autoincrement())
+  barterId Int
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O número e a série, como saem no documento. Texto, e não inteiro: nota
+  /// fiscal tem zero à esquerda, e perdê-los faria a busca no sistema fiscal
+  /// não encontrar nada.
+  number String
+  series String @default("")
+
+  /// A DUPLICATA que a nota originou, quando há. A cédula a cita ao lado da
+  /// nota, e ela é da mesma natureza — documento do faturamento, não da
+  /// negociação. Opcional: nem toda venda gera duplicata.
+  duplicateNumber String @default("")
+
+  /// Quando a nota foi emitida e por quanto. O valor é o DA NOTA, e pode não
+  /// bater com o total da permuta — é o que acontece quando a retirada é
+  /// parcial, que é justamente o caso em que há mais de uma.
+  issuedAt DateTime?
+  value    Float     @default(0)
+
+  /// O que o faturista tem a dizer sobre esta nota (retirada parcial, nota de
+  /// devolução, remessa). Opcional — a maioria não tem o que explicar.
+  note String?
+
+  /// O ARQUIVO. Anexá-lo É o ato — a rota que cria a nota exige o arquivo, e um
+  /// registro sem documento seria de novo o número solto que este modelo existe
+  /// para substituir.
+  ///
+  /// A coluna é nulável mesmo assim, e por um motivo só: as notas HERDADAS do
+  /// campo de texto que ficava dentro da cédula não têm arquivo nenhum (ver a
+  /// migration). Recusá-las apagaria um número que alguém digitou; aceitá-las
+  /// sem arquivo deixa a pendência visível na tela de quem pode resolvê-la.
+  fileId Int?        @unique
+  file   BarterFile? @relation(fields: [fileId], references: [id], onDelete: Cascade)
+
+  attachedBy   String
+  attachedById Int?
+  attachedAt   DateTime @default(now())
+
+  @@index([barterId])
+}
+
+/// A CREDORA — a empresa que recebe o grão, como os documentos a nomeiam.
+///
+/// A CPR nomeia duas partes: o EMITENTE (o produtor, que muda a cada cédula) e a
+/// CREDORA, que é sempre a mesma e aparece em quatro cláusulas do documento — a
+/// qualificação (II), a promessa de entrega, o local de entrega (V-d) e o foro
+/// (XX) —, com a qualificação por inteiro repetida nas três primeiras.
+///
+/// É CADASTRO, e não campo de formulário: pedir a razão social a cada cédula é
+/// pedir que alguém digite o CNPJ do próprio empregador trezentas vezes, e a
+/// trezentésima primeira sai com um dígito trocado num título de crédito.
+///
+/// LINHA ÚNICA, pelo mesmo desenho do comitê (`isSingleAccount` em roles.ts): a
+/// rota é `/creditor`, no singular, sem `:id` e sem exclusão. Uma instalação
+/// serve uma empresa — duas credoras cadastradas fariam a cédula ter de
+/// escolher, e nada no documento diz qual. O dia em que a mesma instalação
+/// servir a mais de uma, isto vira lista e a permuta passa a apontar para uma
+/// delas; até lá, a unicidade é a afirmação certa.
+///
+/// Quem escreve são o ADMIN e o FATURISTA (`creditor.manage`). O segundo está
+/// aí de propósito: quem percebe que o CNPJ saiu errado é quem monta a cédula.
+model Creditor {
+  /// Sempre 1. A linha é única, e o id fixo é o que torna a leitura um
+  /// `findUnique` em vez de um `findFirst` com ordenação — que é a mesma
+  /// diferença entre "a credora" e "alguma credora".
+  id Int @id @default(1)
+
+  name          String @default("")
+  cnpj          String @default("")
+  address       String @default("")
+  addressNumber String @default("")
+  /// Município/UF da sede, no mesmo formato do produtor ("Maringá/PR").
+  city          String @default("")
+
+  /// O FORO eleito (cláusula XX da CPR). Quase sempre a comarca da sede — e por
+  /// isso o vazio vale como `city` na leitura —, mas é escolha contratual, e há
+  /// credora que elege outra.
+  forum String @default("")
+
+  /// A MARGEM DE SEGURANÇA DO PENHOR (%) — quanto a mais de área a credora exige
+  /// além da que a produção estimada justifica.
+  ///
+  /// A área estimada (`sacas ÷ produtividade`) é o que a lavoura precisa ter se
+  /// tudo correr bem. Como nem tudo corre bem — quebra de safra, sinistro, uma
+  /// produtividade que veio otimista —, a empresa penhora uma folga por cima
+  /// dela. Zero é uma resposta legítima: é a credora que decide não exigir folga
+  /// nenhuma, e por isso este campo não entra em `creditorGaps()`.
+  ///
+  /// NÃO É A RESERVA LEGAL, e o nome é escolhido para não confundir os dois. A
+  /// reserva legal é do Código Florestal: o percentual do IMÓVEL que tem de ficar
+  /// em vegetação nativa (20% no Sul/Sudeste, 35% ou 80% na Amazônia). Ela é
+  /// atributo de cada matrícula, imposta por lei, e o efeito dela é o oposto —
+  /// diz que parte da área registrada NÃO é plantável. Esta aqui é apetite de
+  /// risco da credora, muda quando a diretoria muda de ideia, e vale para todas
+  /// as matrículas igualmente.
+  ///
+  /// Mora na CREDORA porque é política da empresa, e não da safra: a folga que se
+  /// exige de um produtor é a mesma que se exige de todos, e ela não muda porque
+  /// o fornecedor republicou a tabela de preços.
+  pledgeMarginPercent Float @default(0)
+
+  updatedAt DateTime @updatedAt
+
+  /// Quem mexeu por último, congelado em texto pelo mesmo motivo de
+  /// `Barter.invoicedBy`: a linha precisa continuar legível depois que a conta
+  /// for excluída.
+  updatedBy String @default("")
+}
+
+/// A CÉDULA DE PRODUTO RURAL (CPR) desta permuta — o que a permuta NÃO sabe.
+///
+/// A CPR é o título que formaliza a entrega do grão: o produtor emite, a empresa
+/// é a credora, e o documento é registrado na B3 (ver a cláusula XIII do
+/// modelo). Ela é o desfecho jurídico do que a permuta já acordou — e por isso
+/// quase tudo o que ela precisa JÁ ESTÁ no registro: quem entrega
+/// (`Barter.producerName`), quanto (o item de grão), a que preço
+/// (`BarterItem.unitValue`), de que safra (`Barter.versionCode`).
+///
+/// O QUE FALTA é o que uma cédula exige e uma permuta não: a qualificação civil
+/// do emitente (a lei pede nacionalidade, estado civil, profissão, RG e endereço
+/// completo), as matrículas das lavouras dadas em penhor, os padrões de
+/// qualidade do grão e o SCR do produtor. É ISSO que esta tabela guarda, e é
+/// isso que o CONSULTOR preenche.
+///
+/// É DO CONSULTOR, e isso mudou de dono. Era do faturista, pelo argumento de que
+/// o posto que emite documento para fora é o mesmo que emite a nota — e o
+/// argumento não se sustentou: nada do que a cédula pede está na mesa de quem
+/// fatura. A matrícula do imóvel, o nome do cônjuge, quem é o dono da área
+/// arrendada, o SCR — quem tem isso é quem visita a fazenda. O faturista obtinha
+/// tudo por telefone e digitava, e cada intermediação dessas é um RG com um
+/// dígito trocado dentro de um título executável.
+///
+/// QUEM CONFERE é o EMISSOR, na hora de gerar (ver `bartersCprIssue`). É a mesma
+/// divisão do parecer: quem conhece o cliente escreve, outro posto responde pelo
+/// documento.
+///
+/// O QUE NÃO ESTÁ MAIS AQUI, e por quê:
+///
+/// - o NÚMERO DA NOTA e o da DUPLICATA: eles são do faturamento, e agora moram
+///   em `BarterInvoice` — com o arquivo junto, e em lista, porque são várias;
+/// - o VENCIMENTO: ele muda conforme a CULTURA e é o mesmo para a safra inteira
+///   (ver `Season.cprDueDate`). `dueDate` continua abaixo, mas quem o escreve é
+///   o servidor, copiando-o da safra — ele é o congelamento, não o campo.
+///
+/// UMA POR PERMUTA (`barterId @unique`): a CPR é o título daquela entrega, e
+/// duas cédulas sobre o mesmo grão seriam duas cobranças do mesmo produto.
+///
+/// Nada aqui é snapshot. Ao contrário do resto da permuta, estes campos são um
+/// RASCUNHO até o documento sair: o consultor digita, confere, corrige o RG que
+/// veio errado. O congelamento acontece no documento emitido, e não na linha —
+/// é a diferença entre o que ainda se está escrevendo e o que já foi assinado.
+///
+/// E porque é rascunho, ele é SALVÁVEL PELA METADE. O vazio (`""`, `0`, `null`)
+/// significa "ainda não preenchido", e quem diz o que falta é `cprGaps()`, em
+/// cpr.ts — não o banco, e não a validação de entrada. Exigir a cédula inteira
+/// numa tacada só obrigaria o consultor a esperar a matrícula que o produtor vai
+/// mandar amanhã para poder gravar a qualificação que ele tem na mão agora, e o
+/// rascunho ficaria num papel ao lado do computador, que é onde ele estava antes
+/// deste formulário.
+model BarterCpr {
+  id       Int    @id @default(autoincrement())
+  barterId Int    @unique
+  barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
+
+  /// O número da cédula, como a empresa a numera. É texto, e não sequência
+  /// gerada: a numeração da CPR é da emissão em papel/registro e costuma vir de
+  /// fora deste sistema (cartório, B3, controle interno da credora).
+  number String @default("")
+
+  /// A data da EMISSÃO ("Aos [DIA] dias do mês de [MÊS] de [ANO]") e o
+  /// VENCIMENTO da entrega. São diferentes da data da permuta de propósito: a
+  /// cédula é emitida quando o emissor a gera, e vence na colheita.
+  ///
+  /// `issuedAt` nasce com o dia em que o rascunho foi aberto, que é a resposta
+  /// certa na esmagadora maioria das vezes e é editável nas outras.
+  ///
+  /// `dueDate` NÃO É CAMPO DE FORMULÁRIO, e essa é a correção: ele é copiado de
+  /// `Season.cprDueDate` — o vencimento daquela CULTURA — a cada gravação, até a
+  /// cédula ser emitida. Depois disso ele congela, como tudo o que já foi
+  /// assinado. Enquanto foi digitado cédula a cédula, duas CPRs da mesma safra
+  /// saíam com vencimentos diferentes e ninguém tinha como saber qual estava
+  /// certa.
+  ///
+  /// Nulável porque a safra pode ainda não ter a data acertada — e aí
+  /// `cprGaps()` cobra, dizendo onde ela se resolve.
+  issuedAt DateTime  @default(now())
+  dueDate  DateTime?
+
+  /// A QUALIFICAÇÃO CIVIL do emitente. O cadastro de produtor tem nome,
+  /// documento, fazenda, município e área — o suficiente para permutar, e não o
+  /// suficiente para emitir título: a cédula qualifica a pessoa por inteiro.
+  ///
+  /// Fica AQUI, e não no produtor, porque quem preenche é o faturista e o
+  /// cadastro é do admin (`producers.manage`). A repetição a cada CPR é
+  /// resolvida pelo pré-preenchimento a partir da última cédula do mesmo
+  /// produtor — ver `prefillFrom` em barters.service.ts —, não por dar ao
+  /// faturista a caneta do cadastro.
+  emitterNationality   String  @default("")
+  emitterMaritalStatus String  @default("")
+  emitterProfession    String  @default("")
+  emitterRg            String  @default("")
+  emitterAddress       String  @default("")
+  emitterAddressNumber String  @default("")
+  /// Município/UF, no mesmo formato do produtor ("Maringá/PR").
+  emitterCity          String  @default("")
+  /// A matrícula do emitente na cooperativa, que fecha o bloco de assinatura.
+  /// Opcional: nem toda credora é cooperativa.
+  emitterCoopId        String?
+
+  /// A QUALIFICAÇÃO QUE A PROPOSTA PEDE E A CÉDULA NÃO IMPRIME.
+  ///
+  /// CNH, filiação e e-mail não aparecem em nenhuma cláusula do modelo — quem
+  /// os pede é a planilha de proposta, e por trás dela o cartório (a filiação é
+  /// o que individualiza um homônimo no registro) e a operação (o e-mail é por
+  /// onde a assinatura eletrônica chega).
+  ///
+  /// Eles são COLETADOS e não SAEM, e essa diferença é deliberada: `cprGaps()`
+  /// não os cobra, porque quem decide o que falta é o documento, e o documento
+  /// não os usa. Se um dia uma cláusula precisar deles, é lá que a mudança
+  /// acontece — aqui o dado já está.
+  emitterCnh        String @default("")
+  emitterFatherName String @default("")
+  emitterMotherName String @default("")
+  emitterEmail      String @default("")
+
+  /// O LOCAL DA ENTREGA do grão (cláusula V, "d").
+  ///
+  /// É campo, e não a unidade de retirada da permuta, porque as duas coisas não
+  /// são a mesma: retirar insumo na Filial 02 não obriga ninguém a entregar o
+  /// grão lá. A unidade entra como SUGESTÃO no formulário (é o caso comum), e
+  /// quem confirma é quem assina embaixo.
+  deliveryPlace String @default("")
+
+  /// HIPOTECAS oferecidas em garantia, como texto livre.
+  ///
+  /// A planilha de proposta as pede num campo só, e é assim que elas chegam.
+  /// Não saem na cédula por enquanto: o modelo não tem cláusula para elas, e
+  /// inventar uma seria escrever garantia nova em título executável.
+  mortgages String @default("")
+
+  /// A ANUÊNCIA DO CÔNJUGE. Nulo quando não há — e "não há" é o caso comum, não
+  /// uma pendência: só o emitente casado assina acompanhado.
+  ///
+  /// O estado civil e o endereço do cônjuge não estão aqui porque não são
+  /// informação nova: o estado civil dele é o do emitente (é o que faz dele
+  /// cônjuge) e o endereço é o mesmo domicílio conjugal. Pedi-los de novo abriria
+  /// a chance de o casal morar em endereços diferentes NO DOCUMENTO.
+  spouseName        String?
+  spouseNationality String?
+  spouseProfession  String?
+  spouseDocument    String?
+  /// O RG do cônjuge é da proposta, não da cédula: o modelo qualifica o cônjuge
+  /// por CPF. Ver o bloco de CNH/filiação acima — mesma natureza.
+  spouseRg          String?
+
+  /// O PADRÃO DO GRÃO recebido (cláusula V, "c"). São exigências comerciais da
+  /// credora, não do cadastro do produto: o mesmo grão é recebido com padrões
+  /// diferentes conforme o ano e o contrato.
+  ///
+  /// `sackWeightKg` é o que converte sacas em quilos ("[QUANTIDADE] kg que
+  /// corresponde a [Nº DE SACAS] sacas de [PESO POR SACA] kg cada"). 60 é o
+  /// padrão do mercado e por isso é o default — mas é um valor da cédula, e não
+  /// uma constante do código, porque semente e milho em big-bag fogem dele.
+  sackWeightKg  Float  @default(60)
+  cultivar      String @default("")
+  /// Percentuais máximos tolerados e o teor de óleo padrão do grão. Zero é
+  /// "ainda não preenchido", e não "sem tolerância": um padrão de umidade 0%
+  /// recusaria a colheita inteira, então o número tem de ser digitado por
+  /// alguém. Ver `cprGaps()`.
+  maxMoisture   Float  @default(0)
+  maxImpurities Float  @default(0)
+  oilContent    Float  @default(0)
+
+  /// O SCR DO PRODUTOR — o relatório do Sistema de Informações de Créditos do
+  /// Banco Central, anexado à cédula. OBRIGATÓRIO.
+  ///
+  /// Ele é a fotografia do endividamento de quem vai emitir o título: quanto o
+  /// produtor já deve, a quem, e em que situação. Uma CPR é crédito, e conceder
+  /// crédito sem olhar o SCR é conceder no escuro — por isso ele é exigência de
+  /// `cprGaps()` e não um anexo "quando houver".
+  ///
+  /// É ARQUIVO e não campo: o SCR é um documento emitido pelo Bacen, com data, e
+  /// o que vale é o papel. Transcrever números dele para campos criaria uma
+  /// segunda versão da informação, mais nova em aparência e sem autoridade
+  /// nenhuma.
+  ///
+  /// `SetNull` no arquivo: apagar o anexo não pode apagar a cédula — o efeito
+  /// certo é a cédula voltar a ter uma pendência, que é o que `cprGaps()` dirá.
+  scrFileId Int?        @unique
+  scrFile   BarterFile? @relation("CprScr", fields: [scrFileId], references: [id], onDelete: SetNull)
+
+  /// A CÉDULA ASSINADA e o COMPROVANTE DO REGISTRO — os dois documentos que
+  /// VOLTAM de fora depois que o título sai daqui.
+  ///
+  /// O sistema gera a cédula em branco e a devolve ao mundo; o que volta é papel
+  /// com assinatura e, depois, com o carimbo do registro. Enquanto eles não
+  /// tinham onde ficar, a permuta dizia "assinada" e "registrada" sem ter como
+  /// provar nenhuma das duas — o documento morava no e-mail de alguém, e a
+  /// segunda via saía do sistema em branco, diferente da que está com o
+  /// produtor.
+  ///
+  /// O ASSINADO é obrigatório no ato de assinar e o do REGISTRO não é: o
+  /// primeiro é a própria coisa que se está lançando (não há "assinada" sem o
+  /// papel assinado), e o segundo é prova de um fato que o `cprRegistryNumber`
+  /// já afirma — cartório que demora a devolver a via carimbada não pode travar
+  /// o fim da linha.
+  ///
+  /// `SetNull` nos dois, como no SCR: apagar o arquivo não pode apagar a cédula.
+  signedFileId Int?        @unique
+  signedFile   BarterFile? @relation("CprSigned", fields: [signedFileId], references: [id], onDelete: SetNull)
+
+  registryFileId Int?        @unique
+  registryFile   BarterFile? @relation("CprRegistry", fields: [registryFileId], references: [id], onDelete: SetNull)
+
+  /// A DATA DA CONSULTA do SCR — o relatório tem validade curta na prática, e
+  /// "o SCR está anexado" não responde "de quando?". Opcional no rascunho, como
+  /// o resto.
+  scrConsultedAt DateTime?
+
+  /// A apólice do seguro agrícola embutido (cláusula XVIII, "j"). Opcional: nem
+  /// toda permuta leva seguro contratado.
+  insurancePolicy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Quem preencheu por último, congelado em texto pelo mesmo motivo de
+  /// `Barter.invoicedBy`: a linha precisa continuar legível depois que a conta
+  /// for excluída.
+  filledBy   String
+  filledById Int?
+
+  areas      CprArea[]
+  guarantors CprGuarantor[]
+}
+
+/// O AVALISTA — quem garante a obrigação do emitente com o próprio patrimônio.
+///
+/// Ele vem da PLANILHA DE PROPOSTA, e não do modelo de cédula: o texto que a
+/// operação usa hoje não tem bloco de assinatura de avalista nem cláusula de
+/// aval. Por isso ele é COLETADO e não IMPRESSO — o dado fica guardado, o
+/// documento continua sendo exatamente o modelo aprovado, e o dia em que a
+/// cláusula existir ela vai encontrar o cadastro pronto.
+///
+/// É LISTA, e não um bloco fixo, pelo mesmo motivo das lavouras: a proposta traz
+/// um avalista porque o exemplo tinha um. Aval de casal são dois, e uma operação
+/// grande pede três.
+///
+/// A FORMA é a mesma da qualificação do emitente, campo por campo, e isso é uma
+/// afirmação sobre o domínio: avalista e emitente são a mesma coisa para o
+/// direito — pessoas que se obrigam —, e o que os separa é o papel, não os
+/// dados.
+model CprGuarantor {
+  id    Int       @id @default(autoincrement())
+  cprId Int
+  cpr   BarterCpr @relation(fields: [cprId], references: [id], onDelete: Cascade)
+
+  /// A ordem em que ele foi acrescentado — a mesma razão de `CprArea.position`.
+  position Int @default(0)
+
+  name          String @default("")
+  document      String @default("")
+  rg            String @default("")
+  cnh           String @default("")
+  nationality   String @default("")
+  profession    String @default("")
+  maritalStatus String @default("")
+  fatherName    String @default("")
+  motherName    String @default("")
+  email         String @default("")
+  address       String @default("")
+  addressNumber String @default("")
+  city          String @default("")
+
+  /// O CÔNJUGE DO AVALISTA. O aval de quem é casado costuma exigir a anuência
+  /// do cônjuge pelo mesmo motivo do emitente — há regime de bens no meio.
+  spouseName        String @default("")
+  spouseDocument    String @default("")
+  spouseRg          String @default("")
+  spouseNationality String @default("")
+  spouseProfession  String @default("")
+
+  @@index([cprId, position])
+}
+
+/// UMA LAVOURA dada em penhor na cédula — o "(i)", o "(ii)" e quantos mais
+/// houver do "Local da Lavoura" (cláusula V, "b", repetido na VI).
+///
+/// É TABELA, e não dois blocos de campos, porque o modelo do documento é uma
+/// enumeração: o produtor planta em quantas áreas plantar, e o texto as lista.
+/// Com campos fixos, a terceira área não teria onde entrar — e a segunda ficaria
+/// vazia na maioria das cédulas, que é o outro lado do mesmo erro.
+model CprArea {
+  id    Int       @id @default(autoincrement())
+  cprId Int
+  cpr   BarterCpr @relation(fields: [cprId], references: [id], onDelete: Cascade)
+
+  /// A ORDEM em que a área aparece no documento. Ela é citada por posição no
+  /// texto ("(i)", "(ii)"), então a ordem é conteúdo, e não apresentação.
+  position Int @default(0)
+
+  /// Onde fica: a localidade (o nome do lugar, "Água Boa", "Linha São João") e o
+  /// município/UF.
+  locality String
+  city     String
+
+  /// A área PLANTADA nesta matrícula, em hectares. Não é a área do imóvel nem a
+  /// área cultivável do produtor (`Producer.areaHa`, que é a soma e serve aos
+  /// mínimos por hectare): é quanto desta matrícula está sob penhor.
+  areaHa Float
+
+  /// Se o plantio ocupa só parte do imóvel — o "dentro de uma área maior" do
+  /// modelo. Muda a frase do documento, e é a diferença entre penhorar a lavoura
+  /// e parecer penhorar a fazenda inteira.
+  withinLargerArea Boolean @default(false)
+
+  /// O REGISTRO DO IMÓVEL: matrícula, livro e a comarca do cartório. É o que
+  /// individualiza a garantia — sem matrícula, o penhor não se registra.
+  registryNumber   String
+  registryBook     String
+  registryDistrict String
+
+  owners CprAreaOwner[]
+
+  @@index([cprId, position])
+}
+
+/// O PROPRIETÁRIO de uma das lavouras, com o CPF/CNPJ dele.
+///
+/// Lista, e não um par de campos, pelo mesmo motivo das áreas: o modelo traz
+/// dois proprietários porque o exemplo tinha dois. Imóvel rural em nome do casal
+/// tem dois; em espólio ou herança, tem seis.
+///
+/// Ele NÃO é o emitente: a lavoura penhorada costuma ser arrendada, e é
+/// exatamente por isso que o documento nomeia o dono do imóvel separadamente de
+/// quem planta.
+model CprAreaOwner {
+  id     Int     @id @default(autoincrement())
+  areaId Int
+  area   CprArea @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  position Int    @default(0)
+  name     String
+  /// CPF ou CNPJ, com a pontuação que o faturista digitar — é o que sai
+  /// impresso. Aqui não há unicidade a defender (o proprietário não é cadastro),
+  /// então não existe a coluna só-dígitos de `Producer`.
+  document String
+
+  @@index([areaId, position])
 }
 
 /// Trilha de AUDITORIA dos atos sensíveis: quem provisionou, redefiniu senha,
@@ -622,9 +1843,9 @@ model AuditLog {
   id Int @id @default(autoincrement())
 
   /// Quem praticou o ato, congelado no momento em que ele aconteceu.
-  actorId    Int?
-  actorName  String
-  actorRole  String
+  actorId   Int?
+  actorName String
+  actorRole String
 
   /// O que foi feito — ver AUDIT_ACTION em src/audit/audit.service.ts.
   action String

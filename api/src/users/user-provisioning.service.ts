@@ -195,7 +195,7 @@ export class UserProvisioningService {
     // para uma rota futura não reabrir o buraco sem ninguém decidir isso.
     if (isSingleAccount(role)) {
       throw new UnprocessableEntityException(
-        `O cadastro do ${ROLE_LABELS[role]} não se exclui — ele é a etapa, não uma pessoa. ` +
+        `O cadastro do ${ROLE_LABELS[role]} não se exclui: ele é a etapa, não uma pessoa. ` +
           'Para tirar o acesso de quem está com ele, redefina a senha.',
       );
     }
@@ -251,7 +251,7 @@ export class UserProvisioningService {
     const existing = await this.prisma.user.count({ where: { role } });
     if (existing > 0) {
       throw new UnprocessableEntityException(
-        `O cadastro do ${ROLE_LABELS[role]} é único e já existe — edite o que está lá, ` +
+        `O cadastro do ${ROLE_LABELS[role]} é único e já existe: edite o que está lá, ` +
           'ou redefina a senha dele.',
       );
     }
@@ -310,7 +310,7 @@ export class UserProvisioningService {
     const team = await this.prisma.user.count({ where: { managerId } });
     if (team > 0) {
       throw new UnprocessableEntityException(
-        `Este gerente ainda responde por ${team} ${team === 1 ? 'consultor' : 'consultores'} — designe outro gerente para ${team === 1 ? 'ele' : 'eles'} antes de excluir`,
+        `Este gerente ainda responde por ${team} ${team === 1 ? 'consultor' : 'consultores'}: designe outro gerente para ${team === 1 ? 'ele' : 'eles'} antes de excluir`,
       );
     }
 

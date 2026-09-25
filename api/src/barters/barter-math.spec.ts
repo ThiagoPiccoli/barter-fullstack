@@ -3,6 +3,7 @@ import {
   classSpend,
   inputCost,
   minQuantityFor,
+  pledgeAreaFor,
   roundQuantity,
   sacksToCover,
   type PricedInput,
@@ -80,5 +81,64 @@ describe('BarterMath', () => {
     expect(roundQuantity(0.1 + 0.2)).toBe(0.3);
 
     expect(sacksToCover(1, 3)).toBe(0.3333);
+  });
+});
+
+/**
+ * O PENHOR: as sacas viram a ÁREA DE LAVOURA que precisa produzi-las.
+ *
+ * É a conversão que fecha o ciclo — o custo vira sacas (`sacksToCover`), e as
+ * sacas viram terra. Os números abaixo são os da conversa que originou a regra:
+ * 1.200 sacas a 60 sc/ha dão 20 ha, e 20% de margem os levam a 24.
+ */
+describe('Penhor — a área que a permuta exige em garantia', () => {
+  it('sacas ÷ produtividade, mais a margem de segurança', () => {
+    expect(pledgeAreaFor(1200, 60, 20)).toBe(24);
+    expect(pledgeAreaFor(1200, 60, 0)).toBe(20);
+    expect(pledgeAreaFor(900, 60, 20)).toBe(18);
+    // Margem de 100% é o dobro da área estimada — o teto que o DTO da credora
+    // aceita, e por isso o caso extremo que a conta precisa acertar.
+    expect(pledgeAreaFor(1200, 60, 100)).toBe(40);
+  });
+
+  /**
+   * ARREDONDA PARA CIMA, e este é o teste que guarda a direção do erro.
+   *
+   * 1.000 ÷ 57 = 17,5438…, e o piso de uma GARANTIA não se arredonda para baixo:
+   * 17,54 entregaria quatro milésimos de hectare de graça. A precisão é de duas
+   * casas porque é a precisão em que a área da matrícula é digitada.
+   */
+  it('a área exigida arredonda para cima, a duas casas', () => {
+    expect(pledgeAreaFor(1000, 57, 0)).toBe(17.55);
+    expect(pledgeAreaFor(1000, 3, 0)).toBe(333.34);
+  });
+
+  /**
+   * E NÃO INVENTA UM CENTÉSIMO quando a conta já fecha redonda.
+   *
+   * `1200 / 60 * 1.2` dá 24.000000000000004 em ponto flutuante, e um teto
+   * ingênuo o levaria a 24,01 — a garantia crescendo por causa do binário. É o
+   * recuo de 1e-9 em `pledgeAreaFor` que segura isso, e é este teste que o
+   * mantém lá.
+   */
+  it('conta redonda não vira um centésimo a mais', () => {
+    expect(pledgeAreaFor(1200, 60, 20)).toBe(24);
+    expect(pledgeAreaFor(300, 50, 10)).toBe(6.6);
+  });
+
+  /**
+   * SEM SACAS OU SEM PRODUTIVIDADE, zero — e zero aqui é "não dá para calcular",
+   * não "não exige garantia". Quem lê a ausência e decide o que ela significa é
+   * `cprGapsOf`; aqui o que não pode acontecer é uma divisão por zero virar
+   * `Infinity` e a área exigida sair como um número.
+   */
+  it('sem sacas ou sem produtividade não há área calculável', () => {
+    expect(pledgeAreaFor(1200, 0, 20)).toBe(0);
+    expect(pledgeAreaFor(0, 60, 20)).toBe(0);
+    expect(pledgeAreaFor(-10, 60, 20)).toBe(0);
+    // Margem negativa não ENCOLHE a garantia: ela é tratada como zero. Um
+    // percentual negativo só chega aqui por defeito de quem chama, e o efeito
+    // dele seria exigir MENOS área do que a produção estimada justifica.
+    expect(pledgeAreaFor(1200, 60, -50)).toBe(20);
   });
 });

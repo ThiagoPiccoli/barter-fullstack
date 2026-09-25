@@ -169,10 +169,10 @@ export function passwordProblem(password: string, owner: PasswordOwner = {}): st
   const normalized = normalize(password);
 
   if (BLOCKLIST.has(normalized)) {
-    return 'Esta senha é conhecida demais — escolha outra que ninguém tentaria';
+    return 'Esta senha é conhecida demais. Escolha outra que ninguém tentaria';
   }
   if (isKeyboardRun(normalized)) {
-    return 'Uma sequência de teclas não protege a conta — escolha outra senha';
+    return 'Uma sequência de teclas não protege a conta. Escolha outra senha';
   }
   if (isTooRepetitive(normalized)) {
     return `A senha precisa ter ao menos ${MIN_DISTINCT_CHARACTERS} caracteres diferentes`;

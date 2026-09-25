@@ -3,7 +3,10 @@ import { hashPassword } from '../src/auth/password.util';
 import { ROLE, type Role } from '../src/common/roles';
 import { documentDigitsOf } from '../src/producers/document';
 import { TAX_REGIME, taxRateOf, type TaxRegime } from '../src/barters/tax-regime';
+import { CHANGE_REQUEST_ACTION, CHANGE_REQUEST_STATUS } from '../src/barters/change-request';
+import { PRODUCT_REQUEST_ACTION, PRODUCT_REQUEST_STATUS } from '../src/barters/product-request';
 import { normalizeName } from '../src/seasons/product-name';
+import { cityKeyOf } from '../src/insurance/insurance-rate';
 
 /**
  * A senha de todas as contas de demonstração.
@@ -22,6 +25,62 @@ import { normalizeName } from '../src/seasons/product-name';
 export const SEED_PASSWORD = 'demo-2026-agro';
 
 /**
+ * UM PDF DE UMA PÁGINA, montado à mão — o anexo de demonstração.
+ *
+ * Ele é um PDF DE VERDADE, e não bytes aleatórios com extensão `.pdf`: a nota
+ * fiscal e o SCR do dataset são baixáveis na tela, e um arquivo que o navegador
+ * recusa a abrir faria a demonstração parecer quebrada exatamente na parte que
+ * ela existe para mostrar.
+ *
+ * Escrito à mão pelo mesmo motivo do `.docx` da cédula (ver `cpr_docx.dart`, no
+ * app): a estrutura mínima de um PDF cabe em vinte linhas, e uma biblioteca de
+ * geração seria uma dependência de produção carregada para produzir um
+ * retângulo com uma frase — em um arquivo que só roda em demonstração.
+ *
+ * O `xref` é preenchido com a tabela de offsets calculada abaixo porque leitores
+ * exigentes a conferem; sem ela, parte deles abre o arquivo e parte reclama.
+ */
+function pdfDeMentira(titulo: string): Uint8Array<ArrayBuffer> {
+  const texto = titulo.replace(/[\\()]/g, '');
+  const objetos = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] ' +
+      '/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>',
+    null, // o fluxo de conteúdo, montado abaixo (ele precisa do próprio tamanho)
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  const conteudo = `BT /F1 18 Tf 72 760 Td (${texto}) Tj ET`;
+  objetos[3] = `<< /Length ${conteudo.length} >>\nstream\n${conteudo}\nendstream`;
+
+  let pdf = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objetos.forEach((corpo, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${corpo}\nendobj\n`;
+  });
+
+  const inicioXref = pdf.length;
+  pdf += `xref\n0 ${objetos.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) {
+    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objetos.length + 1} /Root 1 0 R >>\nstartxref\n${inicioXref}\n%%EOF\n`;
+
+  // `latin1` e não `utf8`: os offsets do `xref` são contados em BYTES, e a conta
+  // acima usa o comprimento da string. Com uma codificação de tamanho variável,
+  // um acento no título deslocaria a tabela e o arquivo sairia corrompido.
+  //
+  // A cópia para um `Uint8Array` novo, e não o `Buffer` direto: o `Buffer` do
+  // Node pode estar apoiado num `SharedArrayBuffer`, e o cliente do Prisma pede
+  // um `ArrayBuffer`. É a mesma cópia de `fileDataOf`, no service.
+  const bytes = Buffer.from(pdf, 'latin1');
+  const content = new Uint8Array(bytes.length);
+  content.set(bytes);
+  return content;
+}
+
+/**
  * Dataset de demonstração — reproduz o mock original do app (mesmos números
  * das permutas PRM-2026-001..008). Senha de todos os usuários: SEED_PASSWORD.
  *
@@ -30,8 +89,25 @@ export const SEED_PASSWORD = 'demo-2026-agro';
  */
 export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // Ordem respeita os FKs (filhos primeiro).
+  await prisma.cprAreaOwner.deleteMany();
+  await prisma.cprArea.deleteMany();
+  await prisma.cprGuarantor.deleteMany();
+  await prisma.barterCpr.deleteMany();
+  await prisma.creditor.deleteMany();
   await prisma.barterItem.deleteMany();
   await prisma.barterEvent.deleteMany();
+  // AS NOTAS antes dos ARQUIVOS: a nota aponta para o arquivo, e apagá-lo
+  // primeiro derrubaria o FK. A cédula já saiu acima, então o SCR também está
+  // livre quando os arquivos caem.
+  await prisma.barterInvoice.deleteMany();
+  // O DOSSIÊ DO COMITÊ também sai antes dos arquivos, pelo mesmo motivo da
+  // nota: a peça aponta para o arquivo dela.
+  await prisma.barterCreditFile.deleteMany();
+  await prisma.barterFile.deleteMany();
+  // O pedido de fora do Barter vem DEPOIS do item, e não antes: o item aponta
+  // para ele (`BarterItem.requestId`), e apagar o pedido primeiro esvaziaria
+  // essa pista em vez de apagar a linha inteira.
+  await prisma.barterProductRequest.deleteMany();
   await prisma.barter.deleteMany();
   await prisma.versionPrice.deleteMany();
   await prisma.barterVersion.deleteMany();
@@ -40,6 +116,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.product.deleteMany();
   await prisma.productClass.deleteMany();
   await prisma.producer.deleteMany();
+  // A base de seguros não tem filho nem pai: ela é lida pela CHAVE do município
+  // (`cityKey`), e a permuta guarda a taxa congelada em vez de apontar para a
+  // linha. Some junto com o resto porque o dataset a recria — e sem isto o
+  // segundo seed esbarraria no índice único da praça.
+  await prisma.insuranceRate.deleteMany();
   await prisma.accessToken.deleteMany();
   await prisma.auditLog.deleteMany();
   // Usuário antes de unidade: o usuário aponta a lotação dele, e o FK é
@@ -51,6 +132,31 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     new Date(Date.UTC(year, month - 1, day, hour, minute));
 
   const password = await hashPassword(SEED_PASSWORD);
+
+  /* ── A credora ────────────────────────────────────────────────────── */
+  // A empresa que recebe o grão, como a CPR a nomeia. Ela existe no dataset
+  // porque sem ela a tela da cédula abriria com uma pendência de configuração
+  // em toda demonstração — e a pendência é justamente o que se quer mostrar
+  // resolvido. Em produção, quem a cadastra é o admin ou o faturista.
+  await prisma.creditor.create({
+    data: {
+      id: 1,
+      name: 'agroBarter Cooperativa Agroindustrial Ltda.',
+      cnpj: '12.345.678/0001-90',
+      address: 'Avenida Colombo',
+      addressNumber: '4750',
+      city: 'Maringá/PR',
+      // Foro em branco de propósito: é o caso comum (elege-se a comarca da
+      // sede), e é ele que exercita a regra do `forumOf`.
+      forum: '',
+      // A MARGEM DE SEGURANÇA DO PENHOR: 20% de folga sobre a área que a produção
+      // estimada justifica. Vem preenchida porque o dataset existe para mostrar o
+      // sistema funcionando, e uma margem zerada faria as permutas da demonstração
+      // exigirem exatamente a área estimada — o caso de borda, e não o normal.
+      pledgeMarginPercent: 20,
+      updatedBy: 'Dataset de demonstração',
+    },
+  });
 
   /* ── Usuários ─────────────────────────────────────────────────────── */
   const mkUser = (data: {
@@ -75,7 +181,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'joao.silva@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0002',
-    branch: 'Filial 02 – Gran. Santa T.',
+    branch: 'Filial 02 (Gran. Santa T.)',
     createdAt: at(2021, 3, 15),
   });
   const ana = await mkUser({
@@ -83,7 +189,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'ana.ferreira@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0003',
-    branch: 'Filial 04 – Gran. Inharap.',
+    branch: 'Filial 04 (Gran. Inharap.)',
     createdAt: at(2021, 6, 20),
   });
   const roberto = await mkUser({
@@ -91,7 +197,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'roberto.souza@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0004',
-    branch: 'Filial 34 – Gran. Jari',
+    branch: 'Filial 34 (Gran. Jari)',
     createdAt: at(2022, 2, 8),
   });
   const maria = await mkUser({
@@ -99,7 +205,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'maria.oliveira@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0005',
-    branch: 'Filial 24 – Gran. Oliveira',
+    branch: 'Filial 24 (Gran. Oliveira)',
     createdAt: at(2022, 9, 1),
   });
   const lucas = await mkUser({
@@ -107,7 +213,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'lucas.barros@agrobarter.com.br',
     role: ROLE.consultant,
     phone: '(44) 99999-0006',
-    branch: 'Filial 18 – Gran. São Joa.',
+    branch: 'Filial 18 (Gran. São Joa.)',
     createdAt: at(2023, 1, 15),
   });
 
@@ -159,8 +265,30 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     email: 'gerente.sul@agrobarter.com.br',
     role: ROLE.manager,
     phone: '(44) 99999-0013',
-    branch: 'Filial 34 – Gran. Jari',
+    branch: 'Filial 34 (Gran. Jari)',
     createdAt: at(2021, 8, 16),
+  });
+
+  /**
+   * O EMISSOR — o posto que vem DEPOIS do faturamento: ele confere a cédula que
+   * o consultor preencheu, emite, colhe as assinaturas e a leva a registro.
+   *
+   * Ele entra no dataset pelo mesmo motivo de todos os outros: sem uma conta
+   * dele, a tela da emissão não abre em demonstração nenhuma — e o trecho novo
+   * da esteira (três estados) ficaria invisível justamente para quem precisa
+   * vê-lo funcionando.
+   *
+   * Vem DEPOIS do Gustavo, e não ao lado da Patrícia, pela mesma razão que ele
+   * veio por último: não deslocar os ids que os testes de provisionamento
+   * fixam.
+   */
+  const renata = await mkUser({
+    fullName: 'Renata Bicudo',
+    email: 'emissor@agrobarter.com.br',
+    role: ROLE.emitter,
+    phone: '(44) 99999-0014',
+    branch: 'Matriz',
+    createdAt: at(2022, 3, 7),
   });
 
   /* ── Unidades de retirada ─────────────────────────────────────────── */
@@ -172,11 +300,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     prisma.unit.create({ data: { name, nameKey: normalizeName(name), city } });
 
   const matriz = await mkUnit('Matriz', 'Maringá/PR');
-  const filial02 = await mkUnit('Filial 02 – Gran. Santa T.', 'Sarandi/PR');
-  const filial04 = await mkUnit('Filial 04 – Gran. Inharap.', 'Maringá/PR');
-  const filial18 = await mkUnit('Filial 18 – Gran. São Joa.', 'Paiçandu/PR');
-  const filial24 = await mkUnit('Filial 24 – Gran. Oliveira', 'Marialva/PR');
-  const filial34 = await mkUnit('Filial 34 – Gran. Jari', 'Mandaguari/PR');
+  const filial02 = await mkUnit('Filial 02 (Gran. Santa T.)', 'Sarandi/PR');
+  const filial04 = await mkUnit('Filial 04 (Gran. Inharap.)', 'Maringá/PR');
+  const filial18 = await mkUnit('Filial 18 (Gran. São Joa.)', 'Paiçandu/PR');
+  const filial24 = await mkUnit('Filial 24 (Gran. Oliveira)', 'Marialva/PR');
+  const filial34 = await mkUnit('Filial 34 (Gran. Jari)', 'Mandaguari/PR');
 
   // A lotação e o gerente de cada um, num segundo passo porque as unidades só
   // existem agora. `branch` continua sendo o NOME da unidade — quem o escreve
@@ -213,6 +341,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await lotar(gustavo, filial34);
   await lotar(comite, matriz);
   await lotar(patricia, matriz);
+  await lotar(renata, matriz);
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
@@ -277,6 +406,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     areaHa: 320,
     createdAt: at(2020, 11, 3),
   });
+  // Os DOIS produtores do dataset que optaram pela FOLHA. Eles existem para as
+  // telas mostrarem as duas alíquotas — Cláudia é CPF (sobra o Senar de 0,20%)
+  // e Vanessa é CNPJ (0,25%) —, e agora a opção mora no cadastro deles, que é
+  // onde ela é feita: perante o fisco, uma vez, valendo para todas as entregas.
   const claudia = await mkProducer({
     name: 'Cláudia Nunes',
     consultants: [ana.id],
@@ -285,6 +418,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     farmName: 'Fazenda Recanto',
     city: 'Marialva/PR',
     areaHa: 80,
+    taxRegime: TAX_REGIME.folha,
     createdAt: at(2022, 3, 21),
   });
   const sebastiao = await mkProducer({
@@ -305,6 +439,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     farmName: 'Fazenda Três Irmãos',
     city: 'Floresta/PR',
     areaHa: 210,
+    taxRegime: TAX_REGIME.folha,
     createdAt: at(2023, 1, 30),
   });
   const osmar = await mkProducer({
@@ -317,6 +452,38 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     areaHa: 150,
     createdAt: at(2022, 6, 14),
   });
+
+  /* ── Base de seguros por município ────────────────────────────────── */
+  //
+  // O SEGURO é opcional, e quem diz se a safra o leva é o admin, no lançamento
+  // (ver `BarterVersion.insuranceRequired`). O que mora aqui é a outra metade:
+  // QUANTO custa o hectare em cada praça — o risco do lugar, que é o que a
+  // seguradora cota.
+  //
+  // A base cobre TODAS as praças dos produtores do dataset, e isso é de
+  // propósito: ligando o seguro na demonstração, nenhuma permuta é recusada por
+  // município sem taxa. Faltando uma, a recusa é a que `missingRateRefusal`
+  // escreve — e ela é a coisa certa a acontecer, só não numa demonstração.
+  //
+  // Os valores são de ordem realista para o Paraná (R$ 80 a R$ 95/ha em soja) e
+  // sobem para o Mato Grosso, que é onde o frete e o risco climático pesam mais.
+  // O Barter vigente do dataset NÃO leva seguro — as permutas dele contam a
+  // história de antes —, e ligá-lo é um toque na tela do lançamento.
+  const mkRate = (city: string, valuePerHa: number, note?: string) =>
+    prisma.insuranceRate.create({
+      data: { city, cityKey: cityKeyOf(city), valuePerHa, note: note ?? null },
+    });
+
+  await mkRate('Maringá/PR', 85.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Sarandi/PR', 82.5, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Mandaguari/PR', 88.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Marialva/PR', 86.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Paiçandu/PR', 84.0, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Floresta/PR', 83.5, 'Soja 2026 — cotação de janeiro');
+  await mkRate('Campo Mourão/PR', 92.5, 'Soja 2026 — região de granizo recorrente');
+  // A praça de FORA da carteira: ela existe para a tela do admin mostrar uma
+  // base maior do que a lista de produtores, que é como ela é no mundo.
+  await mkRate('Sorriso/MT', 140.0, 'Soja 2026 — praça nova, cotação da matriz');
 
   /* ── Classes de produto ───────────────────────────────────────────── */
   //
@@ -427,7 +594,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       sku: 'SEM-7062',
-      name: 'Semente Soja RR – TMG 7062',
+      name: 'Semente Soja RR TMG 7062',
       unit: 'saco 40kg',
       type: 'input',
       prices: [300.0, 305.0, 310.0, 312.0, 318.0, 322.0, 320.0],
@@ -437,6 +604,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
   const products: {
     id: number;
+    sku: string;
     name: string;
     unit: string;
     price: number;
@@ -465,6 +633,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     });
     products.push({
       id: product.id,
+      sku: item.sku,
       name: product.name,
       unit: product.unit,
       price: product.currentPrice,
@@ -483,17 +652,37 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // reajustados, a segunda vigente. É nela que uma permuta nova cai.
   const inputs = products.filter((product) => product.type === 'input');
 
+  /**
+   * UMA CULTURA do lançamento, do jeito que o admin a publica: o grão, a
+   * cotação da saca, a produtividade estimada e o vencimento da entrega.
+   *
+   * A produtividade é obrigatória no lançamento real (ver `VersionGrainDto`) e
+   * por isso é obrigatória aqui: uma cultura vigente sem ela recusaria toda
+   * permuta, e a demonstração abriria travada.
+   *
+   * O VENCIMENTO usa meio-dia UTC pela mesma razão do `dueDate` da cédula, mais
+   * abaixo — é data de calendário, e sai impressa.
+   */
+  type SeedGrain = {
+    product: (typeof products)[number];
+    price: number;
+    estimatedYield: number;
+    cprDueDate: Date;
+    targetSacks?: number;
+  };
+
   const mkVersion = async (args: {
     seasonId: number;
     number: number;
     code: string;
     status: 'active' | 'closed';
-    grainPrice: number;
+    /** As culturas que este lançamento aceita — pelo menos uma. */
+    grains: SeedGrain[];
     priceIndex: number;
     startsAt: Date;
     closedAt?: Date;
     note: string;
-    targets?: { sales?: number; sacks?: number; barters?: number };
+    targets?: { sales?: number; barters?: number };
   }) =>
     prisma.barterVersion.create({
       data: {
@@ -501,15 +690,25 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         number: args.number,
         code: args.code,
         status: args.status,
-        grainPrice: args.grainPrice,
         startsAt: args.startsAt,
         closedAt: args.closedAt ?? null,
         closedBy: args.closedAt ? admin.fullName : null,
         closedById: args.closedAt ? admin.id : null,
         note: args.note,
         targetSales: args.targets?.sales ?? null,
-        targetSacks: args.targets?.sacks ?? null,
         targetBarters: args.targets?.barters ?? null,
+        grains: {
+          create: args.grains.map((grain, index) => ({
+            grainId: grain.product.id,
+            grainName: grain.product.name,
+            grainUnit: grain.product.unit,
+            price: grain.price,
+            estimatedYield: grain.estimatedYield,
+            cprDueDate: grain.cprDueDate,
+            targetSacks: grain.targetSacks ?? null,
+            position: index,
+          })),
+        },
         prices: {
           create: inputs.map((product) => ({
             productId: product.id,
@@ -519,95 +718,129 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
           })),
         },
       },
+      include: { grains: true },
     });
 
-  const trigoSeason = await prisma.season.create({
+  // Números de produtividade do Paraná: trigo ~55 sc/ha, milho ~170, soja ~60.
+  // Os vencimentos são os da cultura: o trigo entrega em outubro, o milho
+  // safrinha em setembro, a soja em junho — e é por isso que eles moram na
+  // CULTURA, e não na safra: no mesmo lançamento, soja e milho vencem em meses
+  // diferentes.
+  const trigoGrain: SeedGrain = {
+    product: trigo,
+    price: 85.0,
+    estimatedYield: 55,
+    cprDueDate: at(2026, 10, 15, 12),
+  };
+  const milhoGrain: SeedGrain = {
+    product: milho,
+    price: 62.3,
+    estimatedYield: 170,
+    cprDueDate: at(2026, 9, 20, 12),
+  };
+
+  // A SAFRA PASSADA — o ciclo 2025/26, já encerrado. A versão dele aceitava
+  // DUAS culturas ao mesmo tempo (trigo no inverno, milho na safrinha), e é dela
+  // que vêm as permutas antigas pagas em cada uma: no dataset antigo isso exigia
+  // duas safras, uma por grão.
+  const pastSeason = await prisma.season.create({
     data: {
-      code: 'T2025',
-      name: 'Trigo 2025',
+      code: 'B2025',
+      name: 'Barter 2025/26',
       year: 2025,
-      grainId: trigo.id,
-      grainName: trigo.name,
-      grainUnit: trigo.unit,
       status: 'closed',
       openedAt: at(2025, 12, 1),
-      closedAt: at(2026, 3, 31),
-    },
-  });
-  const trigoVersion = await mkVersion({
-    seasonId: trigoSeason.id,
-    number: 1,
-    code: 'T2025.01',
-    status: 'closed',
-    grainPrice: trigo.price,
-    priceIndex: 6,
-    startsAt: at(2025, 12, 1),
-    closedAt: at(2026, 3, 31),
-    note: 'Tabela de abertura da safra de trigo.',
-  });
-
-  const milhoSeason = await prisma.season.create({
-    data: {
-      code: 'M2026',
-      name: 'Milho 2026',
-      year: 2026,
-      grainId: milho.id,
-      grainName: milho.name,
-      grainUnit: milho.unit,
-      status: 'closed',
-      openedAt: at(2026, 1, 15),
       closedAt: at(2026, 6, 30),
     },
   });
-  const milhoVersion = await mkVersion({
-    seasonId: milhoSeason.id,
+  const pastVersion = await mkVersion({
+    seasonId: pastSeason.id,
     number: 1,
-    code: 'M2026.01',
+    code: 'B2025.01',
     status: 'closed',
-    grainPrice: milho.price,
+    grains: [trigoGrain, milhoGrain],
     priceIndex: 6,
-    startsAt: at(2026, 1, 15),
+    startsAt: at(2025, 12, 1),
     closedAt: at(2026, 6, 30),
-    note: 'Safra de milho encerrada por atingir a meta de vendas.',
+    note: 'Tabela de abertura do ciclo, com trigo e milho.',
   });
 
-  const sojaSeason = await prisma.season.create({
+  // A SAFRA ABERTA — o ciclo 2026/27, em que uma permuta nova cai.
+  const season = await prisma.season.create({
     data: {
-      code: 'S2026',
-      name: 'Soja 2026',
+      code: 'B2026',
+      name: 'Barter 2026/27',
       year: 2026,
-      grainId: soja.id,
-      grainName: soja.name,
-      grainUnit: soja.unit,
       status: 'open',
       openedAt: at(2026, 1, 5),
     },
   });
-  // A primeira tabela da soja viveu três dias: foi publicada com a cotação
-  // antiga e corrigida logo em seguida. É de propósito que ela não tenha
-  // nenhuma permuta — é o caso de quem republica antes de alguém usar.
+
+  // A primeira tabela viveu três dias: foi publicada com a cotação antiga e
+  // corrigida logo em seguida. É de propósito que ela não tenha nenhuma permuta
+  // — é o caso de quem republica antes de alguém usar. Ela abriu só com soja, e
+  // o milho entrou na versão seguinte: é assim que uma cultura nova chega a um
+  // Barter que já está no ar.
   await mkVersion({
-    seasonId: sojaSeason.id,
+    seasonId: season.id,
     number: 1,
-    code: 'S2026.01',
+    code: 'B2026.01',
     status: 'closed',
-    grainPrice: 145.0,
+    grains: [{ product: soja, price: 145.0, estimatedYield: 60, cprDueDate: at(2026, 6, 30, 12) }],
     priceIndex: 2,
     startsAt: at(2026, 1, 5),
     closedAt: at(2026, 1, 8),
-    note: 'Tabela de abertura — corrigida três dias depois.',
+    note: 'Tabela de abertura, corrigida três dias depois.',
   });
-  const sojaV2 = await mkVersion({
-    seasonId: sojaSeason.id,
+
+  // A VERSÃO VIGENTE, com as DUAS culturas convivendo: o produtor escolhe se
+  // paga em soja (colheita em junho) ou em milho safrinha (setembro), com a
+  // mesma tabela de insumos e cotações e produtividades próprias. As metas de
+  // saca são por cultura, porque sacas de soja e de milho não somam.
+  const current = await mkVersion({
+    seasonId: season.id,
     number: 2,
-    code: 'S2026.02',
+    code: 'B2026.02',
     status: 'active',
-    grainPrice: soja.price,
+    grains: [
+      {
+        product: soja,
+        price: soja.price,
+        estimatedYield: 60,
+        cprDueDate: at(2026, 6, 30, 12),
+        targetSacks: 5000,
+      },
+      {
+        product: milho,
+        price: 64.5,
+        estimatedYield: 170,
+        cprDueDate: at(2026, 9, 20, 12),
+        targetSacks: 9000,
+      },
+    ],
     priceIndex: 6,
     startsAt: at(2026, 1, 8),
-    note: 'Tabela vigente da safra de soja.',
-    targets: { sales: 500000, sacks: 5000, barters: 40 },
+    note: 'Tabela vigente, com soja e milho.',
+    targets: { sales: 500000, barters: 40 },
   });
+
+  /**
+   * A PRODUTIVIDADE com que o penhor desta permuta foi dimensionado: a da
+   * CULTURA em que ela é paga, dentro da versão em que ela nasceu.
+   *
+   * A cultura sai da própria linha de pagamento da permuta, que é onde ela mora
+   * (ver `BarterItem` no schema) — o mesmo caminho que o service usa para
+   * responder "em que grão esta permuta é paga?".
+   */
+  const yieldOf = (entry: {
+    version: { grains: { grainId: number | null; estimatedYield: number }[] };
+    items: { kind: string; productId: number }[];
+  }): number => {
+    const paid = entry.items.find((item) => item.kind === 'grain');
+    return (
+      entry.version.grains.find((grain) => grain.grainId === paid?.productId)?.estimatedYield ?? 0
+    );
+  };
 
   /* ── Permutas históricas (mesmos números do mock) ─────────────────── */
   type Ref = (typeof products)[number];
@@ -623,6 +856,11 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     productId: p.id,
     kind: 'input',
     productName: p.name,
+    // O CÓDIGO junto do nome, como o servidor o congela hoje (ver
+    // `BarterItem.productSku`). O dataset o traz porque é ele que aparece na
+    // tela, no comprovante e na conferência do balcão — sem ele, a demonstração
+    // mostraria um traço em toda linha de insumo.
+    productSku: p.sku,
     unit: p.unit,
     quantity,
     unitValue,
@@ -637,13 +875,16 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // tela do gerente abriria vazia no dataset de demonstração.
   //
   // O dataset cobre a LINHA INTEIRA pelo mesmo motivo: uma em cada posto, para
-  // nenhuma tela do fluxo abrir vazia — duas no gerente, uma no comitê
-  // (PRM-2026-002), três aprovadas esperando o faturista, uma negada e uma já
-  // faturada.
+  // nenhuma tela do fluxo abrir vazia — um rascunho na mão do João
+  // (PRM-2026-009), duas no gerente, uma no comitê (PRM-2026-002), três
+  // aprovadas esperando o faturista (uma delas COM RESSALVA, a PRM-2026-006),
+  // uma negada e uma já faturada.
   const barters = [
     {
       code: 'PRM-2026-001',
-      version: sojaV2,
+      consultantNote:
+        'Cliente de cinco safras, nunca atrasou entrega. A área está toda plantada e a lavoura vem bem.',
+      version: current,
       consultant: joao,
       producer: antonio,
       // A mais antiga do dataset já andou a linha inteira: parecer, decisão do
@@ -667,7 +908,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-002',
-      version: sojaV2,
+      consultantNote:
+        'Produtora organizada, entrega sempre no prazo combinado. Pediu a semente com antecedência por causa do plantio cedo.',
+      version: current,
       consultant: ana,
       producer: helena,
       status: 'pending',
@@ -684,13 +927,15 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-003',
-      version: milhoVersion,
+      consultantNote:
+        'Bom pagador, mas o volume que ele pediu depende de a carga chegar antes da janela dele. Registrei como veio para o gerente avaliar o estoque.',
+      version: pastVersion,
       consultant: roberto,
       producer: joaquim,
       status: 'denied',
       createdAt: at(2026, 2, 5, 8, 0),
       managerNote:
-        'Não temos fertilizante para esse volume no período pedido — a próxima carga ' +
+        'Não temos fertilizante para esse volume no período pedido: a próxima carga ' +
         'chega depois da janela de plantio dele. Sugiro reprogramar ou dividir a retirada.',
       managerReviewedAt: at(2026, 2, 5, 17, 20),
       reviewedAt: at(2026, 2, 6, 10, 30),
@@ -699,7 +944,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-004',
-      version: sojaV2,
+      consultantNote:
+        'Área pequena e bem cuidada. Ela já permutou nas duas últimas safras e liquidou tudo em grão.',
+      version: current,
       consultant: ana,
       producer: claudia,
       status: 'approved',
@@ -719,7 +966,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-005',
-      version: sojaV2,
+      consultantNote:
+        'Primeira permuta dele conosco. Área própria, sem arrendamento, e a referência da revenda vizinha é boa.',
+      version: current,
       consultant: joao,
       producer: sebastiao,
       // Na mesa da Beatriz, esperando o parecer da Filial 02.
@@ -733,17 +982,43 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-006',
-      version: sojaV2,
+      consultantNote:
+        'Cliente antigo da unidade, retira tudo de uma vez. Sem pendência financeira aberta.',
+      version: current,
       consultant: maria,
       producer: osmar,
-      status: 'approved',
+      // A ÚNICA aprovada COM RESSALVA do dataset, e ela existe para a tela do
+      // comitê e a do faturista mostrarem o terceiro desfecho da decisão. Sem
+      // ela, o selo e a exigência só apareceriam depois de alguém aprovar com
+      // ressalva na demonstração — e o mais provável é que ninguém descobrisse
+      // que dá.
+      status: 'approvedWithConditions',
       createdAt: at(2026, 4, 10, 9, 0),
       managerNote:
         'Retirada do inseticida já separada. Produtor é cliente antigo da unidade e ' +
-        'costuma retirar tudo de uma vez — reservei doca para o dia 15.',
+        'costuma retirar tudo de uma vez, então reservei doca para o dia 15.',
       managerReviewedAt: at(2026, 4, 10, 14, 5),
       reviewedAt: at(2026, 4, 11, 11, 0),
-      reviewNote: 'Aprovada com prioridade.',
+      // A RESSALVA é o texto da decisão, e é obrigatória neste desfecho: ela diz
+      // o que precisa ser providenciado antes de a entrega ser cobrada.
+      reviewNote:
+        'Aprovada com ressalva: exigir seguro agrícola da área e aval do cônjuge ' +
+        'antes da retirada. Confirmar a apólice com o produtor.',
+      // O ÚNICO PEDIDO DE ALTERAÇÃO em aberto do dataset, e ele existe pelo
+      // mesmo motivo da permuta em cada posto da linha: sem ele, a mesa do
+      // admin abre vazia, e o caminho de volta da esteira só apareceria na
+      // demonstração depois de alguém pedir uma alteração — o mais provável é
+      // que ninguém descobrisse que dá.
+      //
+      // Ele está numa permuta JÁ DECIDIDA de propósito: é aí que a decisão do
+      // admin custa alguma coisa — liberar joga fora o parecer do gerente e a
+      // ressalva do comitê —, e é esse peso que a tela dele precisa mostrar.
+      changeRequest: {
+        at: at(2026, 4, 12, 8, 5),
+        note:
+          'O produtor trocou o inseticida depois da última chuva: o talhão 3 apareceu ' +
+          'com percevejo e ele quer dobrar a dose. Preciso refazer a permuta antes da retirada.',
+      },
       items: [
         grainItem(soja, 134.0068, 148.5),
         inputItem(lambda, 200, 42.0),
@@ -752,12 +1027,37 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-007',
-      version: milhoVersion,
+      consultantNote:
+        'Produtora nova na carteira, área arrendada em três talhões. Sugiro olhar a garantia com cuidado.',
+      version: pastVersion,
       consultant: lucas,
       producer: vanessa,
       // Na mesa do Gustavo, esperando o parecer da Filial 18.
       status: 'sentToManager',
       createdAt: at(2026, 5, 11, 16, 0),
+      // O ÚNICO PEDIDO DE FORA DO BARTER em aberto do dataset, e ele existe
+      // pelo mesmo motivo do pedido de alteração: sem ele, a mesa do admin abre
+      // sem esse assunto, e o caminho só apareceria na demonstração depois de
+      // alguém pedir um produto — o mais provável é que ninguém descobrisse que
+      // dá.
+      //
+      // Ele está numa permuta JÁ ENCAMINHADA, e não no rascunho, apesar de o
+      // rascunho ser o momento mais natural do pedido: é aqui que ele mostra as
+      // DUAS pontas de uma vez — a mesa do admin, que precisa acertar o valor, e
+      // a do gerente, que precisa saber que a lista de insumos sobre a qual ele
+      // vai opinar ainda pode crescer.
+      //
+      // Sem valor e sem item na permuta: as 245,2649 sacas abaixo são as dos
+      // insumos de tabela, e é o atendimento do admin que muda esse número.
+      productRequest: {
+        at: at(2026, 5, 20, 16, 10),
+        productName: 'Semeadura de capim por drone',
+        unit: 'ha',
+        quantity: 40,
+        note:
+          'A produtora quer consorciar braquiária no milho, nos 40 ha do talhão 2. ' +
+          'Não está na tabela desta gestão; ela aceita pagar em sacas.',
+      },
       items: [
         grainItem(milho, 245.2649, 62.3),
         inputItem(npk, 100, 115.0),
@@ -766,7 +1066,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
     {
       code: 'PRM-2026-008',
-      version: trigoVersion,
+      consultantNote:
+        'Mesmo produtor da PRM-2026-003, agora no trigo. Os dois talhões em pousio explicam o volume de glifosato.',
+      version: pastVersion,
       consultant: roberto,
       producer: joaquim,
       status: 'approved',
@@ -781,6 +1083,29 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         grainItem(trigo, 172.9412, 85.0),
         inputItem(glifosato, 500, 18.9),
         inputItem(fungicida, 60, 87.5),
+      ],
+    },
+    {
+      code: 'PRM-2026-009',
+      consultantNote: '',
+      version: current,
+      consultant: joao,
+      producer: antonio,
+      // O RASCUNHO do dataset: montada e ainda na mão do João, sem parecer
+      // escrito e sem gerente endereçado. Ela existe pelo mesmo motivo das duas
+      // em `sentToManager` — a tela do consultor precisa ter o que mostrar no
+      // estado novo —, e é a única permuta do dataset que NENHUMA tela da
+      // retaguarda enxerga (ver `scopeFor`).
+      status: 'draft',
+      createdAt: at(2026, 5, 14, 8, 40),
+      // 60×115 + 400×18,9 + 18×42 = R$ 15.216,00 → 102,4646 sacas de soja. Os
+      // três insumos com exigência por hectare estão nos mínimos dos 120 ha do
+      // Antônio, como estariam se ela tivesse passado pelo servidor.
+      items: [
+        grainItem(soja, 102.4646, 148.5),
+        inputItem(npk, 60, 115.0),
+        inputItem(glifosato, 400, 18.9),
+        inputItem(lambda, 18, 42.0),
       ],
     },
   ];
@@ -798,18 +1123,13 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   ]);
   const pickupOverride = new Map([['PRM-2026-008', matriz]]);
 
-  // A FORMA de recolhimento escolhida no fechamento de cada permuta. O padrão é
-  // a comercialização; estas duas fecharam sobre a FOLHA, e existem para o
-  // dataset mostrar as duas alíquotas — uma de produtor CPF (fica só o Senar de
-  // 0,20%) e outra de CNPJ (0,25%). Sem elas, toda permuta sairia com o mesmo
-  // percentual e a linha de imposto passaria por certa mostrando sempre o mesmo
-  // número.
-  const taxRegimeOverride = new Map<string, TaxRegime>([
-    // Cláudia Nunes, CPF: sobra o Senar de 0,20%.
-    ['PRM-2026-004', TAX_REGIME.folha],
-    // Vanessa Lopes, CNPJ: sobra o Senar de 0,25%.
-    ['PRM-2026-007', TAX_REGIME.folha],
-  ]);
+  // A FORMA de recolhimento de cada permuta sai do CADASTRO do produtor dela —
+  // é lá que a opção pela folha é feita, e é de lá que o servidor a lê no
+  // registro (ver `Producer.taxRegime`). As permutas de Cláudia (CPF) e de
+  // Vanessa (CNPJ) saem sozinhas com as alíquotas reduzidas do Senar, que é o
+  // que o dataset precisa mostrar: duas telas com percentuais diferentes.
+  const taxRegimeOf = (producer: { taxRegime: string }): TaxRegime =>
+    producer.taxRegime as TaxRegime;
 
   for (const entry of barters) {
     const homeUnit = unitOfConsultant.get(entry.consultant.id)!;
@@ -817,7 +1137,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     // O destinatário é o gerente do CONSULTOR — a mesma regra que o
     // BartersService impõe, aqui só reproduzida para o dataset.
     const manager = managerOfConsultant.get(entry.consultant.id)!;
-    const taxRegime = taxRegimeOverride.get(entry.code) ?? TAX_REGIME.comercializacao;
+    const taxRegime = taxRegimeOf(entry.producer);
 
     await prisma.barter.create({
       data: {
@@ -829,17 +1149,31 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         consultantBranch: homeUnit.name,
         producerId: entry.producer.id,
         producerName: entry.producer.name,
+        // A ÁREA congelada no registro — o denominador do investimento por
+        // hectare. Sai do cadastro do produtor, que é de onde o service a copia.
+        producerAreaHa: entry.producer.areaHa,
+        // O PENHOR congelado, como o service o congela: a produtividade da
+        // CULTURA em que a permuta foi paga e a margem da credora no dia. É
+        // deles que sai a área que as lavouras da cédula precisam fechar — e é
+        // por cultura porque 60 sc/ha de soja não é 170 de milho.
+        pledgeYield: yieldOf(entry),
+        pledgeMarginPercent: 20,
         unitId: unit.id,
         unitName: unit.name,
         status: entry.status,
+        // O PARECER DO CONSULTOR e o encaminhamento. O rascunho é o único sem os
+        // dois: ele ainda não foi escrito nem enviado, que é o que rascunho é.
+        consultantNote: entry.consultantNote || null,
+        consultantSentAt: entry.status === 'draft' ? null : entry.createdAt,
         // A mesma conta do BartersService: a forma escolhida no fechamento e a
         // alíquota que ela produziu para este produtor.
         taxRegime,
         taxRate: taxRateOf(taxRegime, documentDigitsOf(entry.producer.document)),
-        // O destinatário existe desde o envio; o parecer só nas que já passaram
-        // pela etapa. As duas em `sentToManager` estão endereçadas e sem nota.
-        managerId: manager.id,
-        managerName: manager.fullName,
+        // O destinatário existe desde o ENCAMINHAMENTO; o parecer só nas que já
+        // passaram pela etapa. As duas em `sentToManager` estão endereçadas e
+        // sem nota; o rascunho não está endereçado a ninguém.
+        managerId: entry.status === 'draft' ? null : manager.id,
+        managerName: entry.status === 'draft' ? null : manager.fullName,
         managerNote: entry.managerNote ?? null,
         managerReviewedAt: entry.managerReviewedAt ?? null,
         // Quem decide é o COMITÊ. Era o admin quando o dataset foi escrito, e a
@@ -853,12 +1187,270 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         invoicedBy: entry.invoicedAt ? patricia.fullName : null,
         invoicedById: entry.invoicedAt ? patricia.id : null,
         invoicedAt: entry.invoicedAt ?? null,
+        // O PEDIDO DE ALTERAÇÃO em aberto, quando há. Ele NÃO move a permuta:
+        // ela continua na fila em que estava, com a bandeira acesa — é assim
+        // que o service o grava (ver `barters/change-request.ts`).
+        changeRequestStatus: entry.changeRequest ? CHANGE_REQUEST_STATUS.open : null,
+        changeRequestNote: entry.changeRequest?.note ?? null,
+        changeRequestBy: entry.changeRequest ? entry.consultant.fullName : null,
+        changeRequestById: entry.changeRequest ? entry.consultant.id : null,
+        changeRequestAt: entry.changeRequest?.at ?? null,
+        changeRequestFrom: entry.changeRequest ? entry.status : null,
+        // O PEDIDO DE FORA DO BARTER em aberto, quando há. Como o de alteração,
+        // ele não move a permuta: ela continua onde estava, e o que ele faz é
+        // pôr uma linha na mesa do admin (ver `barters/product-request.ts`).
+        productRequests: entry.productRequest
+          ? {
+              create: {
+                productName: entry.productRequest.productName,
+                unit: entry.productRequest.unit,
+                quantity: entry.productRequest.quantity,
+                note: entry.productRequest.note,
+                status: PRODUCT_REQUEST_STATUS.open,
+                requestedBy: entry.consultant.fullName,
+                requestedById: entry.consultant.id,
+                requestedAt: entry.productRequest.at,
+              },
+            }
+          : undefined,
         createdAt: entry.createdAt,
         items: { create: entry.items },
         events: { create: timelineOf(entry) },
       },
     });
   }
+
+  /* ── A cédula pronta ──────────────────────────────────────────────── */
+  //
+  // UMA cédula completa no dataset, na PRM-2026-001 — a única já faturada, e
+  // por isso a que abre direto no botão "Cédula de Produto Rural" sem passar
+  // pelo faturamento. É o documento pronto para ser gerado: abrir a permuta e
+  // exportar o DOCX/PDF, sem digitar nada antes.
+  //
+  // Ela existe porque a tela da cédula tem dois estados muito diferentes — o
+  // formulário vazio (que as outras permutas já mostram) e o documento fechado
+  // — e o segundo não aparecia em demonstração nenhuma: chegar até ele custava
+  // uns quarenta campos digitados à mão, e ninguém faz isso duas vezes.
+  //
+  // TODO CAMPO QUE `cprGaps()` COBRA está preenchido, e é isso que faz
+  // `complete` vir `true` (a credora, que é a outra metade da conta, já está
+  // cadastrada mais acima). O Antônio é CASADO de propósito: é o que aciona o
+  // bloco de anuência do cônjuge, que fica vazio na maioria das cédulas e por
+  // isso é justamente o que ninguém vê antes de precisar dele.
+  const faturada = await prisma.barter.findUniqueOrThrow({
+    where: { code: 'PRM-2026-001' },
+  });
+
+  // A NOTA FISCAL do faturamento, com o arquivo — a origem da dívida que a
+  // cédula cita (cláusula VII).
+  //
+  // Ela existe no dataset porque `invoice` passou a EXIGI-LA: não se fatura sem
+  // nota anexada, e a permuta já faturada precisa ser coerente com a regra que
+  // a produziria hoje. O arquivo é um PDF mínimo de verdade (ver `pdfDeMentira`)
+  // e não bytes aleatórios: ele é baixável na tela, e um anexo que o navegador
+  // não abre faria a demonstração parecer quebrada.
+  const notaFiscal = pdfDeMentira('NF 55.318');
+  const arquivoDaNota = await prisma.barterFile.create({
+    data: {
+      fileName: 'nf-55318-serie-1.pdf',
+      contentType: 'application/pdf',
+      size: notaFiscal.length,
+      content: notaFiscal,
+      uploadedBy: patricia.fullName,
+      uploadedById: patricia.id,
+      uploadedAt: at(2026, 1, 12, 10, 15),
+    },
+  });
+  await prisma.barterInvoice.create({
+    data: {
+      barterId: faturada.id,
+      number: '55.318',
+      series: '1',
+      duplicateNumber: '55.318-A',
+      issuedAt: at(2026, 1, 12, 10, 15),
+      value: 37_334.0,
+      attachedBy: patricia.fullName,
+      attachedById: patricia.id,
+      attachedAt: at(2026, 1, 12, 10, 15),
+      fileId: arquivoDaNota.id,
+    },
+  });
+
+  // O SCR do produtor — o relatório do Bacen que diz quanto ele já deve.
+  //
+  // Criado ANTES da cédula porque ela aponta para ele: é anexo obrigatório, e
+  // sem ele `cprGaps()` cobraria — o que deixaria a cédula "pronta" do dataset
+  // sem poder ser emitida, que é o oposto do que ela existe para mostrar.
+  const relatorioScr = pdfDeMentira('SCR Bacen');
+  const scrDoProdutor = await prisma.barterFile.create({
+    data: {
+      fileName: 'scr-antonio-carvalho-2026-01.pdf',
+      contentType: 'application/pdf',
+      size: relatorioScr.length,
+      content: relatorioScr,
+      uploadedBy: joao.fullName,
+      uploadedById: joao.id,
+      uploadedAt: at(2026, 1, 9, 14),
+    },
+  });
+
+  await prisma.barterCpr.create({
+    data: {
+      barterId: faturada.id,
+      number: 'CPR-2026-014',
+      // Emitida no dia do faturamento e vencendo na colheita — que é o que a
+      // CPR é: a promessa de entregar o grão que ainda está na lavoura.
+      //
+      // O VENCIMENTO é gravado ao MEIO-DIA UTC, e a hora não é enfeite: ele é
+      // uma data de calendário que sai impressa ("IV – VENCIMENTO: 30/06/2026"),
+      // e o app a lê em hora local. À meia-noite UTC, que é o que `at()` dá por
+      // omissão, o documento saía com 29/06 para quem está no Brasil — um dia a
+      // menos num prazo de entrega, dentro de um título executável. Meio-dia
+      // deixa a data certa de UTC-11 a UTC+11. O app não tem esse problema: ele
+      // grava o que o calendário devolve em hora local; quem precisa da hora é
+      // este dataset, que escreve UTC direto.
+      issuedAt: at(2026, 1, 12, 10, 30),
+      dueDate: at(2026, 6, 30, 12),
+
+      emitterNationality: 'brasileiro',
+      emitterMaritalStatus: 'casado',
+      emitterProfession: 'produtor rural',
+      emitterRg: '5.482.109-3 SSP/PR',
+      emitterAddress: 'Estrada da Boa Vista',
+      emitterAddressNumber: 'km 12',
+      emitterCity: 'Maringá/PR',
+      emitterCoopId: '4471',
+      // Coletados e não impressos: nenhuma cláusula do modelo os usa, e por
+      // isso `cprGaps()` não os cobra. Estão aqui para a tela mostrar o bloco
+      // da proposta preenchido como ele fica na vida real.
+      emitterCnh: '02938475610',
+      emitterFatherName: 'Sebastião Carvalho',
+      emitterMotherName: 'Therezinha Moraes Carvalho',
+      emitterEmail: 'antonio.carvalho@exemplo.com.br',
+
+      // O local da entrega é a unidade de retirada dele — o caso comum, e o
+      // que a tela sugere. Ele SAI no documento (cláusula V, "d").
+      deliveryPlace: 'Filial 02 (Gran. Santa T.)',
+      mortgages: 'Hipoteca de 1º grau sobre a matrícula 18.442, junto ao Banco do Brasil S.A.',
+
+      spouseName: 'Marta Regina Carvalho',
+      spouseNationality: 'brasileira',
+      spouseProfession: 'produtora rural',
+      spouseDocument: '321.654.987-00',
+      spouseRg: '6.115.884-0 SSP/PR',
+
+      // O padrão da soja: 60 kg por saca, 14% de umidade, 1% de impurezas e
+      // 18% de teor de óleo. São os números do modelo recebido.
+      sackWeightKg: 60,
+      cultivar: 'BMX Ativa RR',
+      maxMoisture: 14,
+      maxImpurities: 1,
+      oilContent: 18,
+
+      // A ORIGEM DA DÍVIDA não está mais aqui: o número da nota e o da
+      // duplicata são do FATURAMENTO, e moram em `BarterInvoice` — com o
+      // arquivo junto, e em lista, porque uma permuta sai em vários
+      // carregamentos. Ver a nota criada logo abaixo desta cédula.
+
+      // O SCR do produtor, anexado e datado. Ele é OBRIGATÓRIO para a cédula
+      // poder ser emitida (`cprGaps`), e é o que faltava para a demonstração
+      // mostrar a conferência do emissor acontecendo de verdade.
+      scrFileId: scrDoProdutor.id,
+      scrConsultedAt: at(2026, 1, 9, 14),
+
+      // Com apólice, para a alínea "j" da cláusula XVIII aparecer no documento:
+      // ela só existe quando há seguro, e uma cédula sem seguro não a imprime.
+      insurancePolicy: 'AP-2026-778.412',
+
+      // Quem preencheu é o CONSULTOR que registrou a permuta, e não mais o
+      // faturista: a qualificação do produtor, as matrículas das lavouras e o
+      // SCR são o que ele traz da visita. Ver `bartersCprFill` em policy.ts.
+      filledBy: joao.fullName,
+      filledById: joao.id,
+
+      // DUAS lavouras, e não uma: a cláusula VI as enumera ("(i)… e (ii)…"), e
+      // com uma só o documento nunca mostra a conjunção nem a segunda
+      // matrícula. A segunda é ARRENDADA — o dono do imóvel não é o emitente,
+      // que é o caso comum e a razão de o modelo nomear os dois separadamente.
+      areas: {
+        create: [
+          {
+            position: 0,
+            locality: 'Gleba Ribeirão Morangueiro',
+            city: 'Maringá/PR',
+            areaHa: 78.5,
+            withinLargerArea: false,
+            registryNumber: '18.442',
+            registryBook: '2-RG',
+            registryDistrict: 'Maringá/PR',
+            owners: {
+              create: [
+                { position: 0, name: 'Antônio Carvalho', document: '123.456.789-00' },
+                { position: 1, name: 'Marta Regina Carvalho', document: '321.654.987-00' },
+              ],
+            },
+          },
+          {
+            position: 1,
+            locality: 'Gleba Patrimônio Ivaí',
+            city: 'Doutor Camargo/PR',
+            // 38,05 ha de propósito: o zero à esquerda do bloco decimal é o
+            // caso em que o extenso e o algarismo já discordaram, e agora ele
+            // sai impresso em toda geração do documento — "trinta e oito
+            // vírgula zero cinco hectares". Ver `extensoDecimal`, no app.
+            //
+            // Eram 45,05, e o número desceu quando o penhor passou a ser medido:
+            // 78,5 + 45,05 penhorava 123,55 ha de um produtor com 120 ha de área
+            // cultivável no cadastro — o dataset dando em garantia mais terra do
+            // que ele declara plantar. Não era erro de digitação, era uma
+            // inconsistência que nada no sistema tinha como notar; hoje
+            // `pledgeWarningsFor` a nota, e a demonstração abriria com o aviso
+            // aceso. O total agora é 116,55 ha, folgado dentro dos 120 e muito
+            // acima dos 6,04 ha que as 251,4142 sacas desta permuta exigem.
+            areaHa: 38.05,
+            withinLargerArea: true,
+            registryNumber: '7.309',
+            registryBook: '2-RG',
+            registryDistrict: 'Floresta/PR',
+            owners: {
+              create: [
+                { position: 0, name: 'Espólio de Idalina Perotto', document: '456.789.123-00' },
+              ],
+            },
+          },
+        ],
+      },
+
+      // Um AVALISTA — coletado pela proposta e ainda não impresso (o modelo não
+      // tem cláusula de aval). Está aqui para o bloco mais longo do formulário
+      // abrir preenchido pelo menos uma vez.
+      guarantors: {
+        create: [
+          {
+            position: 0,
+            name: 'Nelson Carvalho',
+            document: '987.654.321-00',
+            rg: '4.220.876-5 SSP/PR',
+            cnh: '01827364590',
+            nationality: 'brasileiro',
+            profession: 'comerciante',
+            maritalStatus: 'casado',
+            fatherName: 'Sebastião Carvalho',
+            motherName: 'Therezinha Moraes Carvalho',
+            email: 'nelson.carvalho@exemplo.com.br',
+            address: 'Rua Néo Alves Martins',
+            addressNumber: '2887',
+            city: 'Maringá/PR',
+            spouseName: 'Cláudia Bianchi Carvalho',
+            spouseDocument: '654.321.987-00',
+            spouseRg: '7.881.230-4 SSP/PR',
+            spouseNationality: 'brasileira',
+            spouseProfession: 'advogada',
+          },
+        ],
+      },
+    },
+  });
 
   /**
    * A LINHA DO TEMPO de uma permuta do dataset, montada a partir dos marcos que
@@ -877,13 +1469,30 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       {
         action: 'register',
         fromStatus: null,
-        toStatus: 'sentToManager',
+        toStatus: 'draft',
         actorId: entry.consultant.id,
         actorName: entry.consultant.fullName,
         actorRole: ROLE.consultant,
         at: entry.createdAt,
       },
     ];
+
+    // O ENCAMINHAMENTO é o segundo passo, e leva o parecer do consultor junto —
+    // é ele que tira a permuta da mesa dela. Mesma data do registro no dataset:
+    // as permutas de demonstração foram montadas e mandadas no mesmo ato, que é
+    // o caso comum de quem já vem da conversa com o produtor.
+    if (entry.status !== 'draft') {
+      steps.push({
+        action: 'forward',
+        fromStatus: 'draft',
+        toStatus: 'sentToManager',
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        note: entry.consultantNote || null,
+        at: entry.createdAt,
+      });
+    }
 
     if (entry.managerReviewedAt) {
       steps.push({
@@ -902,14 +1511,48 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       steps.push({
         action: 'review',
         fromStatus: 'pending',
-        // A decisão foi APROVAR ou NEGAR. `invoiced` veio depois, do faturista —
-        // ler o estado atual aqui faria o comitê parecer ter faturado.
-        toStatus: entry.status === 'denied' ? 'denied' : 'approved',
+        // A decisão foi APROVAR, aprovar COM RESSALVA ou NEGAR — e ela é lida do
+        // estado, menos em `invoiced`: esse veio depois, do faturista, e lê-lo
+        // aqui faria o comitê parecer ter faturado.
+        toStatus: entry.status === 'invoiced' ? 'approved' : entry.status,
         actorId: comite.id,
         actorName: comite.fullName,
         actorRole: ROLE.committee,
         note: entry.reviewNote ?? null,
         at: entry.reviewedAt,
+      });
+    }
+
+    // O DESVIO entra na linha do tempo como qualquer outro ato: ele aconteceu,
+    // tem autor e data. Vai por último porque é o mais recente — o pedido é
+    // feito depois de a permuta ter andado.
+    if (entry.changeRequest) {
+      steps.push({
+        action: CHANGE_REQUEST_ACTION.changeRequested,
+        fromStatus: entry.status,
+        toStatus: entry.status,
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        note: entry.changeRequest.note,
+        at: entry.changeRequest.at,
+      });
+    }
+
+    // O PEDIDO DE FORA DO BARTER, pelo mesmo critério: ele aconteceu com a
+    // permuta onde ela estava, e por isso `fromStatus` e `toStatus` são iguais.
+    if (entry.productRequest) {
+      steps.push({
+        action: PRODUCT_REQUEST_ACTION.productRequested,
+        fromStatus: entry.status,
+        toStatus: entry.status,
+        actorId: entry.consultant.id,
+        actorName: entry.consultant.fullName,
+        actorRole: ROLE.consultant,
+        note:
+          `${entry.productRequest.productName} — ${entry.productRequest.quantity} ` +
+          `${entry.productRequest.unit}: ${entry.productRequest.note}`,
+        at: entry.productRequest.at,
       });
     }
 

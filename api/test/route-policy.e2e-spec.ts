@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import {
   ANY_ROLE_KEY,
   IS_PUBLIC_KEY,
+  ANY_CAPABILITY_KEY,
   REQUIRED_CAPABILITIES_KEY,
   ROLES_KEY,
 } from '../src/common/decorators';
@@ -55,6 +56,12 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
     if (read<boolean>(IS_PUBLIC_KEY)) return 'public';
     const capabilities = read<string[]>(REQUIRED_CAPABILITIES_KEY);
     if (capabilities?.length) return `capability:${[...capabilities].sort().join('+')}`;
+    // QUALQUER UMA das listadas (`@RequireAnyCapability`). O separador é outro —
+    // `|` em vez de `+` — de propósito: "e" e "ou" não podem sair iguais num
+    // inventário cuja razão de existir é dizer exatamente quem entra em cada
+    // porta.
+    const anyOf = read<string[]>(ANY_CAPABILITY_KEY);
+    if (anyOf?.length) return `capability-any:${[...anyOf].sort().join('|')}`;
     const roles = read<string[]>(ROLES_KEY);
     if (roles?.length) return `role:${[...roles].sort().join('+')}`;
     if (read<boolean>(ANY_ROLE_KEY)) return 'any-authenticated';
@@ -118,6 +125,19 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // Trilha de auditoria.
         { route: 'GET /audit-logs', policy: 'capability:audit.read' },
 
+        // A CREDORA — cadastro ÚNICO, no singular, sem `:id` e sem DELETE (o
+        // mesmo desenho do comitê). É a única capacidade que o admin divide com
+        // um posto da linha: `creditor.manage` é dele E do EMISSOR, porque a
+        // credora é o timbre do título que o emissor leva a registro. Ela não
+        // decide permuta nem concede acesso — e é isso que este inventário
+        // trava, para a divisão não virar precedente sem alguém escrever a linha.
+        { route: 'GET /creditor', policy: 'capability:creditor.manage' },
+        { route: 'PUT /creditor', policy: 'capability:creditor.manage' },
+        // A MARGEM DO PENHOR é a exceção desta rota: ela É decisão de negócio, e
+        // por isso NÃO entra por `creditor.manage`, que o emissor também tem.
+        // Uma porta por autoridade — ver `pledgePolicyManage`.
+        { route: 'PUT /creditor/pledge-margin', policy: 'capability:pledge.policy' },
+
         // Permutas — leitura escopada pelo service; escrita por capacidade.
         { route: 'GET /barters', policy: 'any-authenticated' },
         { route: 'GET /barters/:code', policy: 'any-authenticated' },
@@ -125,9 +145,143 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // A etapa do gerente. A capacidade abre a porta ao PAPEL; que a permuta
         // seja de uma unidade dele é conferido no service, e por isso não
         // aparece aqui.
+        // O PARECER DO CONSULTOR e o encaminhamento vivem sob a capacidade do
+        // REGISTRO, sem uma própria: encaminhar é a segunda metade do ato de
+        // registrar, partido em dois para caber o parecer de quem conhece o
+        // cliente. Quem registra manda adiante o que registrou — e só o próprio
+        // rascunho, o que é escopo, e disso cuida o service.
+        { route: 'POST /barters/:code/forward', policy: 'capability:barters.register' },
         { route: 'POST /barters/:code/opinion', policy: 'capability:barters.opinion' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
         { route: 'POST /barters/:code/invoice', policy: 'capability:barters.invoice' },
+        // AS NOTAS FISCAIS do faturamento. Anexar e remover são do mesmo posto
+        // que fatura — a nota é o que ele produz. BAIXAR o arquivo é de quem
+        // alcança a permuta (o escopo do service, como o detalhe): é assim que o
+        // emissor confere a nota que a cédula cita, sem pedir o PDF a ninguém.
+        { route: 'DELETE /barters/:code/invoices/:id', policy: 'capability:barters.invoice' },
+        { route: 'GET /barters/:code/invoices/:id/file', policy: 'any-authenticated' },
+        { route: 'POST /barters/:code/invoices', policy: 'capability:barters.invoice' },
+        // A CÉDULA (CPR) é o documento que o posto do faturamento produz, e por
+        // isso vive sob a MESMA capacidade do faturamento, sem uma própria: quem
+        // fatura preenche a cédula do que faturou. Ela fica editável depois de a
+        // permuta ser faturada — o que o estado fecha é o ato, não o papel.
+        // A CÉDULA tem TRÊS MÃOS, e este bloco é onde a divisão fica travada:
+        //
+        // - LER é de quem preenche, de quem emite e de quem administra
+        //   (`barters.cprRead`: consultor, emissor e admin);
+        // - ESCREVER é só do CONSULTOR (`barters.cprFill`) — é ele quem tem a
+        //   matrícula da lavoura, o nome do cônjuge e o SCR. O faturista perdeu
+        //   isso, e devolvê-lo a ele quebra aqui;
+        // - EMITIR, ASSINAR e REGISTRAR são só do EMISSOR
+        //   (`barters.cprIssue`), porque quem confere o próprio texto não está
+        //   conferindo nada.
+        { route: 'GET /barters/:code/cpr', policy: 'capability:barters.cprRead' },
+        { route: 'PUT /barters/:code/cpr', policy: 'capability:barters.cprFill' },
+        // O SCR tem DUAS CHAVES em cada ponta, e elas não são as mesmas.
+        // Para LER, o COMITÊ entra sem ter a cédula: o SCR é o retrato do
+        // endividamento do produtor no Banco Central, e é uma das peças que a
+        // reunião lê para decidir. Ele chega por `barters.creditRead` — a mesma
+        // porta do dossiê — e não por `barters.cprRead`, que traria junto o
+        // formulário do título, assunto de quem emite e não de quem decide o
+        // negócio.
+        {
+          route: 'GET /barters/:code/cpr/scr',
+          policy: 'capability-any:barters.cprRead|barters.creditRead',
+        },
+        // Para ANEXAR, o CONSULTOR porque é ele quem consulta o SCR, e o EMISSOR
+        // porque é ele quem fica travado por ele na hora de emitir — "peça ao
+        // consultor e espere" seria a resposta errada com o produtor na sala.
+        // Anexar não é escrever a cédula: o que o emissor não pode é mexer no
+        // que ele confere.
+        {
+          route: 'PUT /barters/:code/cpr/scr',
+          policy: 'capability-any:barters.cprFill|barters.cprIssue',
+        },
+        { route: 'POST /barters/:code/cpr/issue', policy: 'capability:barters.cprIssue' },
+        { route: 'POST /barters/:code/cpr/registration', policy: 'capability:barters.cprIssue' },
+        { route: 'POST /barters/:code/cpr/signatures', policy: 'capability:barters.cprIssue' },
+        // A VIA CARIMBADA que chega depois do ato — escrita de quem emite.
+        { route: 'PUT /barters/:code/cpr/registry-file', policy: 'capability:barters.cprIssue' },
+        // OS DOIS DOCUMENTOS QUE VOLTARAM, para LER: mesma porta do SCR. É ela
+        // que deixa o admin tirar a segunda via da cédula assinada sem pedir o
+        // PDF ao emissor.
+        { route: 'GET /barters/:code/cpr/signed', policy: 'capability:barters.cprRead' },
+        { route: 'GET /barters/:code/cpr/registry-file', policy: 'capability:barters.cprRead' },
+        // O DESVIO da esteira — o único caminho de volta que a permuta tem.
+        // Duas capacidades DIFERENTES, e é o desenho: pedir é do consultor que
+        // registrou; decidir é do ADMIN, que administra o processo. Repare que
+        // a decisão não usa `barters.review` — o admin continua sem decidir
+        // permuta, e liberar uma alteração não é aprovar nada.
+        {
+          route: 'POST /barters/:code/change-request',
+          policy: 'capability:barters.changeRequest',
+        },
+        {
+          route: 'POST /barters/:code/change-request/decision',
+          policy: 'capability:barters.changeReview',
+        },
+        // A TERCEIRA saída do mesmo pedido: em vez de devolver a permuta ao
+        // rascunho para corrigir uma linha de R$, o admin corrige a linha. Ela
+        // divide a capacidade da decisão de propósito — é a mesma mesa e o
+        // mesmo ato, com um desfecho a mais —, e o service ainda exige o pedido
+        // em aberto: alterar valor é ATENDER, nunca uma iniciativa do admin.
+        {
+          route: 'POST /barters/:code/change-request/prices',
+          policy: 'capability:barters.changeReview',
+        },
+        // O PEDIDO DE FORA DO BARTER: o consultor pede o que a tabela não tem e
+        // o admin o inclui com o valor acertado. Duas capacidades novas, e
+        // separadas pelo mesmo desenho do desvio — pedir é de quem montou a
+        // permuta, precificar é de quem publica a tabela. Repare que a segunda
+        // NÃO é `barter.manage`: acertar um valor dentro de uma permuta não é
+        // publicar preço para a praça inteira.
+        {
+          route: 'POST /barters/:code/product-requests',
+          policy: 'capability:barters.productRequest',
+        },
+        {
+          route: 'POST /barters/:code/product-requests/:id/decision',
+          policy: 'capability:barters.productReview',
+        },
+        // O DOSSIÊ DO COMITÊ — as peças que fundamentam a decisão de crédito: a
+        // consulta ao Serasa, o extrato do que o produtor já deve à cooperativa.
+        // Duas capacidades, e a divisão é o desenho: JUNTA o comitê
+        // (`barters.creditAttach`), e só ele — nem o admin, que lê; quem põe
+        // prova dentro de uma decisão é quem decide, e a leitura do admin existe
+        // para auditar isso.
+        //
+        // A LEITURA do arquivo é a ÚNICA de anexo do sistema que não é
+        // `any-authenticated`, e é essa a linha que este inventário trava: nota
+        // fiscal, cédula assinada e comprovante de registro vão para quem alcança
+        // a permuta, porque são documentos da operação; estes são a vida
+        // financeira de um cliente, colhida para decidir crédito — o consultor
+        // que o atende leva ao produtor a DECISÃO, e não o dossiê.
+        {
+          route: 'POST /barters/:code/credit-files',
+          policy: 'capability:barters.creditAttach',
+        },
+        {
+          route: 'DELETE /barters/:code/credit-files/:id',
+          policy: 'capability:barters.creditAttach',
+        },
+        {
+          route: 'GET /barters/:code/credit-files/:id/file',
+          policy: 'capability:barters.creditRead',
+        },
+        // A TABELA da permuta: quem alcança a permuta alcança os valores com que
+        // ela foi fechada — é deles que a remontagem precisa quando a gestão
+        // vigente já é outra. Escopo no service, como o detalhe.
+        { route: 'GET /barters/:code/version', policy: 'any-authenticated' },
+        // As duas escritas do RASCUNHO, sob a capacidade do registro: o parecer
+        // do consultor e os insumos. As duas são o mesmo tipo de ato — a
+        // bancada de quem montou a permuta, reescrita quantas vezes for preciso
+        // enquanto ela não sair da mão dele. Daí o PUT nas duas.
+        // A CULTURA do rascunho entra na mesma lista e sob a mesma capacidade:
+        // trocar o grão em que a permuta será paga é bancada do consultor, como
+        // trocar um insumo — e é dele a escolha, junto com o produtor.
+        { route: 'PUT /barters/:code/culture', policy: 'capability:barters.register' },
+        { route: 'PUT /barters/:code/inputs', policy: 'capability:barters.register' },
+        { route: 'PUT /barters/:code/note', policy: 'capability:barters.register' },
 
         // Lançamento do Barter — safra e versões são do admin. A exceção é a
         // versão VIGENTE: o consultor precisa dela para saber se há Barter
@@ -135,6 +289,33 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /barter-versions/current', policy: 'any-authenticated' },
         { route: 'GET /barter-versions/:code', policy: 'capability:barter.manage' },
         { route: 'POST /barter-versions/:code/close', policy: 'capability:barter.manage' },
+        // O MODO de encerramento por meta é da mesma alçada do encerramento
+        // manual: quem pode fechar o Barter é quem pode dizer que ele fecha
+        // sozinho.
+        {
+          route: 'PUT /barter-versions/:code/close-on-goal',
+          policy: 'capability:barter.manage',
+        },
+        // O ACERTO DE UMA CULTURA (cotação da saca, produtividade estimada,
+        // vencimento da CPR e meta de sacas) é da mesma alçada da publicação:
+        // são as taxas do lançamento, e quem publica a tabela é quem as acerta.
+        // A produtividade decide quanta área de penhor cada permuta nova vai
+        // exigir, então não é campo de cadastro — é decisão de risco, e mora com
+        // quem gere o Barter.
+        {
+          route: 'PUT /barter-versions/:code/grains/:grainId',
+          policy: 'capability:barter.manage',
+        },
+        // O SEGURO do lançamento é da mesma alçada, e pelo mesmo raciocínio:
+        // ligá-lo acrescenta área × taxa do município ao custo de toda permuta
+        // nova — é decisão comercial da safra, e mora com quem publica a tabela.
+        // Quem MANTÉM a base de cotações é o admin por outra porta
+        // (`insurance.manage`), e as duas são separadas de propósito: uma decide
+        // se a safra tem seguro, a outra transcreve o que a seguradora cobra.
+        {
+          route: 'PUT /barter-versions/:code/insurance',
+          policy: 'capability:barter.manage',
+        },
         {
           route: 'PUT /barter-versions/:code/prices/:productId',
           policy: 'capability:barter.manage',
@@ -142,6 +323,10 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'GET /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/close', policy: 'capability:barter.manage' },
+        // A SAFRA não tem mais o que editar depois de aberta: o grão saiu dela
+        // (as culturas são do lançamento) e com ele foi embora o vencimento da
+        // CPR, que era a única coisa que se acertava depois. Quem acerta a data
+        // agora é `PUT /barter-versions/:code/grains/:grainId`, acima.
         { route: 'POST /seasons/:code/versions', policy: 'capability:barter.manage' },
         { route: 'POST /seasons/:code/versions/import', policy: 'capability:barter.manage' },
 
@@ -158,12 +343,30 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'PUT /products/:id', policy: 'capability:catalog.manage' },
         // Sem rota de preço no catálogo: valor é da versão do Barter.
 
+        // SEGURO — a base de cotações por município. A LEITURA é de qualquer
+        // autenticado: o consultor precisa dela para a prévia do custo, e QUANTO
+        // cada papel enxerga em R$ é decidido pela lente da resposta
+        // (`lensFor`), não pela porta — por isso `any-authenticated` aqui não é
+        // permissivo. A ESCRITA é do admin (`insurance.manage`), linha a linha
+        // ou por planilha: a carga é o mesmo ato de cadastro do POST, só que em
+        // lote, e por isso divide a capacidade em vez de ter uma própria.
+        { route: 'GET /insurance-rates', policy: 'any-authenticated' },
+        { route: 'POST /insurance-rates', policy: 'capability:insurance.manage' },
+        { route: 'POST /insurance-rates/import', policy: 'capability:insurance.manage' },
+        { route: 'PUT /insurance-rates/:id', policy: 'capability:insurance.manage' },
+        { route: 'DELETE /insurance-rates/:id', policy: 'capability:insurance.manage' },
+
         // Produtores — leitura escopada pelo service; cadastro do admin.
         { route: 'DELETE /producers/:id', policy: 'capability:producers.manage' },
         { route: 'GET /producers', policy: 'any-authenticated' },
         { route: 'GET /producers/:id', policy: 'any-authenticated' },
         { route: 'POST /producers', policy: 'capability:producers.manage' },
-        { route: 'PUT /producers/:id', policy: 'capability:producers.manage' },
+        // A EDIÇÃO do produtor é mais larga que o cadastro dele: ela é do admin
+        // E do CONSULTOR da carteira (`producers.edit`), porque quem visita a
+        // fazenda é quem sabe que o telefone mudou. Cadastrar e excluir
+        // continuam em `producers.manage`, e o que o consultor não alcança
+        // dentro da edição é regra sobre o recurso, no service.
+        { route: 'PUT /producers/:id', policy: 'capability:producers.edit' },
 
         // Unidades — a LEITURA é de qualquer autenticado (o consultor precisa
         // dela para escolher onde o produtor retira, o gerente para reconhecer
@@ -186,6 +389,11 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /committee', policy: 'capability:users.manage' },
         { route: 'POST /committee/reset-password', policy: 'capability:users.manage' },
         { route: 'PUT /committee', policy: 'capability:users.manage' },
+        { route: 'DELETE /emitters/:id', policy: 'capability:users.manage' },
+        { route: 'GET /emitters', policy: 'capability:users.manage' },
+        { route: 'POST /emitters', policy: 'capability:users.manage' },
+        { route: 'POST /emitters/:id/reset-password', policy: 'capability:users.manage' },
+        { route: 'PUT /emitters/:id', policy: 'capability:users.manage' },
         { route: 'DELETE /consultants/:id', policy: 'capability:users.manage' },
         { route: 'GET /consultants', policy: 'capability:users.manage' },
         { route: 'POST /consultants', policy: 'capability:users.manage' },

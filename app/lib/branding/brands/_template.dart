@@ -23,7 +23,7 @@ const Brand templateBrand = Brand(
     wordmarkSuffix: 'Cliente', // TROQUE
     monogram: 'nC', // TROQUE — 1 a 3 caracteres
     tagline: 'Assinatura sob o logotipo', // TROQUE
-    appTitle: 'novoCliente — Permuta de Grãos', // TROQUE
+    appTitle: 'novoCliente | Permuta de Grãos', // TROQUE
     legalName: 'novoCliente', // TROQUE
     // Precisa bater com os e-mails semeados em `api/prisma/seed-data.ts`.
     emailDomain: 'cliente.com.br', // TROQUE
@@ -64,6 +64,14 @@ const Brand templateBrand = Brand(
     // com pessoas diferentes, e é na lista misturada que isso importa.
     atManager: Color(0xFF4338CA),
     atManagerBg: Color(0xFFEEF0FF),
+    // Ardósia para o RASCUNHO: sem cor de estado, porque ele não é fila de
+    // ninguém — ver `draft` em BrandPalette.
+    draft: Color(0xFF475569),
+    draftBg: Color(0xFFF1F5F9),
+    // Verde-oliva para a APROVADA COM RESSALVA: da família do aprovado, e
+    // distinguível dele à primeira vista na mesma lista.
+    approvedWithConditions: Color(0xFF4D7C0F),
+    approvedWithConditionsBg: Color(0xFFF4FBE6),
     approved: Color(0xFF15803D),
     pending: Color(0xFFB45309),
     denied: Color(0xFFB91C1C),
@@ -74,6 +82,11 @@ const Brand templateBrand = Brand(
     // `approved`: aprovada é a FILA do faturista, faturada é o trabalho feito.
     invoiced: Color(0xFF0F766E),
     invoicedBg: Color(0xFFE0F2F1),
+    // Azul de AVISO, fora da paleta do fluxo: ele diz um fato (o regime de
+    // imposto que o cadastro do produtor tem, por exemplo) sobre o qual quem lê
+    // não precisa agir. Ver `info` em BrandPalette.
+    info: Color(0xFF1D4ED8),
+    infoBg: Color(0xFFEFF4FF),
 
     // --- Traços e estados neutros ----------------------------------------
     divider: Color(0xFFD8DDD8),

@@ -102,7 +102,7 @@ describe('Leitura da planilha do Barter', () => {
     expect(errors).toEqual([
       'Linha 2 (Sem preço): preço ausente ou ilegível.',
       'Linha 3 (Preço zerado): o preço precisa ser maior que zero.',
-      'Linha 6 (Ureia de novo): repetido — já aparece na linha 5.',
+      'Linha 6 (Ureia de novo): repetido, já aparece na linha 5.',
     ]);
   });
 
@@ -123,7 +123,7 @@ describe('Leitura da planilha do Barter', () => {
       ['', 'Ureia 45%', 'saco', '', '185', ''],
       ['', 'Uréia 45%', 'saco', '', '190', ''],
     ]);
-    expect(errors).toEqual(['Linha 3 (Uréia 45%): repetido — já aparece na linha 2.']);
+    expect(errors).toEqual(['Linha 3 (Uréia 45%): repetido, já aparece na linha 2.']);
   });
 
   it('recusa nomes que só diferem por ESPAÇO repetido', () => {
@@ -132,7 +132,7 @@ describe('Leitura da planilha do Barter', () => {
       ['', 'Ureia 45%', 'saco', '', '185', ''],
       ['', 'Ureia  45%', 'saco', '', '190', ''],
     ]);
-    expect(errors).toEqual(['Linha 3 (Ureia  45%): repetido — já aparece na linha 2.']);
+    expect(errors).toEqual(['Linha 3 (Ureia  45%): repetido, já aparece na linha 2.']);
   });
 
   /**
@@ -146,7 +146,7 @@ describe('Leitura da planilha do Barter', () => {
       ['URE-1', 'Ureia 45%', 'saco', '', '185', ''],
       ['URE-2', 'Ureia 45%', 'saco', '', '190', ''],
     ]);
-    expect(errors).toEqual(['Linha 3 (Ureia 45%): repetido — já aparece na linha 2.']);
+    expect(errors).toEqual(['Linha 3 (Ureia 45%): repetido, já aparece na linha 2.']);
   });
 
   it('nomes de verdade diferentes continuam passando', () => {
@@ -259,7 +259,7 @@ describe('Leitura da planilha do Barter', () => {
     it('um produto além do máximo é recusado, dizendo quantos vieram', () => {
       const { errors } = parseSheet(tableWith(MAX_VERSION_PRICES + 1));
       expect(errors.join(' ')).toContain(
-        `A tabela tem ${MAX_VERSION_PRICES + 1} produtos — o limite é ${MAX_VERSION_PRICES}`,
+        `A tabela tem ${MAX_VERSION_PRICES + 1} produtos, e o limite é ${MAX_VERSION_PRICES}`,
       );
     });
 
@@ -273,7 +273,7 @@ describe('Leitura da planilha do Barter', () => {
       const buffer = Buffer.from((await workbook.xlsx.writeBuffer()) as unknown as Buffer);
 
       await expect(readWorkbook(buffer)).rejects.toThrow(
-        new RegExp(`linhas — o limite é ${MAX_VERSION_PRICES + 100}`),
+        new RegExp(`linhas, e o limite é ${MAX_VERSION_PRICES + 100}`),
       );
     });
 

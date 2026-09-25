@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../services/tax_regime.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/provisional_password_dialog.dart';
 
@@ -21,6 +22,20 @@ String initialsFrom(String name) {
 /// Cadastro/edição de um PRODUTOR (cliente). Quando [producer] é null, cria um
 /// novo registro; caso contrário, edita o existente. Salva em [AppData.producers] e
 /// devolve o produtor resultante via Navigator.pop.
+///
+/// A TELA TEM DOIS DONOS, e o que cada um alcança é diferente.
+///
+/// O ADMIN cadastra, exclui e edita tudo — inclusive a carteira, a área
+/// cultivável, o documento e o regime de Funrural.
+///
+/// O CONSULTOR edita os dados de contato e endereço dos clientes da carteira
+/// dele: é ele quem visita a fazenda e sabe que o telefone mudou. Os outros
+/// quatro campos ficam VISÍVEIS e travados, com o porquê ao lado — escondê-los
+/// faria a tela parecer incompleta, e o consultor procuraria a área cultivável
+/// que ele acabou de conferir na fazenda sem entender por que ela sumiu.
+///
+/// Quem recusa de verdade é o servidor (ver `assertEditable`, na API): esta tela
+/// é a tradução da regra, não a regra.
 class EditProducerScreen extends StatefulWidget {
   final ProducerModel? producer;
   const EditProducerScreen({super.key, this.producer});
@@ -43,7 +58,21 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   /// dividem região e atendem o mesmo cliente.
   final Set<String> _consultantIds = {};
 
+  /// COMO ELE RECOLHE o Funrural — a opção formal dele perante o fisco.
+  ///
+  /// Começa na comercialização porque é o regime de quem não fez opção nenhuma,
+  /// que é a maioria: o cadastro não inventa uma escolha, mostra o padrão legal
+  /// para ser confirmado ou trocado.
+  TaxRegime _taxRegime = TaxRegime.comercializacao;
+
   bool get _isNew => widget.producer == null;
+
+  /// Quem está com a tela na mão pode mexer no CADASTRO — criar, excluir,
+  /// definir a carteira e corrigir as réguas (documento, área, regime)?
+  ///
+  /// Falso para o consultor, que edita só o que ele apura na visita. A regra
+  /// mora no servidor; aqui ela desenha a tela.
+  bool get _manages => AppData.can(Capability.producersManage);
 
   @override
   void initState() {
@@ -55,9 +84,15 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       _consultantIds.addAll(
         p.consultantIds.where((id) => AppData.consultantById(id) != null),
       );
+      _taxRegime = p.taxRegime;
     }
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
+    // O DOCUMENTO redesenha a tela porque ele é quem decide as alíquotas
+    // mostradas ao lado do regime: 11 dígitos é CPF, 14 é CNPJ, e os
+    // percentuais são outros. Sem isto, quem digita o CNPJ depois de escolher o
+    // regime continuaria vendo os números de pessoa física até salvar.
+    _document.addListener(() => setState(() {}));
     _phone = TextEditingController(text: p?.phone ?? '');
     _farm = TextEditingController(text: p?.farmName ?? '');
     _city = TextEditingController(text: p?.city ?? '');
@@ -81,6 +116,15 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     super.dispose();
   }
 
+  /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
+  String get _walletLabel {
+    final names = _consultantIds
+        .map((id) => AppData.consultantById(id)?.name)
+        .whereType<String>()
+        .toList();
+    return names.isEmpty ? 'sem consultor' : names.join(', ');
+  }
+
   /// Envia o cadastro à API e devolve o registro salvo (com id do servidor).
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
@@ -95,6 +139,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       farmName: _farm.text.trim(),
       city: _city.text.trim(),
       areaHa: double.parse(_area.text.trim().replaceAll(',', '.')),
+      taxRegime: _taxRegime,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
     );
@@ -115,12 +160,32 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            _ConsultantWalletField(
-              selected: _consultantIds,
-              onChanged: () => setState(() {}),
-            ),
+            // A CARTEIRA é do admin: ela é a lista inteira num campo só, e um
+            // consultor que a escrevesse poderia se remover do próprio cliente
+            // (ou remover um colega) sem que ninguém tivesse decidido isso.
+            if (_manages)
+              _ConsultantWalletField(
+                selected: _consultantIds,
+                onChanged: () => setState(() {}),
+              )
+            else
+              _LockedNote(
+                icon: Icons.groups_outlined,
+                label: 'Quem atende',
+                value: _walletLabel,
+              ),
             _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
-            _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true),
+            // O DOCUMENTO é a IDENTIDADE do cadastro (a unicidade mora nele):
+            // trocá-lo transforma o cliente A no cliente B mantendo as permutas
+            // do A.
+            if (_manages)
+              _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true)
+            else
+              _LockedNote(
+                icon: Icons.badge_outlined,
+                label: 'Documento (CPF/CNPJ)',
+                value: _document.text,
+              ),
             _EditField(
               controller: _phone,
               label: 'Telefone',
@@ -129,27 +194,206 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             ),
             _EditField(controller: _farm, label: 'Propriedade', icon: Icons.agriculture_outlined, required: true),
             _EditField(controller: _city, label: 'Município/UF', icon: Icons.location_on_outlined, required: true),
-            _EditField(
-              controller: _area,
-              label: 'Área cultivável (ha)',
-              icon: Icons.straighten,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              required: true,
-              validator: (v) {
-                final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
-                if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
-                return null;
-              },
-            ),
+            // A ÁREA CULTIVÁVEL é o denominador de toda régua da permuta — os
+            // mínimos por hectare, o custo do seguro, o investimento por
+            // hectare. Um arrendamento a mais muda quanto insumo o Barter exige
+            // daquele cliente: é decisão de crédito, não atualização de contato.
+            if (_manages)
+              _EditField(
+                controller: _area,
+                label: 'Área cultivável (ha)',
+                icon: Icons.straighten,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                required: true,
+                validator: (v) {
+                  final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                  if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
+                  return null;
+                },
+              )
+            else
+              _LockedNote(
+                icon: Icons.straighten,
+                label: 'Área cultivável',
+                value: '${_area.text} ha',
+              ),
+            // O IMPOSTO do produtor, no cadastro dele: é aqui que a opção pela
+            // folha mora, porque é uma opção só — feita perante o fisco, valendo
+            // para o ano e para todas as entregas. Cada permuta nova nasce com
+            // ela e congela a alíquota que ela produziu.
+            if (_manages)
+              _TaxRegimeField(
+                selected: _taxRegime,
+                document: _document.text,
+                onChanged: (regime) => setState(() => _taxRegime = regime),
+              )
+            else
+              _LockedNote(
+                icon: Icons.receipt_long_outlined,
+                label: 'Funrural',
+                value: _taxRegime.label,
+              ),
             const SizedBox(height: 8),
             Text(
-              'A área define os insumos obrigatórios e a quantidade mínima de cada '
-              'um nas novas permutas deste produtor. O produtor só aparece para os '
-              'consultores marcados acima.',
+              _manages
+                  ? 'A área define os insumos obrigatórios e a quantidade mínima de cada '
+                      'um nas novas permutas deste produtor. O produtor só aparece para os '
+                      'consultores marcados acima.'
+                  : 'O documento, a área cultivável, o Funrural e a carteira são '
+                      'alterados pelo administrador: os três primeiros são as réguas que '
+                      'medem todas as permutas deste cliente, e a carteira é quem o atende. '
+                      'Peça a ele e edite o restante normalmente.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// UM CAMPO QUE ESTA PESSOA NÃO ESCREVE — o valor, visível, com o cadeado.
+///
+/// Ele existe para o consultor não procurar o que sumiu: a área cultivável que
+/// ele acabou de conferir na fazenda continua na tela, dizendo quanto é, e o
+/// cadeado explica por que ela não se digita ali. Esconder o campo faria a tela
+/// parecer incompleta; deixá-lo editável faria o servidor recusar o que a tela
+/// ofereceu.
+class _LockedNote extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _LockedNote({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: AppColors.textLight),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+                Text(
+                  value.trim().isEmpty ? '—' : value,
+                  style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textMedium),
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.lock_outline, size: 16, color: AppColors.textLight),
+        ],
+      ),
+    );
+  }
+}
+
+/// O REGIME DE RECOLHIMENTO do Funrural, no cadastro do produtor.
+///
+/// Toda entrega de grão é comercialização de produção rural, e sobre ela incidem
+/// o Funrural e o Senar. O que se escolhe aqui é a BASE da parte previdenciária:
+/// a receita da venda (o padrão, de quem não fez opção formal) ou a folha de
+/// pagamento do produtor.
+///
+/// Escolher a FOLHA não isenta as entregas: o Senar continua saindo da
+/// comercialização, e é por isso que a alíquota cai em vez de zerar. Os dois
+/// percentuais aparecem ao lado dos nomes justamente para essa diferença ficar
+/// visível na hora da escolha — e eles saem do DOCUMENTO digitado acima, porque
+/// CPF e CNPJ pagam diferente.
+///
+/// Ela vive no cadastro, e não na permuta, porque é uma opção só: feita perante
+/// o fisco, ela vale para o ano e para todas as entregas do produtor. Cada
+/// permuta nova a herda daqui e congela a alíquota que ela produziu — o que já
+/// foi fechado não muda quando esta escolha mudar.
+class _TaxRegimeField extends StatelessWidget {
+  final TaxRegime selected;
+
+  /// O documento como está sendo digitado: é a contagem de dígitos dele que
+  /// decide se os percentuais mostrados são os de CPF ou os de CNPJ.
+  final String document;
+
+  final ValueChanged<TaxRegime> onChanged;
+
+  const _TaxRegimeField({
+    required this.selected,
+    required this.document,
+    required this.onChanged,
+  });
+
+  String _rateLabel(TaxRegime regime) =>
+      '${taxRateOf(regime, document).toStringAsFixed(2).replaceAll('.', ',')}%';
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: AppShape.field,
+          border: Border.all(color: AppColors.borderSubtle),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+              child: Row(
+                children: [
+                  Icon(Icons.receipt_long_outlined, size: 20, color: AppColors.textLight),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Recolhimento do Funrural',
+                      style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            RadioGroup<TaxRegime>(
+              groupValue: selected,
+              onChanged: (value) {
+                if (value != null) onChanged(value);
+              },
+              child: Column(
+                children: [
+                  for (final regime in TaxRegime.values)
+                    RadioListTile<TaxRegime>(
+                      value: regime,
+                      dense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(regime.shortLabel, style: const TextStyle(fontSize: 14)),
+                          ),
+                          Text(
+                            _rateLabel(regime),
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textMedium,
+                            ),
+                          ),
+                        ],
+                      ),
+                      subtitle: Text(
+                        regime.description,
+                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -339,6 +583,11 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 
   bool get _isBiller => widget.role == UserRole.biller;
 
+  /// O EMISSOR — o posto da cédula. Ele compartilha o formulário do faturista
+  /// (pessoa, unidade, sem gerente), e por isso a única coisa que o distingue na
+  /// tela é o rótulo e o rodapé que explica o que ele faz.
+  bool get _isEmitter => widget.role == UserRole.emitter;
+
   String get _roleLabel => widget.role.label;
 
   @override
@@ -408,6 +657,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.consultant => AppData.createConsultant(draft),
         UserRole.manager => AppData.createManager(draft),
         UserRole.biller => AppData.createBiller(draft),
+        UserRole.emitter => AppData.createEmitter(draft),
         UserRole.committee => AppData.createCommittee(draft),
         UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
       };
@@ -416,6 +666,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.consultant => AppData.updateConsultant(draft),
         UserRole.manager => AppData.updateManager(draft),
         UserRole.biller => AppData.updateBiller(draft),
+        UserRole.emitter => AppData.updateEmitter(draft),
         UserRole.committee => AppData.updateCommittee(draft),
         UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
       };
@@ -464,21 +715,24 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
           ? await AppData.resetCommitteePassword()
           : _isBiller
               ? await AppData.resetBillerPassword(user.id)
-              : await AppData.resetManagerPassword(user.id);
+              : _isEmitter
+                  ? await AppData.resetEmitterPassword(user.id)
+                  : await AppData.resetManagerPassword(user.id);
       if (mounted) await showProvisionalPassword(context, provisioned, isReset: true);
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
 
-  /// Exclusão de GERENTE e FATURISTA — as duas pessoas que este formulário
+  /// Exclusão de GERENTE, FATURISTA e EMISSOR — as pessoas que este formulário
   /// cadastra e que podem sair.
   ///
   /// No gerente o servidor RECUSA enquanto ele tiver consultores no time ou
   /// permutas esperando o parecer dele, e a mensagem diz qual dos dois falta — a
   /// tela só a exibe, em vez de repetir a regra aqui e arriscar divergir dela.
-  /// O faturista sai sem trava: o que ele faturou guarda o nome dele no próprio
-  /// registro, e a fila dele é o estado da permuta, não uma caixa de entrada.
+  /// O faturista e o emissor saem sem trava: o que eles assinaram guarda o nome
+  /// deles no próprio registro, e a fila dos dois é o estado da permuta, não uma
+  /// caixa de entrada.
   ///
   /// O COMITÊ não tem este botão, e nem rota: o cadastro é a ETAPA, e sem ele
   /// nenhuma permuta é decidida. Para tirar o acesso, redefine-se a senha.
@@ -491,9 +745,15 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
       name: user.name,
       barterCount: _isBiller
           ? AppData.barters.where((b) => b.invoicedBy == user.name).length
-          : AppData.barters.where((b) => b.managerId == user.id).length,
+          : _isEmitter
+              ? AppData.barters.where((b) => b.cprEmittedBy == user.name).length
+              : AppData.barters.where((b) => b.managerId == user.id).length,
       onConfirm: () async {
-        await (_isBiller ? AppData.deleteBiller(user.id) : AppData.deleteManager(user.id));
+        await switch (widget.role) {
+          UserRole.biller => AppData.deleteBiller(user.id),
+          UserRole.emitter => AppData.deleteEmitter(user.id),
+          _ => AppData.deleteManager(user.id),
+        };
         if (mounted) Navigator.pop(context);
       },
     );
@@ -505,21 +765,27 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.consultant =>
           'As permutas registradas por este consultor são enviadas ao gerente escolhido '
               'acima, que dá o parecer técnico antes de elas seguirem para o comitê. A '
-              'unidade é onde ele trabalha — ela não decide o parecer, e a retirada de cada '
+              'unidade é onde ele trabalha: ela não decide o parecer, e a retirada de cada '
               'permuta é combinada caso a caso.',
         UserRole.manager =>
           'O gerente recebe as permutas dos consultores do time dele e escreve o parecer '
               'técnico de cada uma. Ele passa a aparecer na lista de gerentes do cadastro de '
-              'consultor — é lá que o time é montado.',
+              'consultor: é lá que o time é montado.',
         UserRole.committee =>
           'O comitê é uma REUNIÃO, e este é o cadastro dela: um acesso só, compartilhado '
               'por quem participa. É por ele que se aprova ou nega a permuta depois do '
-              'parecer do gerente, e a decisão sai assinada pelo comitê — a ata (quem '
+              'parecer do gerente, e a decisão sai assinada pelo comitê. A ata (quem '
               'estava, o que foi acordado) vai na observação da decisão.',
         UserRole.biller =>
-          'O faturista fatura o que o comitê aprovou — a última etapa da permuta. A fila '
-              'dele não é pessoal: é o estado da permuta, e todos os faturistas veem a '
-              'mesma. Quem emitiu cada uma fica registrado na linha do tempo dela.',
+          'O faturista fatura o que o comitê aprovou e anexa as notas fiscais da permuta '
+              '— são várias, porque a retirada sai em mais de um carregamento. A fila dele '
+              'não é pessoal: é o estado da permuta, e todos os faturistas veem a mesma. '
+              'Quem faturou cada uma fica registrado na linha do tempo dela.',
+        UserRole.emitter =>
+          'O emissor pega a permuta FATURADA, confere a cédula que o consultor preencheu, '
+              'emite o título, colhe as assinaturas e o leva a registro. São três etapas '
+              'porque acontecem em dias diferentes, e é o status da permuta que diz em que '
+              'pé a CPR está. Sem um emissor cadastrado, toda permuta faturada para aí.',
         UserRole.admin => '',
       };
 
@@ -775,12 +1041,139 @@ class _EditUnitScreenState extends State<EditUnitScreen> {
             const SizedBox(height: 8),
             Text(
               'A unidade é o local de retirada dos insumos. O consultor escolhe uma ao '
-              'registrar cada permuta — pode ser qualquer uma, combinada com o produtor. '
+              'registrar cada permuta: pode ser qualquer uma, combinada com o produtor. '
               'Ela não decide quem analisa a permuta: isso é o gerente do consultor.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// UMA PRAÇA da base de seguros — o município e quanto custa segurar um
+/// hectare nele.
+///
+/// O cadastro é curto porque a cotação é curta: um lugar e um valor. O que NÃO
+/// existe aqui é safra nem cultura — a base responde "quanto custa o hectare
+/// nesta praça HOJE", e cada permuta CONGELA a taxa que usou. Recotar a praça
+/// no ano seguinte é reescrever esta linha; as permutas já fechadas continuam
+/// com a taxa do dia delas.
+class EditInsuranceRateScreen extends StatefulWidget {
+  final InsuranceRateModel? rate;
+  const EditInsuranceRateScreen({super.key, this.rate});
+
+  @override
+  State<EditInsuranceRateScreen> createState() => _EditInsuranceRateScreenState();
+}
+
+class _EditInsuranceRateScreenState extends State<EditInsuranceRateScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late final TextEditingController _city;
+  late final TextEditingController _value;
+  late final TextEditingController _note;
+  bool _saving = false;
+
+  bool get _isNew => widget.rate == null;
+
+  @override
+  void initState() {
+    super.initState();
+    _city = TextEditingController(text: widget.rate?.city ?? '');
+    _value = TextEditingController(
+      text: (widget.rate?.valuePerHa ?? 0) > 0
+          ? widget.rate!.valuePerHa.toStringAsFixed(2).replaceAll('.', ',')
+          : '',
+    );
+    _note = TextEditingController(text: widget.rate?.note ?? '');
+  }
+
+  @override
+  void dispose() {
+    _city.dispose();
+    _value.dispose();
+    _note.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _saving = true);
+    try {
+      final saved = await AppData.saveInsuranceRate(
+        id: widget.rate?.id,
+        city: _city.text.trim(),
+        valuePerHa: _parsed(_value.text) ?? 0,
+        note: _note.text.trim(),
+      );
+      if (mounted) Navigator.pop(context, saved);
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Número como o Brasil escreve — a mesma leitura da planilha da seguradora,
+  /// para quem digita e quem carrega o arquivo não terem regras diferentes.
+  double? _parsed(String raw) {
+    final cleaned = raw.replaceAll(RegExp(r'[^\d,.-]'), '').trim();
+    if (cleaned.isEmpty) return null;
+    final normalized =
+        cleaned.contains(',') ? cleaned.replaceAll('.', '').replaceAll(',', '.') : cleaned;
+    return double.tryParse(normalized);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(_isNew ? 'Nova praça' : 'Editar praça')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _EditField(
+              controller: _city,
+              label: 'Município/UF',
+              icon: Icons.location_on_outlined,
+              required: true,
+            ),
+            _EditField(
+              controller: _value,
+              label: 'Valor por hectare (R\$)',
+              icon: Icons.shield_outlined,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              validator: (v) {
+                final value = _parsed(v ?? '');
+                // Zero não é seguro de graça: é linha pela metade. A praça a
+                // R$ 0,00 produziria permutas com uma linha de seguro que não
+                // cobra nada — pior do que a praça ausente, que ao menos recusa
+                // o registro dizendo o que falta.
+                if (value == null || value <= 0) return 'Informe um valor maior que zero';
+                return null;
+              },
+            ),
+            _EditField(
+              controller: _note,
+              label: 'Observação (seguradora, vigência, cultura)',
+              icon: Icons.notes_outlined,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'O seguro é do LUGAR: o que a seguradora cota é o risco da praça — chuva, '
+              'granizo, seca. A permuta pega a área cultivável do produtor, multiplica '
+              'por este valor e cobra o resultado em sacas, junto com os insumos. '
+              'Quem decide se a safra leva seguro é o lançamento do Barter.',
+              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+            ),
+            const SizedBox(height: 20),
+            _saving
+                ? const Center(child: CircularProgressIndicator())
+                : _SaveButton(onPressed: _save, isNew: _isNew),
           ],
         ),
       ),

@@ -10,6 +10,8 @@ import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
 import '../repositories/committee_repository.dart';
+import '../repositories/creditor_repository.dart';
+import '../repositories/insurance_repository.dart';
 import '../repositories/staff_repository.dart';
 import '../repositories/unit_repository.dart';
 
@@ -30,15 +32,27 @@ class AppData {
   static final BarterRepository _barters = BarterRepository();
   static final BarterProgramRepository _program = BarterProgramRepository();
   static final UnitRepository _units = UnitRepository();
+
+  /// A BASE DE SEGUROS por município — quanto custa segurar um hectare em cada
+  /// praça. O admin a mantém; todo mundo a lê.
+  static final InsuranceRepository _insurance = InsuranceRepository();
   static const StaffRepository _managers = StaffRepository('/managers');
 
-  /// FATURISTAS — quem fatura o que o comitê aprovou. Rota de admin, como as
-  /// outras duas de pessoas.
+  /// FATURISTAS — quem fatura o que o comitê aprovou e anexa as notas. Rota de
+  /// admin, como as outras de pessoas.
   static const StaffRepository _billers = StaffRepository('/billers');
+
+  /// EMISSORES — o posto da CÉDULA: conferem o que o consultor preencheu,
+  /// emitem o título, colhem as assinaturas e o levam a registro.
+  static const StaffRepository _emitters = StaffRepository('/emitters');
 
   /// O COMITÊ — cadastro único, e por isso um repositório de outra forma: sem
   /// lista, sem id e sem exclusão.
   static final CommitteeRepository _committee = CommitteeRepository();
+
+  /// A CREDORA — a empresa nos documentos que ela emite. Cadastro único, como o
+  /// comitê, e mantido pelo admin OU pelo faturista.
+  static final CreditorRepository _creditor = CreditorRepository();
 
   /// Usuário logado (admin ou consultor).
   static UserModel? currentUser;
@@ -63,6 +77,11 @@ class AppData {
   /// FATURISTAS cadastrados (só o admin enxerga — a API restringe a rota).
   static List<UserModel> billers = [];
 
+  /// EMISSORES cadastrados (idem). Sem pelo menos um, toda permuta faturada
+  /// para em "a emitir a CPR" — é a primeira coisa que falta numa instalação
+  /// nova.
+  static List<UserModel> emitters = [];
+
   /// O CADASTRO DO COMITÊ, ou null enquanto ele não existe.
   ///
   /// Um, e não uma lista: o comitê é uma REUNIÃO, e a conta é do órgão (ver
@@ -78,6 +97,14 @@ class AppData {
   /// consultor escolhe entre elas ao registrar, o gerente descobre quais são as
   /// dele e o admin as cadastra.
   static List<UnitModel> units = [];
+
+  /// AS PRAÇAS da base de seguros, em ordem alfabética.
+  ///
+  /// Ela é carregada para todo mundo, e não só para o admin, por causa do
+  /// CONSULTOR: quando o Barter vigente leva seguro, a prévia da permuta dele
+  /// precisa mostrar quanto a apólice vai custar ao cliente ANTES de ele fechar
+  /// o negócio. Quem não vê R$ recebe a taxa em sacas por hectare.
+  static List<InsuranceRateModel> insuranceRates = [];
 
   static List<ProductModel> grains = [];
   static List<ProductModel> inputs = [];
@@ -232,6 +259,7 @@ class AppData {
     classes = _catalog.parseClasses(package.classes);
     producers = _producers.parse(package.producers);
     units = _units.parse(package.units);
+    insuranceRates = _insurance.parse(package.insuranceRates);
     currentVersion = _program.parseVersion(package.version);
     lastSyncAt = package.savedAt;
   }
@@ -266,9 +294,11 @@ class AppData {
     consultants = [];
     managers = [];
     billers = [];
+    emitters = [];
     committee = null;
     producers = [];
     units = [];
+    insuranceRates = [];
     grains = [];
     inputs = [];
     classes = [];
@@ -295,8 +325,12 @@ class AppData {
       if (isAdmin) refreshConsultants(),
       if (isAdmin) refreshManagers(),
       if (isAdmin) refreshBillers(),
+      if (isAdmin) refreshEmitters(),
       if (isAdmin) refreshCommittee(),
       if (isAdmin) refreshSeasons(),
+      // A BASE DE SEGUROS vai para todo mundo: ela é leitura aberta, e é da
+      // prévia do consultor que ela participa. Ver `insuranceRates`.
+      refreshInsuranceRates(),
     ]);
   }
 
@@ -319,6 +353,10 @@ class AppData {
       _producers.listRaw(),
       _units.listRaw(),
       _program.currentRaw(),
+      // A BASE DE SEGUROS viaja com as outras cinco, e pelo mesmo motivo que
+      // elas: a prévia da permuta depende dela quando o Barter leva seguro, e
+      // quem monta permuta faz isso na fazenda, sem sinal.
+      _insurance.listRaw(),
     ]);
 
     final productRows = results[0] as List<Map<String, dynamic>>;
@@ -326,6 +364,7 @@ class AppData {
     final producerRows = results[2] as List<Map<String, dynamic>>;
     final unitRows = results[3] as List<Map<String, dynamic>>;
     final versionRow = results[4] as Map<String, dynamic>?;
+    final rateRows = results[5] as List<Map<String, dynamic>>;
 
     final package = OfflinePackage(
       savedAt: DateTime.now(),
@@ -335,6 +374,7 @@ class AppData {
       classes: classRows,
       producers: producerRows,
       units: unitRows,
+      insuranceRates: rateRows,
     );
 
     _applyPackage(package);
@@ -351,11 +391,115 @@ class AppData {
     units = await _units.list();
   }
 
+  /// A BASE DE SEGUROS por município.
+  ///
+  /// Falhar aqui NÃO pode derrubar o login nem o refresh: o seguro é opcional, e
+  /// um Barter sem ele não depende desta lista para nada. Sem a base, a tela do
+  /// consultor deixa de mostrar a prévia do custo — e quem cobra a praça que
+  /// falta continua sendo o servidor, no registro, com a frase que nomeia o
+  /// município.
+  static Future<void> refreshInsuranceRates() async {
+    try {
+      insuranceRates = await _insurance.list();
+    } on ApiException {
+      // Mantém o que já estava em memória: uma lista zerada por falha de rede
+      // faria a tela afirmar que não há praça cadastrada nenhuma.
+    }
+  }
+
+  /// A TAXA da praça deste produtor, ou `null` quando ela não está na base.
+  ///
+  /// A comparação é a MESMA do servidor (`sameCity`), e ela tem duas partes. A
+  /// primeira é a forma canônica — sem acento, sem caixa, sem espaço em volta
+  /// da barra: o cadastro do produtor tem "Maringá/PR" e a base pode ter
+  /// "maringa / pr", escritos por duas pessoas diferentes.
+  ///
+  /// A segunda é a UF, e é o caso NORMAL: a planilha da seguradora é toda de um
+  /// estado só e traz "TUPANCIRETÃ", enquanto o cadastro do produtor traz
+  /// "Tupanciretã/RS". Quem não declara o estado não contradiz quem declara —
+  /// mas dois estados DIFERENTES separam de verdade ("Bom Jesus/RS" não é "Bom
+  /// Jesus/SC"), e duas praças casando ao mesmo tempo é ambiguidade: devolve
+  /// `null`, como o servidor, em vez de escolher uma delas no palpite.
+  static InsuranceRateModel? insuranceRateFor(String city) {
+    final key = _cityKey(city);
+    if (key.isEmpty) return null;
+
+    final matches = insuranceRates.where((rate) => _sameCity(rate.city, city)).toList();
+    if (matches.length == 1) return matches.single;
+    // Empate: a praça escrita exatamente igual vence — é o que acontece quando
+    // a base tem "Bom Jesus/RS" e "Bom Jesus/SC" e o produtor disse qual é.
+    for (final rate in matches) {
+      if (_cityKey(rate.city) == key) return rate;
+    }
+    return null;
+  }
+
+  /// Estes dois textos falam do mesmo município? Ver `sameCity` na API.
+  static bool _sameCity(String a, String b) {
+    final nameA = _cityKey(a).split('/').first.trim();
+    final nameB = _cityKey(b).split('/').first.trim();
+    if (nameA != nameB) return false;
+    final ufA = _uf(a);
+    final ufB = _uf(b);
+    return ufA.isEmpty || ufB.isEmpty || ufA == ufB;
+  }
+
+  /// A UF, quando ela foi escrita. Vazio quando o município veio sozinho.
+  static String _uf(String city) {
+    final parts = _cityKey(city).split('/');
+    return parts.length > 1 ? parts.last.trim() : '';
+  }
+
+  /// A forma COMPARÁVEL de um município — a mesma regra do `cityKeyOf` da API:
+  /// sem acento, sem caixa, sem espaço repetido e sem espaço em volta da barra.
+  ///
+  /// O acento cai aqui, e não só lá, porque as duas pontas precisam concordar:
+  /// o dia em que a base tiver "maringa/pr" e o produtor "Maringá/PR", o
+  /// servidor encontra a praça e a prévia da tela não encontraria — e o
+  /// consultor veria "sem seguro cadastrado" numa permuta que vai nascer com a
+  /// linha dele.
+  static String _cityKey(String city) {
+    final lower = city.toLowerCase();
+    final buffer = StringBuffer();
+    for (final rune in lower.runes) {
+      final char = String.fromCharCode(rune);
+      buffer.write(_accents[char] ?? char);
+    }
+    return buffer
+        .toString()
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .replaceAll(RegExp(r'\s*/\s*'), '/');
+  }
+
+  /// As letras acentuadas do português, reduzidas à forma sem acento.
+  ///
+  /// Um mapa, e não `unorm`: são estas e nada mais — o que entra aqui é nome de
+  /// município brasileiro, e uma dependência a mais para dobrar quinze letras
+  /// seria um pacote inteiro no aparelho de quem vai a campo.
+  static const Map<String, String> _accents = {
+    'á': 'a', 'à': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a',
+    'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+    'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
+    'ó': 'o', 'ò': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o',
+    'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
+    'ç': 'c', 'ñ': 'n',
+  };
+
   /// A versão vigente do Barter. Todo papel carrega — o consultor precisa dela
   /// para montar a permuta, e a retaguarda para saber o que está aberto.
-  static Future<void> refreshBarterVersion() async {
-    currentVersion = await _program.current();
+  static Future<void> refreshBarterVersion({String? grainId}) async {
+    currentVersion = await _program.current(grainId: grainId);
   }
+
+  /// A VERSÃO VIGENTE convertida por OUTRA CULTURA, sem tocar no cache.
+  ///
+  /// É o que a tela do consultor pede ao trocar o seletor de cultura: a tabela
+  /// inteira volta em sacas daquele grão. Ela não substitui [currentVersion]
+  /// porque a escolha é DAQUELA permuta — outra tela, aberta em seguida, começa
+  /// de novo na primeira cultura do lançamento.
+  static Future<BarterVersionModel?> versionPricedIn(String grainId) =>
+      _program.current(grainId: grainId);
 
   /// As safras com o histórico de versões (admin).
   static Future<void> refreshSeasons() async {
@@ -392,6 +536,10 @@ class AppData {
 
   static Future<void> refreshBillers() async {
     billers = await _billers.list();
+  }
+
+  static Future<void> refreshEmitters() async {
+    emitters = await _emitters.list();
   }
 
   static Future<void> refreshCommittee() async {
@@ -442,6 +590,39 @@ class AppData {
     return null;
   }
 
+  /// O CÓDIGO de um item de permuta, como a tela o mostra.
+  ///
+  /// Preferência absoluta pelo código CONGELADO no item: é ele que estava no
+  /// cadastro no dia do acordo, e é o que a conferência da retirada vai
+  /// comparar. O do catálogo entra só quando o item não tem o seu — os
+  /// registrados antes de o campo existir —, e aí o número está sendo LIDO do
+  /// cadastro de hoje, não afirmado sobre aquele dia.
+  ///
+  /// Null quando nenhum dos dois responde: produto sem código, ou catálogo que
+  /// não veio (o consultor sem rede). A tela cala em vez de mostrar um traço
+  /// onde caberia o nome do insumo.
+  static String? skuOf(BarterItem item) {
+    final frozen = item.sku;
+    if (frozen != null && frozen.isNotEmpty) return frozen;
+    return productSkuById(item.productId);
+  }
+
+  /// O CÓDIGO de um produto do catálogo, pelo id — para onde não há item de
+  /// permuta com código congelado: a simulação guardada no aparelho e a
+  /// conferência de envio, que carregam só o id, o nome e a quantidade.
+  ///
+  /// Null quando o catálogo não veio (consultor sem rede) ou o produto não tem
+  /// código: quem chama some com a informação em vez de mostrar um traço.
+  static String? productSkuById(String productId) {
+    for (final product in [...inputs, ...grains]) {
+      if (product.id == productId) {
+        final sku = product.sku;
+        return sku != null && sku.isNotEmpty ? sku : null;
+      }
+    }
+    return null;
+  }
+
   /// Busca uma unidade pelo id (null se não encontrada ou id vazio).
   static UnitModel? unitById(String? id) {
     if (id == null || id.isEmpty) return null;
@@ -471,6 +652,17 @@ class AppData {
   static List<BarterModel> get invoiceQueue =>
       barters.where((b) => b.awaitsInvoice).toList();
 
+  /// A fila do EMISSOR: o que foi faturado e ainda não virou título registrado.
+  ///
+  /// Ela inclui os TRÊS degraus da cédula — a que espera emissão, a que espera
+  /// assinatura e a que espera registro —, e não só o primeiro: os três são
+  /// trabalho dele, acontecem em dias diferentes, e uma fila que mostrasse só o
+  /// primeiro esconderia dele as cédulas assinadas paradas esperando cartório —
+  /// que é exatamente o que estava invisível antes deste posto existir.
+  static List<BarterModel> get issuanceQueue => barters
+      .where((b) => b.awaitsCprIssue || b.awaitsSignatures || b.awaitsRegistration)
+      .toList();
+
   /// Busca uma classe pelo id (null se não encontrada ou id null).
   static ProductClassModel? classById(String? id) {
     if (id == null) return null;
@@ -482,20 +674,39 @@ class AppData {
 
   /* ── Mutações (API primeiro, cache depois) ──────────────────────────── */
 
+  /// Registra a permuta. Ela nasce RASCUNHO — ver [BarterRepository.create]. O
+  /// parecer é opcional aqui e obrigatório no encaminhamento.
   static Future<BarterModel> createBarter({
     required String producerId,
     required String unitId,
+    required String grainId,
     required Map<String, double> inputQuantities,
-    TaxRegime taxRegime = TaxRegime.comercializacao,
+    String note = '',
   }) async {
     final barter = await _barters.create(
       producerId: producerId,
       unitId: unitId,
+      grainId: grainId,
       inputQuantities: inputQuantities,
-      taxRegime: taxRegime,
+      note: note,
     );
     barters.insert(0, barter);
     return barter;
+  }
+
+  /// O PARECER DO CONSULTOR salvo no rascunho, sem encaminhar. O cache guarda a
+  /// resposta do servidor, nunca uma versão montada aqui.
+  static Future<BarterModel> saveBarterNote(String code, String note) async {
+    final updated = await _barters.saveNote(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O ENCAMINHAMENTO ao gerente, com o parecer do consultor junto.
+  static Future<BarterModel> forwardBarter(String code, String note) async {
+    final updated = await _barters.forward(code, note);
+    _replaceBarter(updated);
+    return updated;
   }
 
   /* ── Simulações (o aparelho é a autoridade; só o envio fala com a API) ─ */
@@ -600,17 +811,49 @@ class AppData {
   /// natureza. A correção definitiva é uma chave de idempotência no `POST`, que
   /// deixaria o servidor reconhecer o reenvio — e que exige uma coluna nova.
   /// Enquanto ela não existe, é melhor perguntar do que duplicar em silêncio.
-  static Future<SendResult> sendSimulation(BarterSimulation simulation) async {
+  /// [note] é o parecer do consultor e [forward] diz se a permuta sai da mesa
+  /// dele agora. Os dois andam juntos e são o mesmo desenho do rascunho: quem já
+  /// conversou com o produtor manda de uma vez; quem ainda não, guarda o
+  /// registro e escreve depois.
+  ///
+  /// O ENCAMINHAMENTO é um segundo ato, e por isso pode falhar sozinho — a
+  /// permuta já está registrada quando ele acontece. Falhando, o método devolve
+  /// a permuta como ela ficou (rascunho), e é a tela que diz isso a quem enviou:
+  /// perder o registro para relatar um erro seria trocar um aviso por um
+  /// prejuízo.
+  static Future<SendResult> sendSimulation(
+    BarterSimulation simulation, {
+    String note = '',
+    bool forward = true,
+  }) async {
     final startedAt = DateTime.now();
     try {
       final barter = await createBarter(
         producerId: simulation.producerId,
         unitId: simulation.unitId,
+        // A CULTURA guardada na simulação. As simulações montadas ANTES de as
+        // culturas coexistirem não a têm — e para elas a primeira cultura do
+        // lançamento é a resposta certa: era a única que existia quando elas
+        // foram montadas.
+        grainId: simulation.grainId.isNotEmpty
+            ? simulation.grainId
+            : (currentVersion?.grains.firstOrNull?.grainId ?? ''),
         inputQuantities: simulation.inputQuantities,
-        taxRegime: simulation.taxRegime,
+        note: note,
       );
       await deleteSimulation(simulation.id);
-      return SendResult.sent(barter);
+      if (!forward) return SendResult.sent(barter);
+      try {
+        return SendResult.sent(await forwardBarter(barter.id, note));
+      } on ApiException catch (error) {
+        // A PERMUTA ENTROU e não foi encaminhada — e agora a tela sabe POR QUÊ.
+        //
+        // O motivo mais comum passou a ser a cédula: encaminhar exige a CPR
+        // preenchida, e quem envia a simulação sem tê-la feito para no rascunho.
+        // Engolir a mensagem aqui faria a tela dizer "enviada" e o consultor
+        // descobrir dias depois, pelo gerente que nunca recebeu nada.
+        return SendResult.sent(barter, notForwardedReason: error.message);
+      }
     } on ApiException catch (error) {
       if (error.statusCode != 0) return SendResult.refused(error.message);
 
@@ -677,6 +920,57 @@ class AppData {
     await refreshBarters();
   }
 
+  /* ── Base de seguros (admin mantém; todo mundo lê) ──────────────────── */
+
+  /// Cadastra ou corrige uma praça. A lista em memória é reordenada por
+  /// município, que é a ordem em que a tela e o servidor a entregam.
+  static Future<InsuranceRateModel> saveInsuranceRate({
+    String? id,
+    required String city,
+    required double valuePerHa,
+    String? note,
+  }) async {
+    final saved = id == null
+        ? await _insurance.create(city: city, valuePerHa: valuePerHa, note: note)
+        : await _insurance.update(id, city: city, valuePerHa: valuePerHa, note: note);
+    final index = insuranceRates.indexWhere((rate) => rate.id == saved.id);
+    if (index == -1) {
+      insuranceRates.add(saved);
+    } else {
+      insuranceRates[index] = saved;
+    }
+    insuranceRates.sort((a, b) => a.city.compareTo(b.city));
+    return saved;
+  }
+
+  /// Excluir a praça NÃO mexe nas permutas dela: a taxa está congelada em cada
+  /// uma. O que some é a possibilidade de registrar permuta nova naquele
+  /// município enquanto o Barter levar seguro — que é o que "a seguradora não
+  /// cobre mais esta praça" significa.
+  static Future<void> deleteInsuranceRate(String id) async {
+    await _insurance.delete(id);
+    insuranceRates.removeWhere((rate) => rate.id == id);
+  }
+
+  /// A CARGA DA PLANILHA. Devolve o relatório da leitura — a base inteira mais
+  /// a coluna de onde o valor saiu, que é o que a tela mostra de volta ao
+  /// admin.
+  static Future<InsuranceImportResult> importInsuranceRates({
+    required String filename,
+    required List<int> bytes,
+    bool replace = false,
+    String? column,
+  }) async {
+    final result = await _insurance.importSheet(
+      filename: filename,
+      bytes: bytes,
+      replace: replace,
+      column: column,
+    );
+    insuranceRates = result.rates;
+    return result;
+  }
+
   /// PARECER TÉCNICO do gerente. A permuta volta do servidor já em revisão —
   /// o cache guarda a resposta dele, nunca uma versão montada aqui.
   static Future<BarterModel> giveOpinion(String code, String note) async {
@@ -694,11 +988,12 @@ class AppData {
     required String seasonCode,
     required String filename,
     required List<int> bytes,
-    required double grainPrice,
+    required List<VersionGrainInput> grains,
     DateTime? endsAt,
     double? targetSales,
-    double? targetSacks,
     int? targetBarters,
+    bool closeOnGoal = false,
+    bool insuranceRequired = false,
     String? note,
     bool carryOver = false,
   }) async {
@@ -706,11 +1001,12 @@ class AppData {
       seasonCode: seasonCode,
       filename: filename,
       bytes: bytes,
-      grainPrice: grainPrice,
+      grains: grains,
       endsAt: endsAt,
       targetSales: targetSales,
-      targetSacks: targetSacks,
       targetBarters: targetBarters,
+      closeOnGoal: closeOnGoal,
+      insuranceRequired: insuranceRequired,
       note: note,
       carryOver: carryOver,
     );
@@ -720,7 +1016,7 @@ class AppData {
     return version;
   }
 
-  /// Corrige um valor da versão vigente (o grão da safra inclusive).
+  /// Corrige um valor da versão vigente (a cotação de uma CULTURA inclusive).
   static Future<void> updateVersionPrice(String productId, double price) async {
     final version = currentVersion;
     if (version == null) return;
@@ -738,36 +1034,346 @@ class AppData {
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
+  /// Liga ou desliga o encerramento automático por meta na versão vigente.
+  ///
+  /// Recarrega safras e versão vigente como o encerramento manual faz, e pelo
+  /// mesmo motivo: ligar com a meta já batida ENCERRA o Barter no servidor, e um
+  /// cache que só guardasse o interruptor mostraria um Barter aberto que não
+  /// existe mais. Devolve a versão como o servidor a deixou.
+  static Future<BarterVersionModel> setVersionCloseOnGoal(String code, bool enabled) async {
+    final version = await _program.setCloseOnGoal(code, enabled);
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+    return version;
+  }
+
   static Future<void> closeSeason(String code) async {
     await _program.closeSeason(code);
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
   static Future<void> openSeason({
-    required String grainId,
     required int year,
     String? name,
     String? letter,
   }) async {
-    await _program.openSeason(grainId: grainId, year: year, name: name, letter: letter);
+    await _program.openSeason(year: year, name: name, letter: letter);
     await Future.wait([refreshSeasons(), refreshBarterVersion()]);
   }
 
-  /// A DECISÃO DO COMITÊ (aprovar/negar). O cache guarda a resposta do
-  /// servidor, nunca uma versão montada aqui.
+  /// LIGA ou DESLIGA o seguro agrícola do Barter vigente.
+  ///
+  /// Vale para as permutas que ainda vão nascer: as registradas têm a taxa
+  /// congelada e não são tocadas. A versão vigente em memória é atualizada com
+  /// o que o servidor devolveu.
+  static Future<BarterVersionModel> setVersionInsurance(String code, bool enabled) async {
+    final updated = await _program.setInsurance(code, enabled);
+    if (currentVersion?.code == updated.code) currentVersion = updated;
+    return updated;
+  }
+
+  /// ACERTA UMA CULTURA da versão vigente: a cotação, a produtividade, o
+  /// vencimento da CPR ou a meta de sacas dela.
+  ///
+  /// O vencimento é a data de entrega de todas as cédulas DAQUELA CULTURA que
+  /// ainda não foram emitidas — as emitidas congelaram a delas. Recarrega safras
+  /// e versão vigente porque as duas mostram os números da cultura.
+  static Future<BarterVersionModel> updateVersionGrain(
+    String code,
+    String grainId, {
+    double? price,
+    double? estimatedYield,
+    DateTime? cprDueDate,
+    double? targetSacks,
+  }) async {
+    final updated = await _program.updateGrain(
+      code,
+      grainId,
+      price: price,
+      estimatedYield: estimatedYield,
+      cprDueDate: cprDueDate,
+      targetSacks: targetSacks,
+    );
+    await Future.wait([refreshSeasons(), refreshBarterVersion()]);
+    return updated;
+  }
+
+  /// A DECISÃO DO COMITÊ: aprovar, aprovar com RESSALVA ou negar. O cache
+  /// guarda a resposta do servidor, nunca uma versão montada aqui.
+  ///
+  /// AS EXIGÊNCIAS (avalista, garantia real, seguro) andam junto com a decisão:
+  /// elas dizem O QUÊ o comitê exigiu, e o texto continua dizendo QUAL — qual
+  /// matrícula, qual valor segurado, quem se espera como avalista.
   static Future<BarterModel> reviewBarter(
     String code,
     BarterStatus status,
-    String note,
-  ) async {
-    final updated = await _barters.review(code, status, note);
+    String note, {
+    bool requiresGuarantor = false,
+    bool requiresCollateral = false,
+    bool requiresInsurance = false,
+  }) async {
+    final updated = await _barters.review(
+      code,
+      status,
+      note,
+      requiresGuarantor: requiresGuarantor,
+      requiresCollateral: requiresCollateral,
+      requiresInsurance: requiresInsurance,
+    );
     _replaceBarter(updated);
     return updated;
   }
 
-  /// O FATURAMENTO da permuta aprovada — o último posto da linha.
+  /* ── O DOSSIÊ DO COMITÊ ─────────────────────────────────────────────── */
+
+  /// ANEXA uma peça da análise de crédito à permuta (comitê).
+  ///
+  /// O cache guarda a permuta que o servidor devolveu — ela já volta com o
+  /// dossiê inteiro, e remontá-la aqui abriria a chance de a tela mostrar uma
+  /// lista que o servidor não tem.
+  static Future<BarterModel> attachCreditFile(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+    String kind = 'other',
+    String note = '',
+  }) async {
+    final updated = await _barters.attachCreditFile(
+      code,
+      filename: filename,
+      bytes: bytes,
+      kind: kind,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// REMOVE uma peça do dossiê. A janela é a mesma de anexar: até a decisão.
+  static Future<BarterModel> removeCreditFile(String code, String creditFileId) async {
+    final updated = await _barters.removeCreditFile(code, creditFileId);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O FATURAMENTO da permuta aprovada.
+  ///
+  /// O servidor recusa (422) sem NOTA anexada: é ela que a cédula cita como
+  /// origem da dívida. A tela cuida de anexar antes — ver [attachBarterInvoice].
   static Future<BarterModel> invoiceBarter(String code, String note) async {
     final updated = await _barters.invoice(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// ANEXA UMA NOTA FISCAL ao faturamento — o arquivo e os dados dele.
+  ///
+  /// SÃO VÁRIAS por permuta: a retirada sai em mais de um carregamento, cada uma
+  /// gera a sua nota, e a cancelada é reemitida. A resposta é a permuta inteira,
+  /// e é ela que entra no cache — a lista precisa saber que a permuta já tem
+  /// nota.
+  static Future<BarterModel> attachBarterInvoice(
+    String code, {
+    required String number,
+    required String filename,
+    required List<int> bytes,
+    String series = '',
+    String duplicateNumber = '',
+    DateTime? issuedAt,
+    double? value,
+    String note = '',
+  }) async {
+    final updated = await _barters.attachInvoice(
+      code,
+      number: number,
+      filename: filename,
+      bytes: bytes,
+      series: series,
+      duplicateNumber: duplicateNumber,
+      issuedAt: issuedAt,
+      value: value,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// REMOVE uma nota anexada — a cancelada, ou a que subiu trocada.
+  static Future<BarterModel> removeBarterInvoice(String code, String invoiceId) async {
+    final updated = await _barters.removeInvoice(code, invoiceId);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /* ── A EMISSÃO DA CÉDULA: os três atos do emissor ───────────────────── */
+
+  /// EMITE a cédula — o ato que CONFERE o que os outros postos produziram.
+  ///
+  /// O servidor recusa (422) com a lista do que falta, e cada item dela diz com
+  /// quem a pendência se resolve: o RG é com o consultor, a nota é com o
+  /// faturista, o vencimento é com quem cadastra a safra.
+  static Future<BarterModel> issueBarterCpr(
+    String code, {
+    String number = '',
+    String note = '',
+  }) async {
+    final updated = await _barters.issueCpr(code, number: number, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A COLETA DE ASSINATURAS concluída — o lançamento de um fato de fora, com a
+  /// CÉDULA ASSINADA anexada no mesmo ato.
+  static Future<BarterModel> signBarterCpr(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+    DateTime? signedAt,
+    String note = '',
+  }) async {
+    final updated = await _barters.signCpr(
+      code,
+      filename: filename,
+      bytes: bytes,
+      signedAt: signedAt,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O REGISTRO do título — o fim da linha. O número é obrigatório; a via
+  /// carimbada do cartório, não (ver [saveCprRegistryFile]).
+  static Future<BarterModel> registerBarterCpr(
+    String code, {
+    required String registryNumber,
+    String registryPlace = '',
+    DateTime? registeredAt,
+    String note = '',
+    String? filename,
+    List<int>? bytes,
+  }) async {
+    final updated = await _barters.registerCpr(
+      code,
+      registryNumber: registryNumber,
+      registryPlace: registryPlace,
+      registeredAt: registeredAt,
+      note: note,
+      filename: filename,
+      bytes: bytes,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O PEDIDO DE ALTERAÇÃO do consultor — o caminho de volta da esteira.
+  static Future<BarterModel> requestBarterChange(String code, String note) async {
+    final updated = await _barters.requestChange(code, note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A DECISÃO DO ADMIN sobre o pedido: liberar ou recusar.
+  static Future<BarterModel> decideBarterChange(
+    String code, {
+    required bool accept,
+    String note = '',
+  }) async {
+    final updated = await _barters.decideChange(code, accept: accept, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O ATENDIMENTO DO PEDIDO NO VALOR: o admin corrige a linha de R$ e a
+  /// permuta continua onde estava, com as sacas recalculadas pelo servidor.
+  static Future<BarterModel> changeBarterPrices(
+    String code,
+    Map<String, double> valueByItemId, {
+    String note = '',
+  }) async {
+    final updated = await _barters.changePrices(code, valueByItemId, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O PEDIDO DE FORA DO BARTER: o consultor pede o produto que falta na tabela.
+  static Future<BarterModel> requestBarterProduct(
+    String code, {
+    required String productName,
+    required String unit,
+    required double quantity,
+    String note = '',
+  }) async {
+    final updated = await _barters.requestProduct(
+      code,
+      productName: productName,
+      unit: unit,
+      quantity: quantity,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A DECISÃO DO ADMIN sobre o pedido de produto: incluir com o valor
+  /// acertado, ou recusar com o motivo.
+  static Future<BarterModel> decideBarterProduct(
+    String code,
+    String requestId, {
+    required bool accept,
+    double? unitValue,
+    String? productName,
+    String? unit,
+    double? quantity,
+    String? sku,
+    String note = '',
+  }) async {
+    final updated = await _barters.decideProduct(
+      code,
+      requestId,
+      accept: accept,
+      unitValue: unitValue,
+      productName: productName,
+      unit: unit,
+      quantity: quantity,
+      sku: sku,
+      note: note,
+    );
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A TABELA com que uma permuta foi fechada — a gestão DELA, não a vigente.
+  ///
+  /// Fora do cache, como o detalhe: o cache guarda a versão VIGENTE, que é a que
+  /// precifica permuta nova. Esta é a de uma permuta específica, e guardá-la no
+  /// mesmo lugar faria a tela de registro passar a montar com a tabela de uma
+  /// gestão encerrada.
+  /// A TABELA COM QUE UMA PERMUTA FOI FECHADA, na CULTURA dela: remontar um
+  /// rascunho de milho lendo a tabela em sacas de soja mostraria ao produtor um
+  /// total que o servidor não gravaria.
+  static Future<BarterVersionModel> barterVersion(String code, {String? grainId}) =>
+      _barters.versionOf(code, grainId: grainId);
+
+  /// TROCA A CULTURA de um rascunho — a permuta passa a ser paga em outro grão.
+  ///
+  /// Os insumos ficam; o que muda são as sacas (a cotação da cultura nova
+  /// converte o mesmo custo) e a produtividade que dimensiona o penhor. Quem
+  /// recalcula é o servidor, e o cache guarda a resposta dele.
+  static Future<BarterModel> setBarterCulture(String code, String grainId) async {
+    final updated = await _barters.setCulture(code, grainId);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A REESCRITA DOS INSUMOS do rascunho — a permuta remontada.
+  ///
+  /// Quem reprecifica é o servidor, pela tabela da versão em que a permuta foi
+  /// fechada: o cache guarda a resposta dele, e não uma permuta montada aqui.
+  static Future<BarterModel> replaceBarterInputs(
+    String code,
+    Map<String, double> inputQuantities,
+  ) async {
+    final updated = await _barters.replaceInputs(code, inputQuantities);
     _replaceBarter(updated);
     return updated;
   }
@@ -778,6 +1384,78 @@ class AppData {
   /// histórico — guardar o detalhe ali faria a mesma permuta ter ou não ter
   /// linha do tempo conforme a tela por onde se passou.
   static Future<BarterModel> barterDetail(String code) => _barters.find(code);
+
+  /// A CÉDULA (CPR) desta permuta, e a gravação dela.
+  ///
+  /// Fora do cache pelo mesmo motivo do detalhe, e com um a mais: a cédula é
+  /// lida por três papéis (o consultor que preenche, o emissor que confere e o
+  /// admin que tira a segunda via), e um rascunho guardado em memória mostraria
+  /// a versão de quem abriu a tela primeiro. Ela é sempre lida do servidor e a
+  /// gravação devolve a mesa recalculada — inclusive o que falta.
+  static Future<CprDesk> barterCpr(String code) => _barters.cpr(code);
+
+  static Future<CprDesk> saveBarterCpr(String code, CprDraft draft) =>
+      _barters.saveCpr(code, draft);
+
+  /// ANEXA O SCR DO PRODUTOR à cédula — anexo OBRIGATÓRIO para ela ser emitida.
+  static Future<CprDesk> saveBarterScr(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+  }) =>
+      _barters.saveScr(code, filename: filename, bytes: bytes);
+
+  /// BAIXA o arquivo de uma NOTA FISCAL anexada ao faturamento.
+  static Future<({List<int> bytes, String filename, String contentType})>
+      downloadBarterInvoiceFile(String code, String invoiceId) =>
+          _barters.download(_barters.invoiceFilePath(code, invoiceId));
+
+  /// BAIXA uma peça do DOSSIÊ do comitê (Serasa, endividamento interno).
+  ///
+  /// Só o comitê e o admin chegam aqui: o servidor recusa os demais com 403,
+  /// e a tela nem oferece o botão — ver `Capability.bartersCreditRead`.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadCreditFile(
+    String code,
+    String creditFileId,
+  ) =>
+      _barters.download(_barters.creditFilePath(code, creditFileId));
+
+  /// BAIXA o arquivo do SCR anexado à cédula.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadBarterScr(
+    String code,
+  ) =>
+      _barters.download(_barters.scrFilePath(code));
+
+  /// ANEXA A VIA CARIMBADA do registro, quando ela chega depois do ato.
+  static Future<CprDesk> saveCprRegistryFile(
+    String code, {
+    required String filename,
+    required List<int> bytes,
+  }) =>
+      _barters.saveCprRegistryFile(code, filename: filename, bytes: bytes);
+
+  /// BAIXA a CÉDULA ASSINADA e a VIA DO REGISTRO — os documentos que voltaram.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadSignedCpr(
+    String code,
+  ) =>
+      _barters.download(_barters.signedCprPath(code));
+
+  static Future<({List<int> bytes, String filename, String contentType})>
+      downloadCprRegistryFile(String code) =>
+          _barters.download(_barters.cprRegistryFilePath(code));
+
+  /// O CADASTRO DA CREDORA. Fora do cache pelo mesmo motivo da cédula: ele tem
+  /// dois donos (admin e EMISSOR), e uma cópia em memória mostraria a versão de
+  /// quem abriu a tela primeiro.
+  static Future<CprCreditor> creditor() => _creditor.get();
+
+  static Future<CprCreditor> saveCreditor(CprCreditor creditor) => _creditor.save(creditor);
+
+  /// A MARGEM DE SEGURANÇA DO PENHOR — só para quem tem
+  /// `Capability.pledgePolicyManage` (o admin). Chamada à parte do cadastro
+  /// porque no servidor são duas rotas com autoridades diferentes.
+  static Future<CprCreditor> saveCreditorPledgeMargin(double percent) =>
+      _creditor.savePledgeMargin(percent);
 
   /// Troca uma permuta do cache pela versão que o servidor devolveu.
   static void _replaceBarter(BarterModel updated) {
@@ -892,6 +1570,47 @@ class AppData {
       billers.add(saved);
     } else {
       billers[index] = saved;
+    }
+  }
+
+  /* ── Emissores (pessoas, várias) ────────────────────────────────────── */
+  //
+  // O posto da CÉDULA. Ele é cadastrado como o faturista — pessoa, unidade, sem
+  // gerente — porque o formulário é o mesmo: o que muda entre os dois é o que
+  // cada um faz, e isso está na tabela de capacidades do servidor, não aqui.
+
+  static Future<ProvisionedConsultant> createEmitter(UserModel emitter) async {
+    final provisioned = await _emitters.create(emitter);
+    _cacheEmitter(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateEmitter(UserModel emitter) async {
+    final saved = await _emitters.update(emitter);
+    _cacheEmitter(saved);
+    return saved;
+  }
+
+  static Future<ProvisionedConsultant> resetEmitterPassword(String id) async {
+    final provisioned = await _emitters.resetPassword(id);
+    _cacheEmitter(provisioned.consultant);
+    return provisioned;
+  }
+
+  /// Excluir emissor não trava em nada, pelo mesmo motivo do faturista: as
+  /// cédulas que ele emitiu guardam o nome dele no próprio registro (snapshot),
+  /// e a fila é o ESTADO da permuta, não uma caixa de entrada pessoal.
+  static Future<void> deleteEmitter(String id) async {
+    await _emitters.delete(id);
+    emitters.removeWhere((e) => e.id == id);
+  }
+
+  static void _cacheEmitter(UserModel saved) {
+    final index = emitters.indexWhere((e) => e.id == saved.id);
+    if (index == -1) {
+      emitters.add(saved);
+    } else {
+      emitters[index] = saved;
     }
   }
 

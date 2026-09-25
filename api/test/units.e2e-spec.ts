@@ -8,6 +8,7 @@ import {
   JOAO,
   UNIT,
   createTestApp,
+  fillCpr,
   loginAs,
   resetDb,
 } from './utils';
@@ -115,7 +116,7 @@ describe('Unidades (e2e)', () => {
     expect(barter.status).toBe(200);
     // O vínculo cai, o nome congelado fica — o comprovante continua legível.
     expect(barter.body.data.unitId).toBeNull();
-    expect(barter.body.data.unitName).toBe('Filial 02 – Gran. Santa T.');
+    expect(barter.body.data.unitName).toBe('Filial 02 (Gran. Santa T.)');
     expect(barter.body.data.status).toBe('sentToManager');
 
     // E a etapa do gerente segue exatamente como estava.
@@ -139,7 +140,7 @@ describe('Unidades (e2e)', () => {
       .set('Authorization', admin);
     expect(trilha.body.data).toHaveLength(1);
     expect(trilha.body.data[0].detail).toBe(
-      'nome: Filial 02 – Gran. Santa T. → Filial 02 – Santa Terezinha',
+      'nome: Filial 02 (Gran. Santa T.) → Filial 02 – Santa Terezinha',
     );
   });
 
@@ -173,7 +174,7 @@ describe('Unidades (e2e)', () => {
       });
     expect(criado.status).toBe(201);
     expect(criado.body.data.unitId).toBe(UNIT.filial18);
-    expect(criado.body.data.branch).toBe('Filial 18 – Gran. São Joa.');
+    expect(criado.body.data.branch).toBe('Filial 18 (Gran. São Joa.)');
   });
 
   /**
@@ -193,9 +194,9 @@ describe('Unidades (e2e)', () => {
     const roberto = porNome.get('Roberto Souza') as { branch: string; managerName: string };
     const ana = porNome.get('Ana Paula Ferreira') as { branch: string; managerName: string };
 
-    expect(roberto.branch).toBe('Filial 34 – Gran. Jari');
+    expect(roberto.branch).toBe('Filial 34 (Gran. Jari)');
     expect(roberto.managerName).toBe('Gustavo Ramires');
-    expect(ana.branch).toBe('Filial 04 – Gran. Inharap.');
+    expect(ana.branch).toBe('Filial 04 (Gran. Inharap.)');
     expect(ana.managerName).toBe('Beatriz Nogueira');
   });
 
@@ -209,6 +210,7 @@ describe('Unidades (e2e)', () => {
       .set('Authorization', await asUser(JOAO))
       .send({
         producerId: 1,
+        grainId: 1,
         unitId: UNIT.filial34, // praça do Gustavo, consultor é do time da Beatriz
         inputs: [
           { productId: 5, quantity: 48 },
@@ -217,10 +219,23 @@ describe('Unidades (e2e)', () => {
         ],
       });
     expect(criada.status).toBe(201);
-    expect(criada.body.data.unitName).toBe('Filial 34 – Gran. Jari');
-    expect(criada.body.data.managerName).toBe('Beatriz Nogueira');
+    expect(criada.body.data.unitName).toBe('Filial 34 (Gran. Jari)');
+    // Ela nasce RASCUNHO, e sem destinatário: quem endereça é o
+    // encaminhamento, que é onde o envio de fato acontece.
+    expect(criada.body.data.status).toBe('draft');
+    expect(criada.body.data.managerName).toBeNull();
 
     const code = criada.body.data.code as string;
+    // A CÉDULA antes do encaminhamento: ela passou a ser pré-requisito, e a
+    // unidade de retirada não tem nada a ver com isso — o que este caso testa é
+    // o roteamento do parecer, e a cédula é só o caminho até lá.
+    await fillCpr(app, await asUser(JOAO), code);
+    const encaminhada = await request(app.getHttpServer())
+      .post(`/api/v1/barters/${code}/forward`)
+      .set('Authorization', await asUser(JOAO))
+      .send({ note: 'Cliente antigo, pagou as três últimas safras em dia.' });
+    expect(encaminhada.status).toBe(200);
+    expect(encaminhada.body.data.managerName).toBe('Beatriz Nogueira');
     await request(app.getHttpServer())
       .post(`/api/v1/barters/${code}/opinion`)
       .set('Authorization', await asUser(GERENTE_SUL))
