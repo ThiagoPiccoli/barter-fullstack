@@ -3,6 +3,7 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/tax_regime.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -32,7 +33,7 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
       context,
       title: 'Excluir Produtor',
       name: producer.name,
-      barterCount: AppData.barters.where((b) => b.producerId == producer.id).length,
+      barterCount: ofProducer(AppData.barters, producer.id).length,
       onConfirm: () async {
         await AppData.deleteProducer(producer.id);
         if (mounted) Navigator.pop(context);
@@ -42,15 +43,16 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final barters = AppData.barters.where((b) => b.producerId == producer.id).toList()
+    final barters = ofProducer(AppData.barters, producer.id)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    // Aprovadas E faturadas: faturar não desfaz o negócio (ver wasApproved).
-    final approvedList = barters.where((b) => b.wasApproved).toList();
-    final pending = barters.where((b) => b.status == BarterStatus.pending).length;
-    final denied = barters.where((b) => b.status == BarterStatus.denied).length;
-    final atManager = barters.where((b) => b.awaitsManager).length;
-    final sacks = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
-    final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
+    // Aprovadas E faturadas: faturar não desfaz o negócio. A conta é a mesma
+    // dos painéis (ver `services/dashboard_stats.dart`).
+    final stats = statsOf(barters);
+    final pending = stats.pendingCount;
+    final denied = stats.denied;
+    final atManager = stats.atManagerCount;
+    final sacks = stats.sacksReceivable;
+    final inputsValue = stats.inputsValue;
     // A carteira do produtor é lista: consultores dividem região e atendem o
     // mesmo cliente. Consultor excluído já não tem nome para mostrar — some da
     // linha em vez de virar um id solto.

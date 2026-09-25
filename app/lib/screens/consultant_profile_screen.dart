@@ -3,6 +3,7 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -80,7 +81,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
       context,
       title: 'Excluir Consultor',
       name: consultant.name,
-      barterCount: AppData.barters.where((b) => b.consultantId == consultant.id).length,
+      barterCount: ofConsultant(AppData.barters, consultant.id).length,
       onConfirm: () async {
         // O servidor apaga os VÍNCULOS dele com os produtores e preserva o
         // histórico. Produtor que outro consultor também atende continua
@@ -94,14 +95,17 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final wallet = AppData.producersForConsultant(consultant.id);
-    final barters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
+    final barters = ofConsultant(AppData.barters, consultant.id)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final approvedList = barters.where((b) => b.wasApproved).toList();
-    final pending = barters.where((b) => b.status == BarterStatus.pending).length;
-    final denied = barters.where((b) => b.status == BarterStatus.denied).length;
-    final atManager = barters.where((b) => b.awaitsManager).length;
-    final sacks = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
-    final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
+    // Os números do perfil são a mesma leitura dos painéis (ver
+    // `services/dashboard_stats.dart`): "faturada ainda conta como aprovada" não
+    // pode valer numa tela e não valer na outra.
+    final stats = statsOf(barters);
+    final pending = stats.pendingCount;
+    final denied = stats.denied;
+    final atManager = stats.atManagerCount;
+    final sacks = stats.sacksReceivable;
+    final inputsValue = stats.inputsValue;
 
     return Scaffold(
       appBar: AppBar(

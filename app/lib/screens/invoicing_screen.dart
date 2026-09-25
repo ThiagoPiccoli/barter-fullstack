@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../data/app_data.dart';
 import '../models/models.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -326,7 +327,7 @@ class _InvoicingScreenState extends State<InvoicingScreen> {
       series: seriesCtrl.text,
       duplicateNumber: dupCtrl.text,
       issuedAt: emitida,
-      value: double.tryParse(valueCtrl.text.trim().replaceAll('.', '').replaceAll(',', '.')),
+      value: parseNumber(valueCtrl.text),
     );
   }
 

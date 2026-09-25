@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
+import '../services/num_input.dart';
 import '../services/tax_regime.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/provisional_password_dialog.dart';
@@ -138,7 +140,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       phone: _phone.text.trim(),
       farmName: _farm.text.trim(),
       city: _city.text.trim(),
-      areaHa: double.parse(_area.text.trim().replaceAll(',', '.')),
+      areaHa: parseNumberOr(_area.text),
       taxRegime: _taxRegime,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
@@ -206,7 +208,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 required: true,
                 validator: (v) {
-                  final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                  final n = parseNumber(v ?? '');
                   if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
                   return null;
                 },
@@ -744,10 +746,10 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
       title: 'Excluir $_roleLabel',
       name: user.name,
       barterCount: _isBiller
-          ? AppData.barters.where((b) => b.invoicedBy == user.name).length
+          ? invoicedBy(AppData.barters, user.name)
           : _isEmitter
-              ? AppData.barters.where((b) => b.cprEmittedBy == user.name).length
-              : AppData.barters.where((b) => b.managerId == user.id).length,
+              ? issuedBy(AppData.barters, user.name)
+              : opinionsOf(AppData.barters, user.id),
       onConfirm: () async {
         await switch (widget.role) {
           UserRole.biller => AppData.deleteBiller(user.id),
@@ -1117,15 +1119,10 @@ class _EditInsuranceRateScreenState extends State<EditInsuranceRateScreen> {
     }
   }
 
-  /// Número como o Brasil escreve — a mesma leitura da planilha da seguradora,
-  /// para quem digita e quem carrega o arquivo não terem regras diferentes.
-  double? _parsed(String raw) {
-    final cleaned = raw.replaceAll(RegExp(r'[^\d,.-]'), '').trim();
-    if (cleaned.isEmpty) return null;
-    final normalized =
-        cleaned.contains(',') ? cleaned.replaceAll('.', '').replaceAll(',', '.') : cleaned;
-    return double.tryParse(normalized);
-  }
+  /// Número como o Brasil escreve — ver `services/num_input.dart`, que é a
+  /// mesma leitura da planilha da seguradora: quem digita e quem carrega o
+  /// arquivo não podem ter regras diferentes.
+  double? _parsed(String raw) => parseNumber(raw);
 
   @override
   Widget build(BuildContext context) {
@@ -1219,7 +1216,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
   }
 
   double _number(TextEditingController c) =>
-      double.tryParse(c.text.trim().replaceAll(',', '.')) ?? 0;
+      parseNumberOr(c.text);
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
@@ -1286,7 +1283,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               required: true,
               validator: (v) {
-                final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                final n = parseNumber(v ?? '');
                 if (n == null || n <= 0) return 'Informe um valor maior que 0';
                 return null;
               },
@@ -1317,7 +1314,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
                 validator: (v) {
                   final text = (v ?? '').trim();
                   if (text.isEmpty) return null;
-                  final n = double.tryParse(text.replaceAll(',', '.'));
+                  final n = parseNumber(text);
                   if (n == null || n < 0) return 'Informe um número válido (ou deixe vazio)';
                   return null;
                 },
@@ -1405,7 +1402,7 @@ class _EditClassRuleScreenState extends State<EditClassRuleScreen> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final value = _needsValue
-        ? (double.tryParse(_value.text.trim().replaceAll(',', '.')) ?? 0)
+        ? parseNumberOr(_value.text)
         : 0.0;
     try {
       final saved = await AppData.updateClassRule(ProductClassModel(

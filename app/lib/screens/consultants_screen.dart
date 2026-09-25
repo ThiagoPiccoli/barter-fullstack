@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -304,7 +305,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final p = list[i];
-        final bs = AppData.barters.where((b) => b.producerId == p.id).toList();
+        final bs = ofProducer(AppData.barters, p.id);
         return _PersonCard(
           initials: p.avatarInitials,
           name: p.name,
@@ -350,7 +351,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final v = list[i];
-        final bs = AppData.barters.where((b) => b.consultantId == v.id).toList();
+        final bs = ofConsultant(AppData.barters, v.id);
         return _PersonCard(
           initials: v.avatarInitials,
           name: v.name,
@@ -429,7 +430,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     }
 
     final queue = AppData.committeeQueue.length;
-    final decided = AppData.barters.where((b) => b.hasDecision).length;
+    final decided = decidedCount(AppData.barters);
     return ListView(
       key: const PageStorageKey('cadastros_comite'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -480,7 +481,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final b = list[i];
-        final invoiced = AppData.barters.where((p) => p.invoicedBy == b.name).length;
+        final invoiced = invoicedBy(AppData.barters, b.name);
         return _PersonCard(
           initials: b.avatarInitials,
           name: b.name,
@@ -519,7 +520,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final e = list[i];
-        final emitidas = AppData.barters.where((p) => p.cprEmittedBy == e.name).length;
+        final emitidas = issuedBy(AppData.barters, e.name);
         return _PersonCard(
           initials: e.avatarInitials,
           name: e.name,
@@ -724,7 +725,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final u = list[i];
-        final pickups = AppData.barters.where((b) => b.unitId == u.id).length;
+        final pickups = ofUnit(AppData.barters, u.id).length;
         final staff = AppData.consultants.where((c) => c.unitId == u.id).length;
         return _PersonCard(
           initials: u.avatarInitials,

@@ -7,6 +7,7 @@ import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../services/cpr_docx.dart';
 import 'package:file_saver/file_saver.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
 import 'creditor_screen.dart';
@@ -361,7 +362,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
       value == value.roundToDouble() ? value.toStringAsFixed(0) : value.toString();
 
   static double _parse(String text) =>
-      double.tryParse(text.trim().replaceAll(',', '.')) ?? 0;
+      parseNumberOr(text);
 
   CprDraft _collect() => CprDraft(
         number: _number.text,
@@ -1520,7 +1521,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           validator: (value) {
             final text = (value ?? '').trim();
             if (text.isEmpty) return null;
-            final parsed = double.tryParse(text.replaceAll(',', '.'));
+            final parsed = parseNumber(text);
             if (parsed == null) return 'Número inválido';
             if (percent && (parsed < 0 || parsed > 100)) return 'Entre 0 e 100';
             return null;

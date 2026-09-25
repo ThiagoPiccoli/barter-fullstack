@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -868,7 +869,7 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
         ElevatedButton(
           onPressed: () async {
-            final value = double.tryParse(ctrl.text.replaceAll(',', '.')) ?? 0;
+            final value = parseNumberOr(ctrl.text);
             try {
               await AppData.updateProductFields(product, {
                 'requiredPerHa': value < 0 ? 0 : value,

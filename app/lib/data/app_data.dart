@@ -6,6 +6,7 @@ import '../services/simulation_check.dart';
 import '../services/simulation_storage.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/barter_program_repository.dart';
+import '../services/work_post.dart';
 import '../repositories/barter_repository.dart';
 import '../repositories/catalog_repository.dart';
 import '../repositories/producer_repository.dart';
@@ -639,18 +640,16 @@ class AppData {
   /// que é rota de admin. O servidor aplica a mesma regra ao recusar o parecer
   /// de outro gerente.
   static List<BarterModel> opinionQueueFor(String managerId) =>
-      barters.where((b) => b.awaitsOpinionFrom(managerId)).toList();
+      queueOf(WorkPost.manager, barters, managerId: managerId);
 
   /// A fila do COMITÊ: as permutas com parecer, esperando decisão.
   ///
   /// Diferente da do gerente, ela não tem destinatário — o comitê é um só, e a
   /// fila dele é o ESTADO da permuta. É a mesma regra do servidor.
-  static List<BarterModel> get committeeQueue =>
-      barters.where((b) => b.awaitsCommittee).toList();
+  static List<BarterModel> get committeeQueue => queueOf(WorkPost.committee, barters);
 
   /// A fila do FATURISTA: o que o comitê aprovou e ainda não foi faturado.
-  static List<BarterModel> get invoiceQueue =>
-      barters.where((b) => b.awaitsInvoice).toList();
+  static List<BarterModel> get invoiceQueue => queueOf(WorkPost.biller, barters);
 
   /// A fila do EMISSOR: o que foi faturado e ainda não virou título registrado.
   ///
@@ -659,9 +658,7 @@ class AppData {
   /// trabalho dele, acontecem em dias diferentes, e uma fila que mostrasse só o
   /// primeiro esconderia dele as cédulas assinadas paradas esperando cartório —
   /// que é exatamente o que estava invisível antes deste posto existir.
-  static List<BarterModel> get issuanceQueue => barters
-      .where((b) => b.awaitsCprIssue || b.awaitsSignatures || b.awaitsRegistration)
-      .toList();
+  static List<BarterModel> get issuanceQueue => queueOf(WorkPost.emitter, barters);
 
   /// Busca uma classe pelo id (null se não encontrada ou id null).
   static ProductClassModel? classById(String? id) {

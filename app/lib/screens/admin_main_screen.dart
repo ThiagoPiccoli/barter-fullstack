@@ -3,6 +3,7 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -92,65 +93,15 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    // Aprovadas E faturadas: os totais do painel são sobre negócio FECHADO, e
-    // faturar não desfaz a aprovação (ver BarterModel.wasApproved).
-    final approvedList = AppData.barters.where((b) => b.wasApproved).toList();
-    // Pendentes da mais antiga para a mais nova: são a fila de "ação necessária".
-    final pendingList = AppData.barters.where((b) => b.status == BarterStatus.pending).toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    // O total de FECHADAS (aprovadas + faturadas): é ele que os números em R$ e
-    // em sacas descrevem, e é o mesmo recorte de `approvedList`.
-    final approved = approvedList.length;
-    // A BARRA DE STATUS é a outra pergunta — ela conta os POSTOS da linha, um a
-    // um. Aqui "a faturar" e "faturadas" andam separadas de propósito: somadas,
-    // esconderiam justamente o que ainda tem trabalho pela frente.
-    final toInvoice = AppData.barters.where((b) => b.awaitsInvoice).length;
-    final invoiced = AppData.barters.where((b) => b.isInvoiced).length;
-    final pending = pendingList.length;
-    final denied = AppData.barters.where((b) => b.status == BarterStatus.denied).length;
-    // Ainda na mesa do gerente: não está no comitê nem aprovada, e somá-la a
-    // qualquer uma das duas contaria como decidido o que ninguém decidiu.
-    final atManager = AppData.barters.where((b) => b.awaitsManager).length;
-
-    // Sacas a receber: o grão que os produtores entregarão pelas permutas
-    // aprovadas — o "a receber" da empresa, em saca, na colheita.
-    final sacksReceivable = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
-    final grainValue = approvedList.fold<double>(0, (s, b) => s + b.grainCredit);
-    final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
-    // Sacas ainda no comitê (potencial a entrar se aprovadas).
-    final pendingSacks = pendingList.fold<double>(0, (s, b) => s + b.totalGrainQty);
-    // Produtores distintos com permuta aprovada.
-    final activeProducers = approvedList.map((b) => b.producerId).toSet().length;
-
-    // Sacas a receber agrupadas por grão de pagamento (soja, milho, trigo...).
-    final byGrain = <String, double>{};
-    for (final b in approvedList) {
-      final name = b.referenceGrainName.isEmpty ? 'sem grão' : b.referenceGrainName;
-      byGrain[name] = (byGrain[name] ?? 0) + b.totalGrainQty;
-    }
-    final grainEntries = byGrain.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-    // Volume (sacas) por filial do consultor.
-    final byBranch = <String, double>{};
-    for (final b in approvedList) {
-      byBranch[b.consultantBranch] = (byBranch[b.consultantBranch] ?? 0) + b.totalGrainQty;
-    }
-    final branchEntries = byBranch.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-    // Insumos mais retirados (R$) nas permutas aprovadas — o lado insumo da
-    // história, que origina o custo e, por consequência, as sacas.
-    final byInput = <String, double>{};
-    for (final b in approvedList) {
-      for (final it in b.inputs) {
-        byInput[it.productName] = (byInput[it.productName] ?? 0) + it.total;
-      }
-    }
-    final topInputs = (byInput.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
-        .take(5)
-        .toList();
-
-    // Ticket médio em sacas por permuta aprovada.
-    final avgSacks = approved > 0 ? sacksReceivable / approved : 0.0;
+    // OS NÚMEROS DO PAINEL saem de `services/dashboard_stats.dart`, e não
+    // daqui: quem conta como negócio fechado, como as permutas se agrupam e há
+    // quanto tempo a fila espera são decisões de DOMÍNIO — "faturada ainda
+    // conta como aprovada" é regra, não layout. Dentro do `build` elas eram
+    // reescritas a cada mudança de tela e não tinham teste fora do widget.
+    final stats = statsOf(AppData.barters);
+    final grainEntries = sacksByGrain(stats.closed);
+    final branchEntries = sacksByBranch(stats.closed);
+    final inputEntries = topInputs(stats.closed);
 
     return Scaffold(
       appBar: AppBar(
@@ -177,33 +128,33 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 
             // Estrela do painel: o compromisso de entrega de grãos das aprovadas.
             _ReceivableHero(
-              sacks: sacksReceivable,
-              value: grainValue,
-              approvedCount: approved,
-              pendingSacks: pendingSacks,
-              pendingCount: pending,
+              sacks: stats.sacksReceivable,
+              value: stats.grainValue,
+              approvedCount: stats.closedCount,
+              pendingSacks: stats.pendingSacks,
+              pendingCount: stats.pendingCount,
               onTapPending: () => onNavigate(1),
             ),
             const SizedBox(height: 16),
 
             _InsightStrip(
-              insumosValue: inputsValue,
-              activeProducers: activeProducers,
-              avgSacks: avgSacks,
+              insumosValue: stats.inputsValue,
+              activeProducers: stats.activeProducers,
+              avgSacks: stats.averageSacks,
             ),
             const SizedBox(height: 20),
 
             // Os dois lados da mesma história — o insumo retirado, que origina o
             // custo, e a saca que vai cobri-lo. Lidos juntos quando a tela
             // permite; empilhados quando não permite.
-            if (topInputs.isNotEmpty || grainEntries.isNotEmpty) ...[
+            if (inputEntries.isNotEmpty || grainEntries.isNotEmpty) ...[
               AdaptiveColumns(
                 children: [
-                  if (topInputs.isNotEmpty)
+                  if (inputEntries.isNotEmpty)
                     _DashboardSection(
                       title: '${brand.copy.inputPluralTitle} Mais Retirados',
                       child: _RankingBars(
-                          entries: topInputs,
+                          entries: inputEntries,
                           formatValue: formatCurrency,
                           color: AppColors.input),
                     ),
@@ -211,7 +162,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
                     _DashboardSection(
                       title: 'Sacas a Receber por ${brand.copy.grainTitle}',
                       child: _GrainBreakdownCard(
-                          entries: grainEntries, total: sacksReceivable),
+                          entries: grainEntries, total: stats.sacksReceivable),
                     ),
                 ],
               ),
@@ -222,11 +173,11 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 12),
             _StatusBreakdownCard(
-              atManager: atManager,
-              pending: pending,
-              toInvoice: toInvoice,
-              invoiced: invoiced,
-              denied: denied,
+              atManager: stats.atManagerCount,
+              pending: stats.pendingCount,
+              toInvoice: stats.toInvoice,
+              invoiced: stats.invoiced,
+              denied: stats.denied,
             ),
             const SizedBox(height: 20),
 
@@ -247,13 +198,13 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
               ],
             ),
             const SizedBox(height: 8),
-            if (pendingList.isEmpty)
+            if (stats.pending.isEmpty)
               const _EmptyHint(
                 icon: Icons.check_circle_outline,
                 text: 'Nenhuma permuta esperando o comitê. Tudo em dia!',
               )
             else
-              ...pendingList.map((b) => _PendingActionCard(barter: b)),
+              ...stats.pending.map((b) => _PendingActionCard(barter: b)),
             const SizedBox(height: 20),
 
             // O rodapé do painel: o volume por filial e o que andou. Nenhum dos
@@ -417,7 +368,7 @@ class _ReceivableHero extends StatelessWidget {
 
 /// Mix das sacas a receber por grão: barra empilhada + legenda com sacas e %.
 class _GrainBreakdownCard extends StatelessWidget {
-  final List<MapEntry<String, double>> entries;
+  final List<StatSlice> entries;
   final double total;
   const _GrainBreakdownCard({required this.entries, required this.total});
 
@@ -452,7 +403,7 @@ class _GrainBreakdownCard extends StatelessWidget {
                       decoration: BoxDecoration(color: _grainColor(i), shape: BoxShape.circle)),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(entries[i].key,
+                    child: Text(entries[i].label,
                         style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
                   ),
                   Text(formatSacks(entries[i].value),
@@ -570,7 +521,7 @@ class _StripCell extends StatelessWidget {
 /// Ranking genérico (filiais, insumos...) com barra proporcional ao maior valor.
 /// [formatValue] decide se o valor sai em sacas, R$, etc.
 class _RankingBars extends StatelessWidget {
-  final List<MapEntry<String, double>> entries;
+  final List<StatSlice> entries;
   final String Function(double) formatValue;
   final Color color;
   const _RankingBars({required this.entries, required this.formatValue, required this.color});
@@ -591,7 +542,7 @@ class _RankingBars extends StatelessWidget {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(entries[i].key,
+                        child: Text(entries[i].label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(fontSize: 12, color: AppColors.textMedium)),

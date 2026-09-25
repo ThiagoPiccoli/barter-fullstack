@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../services/barter_draft.dart';
 import '../services/barter_math.dart';
 import '../services/tax_regime.dart';
 import '../widgets/class_avatar.dart';
@@ -249,12 +251,33 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     }
   }
 
-  /// Os insumos que a versão desta tela colocou na mesa.
-  List<ProductModel> get _catalog {
-    final version = _version;
-    if (version == null) return const [];
-    return AppData.inputs.where((input) => version.priceOf(input.id) != null).toList();
+  /// A PERMUTA SENDO MONTADA, do ponto de vista do DOMÍNIO.
+  ///
+  /// Tudo o que se pergunta sobre ela — o que é permutável nesta gestão, quanto
+  /// custa, quantas sacas dá, o que as réguas ainda cobram — mora em
+  /// `services/barter_draft.dart`. Esta tela guarda o que o consultor TOCOU (a
+  /// versão, o produtor, a unidade, a cultura e as quantidades) e pergunta o
+  /// resto; assim, refazer a tela não é reescrever a regra.
+  ///
+  /// Montada a cada leitura, de propósito: ela não tem estado próprio, e o
+  /// estado que ela lê muda a cada toque.
+  BarterDraft get _composition {
+    final producer = _producer;
+    return BarterDraft(
+      version: _version,
+      producer: producer,
+      quantities: _inputQty,
+      allInputs: AppData.inputs,
+      classes: AppData.classes,
+      // A TAXA da praça do produtor entra pronta: a busca é do cache, e a regra
+      // — se ela se aplica, quanto custa, o que fazer quando falta — é de lá.
+      insuranceRate: producer == null ? null : AppData.insuranceRateFor(producer.city),
+      offBarterCost: _offBarterCost,
+    );
   }
+
+  /// Os insumos que a versão desta tela colocou na mesa.
+  List<ProductModel> get _catalog => _composition.catalog;
 
   /// Os insumos escolhidos, precificados PELA VERSÃO — a entrada da matemática
   /// da permuta (services/barter_math.dart, espelho do cálculo do servidor).
@@ -262,27 +285,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// O valor unitário vem na moeda da LENTE: R$ para a retaguarda, sacas do grão
   /// para o consultor, que é quem monta permuta. As duas atravessam a mesma
   /// conta — ver [BarterVersionModel.costPerSack].
-  List<PricedInput> get _pricedInputs => [
-    for (final e in _inputQty.entries)
-      if (e.value > 0)
-        PricedInput(
-          productId: e.key,
-          quantity: e.value,
-          unitPrice: _version?.priceOf(e.key)?.perUnit ?? 0,
-          classId: _productById(e.key)?.classId,
-        ),
-  ];
-
-  ProductModel? _productById(String id) {
-    for (final input in _catalog) {
-      if (input.id == id) return input;
-    }
-    return null;
-  }
+  ProductModel? _productById(String id) => _composition.productById(id);
 
   /// Custo total dos insumos escolhidos, na moeda da lente — o valor que a
   /// permuta paga. Ver [_pricedInputs].
-  double get _inputCost => inputCost(_pricedInputs);
+  double get _inputCost => _composition.inputsCost;
 
   /// Produtor (cliente) designado para esta permuta (ou null).
   ProducerModel? get _producer => _producerId == null ? null : AppData.producerById(_producerId!);
@@ -291,140 +298,45 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   UnitModel? get _unit => AppData.unitById(_unitId);
 
   /// O que veio de FORA DO BARTER nesta permuta — os pedidos que o admin
-  /// atendeu, na moeda da lente (ver [BarterProductRequest.total]).
-  ///
-  /// Ele não aparece na lista de insumos desta tela porque não está no
-  /// catálogo: é um item cotado para ESTA permuta. Mas ele foi retirado, e as
-  /// sacas o pagam — então entra na conta do total, como entra no servidor.
-  ///
-  /// E entra SÓ ali: as réguas das pastas e do mínimo por hectare não o
-  /// enxergam, pelo mesmo motivo do servidor — ele não tem classe, e engordaria
-  /// o denominador de todas elas. Ver `pricedItemsFor`, na API.
-  double get _offBarterCost => (_draft?.addedProductRequests ?? const <BarterProductRequest>[])
-      .fold(0.0, (sum, request) => sum + (request.total ?? 0));
+  /// atendeu. A conta é da própria permuta (ver
+  /// `BarterModel.addedProductRequestsCost`); zero numa permuta nova, que ainda
+  /// não tem pedido nenhum.
+  double get _offBarterCost => _draft?.addedProductRequestsCost ?? 0;
 
-  /// A TAXA DO SEGURO desta permuta — a praça do produtor na base, quando o
-  /// Barter vigente leva seguro.
-  ///
-  /// `null` em três casos diferentes, e a tela os trata como um só: o Barter
-  /// não leva seguro, não há produtor escolhido ainda, ou a praça dele não está
-  /// na base. Quem separa o terceiro é [_insuranceMissing] — é o único que vai
-  /// RECUSAR o registro, e o consultor precisa saber disso antes de montar a
-  /// permuta inteira.
-  InsuranceRateModel? get _insuranceRate {
-    final version = _version;
-    final producer = _producer;
-    if (version == null || !version.insuranceRequired || producer == null) return null;
-    return AppData.insuranceRateFor(producer.city);
-  }
-
-  /// O Barter leva seguro e a praça do produtor NÃO está na base.
-  ///
-  /// É a recusa que o servidor vai dar no registro, antecipada para a tela: sem
-  /// isto, o consultor monta a permuta inteira com o produtor ao lado e só
-  /// descobre o problema ao salvar.
-  bool get _insuranceMissing {
-    final version = _version;
-    final producer = _producer;
-    return version != null &&
-        version.insuranceRequired &&
-        producer != null &&
-        AppData.insuranceRateFor(producer.city) == null;
-  }
+  /// O Barter leva seguro e a praça do produtor NÃO está na base — a recusa do
+  /// servidor, antecipada para cá.
+  bool get _insuranceMissing => _composition.insuranceMissing;
 
   /// O CUSTO DO SEGURO na moeda da lente — área cultivável × taxa da praça.
-  ///
-  /// A mesma conta do servidor (`insuranceCostFor`), e na mesma lente do resto
-  /// da tela: o consultor lê tudo em sacas, e a retaguarda em R$. Zero quando
-  /// não há seguro a cobrar.
-  double get _insuranceCost {
-    final rate = _insuranceRate;
-    final producer = _producer;
-    if (rate == null || producer == null) return 0;
-    return rate.showsCurrency ? rate.costFor(producer.areaHa) : rate.sacksFor(producer.areaHa);
-  }
+  double get _insuranceCost => _composition.insuranceCost;
 
-  /// Sacas do grão da safra necessárias para cobrir o custo dos insumos.
-  /// Mesmo arredondamento do servidor: o número da tela é o que será gravado.
-  ///
-  /// O SEGURO entra aqui, e só aqui, pelo mesmo caminho do item de fora do
-  /// Barter: ele é custo que a empresa adianta, as sacas o pagam, e as réguas
-  /// das pastas não o enxergam — ver `pricedItemsFor`, na API.
-  double get _sacksNeeded {
-    final version = _version;
-    return version == null
-        ? 0
-        : sacksToCover(_inputCost + _offBarterCost + _insuranceCost, version.costPerSack);
-  }
+  /// Sacas da cultura escolhida necessárias para cobrir o custo. Mesmo
+  /// arredondamento do servidor: o número da tela é o que será gravado.
+  double get _sacksNeeded => _composition.sacksNeeded;
 
-  /// Quantidade mínima obrigatória de um insumo para o produtor atual:
-  /// taxa por hectare × área da propriedade. 0 se não há produtor ou exigência.
-  double _minFor(String inputId) {
-    final producer = _producer;
-    final input = _productById(inputId);
-    if (producer == null || input == null) return 0;
-    return minQuantityFor(input.requiredPerHa, producer.areaHa);
-  }
+  /// Quantidade mínima obrigatória de um insumo para o produtor atual.
+  double _minFor(String inputId) => _composition.minimumFor(inputId);
 
   /// Há algum insumo com exigência mínima por área para o produtor atual?
-  bool get _hasRequiredInputs => _catalog.any((i) => _minFor(i.id) > 0);
+  bool get _hasRequiredInputs => _composition.hasRequiredInputs;
 
-  /// Classes que carregam uma regra de mínimo capaz de travar o envio da
-  /// permuta.
-  List<ProductClassModel> get _ruledClasses => AppData.classes.where((c) => c.hasRule).toList();
+  /// Classes que carregam uma regra de mínimo capaz de travar o envio.
+  List<ProductClassModel> get _ruledClasses => _composition.ruledClasses;
 
-  /// Custo (R$) dos insumos escolhidos que pertencem à classe [classId].
-  double _classSpend(String classId) => classSpend(_pricedInputs, classId);
+  /// Progresso (0–1) rumo ao mínimo da classe — proporção, nunca R$.
+  double _classProgress(ProductClassModel c) => _composition.progressOn(c);
 
-  /// Mínimo (R$) exigido por uma classe, dado o estado atual da permuta:
-  /// percentual do custo total, ou valor por hectare × área do produtor.
-  double _classRequired(ProductClassModel c) {
-    final p = _producer;
-    // Sem produtor escolhido não há área, e a regra por hectare não tem base
-    // de cálculo — o servidor sempre tem, porque a permuta chega com produtor.
-    if (p == null && c.ruleType == ClassRuleType.valuePerHa) return 0;
-    return classRequired(
-      ClassRule.values.byName(c.ruleType.name),
-      c.ruleValue,
-      totalCost: _inputCost,
-      areaHa: p?.areaHa ?? 0,
-    );
-  }
-
-  /// O mínimo da classe foi atingido? (tolerância de centavos)
-  bool _classMet(ProductClassModel c) {
-    final req = _classRequired(c);
-    if (req <= 0) return true;
-    return _classSpend(c.id) >= req - moneyEpsilon;
-  }
-
-  /// Progresso (0–1) rumo ao mínimo da classe. Usado na barra do consultor —
-  /// é proporção, nunca expõe R\$.
-  ///
-  /// Com a permuta VAZIA a barra fica em zero, e não em 100%. A regra
-  /// percentual sobre um custo zero dá exigência zero — matematicamente
-  /// cumprida —, mas "Exigência atingida" antes de o consultor escolher o
-  /// primeiro insumo é a tela dizendo que ele terminou sem ter começado.
-  double _classProgress(ProductClassModel c) {
-    if (_inputCost <= 0) return 0;
-    final req = _classRequired(c);
-    if (req <= 0) return 1;
-    return (_classSpend(c.id) / req).clamp(0.0, 1.0);
-  }
-
-  /// A classe aparece como cumprida na tela? Só depois de haver permuta: é o
-  /// mesmo motivo de [_classProgress]. Quem decide o ENVIO é [_classMet], que
-  /// não muda — a permuta vazia já é barrada por não ter insumo nenhum.
-  bool _classMetOnScreen(ProductClassModel c) => _inputCost > 0 && _classMet(c);
+  /// A classe aparece como cumprida na tela? Só depois de haver permuta.
+  bool _classMetOnScreen(ProductClassModel c) => _composition.isMetOnScreen(c);
 
   /// Classes ainda abaixo do mínimo (para avisar o consultor).
-  List<ProductClassModel> get _unmetClasses => _ruledClasses.where((c) => !_classMet(c)).toList();
+  List<ProductClassModel> get _unmetClasses => _composition.unmetClasses;
 
   void _setInput(String id, double qty) {
-    final min = _minFor(id);
     setState(() {
-      // Insumos exigidos por área não podem ficar abaixo do mínimo obrigatório.
-      final v = qty < min ? min : qty;
+      // Insumos exigidos por área não podem ficar abaixo do mínimo obrigatório
+      // — a regra é do domínio (ver `BarterDraft.clampToMinimum`).
+      final v = _composition.clampToMinimum(id, qty);
       if (v <= 0) {
         _inputQty.remove(id);
       } else {
@@ -443,10 +355,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     setState(() {
       _producerId = id;
       _searchQuery = '';
-      for (final i in _catalog) {
-        final min = minQuantityFor(i.requiredPerHa, p.areaHa);
-        if (min > 0) _inputQty[i.id] = min;
-      }
+      // OS INSUMOS EXIGIDOS POR ÁREA já entram no mínimo de cada um: eles são
+      // obrigatórios, e começar em zero faria o consultor descobrir isso um a
+      // um, na recusa do envio. Ver `BarterDraft.requiredMinimums`.
+      _inputQty.addAll(_composition.requiredMinimums);
     });
   }
 
@@ -2171,7 +2083,7 @@ class _InputTileState extends State<_InputTile> {
     super.didUpdateWidget(old);
     // Sincroniza o texto apenas quando a mudança veio de fora (botões +/-,
     // pré-preenchimento do mínimo), sem brigar com a digitação do usuário.
-    final typed = double.tryParse(_qtyCtrl.text.replaceAll(',', '.')) ?? 0;
+    final typed = parseNumberOr(_qtyCtrl.text);
     if ((widget.qty - typed).abs() > 0.004) {
       _qtyCtrl.text = widget.qty > 0 ? formatQty(widget.qty) : '';
       _qtyCtrl.selection = TextSelection.collapsed(offset: _qtyCtrl.text.length);
@@ -2281,8 +2193,8 @@ class _InputTileState extends State<_InputTile> {
                       contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
                       isDense: true,
                     ),
-                    onSubmitted: (v) => onChanged(double.tryParse(v.replaceAll(',', '.')) ?? 0),
-                    onChanged: (v) => onChanged(double.tryParse(v.replaceAll(',', '.')) ?? 0),
+                    onSubmitted: (v) => onChanged(parseNumberOr(v)),
+                    onChanged: (v) => onChanged(parseNumberOr(v)),
                   ),
                 ),
                 const SizedBox(width: 8),

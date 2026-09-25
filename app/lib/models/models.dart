@@ -1662,6 +1662,16 @@ class BarterModel {
   List<BarterProductRequest> get addedProductRequests =>
       productRequests.where((r) => r.isAdded).toList();
 
+  /// O CUSTO do que entrou por pedido, na moeda da lente.
+  ///
+  /// Ele não está na tabela do Barter (é item cotado para ESTA permuta), mas foi
+  /// retirado — e as sacas o pagam, como no servidor. E entra SÓ na conta do
+  /// total: as réguas das pastas e do mínimo por hectare não o enxergam, porque
+  /// ele não tem classe e engordaria o denominador de todas elas (ver
+  /// `pricedItemsFor`, na API).
+  double get addedProductRequestsCost =>
+      addedProductRequests.fold(0.0, (sum, request) => sum + (request.total ?? 0));
+
   /// Há pedido de produto esperando resposta?
   bool get hasOpenProductRequest => productRequests.any((r) => r.isOpen);
 

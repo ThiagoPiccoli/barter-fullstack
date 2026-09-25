@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/app_data.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -147,7 +148,7 @@ class _CreditorScreenState extends State<CreditorScreen> {
       // Só quando MUDOU: a rota grava trilha de auditoria, e reenviar o mesmo
       // número a cada "salvar" encheria a linha do tempo de atos que não
       // aconteceram.
-      final margem = double.tryParse(_pledgeMargin.text.trim().replaceAll(',', '.')) ?? 0;
+      final margem = parseNumberOr(_pledgeMargin.text);
       final saved = _canSetPledgeMargin && margem != (_creditor?.pledgeMarginPercent ?? 0)
           ? await AppData.saveCreditorPledgeMargin(margem)
           : cadastro;

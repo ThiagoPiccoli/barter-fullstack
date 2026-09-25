@@ -4,6 +4,7 @@ import '../theme/app_theme.dart';
 import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'barter_detail_screen.dart';
@@ -229,7 +230,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
         ? List<BarterModel>.from(AppData.barters)
-        : AppData.barters.where((b) => b.consultantId == widget.consultantId).toList();
+        : ofConsultant(AppData.barters, widget.consultantId!);
     if (status != null) list = list.where((b) => _inTab(b, status)).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();

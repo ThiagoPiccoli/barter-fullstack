@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
 import '../data/app_data.dart';
+import '../services/work_post.dart';
+import '../services/dashboard_stats.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
@@ -186,18 +188,10 @@ class _Post {
   /// "3 permutas esperando o seu parecer" — a manchete da fila.
   final String Function(int count) headline;
 
-  /// A ETAPA VIZINHA que esta pessoa acompanha, e que vira o segundo número do
-  /// painel.
-  ///
-  /// Vizinha, e nunca uma etapa qualquer: para quem empurra a permuta adiante é
-  /// a SEGUINTE (o gerente vê o que já mandou ao comitê); para o faturista, que
-  /// é o fim da linha, é o que ele já faturou. O comitê é o único que olha para
-  /// TRÁS — o que está no gerente é a fila que vai cair na mesa dele.
-  ///
-  /// Nenhum posto conta aqui uma etapa que ele não enxerga: o painel do
-  /// faturista mostrava "No comitê" enquanto ele lia a operação inteira, e era
-  /// um número que ele não podia abrir, conferir nem fazer nada a respeito.
-  final BarterStatus followStatus;
+  /// QUAL POSTO é este. A regra — fila, etapa vizinha, quem ocupa — mora em
+  /// `services/work_post.dart`; o que está nesta classe é a aparência dela.
+  final WorkPost post;
+
   final String followLabel;
   final IconData followIcon;
   final Color followColor;
@@ -214,11 +208,11 @@ class _Post {
 
   const _Post({
     required this.queue,
+    required this.post,
     required this.color,
     required this.surface,
     required this.icon,
     required this.headline,
-    required this.followStatus,
     required this.followLabel,
     required this.followIcon,
     required this.followColor,
@@ -230,17 +224,24 @@ class _Post {
   });
 
   /// Quantas permutas estão na etapa vizinha, dentro do que esta pessoa enxerga.
-  int get followCount =>
-      AppData.barters.where((b) => b.status == followStatus).length;
+  int get followCount => followCountOf(post, AppData.barters);
 
-  /// O posto desta pessoa — null para quem não tem etapa na linha (o admin, que
-  /// administra o sistema e não decide permuta).
+  /// A APARÊNCIA do posto desta pessoa — null para quem não tem etapa na linha
+  /// (o admin, que administra o sistema e não decide permuta).
+  ///
+  /// Quem responde QUAL é o posto e o que há na fila dele é
+  /// `services/work_post.dart`; este `switch` só veste o que veio de lá.
   static _Post? of(UserModel user) {
-    if (user.can(Capability.bartersOpinion)) {
+    final post = workPostOf(user);
+    if (post == null) return null;
+
+    switch (post) {
+      case WorkPost.manager:
       return _Post(
+        post: post,
         // A do gerente é a única fila com DESTINATÁRIO: o parecer é dele, e a
         // permuta de outro time não é assunto dele.
-        queue: AppData.opinionQueueFor(user.id),
+        queue: queueOf(post, AppData.barters, managerId: user.id),
         color: AppColors.atManager,
         surface: AppColors.atManagerBg,
         icon: Icons.assignment_ind,
@@ -248,7 +249,6 @@ class _Post {
             ? '1 permuta esperando o seu parecer'
             : '$count permutas esperando o seu parecer',
         // Adiante: o que ele já mandou ao comitê.
-        followStatus: BarterStatus.pending,
         followLabel: 'No comitê',
         followIcon: Icons.groups_2_outlined,
         followColor: AppColors.pending,
@@ -259,11 +259,11 @@ class _Post {
         emptyTitle: 'Nenhum parecer pendente',
         emptyText: 'Nada do seu time esperando você agora. Puxe para atualizar.',
       );
-    }
 
-    if (user.can(Capability.bartersReview)) {
+      case WorkPost.committee:
       return _Post(
-        queue: AppData.committeeQueue,
+        post: post,
+        queue: queueOf(post, AppData.barters),
         color: AppColors.pending,
         surface: AppColors.pendingBg,
         icon: Icons.groups_2,
@@ -273,7 +273,6 @@ class _Post {
         // O comitê é o único que olha para TRÁS: o que está no gerente é a fila
         // que vai cair na mesa dele, e saber o tamanho dela antes de ela chegar
         // é o começo de acompanhar a linha.
-        followStatus: BarterStatus.sentToManager,
         followLabel: 'No gerente',
         followIcon: Icons.assignment_ind_outlined,
         followColor: AppColors.atManager,
@@ -286,11 +285,11 @@ class _Post {
         emptyTitle: 'Nenhuma permuta esperando decisão',
         emptyText: 'A fila do comitê está vazia. Puxe para atualizar.',
       );
-    }
 
-    if (user.can(Capability.bartersInvoice)) {
+      case WorkPost.biller:
       return _Post(
-        queue: AppData.invoiceQueue,
+        post: post,
+        queue: queueOf(post, AppData.barters),
         color: AppColors.approved,
         surface: AppColors.approvedBg,
         icon: Icons.receipt_long,
@@ -299,7 +298,6 @@ class _Post {
             : '$count permutas aprovadas a faturar',
         // O faturista é fim de linha: não há etapa adiante, e o número que dá
         // tamanho ao trabalho dele é o que ele já faturou.
-        followStatus: BarterStatus.invoiced,
         followLabel: 'Faturadas',
         followIcon: Icons.receipt_long_outlined,
         followColor: AppColors.invoiced,
@@ -310,18 +308,12 @@ class _Post {
         emptyTitle: 'Nada a faturar',
         emptyText: 'Nenhuma permuta aprovada esperando faturamento. Puxe para atualizar.',
       );
-    }
 
-    // O EMISSOR — o posto que vem depois do faturamento.
-    //
-    // A fila dele tem os TRÊS degraus da cédula, e não só o primeiro: emitir,
-    // colher assinaturas e registrar acontecem em dias diferentes, e uma fila
-    // que mostrasse só "a emitir" esconderia dele as cédulas assinadas paradas
-    // esperando cartório — que é justamente o que estava invisível enquanto este
-    // posto não existia.
-    if (user.can(Capability.bartersCprIssue)) {
+      // O EMISSOR — o posto que vem depois do faturamento.
+      case WorkPost.emitter:
       return _Post(
-        queue: AppData.issuanceQueue,
+        post: post,
+        queue: queueOf(post, AppData.barters),
         color: AppColors.invoiced,
         surface: AppColors.invoicedBg,
         icon: Icons.description_outlined,
@@ -331,7 +323,6 @@ class _Post {
         // O número que dá tamanho ao trabalho dele é o que já foi REGISTRADO:
         // é o fim da linha, e o único estado em que a garantia vale contra
         // terceiros.
-        followStatus: BarterStatus.cprRegistered,
         followLabel: 'Registradas',
         followIcon: Icons.verified_outlined,
         followColor: AppColors.approved,
@@ -344,8 +335,6 @@ class _Post {
             'Puxe para atualizar.',
       );
     }
-
-    return null;
   }
 
   static Future<void> _openDetail(
@@ -411,9 +400,9 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
   @override
   Widget build(BuildContext context) {
     // As SACAS A RECEBER contam as aprovadas E as faturadas: faturar não desfaz
-    // a entrega combinada — a permuta continua devendo as sacas dela.
-    final sacksReceivable =
-        AppData.barters.where((b) => b.wasApproved).fold<double>(0, (s, b) => s + b.totalGrainQty);
+    // a entrega combinada — a permuta continua devendo as sacas dela. A regra é
+    // a mesma dos outros painéis, e mora em `services/dashboard_stats.dart`.
+    final sacksReceivable = statsOf(AppData.barters).sacksReceivable;
     // O POSTO de quem está olhando, e a fila dele. Ver [_Post].
     final post = _Post.of(user);
 
@@ -469,7 +458,7 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
             // de hoje sem competir com ela.
             if (user.can(Capability.bartersReview)) ...[
               _UpstreamPanel(
-                atManager: AppData.barters.where((b) => b.awaitsManager).toList(),
+                atManager: statsOf(AppData.barters).atManager,
               ),
               const SizedBox(height: 20),
             ],
@@ -720,16 +709,6 @@ class _UpstreamPanel extends StatelessWidget {
   final List<BarterModel> atManager;
   const _UpstreamPanel({required this.atManager});
 
-  /// Há quantos dias a mais antiga do grupo espera. A conta é sobre a CRIAÇÃO
-  /// porque a permuta chega ao gerente no instante em que nasce: entre registrar
-  /// e o parecer não há outra etapa que segure o relógio.
-  static int _waitOf(List<BarterModel> barters) {
-    final now = DateTime.now();
-    return barters
-        .map((b) => now.difference(b.createdAt).inDays)
-        .fold(0, (a, b) => a > b ? a : b);
-  }
-
   /// Quanto mais antiga, mais quente — os mesmos cortes do painel do admin.
   static Color _urgencyOf(int days) => days >= 14
       ? AppColors.denied
@@ -742,15 +721,11 @@ class _UpstreamPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final byManager = <String, List<BarterModel>>{};
-    for (final barter in atManager) {
-      byManager.putIfAbsent(barter.managerLabel, () => []).add(barter);
-    }
     // QUEM ESTÁ SEGURANDO HÁ MAIS TEMPO primeiro: a ordem alfabética esconderia
-    // justamente a linha que se quer ler.
-    final groups = byManager.entries.toList()
-      ..sort((a, b) => _waitOf(b.value).compareTo(_waitOf(a.value)));
-    final sacks = atManager.fold<double>(0, (s, b) => s + b.totalGrainQty);
+    // justamente a linha que se quer ler. O agrupamento e a espera são de
+    // `services/dashboard_stats.dart` — a tela desenha a ordem que recebe.
+    final groups = byManagerOldestFirst(atManager);
+    final sacks = sacksOf(atManager);
 
     return Card(
       child: Padding(
@@ -799,8 +774,8 @@ class _UpstreamPanel extends StatelessWidget {
                 _UpstreamRow(
                   manager: group.key,
                   count: group.value.length,
-                  sacks: group.value.fold<double>(0, (s, b) => s + b.totalGrainQty),
-                  days: _waitOf(group.value),
+                  sacks: sacksOf(group.value),
+                  days: waitingDays(group.value),
                 ),
             ],
           ],
@@ -918,13 +893,13 @@ class _SummaryStrip extends StatelessWidget {
         _SummaryCell(
           icon: Icons.hourglass_top,
           color: AppColors.pending,
-          value: '${AppData.barters.where((b) => b.status == BarterStatus.pending).length}',
+          value: '${statsOf(AppData.barters).pendingCount}',
           label: 'No comitê',
         ),
         _SummaryCell(
           icon: Icons.check_circle_outline,
           color: AppColors.approved,
-          value: '${AppData.barters.where((b) => b.awaitsInvoice).length}',
+          value: '${statsOf(AppData.barters).toInvoice}',
           label: 'A faturar',
         ),
       ],

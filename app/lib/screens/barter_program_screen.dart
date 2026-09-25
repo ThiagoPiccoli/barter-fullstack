@@ -5,6 +5,7 @@ import '../data/app_data.dart';
 import '../repositories/barter_program_repository.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
 import 'edit_forms.dart';
@@ -345,9 +346,7 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
           ElevatedButton(
             onPressed: () {
-              final value = double.tryParse(
-                controller.text.trim().replaceAll('.', '').replaceAll(',', '.'),
-              );
+              final value = parseNumber(controller.text);
               if (value != null && value > 0) Navigator.pop(ctx, value);
             },
             child: const Text('Salvar'),
@@ -1398,11 +1397,7 @@ class _PublishSheetState extends State<_PublishSheet> {
     if (chosen != null) setState(() => _endsAt = chosen);
   }
 
-  double? _number(TextEditingController controller) {
-    final text = controller.text.trim();
-    if (text.isEmpty) return null;
-    return double.tryParse(text.replaceAll('.', '').replaceAll(',', '.'));
-  }
+  double? _number(TextEditingController controller) => parseNumber(controller.text);
 
   void _submit() {
     final bytes = _bytes;
@@ -2042,7 +2037,7 @@ Future<void> showVersionPriceDialog(
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
         ElevatedButton(
           onPressed: () async {
-            final novo = double.tryParse(priceCtrl.text.replaceAll('.', '').replaceAll(',', '.'));
+            final novo = parseNumber(priceCtrl.text);
             if (novo == null || novo <= 0) return;
             try {
               await AppData.updateVersionPrice(productId, novo);

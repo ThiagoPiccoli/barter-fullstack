@@ -3,6 +3,7 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -114,14 +115,19 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
+    // AS PERMUTAS DELE. O recorte por consultor é da TELA (é o painel dele), e
+    // a contagem é de `services/dashboard_stats.dart`: "faturada ainda conta
+    // como aprovada" é a mesma regra dos outros painéis, e ela não pode ser
+    // reescrita uma vez por tela.
+    final myBarters = ofConsultant(AppData.barters, consultant.id)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final approved = myBarters.where((b) => b.wasApproved).toList();
-    final pending = myBarters.where((b) => b.status == BarterStatus.pending).length;
+    final stats = statsOf(myBarters);
+    final approved = stats.closed;
+    final pending = stats.pendingCount;
     // OS RASCUNHOS dele: registrados, e ainda esperando o parecer que ele tem de
     // escrever. É a única fila da tela que é DELE.
-    final myDrafts = myBarters.where((b) => b.isDraft).toList();
-    final sacksDelivered = approved.fold<double>(0, (s, b) => s + b.totalGrainQty);
+    final myDrafts = stats.drafts;
+    final sacksDelivered = stats.sacksReceivable;
 
     return Scaffold(
       appBar: AppBar(
@@ -302,7 +308,7 @@ class _ConsultantProfileTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList();
+    final myBarters = ofConsultant(AppData.barters, consultant.id);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Meu Perfil'),
