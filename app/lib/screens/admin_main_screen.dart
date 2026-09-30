@@ -11,6 +11,7 @@ import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
 import 'prices_screen.dart';
 import 'consultants_screen.dart';
+import 'back_office_main_screen.dart';
 
 class AdminMainScreen extends StatefulWidget {
   final UserModel admin;
@@ -29,7 +30,10 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
     super.initState();
     _screens = [
       _AdminDashboardTab(admin: widget.admin, onNavigate: (i) => setState(() => _selectedIndex = i)),
-      const BartersScreen(isAdmin: true, consultantId: null),
+      // As filas dos quatro postos da linha: o admin tem todas as capacidades,
+      // e age em qualquer etapa.
+      WorkQueuesTab(user: widget.admin, onQueueChanged: () => setState(() {})),
+      BartersScreen(isAdmin: true, consultantId: null, onChanged: () => setState(() {})),
       const PricesScreen(),
       const ConsultantsScreen(),
     ];
@@ -47,6 +51,12 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
           icon: Icons.dashboard_outlined,
           activeIcon: Icons.dashboard,
           label: 'Dashboard',
+        ),
+        AdaptiveDestination(
+          icon: Icons.inbox_outlined,
+          activeIcon: Icons.inbox,
+          label: 'Filas',
+          badgeCount: workQueuesCount(widget.admin),
         ),
         AdaptiveDestination(
           icon: Icons.swap_horiz_outlined,
@@ -184,11 +194,7 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                // O ADMIN NÃO DECIDE MAIS: esta lista era a fila de ação dele e
-                // passou a ser acompanhamento — quem decide é o comitê. Ela fica
-                // porque continua sendo a pergunta do painel ("o que está
-                // parado, e há quanto tempo?"), mas o título não pode chamar de
-                // ação de quem está olhando o que é trabalho de outra pessoa.
+                // "Ver todas" leva à aba Filas, onde o admin também decide.
                 Text('No Comitê, Esperando Decisão',
                     style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                 TextButton(
@@ -574,11 +580,6 @@ class _RankingBars extends StatelessWidget {
 
 /// Card de permuta parada no comitê, com o tempo de espera ("há X dias")
 /// destacado. Quanto mais antiga, mais quente a cor.
-///
-/// Para o admin isto é ACOMPANHAMENTO, não fila: ele não decide permuta. O
-/// tempo de espera continua sendo a informação que importa — uma permuta parada
-/// há três semanas é assunto de quem administra a operação, mesmo que a decisão
-/// seja de outro.
 class _PendingActionCard extends StatelessWidget {
   final BarterModel barter;
   const _PendingActionCard({required this.barter});

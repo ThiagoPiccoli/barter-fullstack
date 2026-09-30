@@ -26,12 +26,15 @@ describe('Pedido de produto de fora do Barter', () => {
   /* ── Quem pede e quem decide ────────────────────────────────────────── */
 
   /**
-   * Os dois lados têm capacidades DIFERENTES, e nenhum papel tem as duas: pedir
-   * é do consultor, atender é do admin. Juntas na mesma pessoa, quem monta a
-   * permuta passaria a escrever o preço dela.
+   * Os dois lados têm capacidades DIFERENTES: pedir é do consultor, atender é
+   * do admin. Entre os postos especializados da linha, nenhum acumula os
+   * dois — o admin é a exceção deliberada, por ser o responsável final pelo
+   * sistema e ter todas as capacidades.
    */
-  it('o consultor pede e o admin atende, e ninguém faz as duas coisas', () => {
-    expect(rolesWith(CAPABILITY.bartersProductRequest)).toEqual([ROLE.consultant]);
+  it('o consultor pede e o admin atende', () => {
+    expect(rolesWith(CAPABILITY.bartersProductRequest).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
     expect(rolesWith(CAPABILITY.bartersProductReview)).toEqual([ROLE.admin]);
   });
 
@@ -42,9 +45,10 @@ describe('Pedido de produto de fora do Barter', () => {
    */
   it('quem atende o pedido é quem responde pelos valores', () => {
     expect(rolesWith(CAPABILITY.barterManage)).toEqual(rolesWith(CAPABILITY.bartersProductReview));
-    // E continua sem decidir permuta: incluir um item não é aprovar o negócio.
+    // E continua sem decidir permuta por essa via: incluir um item não é
+    // aprovar o negócio — isso é `bartersReview`, que o comitê tem e o admin
+    // também tem, mas por decisão separada (ver policy.spec.ts).
     expect(rolesWith(CAPABILITY.bartersProductReview)).not.toContain(ROLE.committee);
-    expect(rolesWith(CAPABILITY.bartersReview)).not.toContain(ROLE.admin);
   });
 
   /* ── Até quando se pode pedir ───────────────────────────────────────── */

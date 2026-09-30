@@ -118,17 +118,20 @@ void main() {
       expect(user('admin').can(Capability.bartersReview), isFalse);
     });
 
-    /// O ADMIN NÃO DECIDE PERMUTA. Ele administra o sistema; quem decide é o
-    /// comitê. Este teste existe do lado do app porque foi aqui que o botão de
-    /// aprovar morava.
-    test('o admin não recebe a capacidade de decidir', () {
+    /// O ADMIN PODE TUDO — mas é o servidor quem diz: o app só mostra o que
+    /// veio na lista de capacidades dele.
+    test('o admin age em qualquer etapa quando o servidor concede', () {
       final admin = withCapabilities('admin', [
         'users.manage',
         'barters.readAll',
         Capability.pricesRead,
+        Capability.bartersOpinion,
+        Capability.bartersReview,
+        Capability.bartersInvoice,
+        Capability.bartersCprIssue,
       ]);
-      expect(admin.can(Capability.bartersReview), isFalse);
-      expect(admin.can(Capability.bartersInvoice), isFalse);
+      expect(admin.can(Capability.bartersReview), isTrue);
+      expect(admin.can(Capability.bartersInvoice), isTrue);
     });
   });
 

@@ -226,22 +226,26 @@ class _Post {
   /// Quantas permutas estão na etapa vizinha, dentro do que esta pessoa enxerga.
   int get followCount => followCountOf(post, AppData.barters);
 
-  /// A APARÊNCIA do posto desta pessoa — null para quem não tem etapa na linha
-  /// (o admin, que administra o sistema e não decide permuta).
+  /// A APARÊNCIA do posto desta pessoa — null para quem não tem etapa na linha.
   ///
   /// Quem responde QUAL é o posto e o que há na fila dele é
   /// `services/work_post.dart`; este `switch` só veste o que veio de lá.
   static _Post? of(UserModel user) {
     final post = workPostOf(user);
     if (post == null) return null;
+    return forPost(post, user);
+  }
 
+  /// A aparência de um posto qualquer. [anyManager] troca a fila do parecer
+  /// pela de TODOS os gerentes — a de quem pode opinar em qualquer permuta.
+  static _Post forPost(WorkPost post, UserModel user, {bool anyManager = false}) {
     switch (post) {
       case WorkPost.manager:
       return _Post(
         post: post,
         // A do gerente é a única fila com DESTINATÁRIO: o parecer é dele, e a
         // permuta de outro time não é assunto dele.
-        queue: queueOf(post, AppData.barters, managerId: user.id),
+        queue: queueOf(post, AppData.barters, managerId: anyManager ? null : user.id),
         color: AppColors.atManager,
         surface: AppColors.atManagerBg,
         icon: Icons.assignment_ind,
@@ -509,6 +513,75 @@ String _todayDate() {
   final now = DateTime.now();
   const months = ['', 'jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   return '${now.day} ${months[now.month]} ${now.year}';
+}
+
+/// Quantas permutas esperam ação desta pessoa, somando TODOS os postos dela.
+int workQueuesCount(UserModel user) => workPostsOf(user)
+    .map((post) => _Post.forPost(post, user, anyManager: true).queue.length)
+    .fold(0, (a, b) => a + b);
+
+/// AS FILAS DE TODOS OS POSTOS numa tela só — para quem acumula as etapas da
+/// linha (o admin). Cada posto aparece com o mesmo cartão que o seu dono vê no
+/// próprio painel, e a fila do parecer é a de todos os gerentes.
+class WorkQueuesTab extends StatefulWidget {
+  final UserModel user;
+  final VoidCallback? onQueueChanged;
+  const WorkQueuesTab({super.key, required this.user, this.onQueueChanged});
+
+  @override
+  State<WorkQueuesTab> createState() => _WorkQueuesTabState();
+}
+
+class _WorkQueuesTabState extends State<WorkQueuesTab> {
+  Future<void> _refresh() async {
+    try {
+      await AppData.refreshAll();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+    _onQueueChanged();
+  }
+
+  void _onQueueChanged() {
+    if (mounted) setState(() {});
+    widget.onQueueChanged?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final posts = workPostsOf(widget.user)
+        .map((post) => _Post.forPost(post, widget.user, anyManager: true))
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const MainAppBarTitle('Filas'),
+        actions: [
+          const ChangePasswordButton(),
+          const LogoutButton(),
+          AppBarUserAvatar(user: widget.user),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        color: AppColors.primary,
+        child: BoundedContent(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              for (final post in posts) ...[
+                if (post.queue.isEmpty)
+                  _EmptyQueueCard(post: post)
+                else
+                  _WorkQueueCard(post: post, onChanged: _onQueueChanged),
+                const SizedBox(height: 16),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// A FILA DO POSTO de quem está olhando — o que espera ação dele.

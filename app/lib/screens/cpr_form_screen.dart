@@ -1222,7 +1222,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
                     textCapitalization: TextCapitalization.characters,
                     decoration: const InputDecoration(
                       labelText: 'Nº do registro',
-                      hintText: 'R-4 / 18.442',
                       isDense: true,
                     ),
                   ),
@@ -1232,7 +1231,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
                     textCapitalization: TextCapitalization.words,
                     decoration: const InputDecoration(
                       labelText: 'Onde (opcional)',
-                      hintText: 'CRI Maringá/PR, B3…',
                       isDense: true,
                     ),
                   ),

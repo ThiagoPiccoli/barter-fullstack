@@ -590,6 +590,10 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
   /// tela é o rótulo e o rodapé que explica o que ele faz.
   bool get _isEmitter => widget.role == UserRole.emitter;
 
+  bool get _isAdmin => widget.role == UserRole.admin;
+
+  bool get _isSelf => widget.user != null && widget.user!.id == AppData.currentUser?.id;
+
   String get _roleLabel => widget.role.label;
 
   @override
@@ -652,16 +656,15 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
   }
 
   /// A rota vem do PAPEL — o mesmo desenho do servidor, onde cada papel tem a
-  /// sua e o motor de provisionamento é um só. O admin não aparece: ele não se
-  /// cadastra por aqui (ver `ManagedRole` em common/roles.ts), e o consultor não
-  /// chega neste método sem gerente porque o formulário o exige antes.
+  /// sua e o motor de provisionamento é um só. O consultor não chega neste
+  /// método sem gerente porque o formulário o exige antes.
   Future<ProvisionedConsultant> _create(UserModel draft) => switch (widget.role) {
         UserRole.consultant => AppData.createConsultant(draft),
         UserRole.manager => AppData.createManager(draft),
         UserRole.biller => AppData.createBiller(draft),
         UserRole.emitter => AppData.createEmitter(draft),
         UserRole.committee => AppData.createCommittee(draft),
-        UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
+        UserRole.admin => AppData.createAdmin(draft),
       };
 
   Future<UserModel> _update(UserModel draft) => switch (widget.role) {
@@ -670,7 +673,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.biller => AppData.updateBiller(draft),
         UserRole.emitter => AppData.updateEmitter(draft),
         UserRole.committee => AppData.updateCommittee(draft),
-        UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
+        UserRole.admin => AppData.updateAdmin(draft),
       };
 
   /// Nova senha de primeira entrada. Derruba as sessões abertas do titular no
@@ -719,7 +722,9 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               ? await AppData.resetBillerPassword(user.id)
               : _isEmitter
                   ? await AppData.resetEmitterPassword(user.id)
-                  : await AppData.resetManagerPassword(user.id);
+                  : _isAdmin
+                      ? await AppData.resetAdminPassword(user.id)
+                      : await AppData.resetManagerPassword(user.id);
       if (mounted) await showProvisionalPassword(context, provisioned, isReset: true);
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
@@ -749,11 +754,14 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
           ? invoicedBy(AppData.barters, user.name)
           : _isEmitter
               ? issuedBy(AppData.barters, user.name)
-              : opinionsOf(AppData.barters, user.id),
+              : _isAdmin
+                  ? 0
+                  : opinionsOf(AppData.barters, user.id),
       onConfirm: () async {
         await switch (widget.role) {
           UserRole.biller => AppData.deleteBiller(user.id),
           UserRole.emitter => AppData.deleteEmitter(user.id),
+          UserRole.admin => AppData.deleteAdmin(user.id),
           _ => AppData.deleteManager(user.id),
         };
         if (mounted) Navigator.pop(context);
@@ -788,7 +796,10 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               'emite o título, colhe as assinaturas e o leva a registro. São três etapas '
               'porque acontecem em dias diferentes, e é o status da permuta que diz em que '
               'pé a CPR está. Sem um emissor cadastrado, toda permuta faturada para aí.',
-        UserRole.admin => '',
+        UserRole.admin =>
+          'O administrador é responsável pelo sistema e pode tudo: cadastros, preços, '
+              'e todas as etapas da permuta (parecer, decisão, faturamento e emissão). '
+              'Ninguém exclui a própria conta, e o último administrador não pode ser excluído.',
       };
 
   @override
@@ -898,7 +909,9 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
             // dele no perfil, que existe porque ele tem carteira e histórico
             // para mostrar. Gerente, faturista e comitê não têm — e criar uma
             // tela só para pendurar dois botões seria pior do que tê-los aqui.
-            if (!_isNew && !_isConsultant) ...[
+            // A PRÓPRIA CONTA não tem estes botões: a senha dela se troca por
+            // "Alterar senha", e o servidor recusa excluí-la.
+            if (!_isNew && !_isConsultant && !_isSelf) ...[
               const SizedBox(height: 24),
               const Divider(),
               const SizedBox(height: 8),

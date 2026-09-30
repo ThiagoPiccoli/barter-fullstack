@@ -34,22 +34,17 @@ describe('Pedido de alteração da permuta', () => {
   /* ── Quem pede e quem decide ────────────────────────────────────────── */
 
   /**
-   * Os dois lados do desvio têm capacidades DIFERENTES, e nenhum papel tem as
-   * duas: pedir é do consultor, decidir é do admin. Se um dia coincidirem, o
-   * pedido nasce concedido — e o portão vira enfeite.
+   * Pedir é do consultor, decidir é do admin. O admin também pode pedir, por
+   * ter todas as capacidades — o consultor continua sem decidir.
    */
-  it('o consultor pede e o admin decide, e ninguém faz as duas coisas', () => {
-    expect(rolesWith(CAPABILITY.bartersChangeRequest)).toEqual([ROLE.consultant]);
+  it('o consultor pede e o admin decide', () => {
+    expect(rolesWith(CAPABILITY.bartersChangeRequest).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
     expect(rolesWith(CAPABILITY.bartersChangeReview)).toEqual([ROLE.admin]);
   });
 
-  /**
-   * O admin decide o PROCESSO e continua sem decidir o NEGÓCIO. As duas coisas
-   * juntas na mesma pessoa fariam do "libere e refaça" um caminho para aprovar
-   * o que o comitê negou.
-   */
-  it('quem decide o pedido não decide a permuta', () => {
-    expect(rolesWith(CAPABILITY.bartersReview)).not.toContain(ROLE.admin);
+  it('o comitê decide a permuta, não o pedido de alteração', () => {
     expect(rolesWith(CAPABILITY.bartersChangeReview)).not.toContain(ROLE.committee);
   });
 

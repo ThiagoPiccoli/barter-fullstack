@@ -4,8 +4,8 @@ import '../brand.dart';
 
 /// **agroBarter** — marca padrão do produto.
 ///
-/// Direção visual "Campo": verde-floresta institucional com um acento
-/// folha/lima. O logotipo é bicolor — `agro` no acento, `Barter` no tom de
+/// Direção visual "Campo": verde-floresta institucional com o acento
+/// dourado do trigo. O logotipo é bicolor — `agro` no acento, `Barter` no tom de
 /// conteúdo — e é essa quebra que dá o nome sua leitura de duas partes.
 ///
 /// Este arquivo é o molde de todos os outros clientes. Para criar um, copie
@@ -28,14 +28,14 @@ const Brand agroBarterBrand = Brand(
 
   palette: BrandPalette(
     // --- Institucional ---------------------------------------------------
-    primary: Color(0xFF14532D), // verde-floresta profundo
-    primaryMedium: Color(0xFF166D3B), // fecha o gradiente do cabeçalho
-    primaryLight: Color(0xFF1E7A42), // ícones e realces sobre fundo claro
-    primaryAccent: Color(0xFF84CC16), // folha/lima — o "agro" do logotipo
+    primary: Color(0xFF1F4D2E), // verde-floresta do logotipo
+    primaryMedium: Color(0xFF28613A), // fecha o gradiente do cabeçalho
+    primaryLight: Color(0xFF2E7045), // ícones e realces sobre fundo claro
+    primaryAccent: Color(0xFFD9A021), // dourado do trigo — o "agro" do logotipo
     primarySurface: Color(0xFFECFDF3), // chip e cartão selecionado
     // O acento vivo não tem contraste sobre branco; sobre superfície clara o
     // logotipo troca para este tom sem perder a leitura de duas cores.
-    accentOnLight: Color(0xFF4D7C0F),
+    accentOnLight: Color(0xFFB7841A),
 
     // --- Superfícies e conteúdo ------------------------------------------
     background: Color(0xFFF6F7F5), // off-white levemente esverdeado
@@ -101,7 +101,7 @@ const Brand agroBarterBrand = Brand(
     grainBg: Color(0xFFFEF3E2),
     input: Color(0xFF0F766E), // verde-azulado
     inputBg: Color(0xFFE6F4F3),
-    balance: Color(0xFF14532D),
+    balance: Color(0xFF1F4D2E),
 
     // --- Séries de gráfico (sacas por grão) -------------------------------
     // Abre no tom de `grain` — o primeiro grão do painel herda a cor do

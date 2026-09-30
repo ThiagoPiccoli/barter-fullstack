@@ -404,50 +404,13 @@ export const CAPABILITIES = Object.values(CAPABILITY) as Capability[];
  * guarda o caminho é `barters/barter-workflow.ts`, e esta tabela só responde
  * quem pode agir.
  *
- * Repare no que o admin PERDEU: `bartersReview`. Ele administra o sistema e
- * enxerga tudo, mas não decide permuta — ver o comentário da capacidade.
+ * O ADMIN tem TODAS as capacidades do sistema — é o responsável final, e
+ * acumula também as quatro etapas da esteira (parecer, decisão, faturamento,
+ * emissão) além da administração. `CAPABILITIES` é `Object.values(CAPABILITY)`
+ * logo acima: uma capacidade nova nasce automaticamente concedida ao admin.
  */
 export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
-  [ROLE.admin]: [
-    CAPABILITY.usersManage,
-    CAPABILITY.producersManage,
-    // A EDIÇÃO também, ao lado do cadastro: quem pode o mais pode o menos, e a
-    // rota de edição pede esta capacidade. Sem ela aqui, o admin perderia a
-    // caneta do cadastro que ele mesmo abre.
-    CAPABILITY.producersEdit,
-    CAPABILITY.unitsManage,
-    CAPABILITY.catalogManage,
-    CAPABILITY.barterManage,
-    CAPABILITY.producersReadAll,
-    CAPABILITY.bartersReadAll,
-    CAPABILITY.creditorManage,
-    // A MARGEM DE SEGURANÇA DO PENHOR — só do admin. Ver a capacidade: ela mora
-    // no cadastro da credora e NÃO entra por `creditorManage`, que o emissor
-    // também tem. Timbre é uma coisa; quanta terra se exige em garantia é outra.
-    CAPABILITY.pledgePolicyManage,
-    // A CÉDULA em segunda via: ler e gerar o documento do que já foi faturado.
-    // Não vem com `bartersInvoice` junto — o admin não fatura permuta, e
-    // preencher a cédula continua sendo de quem apura a matrícula.
-    CAPABILITY.bartersCprRead,
-    CAPABILITY.auditRead,
-    CAPABILITY.pricesRead,
-    CAPABILITY.bartersInvestmentPerHa,
-    // A BASE DE SEGUROS POR MUNICÍPIO — a outra metade do custo que o admin
-    // lança. Ver `insuranceManage`, e repare que ela é separada de
-    // `barterManage`, que é quem LIGA o seguro na versão.
-    CAPABILITY.insuranceManage,
-    // O DOSSIÊ do comitê, em LEITURA. Ele não anexa nada (ver
-    // `bartersCreditAttach`): quem junta prova a uma decisão é quem decide, e a
-    // leitura do admin existe justamente para auditar isso.
-    CAPABILITY.bartersCreditRead,
-    // O caminho de VOLTA da esteira. Ele não é decisão de negócio — é o admin
-    // dizendo se o trabalho já feito pelos outros postos vai ser refeito. Ver
-    // `bartersChangeReview`, e repare que `bartersReview` continua fora daqui.
-    CAPABILITY.bartersChangeReview,
-    // O PEDIDO DE FORA DO BARTER, do outro lado: quem publica a tabela de
-    // valores é quem diz por quanto entra o que ficou fora dela.
-    CAPABILITY.bartersProductReview,
-  ],
+  [ROLE.admin]: CAPABILITIES,
   // O gerente é o único com escopo de TIME: ele enxerga as permutas
   // endereçadas a ele, e não a operação inteira. Repare que `bartersReadAll`
   // NÃO está aqui — foi removida de propósito, não esquecida.

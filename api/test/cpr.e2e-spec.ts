@@ -370,15 +370,19 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
    * NEM LÊ: o que ele produz é a nota, não o título. É o teste que impede a
    * cédula de voltar para a mesa dele sem alguém escrever a linha em policy.ts.
    */
-  it('só o consultor preenche a cédula — nem o faturista, nem o emissor', async () => {
+  it('o consultor preenche a cédula — nem o faturista, nem o emissor (o admin, sim)', async () => {
     const dele = await saveCpr('PRM-2026-004', await asUser(ANA), { number: 'CPR-2026-014' });
     expect(dele.status).toBe(200);
     expect(dele.body.data.cpr.filledBy).toBe('Ana Paula Ferreira');
 
-    for (const email of [ADMIN, COMITE, GERENTE, FATURISTA, EMISSOR]) {
+    for (const email of [COMITE, GERENTE, FATURISTA, EMISSOR]) {
       const escrita = await saveCpr('PRM-2026-004', await asUser(email), { number: 'X' });
       expect([email, escrita.status]).toEqual([email, 403]);
     }
+
+    // O ADMIN tem todas as capacidades, e preencher a cédula é uma delas.
+    const doAdmin = await saveCpr('PRM-2026-004', await asUser(ADMIN), { number: 'CPR-2026-015' });
+    expect(doAdmin.status).toBe(200);
   });
 
   /**

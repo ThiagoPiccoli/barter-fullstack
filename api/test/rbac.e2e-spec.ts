@@ -296,16 +296,24 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       if (ato === 'invoice') {
         await attachInvoice(app, await asUser(FATURISTA), 'PRM-2026-004');
       }
-      for (const email of [...BACK_OFFICE, ADMIN]) {
+      for (const email of BACK_OFFICE) {
         const response = await atos[ato](await asUser(email));
-        // O ato do dono precisa PASSAR; o dos outros precisa levar 403 — e o
-        // admin está na varredura de propósito: ele não é dono de nenhum.
+        // O ato do dono precisa PASSAR; o dos outros postos precisa levar 403.
         expect([ato, email, response.status]).toEqual([
           ato,
           email,
           email === dono[ato] ? 200 : 403,
         ]);
       }
+      await resetDb(app);
+
+      // O ADMIN tem todas as capacidades: ele faz qualquer um dos quatro atos,
+      // numa base limpa (o dono já teria movido a permuta de etapa).
+      if (ato === 'invoice') {
+        await attachInvoice(app, await asUser(FATURISTA), 'PRM-2026-004');
+      }
+      const response = await atos[ato](await asUser(ADMIN));
+      expect([ato, ADMIN, response.status]).toEqual([ato, ADMIN, 200]);
       await resetDb(app);
     }
   });

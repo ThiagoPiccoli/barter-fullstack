@@ -79,7 +79,14 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   ///
   /// Quem decide o recorte continua sendo o servidor; esta lista só evita
   /// desenhar o que ele não vai responder.
-  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadIssuance)
+  ///
+  /// Quem ENXERGA TUDO (`barters.readAll` — admin e comitê) fica com a linha
+  /// inteira, mesmo acumulando os escopos estreitos: o admin tem todas as
+  /// capacidades, e cair no recorte do emissor esconderia dele o resto da
+  /// operação.
+  late final List<BarterStatus?> _statuses = _readsAll
+      ? _fullLine
+      : AppData.can(Capability.bartersReadIssuance)
       ? const [BarterStatus.invoiced, BarterStatus.cprIssued]
       : AppData.can(Capability.bartersReadInvoicing)
       // O FATURISTA ganhou "Concluídas" pelo mesmo motivo de quem acompanha, e
@@ -87,13 +94,17 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
       // as permutas até o registro, e sem esta aba a registrada não caía em
       // nenhuma das duas — sumia da tela, sem "Todas" para recolhê-la.
       ? const [BarterStatus.approved, BarterStatus.invoiced, BarterStatus.cprRegistered]
-      : [
+      : _fullLine;
+
+  bool get _readsAll => AppData.can(Capability.bartersReadAll);
+
+  List<BarterStatus?> get _fullLine => [
           null,
           // O RASCUNHO abre a lista de quem registra, e só a dele: é o único
           // estado em que o consultor tem o que fazer, e a permuta pela metade
           // não é fila de mais ninguém. Para a retaguarda a aba nem existe — o
           // servidor não devolveria nada nela.
-          if (AppData.can(Capability.bartersRegister)) BarterStatus.draft,
+          if (AppData.can(Capability.bartersRegister) && !_readsAll) BarterStatus.draft,
           // Na ordem da LINHA DE PRODUÇÃO: consultor → gerente → comitê →
           // faturamento. A lista lida da esquerda para a direita conta o caminho
           // da permuta, e é por isso que "Negadas" fica no fim: ela é saída
@@ -118,7 +129,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// para quem acompanha (admin, comitê, gerente, consultor), a pergunta é
   /// "onde está a permuta?", e a resposta é o TRECHO inteiro do emissor —
   /// emitida e assinada ainda estão com ele.
-  bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance);
+  bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance) && !_readsAll;
 
   String _tabLabel(BarterStatus? status) => switch (status) {
         null => 'Todas',
@@ -161,6 +172,10 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     // as outras uma casa.
     final offset = _hasSimulations ? 1 : 0;
     if (_hasSimulations && AppData.mySimulations.isNotEmpty) return 0;
+
+    // Quem acumula os postos (o admin) entra em "Todas": a fila de cada um já
+    // está na aba Filas.
+    if (AppData.can(Capability.usersManage)) return offset;
 
     final BarterStatus? mine = widget.opinionManagerId != null
         ? BarterStatus.sentToManager

@@ -181,6 +181,13 @@ class Capability {
   /// contando permutas que o servidor responde vazias.
   static const bartersReadIssuance = 'barters.readIssuance';
 
+  /// Enxergar a OPERAÇÃO INTEIRA — admin e comitê. Vence os escopos estreitos
+  /// acima quando alguém acumula os dois.
+  static const bartersReadAll = 'barters.readAll';
+
+  /// Provisionar, editar e excluir usuários — o admin.
+  static const usersManage = 'users.manage';
+
   /// Ver valores em R$ — todo mundo menos o consultor.
   static const pricesRead = 'prices.read';
 

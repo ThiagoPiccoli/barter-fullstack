@@ -245,10 +245,8 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         },
         // O DOSSIÊ DO COMITÊ — as peças que fundamentam a decisão de crédito: a
         // consulta ao Serasa, o extrato do que o produtor já deve à cooperativa.
-        // Duas capacidades, e a divisão é o desenho: JUNTA o comitê
-        // (`barters.creditAttach`), e só ele — nem o admin, que lê; quem põe
-        // prova dentro de uma decisão é quem decide, e a leitura do admin existe
-        // para auditar isso.
+        // Duas capacidades: JUNTA quem decide (`barters.creditAttach` — o
+        // comitê, e o admin, que tem todas).
         //
         // A LEITURA do arquivo é a ÚNICA de anexo do sistema que não é
         // `any-authenticated`, e é essa a linha que este inventário trava: nota
@@ -379,6 +377,11 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'PUT /units/:id', policy: 'capability:units.manage' },
 
         // Usuários — uma rota por papel, todas sob a mesma capacidade.
+        { route: 'DELETE /admins/:id', policy: 'capability:users.manage' },
+        { route: 'GET /admins', policy: 'capability:users.manage' },
+        { route: 'POST /admins', policy: 'capability:users.manage' },
+        { route: 'POST /admins/:id/reset-password', policy: 'capability:users.manage' },
+        { route: 'PUT /admins/:id', policy: 'capability:users.manage' },
         { route: 'DELETE /billers/:id', policy: 'capability:users.manage' },
         { route: 'GET /billers', policy: 'capability:users.manage' },
         { route: 'POST /billers', policy: 'capability:users.manage' },

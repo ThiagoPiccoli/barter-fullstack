@@ -853,7 +853,6 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
             decoration: const InputDecoration(
               labelText: 'Quantidade por hectare',
               prefixIcon: Icon(Icons.straighten),
-              hintText: 'Ex.: 2,5',
             ),
             autofocus: true,
           ),

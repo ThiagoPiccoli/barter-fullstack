@@ -47,6 +47,9 @@ class AppData {
   /// emitem o título, colhem as assinaturas e o levam a registro.
   static const StaffRepository _emitters = StaffRepository('/emitters');
 
+  /// ADMINISTRADORES — os responsáveis pelo sistema, com todas as capacidades.
+  static const StaffRepository _admins = StaffRepository('/admins');
+
   /// O COMITÊ — cadastro único, e por isso um repositório de outra forma: sem
   /// lista, sem id e sem exclusão.
   static final CommitteeRepository _committee = CommitteeRepository();
@@ -82,6 +85,9 @@ class AppData {
   /// para em "a emitir a CPR" — é a primeira coisa que falta numa instalação
   /// nova.
   static List<UserModel> emitters = [];
+
+  /// ADMINISTRADORES cadastrados — o próprio incluído.
+  static List<UserModel> admins = [];
 
   /// O CADASTRO DO COMITÊ, ou null enquanto ele não existe.
   ///
@@ -296,6 +302,7 @@ class AppData {
     managers = [];
     billers = [];
     emitters = [];
+    admins = [];
     committee = null;
     producers = [];
     units = [];
@@ -327,6 +334,7 @@ class AppData {
       if (isAdmin) refreshManagers(),
       if (isAdmin) refreshBillers(),
       if (isAdmin) refreshEmitters(),
+      if (isAdmin) refreshAdmins(),
       if (isAdmin) refreshCommittee(),
       if (isAdmin) refreshSeasons(),
       // A BASE DE SEGUROS vai para todo mundo: ela é leitura aberta, e é da
@@ -541,6 +549,10 @@ class AppData {
 
   static Future<void> refreshEmitters() async {
     emitters = await _emitters.list();
+  }
+
+  static Future<void> refreshAdmins() async {
+    admins = await _admins.list();
   }
 
   static Future<void> refreshCommittee() async {
@@ -1608,6 +1620,41 @@ class AppData {
       emitters.add(saved);
     } else {
       emitters[index] = saved;
+    }
+  }
+
+  /* ── Administradores (pessoas, várias) ──────────────────────────────── */
+
+  static Future<ProvisionedConsultant> createAdmin(UserModel admin) async {
+    final provisioned = await _admins.create(admin);
+    _cacheAdmin(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateAdmin(UserModel admin) async {
+    final saved = await _admins.update(admin);
+    _cacheAdmin(saved);
+    return saved;
+  }
+
+  static Future<ProvisionedConsultant> resetAdminPassword(String id) async {
+    final provisioned = await _admins.resetPassword(id);
+    _cacheAdmin(provisioned.consultant);
+    return provisioned;
+  }
+
+  /// O servidor recusa excluir a própria conta e o último admin.
+  static Future<void> deleteAdmin(String id) async {
+    await _admins.delete(id);
+    admins.removeWhere((a) => a.id == id);
+  }
+
+  static void _cacheAdmin(UserModel saved) {
+    final index = admins.indexWhere((a) => a.id == saved.id);
+    if (index == -1) {
+      admins.add(saved);
+    } else {
+      admins[index] = saved;
     }
   }
 

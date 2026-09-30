@@ -133,8 +133,64 @@ describe('Usuários — uma rota por papel (e2e)', () => {
     }
   });
 
-  /** Não existe rota que crie ou gerencie admin — nem por um id. Ver ManagedRole. */
-  it('o admin (id 1) não é gerenciado por nenhuma das rotas', async () => {
+  /**
+   * ADMINS cadastram outros admins pela rota própria. O sistema nunca fica sem
+   * admin: ninguém exclui a própria conta, e o último não sai.
+   */
+  describe('/admins', () => {
+    it('cria outro admin, que entra com todas as capacidades', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admins')
+        .set('Authorization', await admin())
+        .send(novoUsuario('segundo.admin@agrobarter.com.br'));
+      expect(created.status).toBe(201);
+      expect(created.body.data.role).toBe('admin');
+
+      const lista = await request(app.getHttpServer())
+        .get('/api/v1/admins')
+        .set('Authorization', await admin());
+      expect(lista.body.data.map((u: { email: string }) => u.email)).toContain(
+        'segundo.admin@agrobarter.com.br',
+      );
+    });
+
+    it('ninguém exclui a própria conta, e o último admin não sai', async () => {
+      const proprio = await request(app.getHttpServer())
+        .delete('/api/v1/admins/1')
+        .set('Authorization', await admin());
+      expect(proprio.status).toBe(422);
+      expect(proprio.body.message).toContain('própria conta');
+    });
+
+    it('um admin exclui outro enquanto sobrar pelo menos um', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admins')
+        .set('Authorization', await admin())
+        .send(novoUsuario('temporario.admin@agrobarter.com.br'));
+      const id = created.body.data.id as number;
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/admins/${id}`)
+        .set('Authorization', await admin())
+        .expect(204);
+    });
+
+    it('a rota de admins não alcança usuário de outro papel', async () => {
+      await request(app.getHttpServer())
+        .delete('/api/v1/admins/2')
+        .set('Authorization', await admin())
+        .expect(404);
+    });
+
+    it('só quem gerencia usuários chega à rota', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/admins')
+        .set('Authorization', await asUser(JOAO));
+      expect(response.status).toBe(403);
+    });
+  });
+
+  it('o admin (id 1) não é gerenciado pelas rotas dos outros papéis', async () => {
     const auth = await admin();
     for (const route of ROUTES) {
       await request(app.getHttpServer())

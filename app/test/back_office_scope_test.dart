@@ -103,6 +103,45 @@ void main() {
   }
 
   group('abas da lista de permutas', () {
+    /// O ADMIN tem todas as capacidades — inclusive os escopos estreitos do
+    /// faturista e do emissor. Quem enxerga tudo fica com a linha inteira, e não
+    /// com o recorte do emissor.
+    testWidgets('o admin, com todas as capacidades, vê a linha inteira', (tester) async {
+      AppData.currentUser = staff(UserRole.admin, [
+        Capability.usersManage,
+        Capability.bartersReadAll,
+        Capability.bartersReadTeam,
+        Capability.bartersReadInvoicing,
+        Capability.bartersReadIssuance,
+        Capability.bartersRegister,
+        Capability.bartersOpinion,
+        Capability.bartersReview,
+        Capability.bartersInvoice,
+        Capability.bartersCprIssue,
+        Capability.pricesRead,
+      ]);
+      seedLinhaInteira();
+
+      await abrir(
+        tester,
+        const BartersScreen(isAdmin: true, consultantId: null),
+      );
+
+      for (final aba in [
+        'Todas (',
+        'No gerente (',
+        'No comitê (',
+        'A faturar (',
+        'No emissor (',
+        'Concluídas (',
+        'Negadas (',
+      ]) {
+        expect(find.textContaining(aba), findsOneWidget, reason: aba);
+      }
+      expect(find.textContaining('A emitir CPR ('), findsNothing);
+      expect(find.textContaining('Rascunhos ('), findsNothing);
+    });
+
     testWidgets('o faturista só tem as etapas que chegaram nele', (tester) async {
       AppData.currentUser = staff(UserRole.biller, [
         Capability.bartersInvoice,

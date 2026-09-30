@@ -6,6 +6,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../branding/active_brand.dart';
+import '../branding/brand_mark.dart';
 import '../data/app_data.dart';
 import '../models/models.dart';
 import '../theme/app_theme.dart';
@@ -27,6 +28,8 @@ class BarterPdf {
   /// ponte ele guardaria uma segunda paleta, que sobreviveria intacta ao
   /// reskin do app — e o cliente novo receberia o PDF do cliente antigo.
   static PdfColor _c(Color color) => PdfColor.fromInt(color.toARGB32());
+  static String _hex(Color color) =>
+      '#${(color.toARGB32() & 0xFFFFFF).toRadixString(16).padLeft(6, '0')}';
 
   static PdfColor get _primary => _c(AppColors.primary);
   static PdfColor get _primarySurface => _c(AppColors.primarySurface);
@@ -165,33 +168,48 @@ class BarterPdf {
 
   static List<pw.Widget> _headerRow(BarterModel barter) {
     return [
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
+          pw.Row(
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
             children: [
-              // Mesma quebra de cor do logotipo na tela: o prefixo sai no
-              // acento e o sufixo no tom de conteúdo.
-              pw.RichText(
-                text: pw.TextSpan(children: [
-                  pw.TextSpan(
-                    text: brand.identity.wordmarkPrefix,
-                    style: pw.TextStyle(
-                      color: _c(AppColors.primaryAccent),
-                      fontSize: 20,
-                      fontWeight: pw.FontWeight.normal,
-                    ),
-                  ),
-                  pw.TextSpan(
-                    text: brand.identity.wordmarkSuffix,
-                    style: pw.TextStyle(
-                      color: _onPrimary,
-                      fontSize: 20,
-                      fontWeight: pw.FontWeight.bold,
-                    ),
-                  ),
-                ]),
+              // O símbolo da tela, no mesmo tom da barra: vagem branca,
+              // espiga dourada.
+              pw.SvgImage(
+                svg: brandMarkSvg(
+                  podHex: _hex(AppColors.onPrimary),
+                  wheatHex: _hex(AppColors.primaryAccent),
+                ),
+                height: 30,
               ),
-              pw.Text(brand.identity.tagline,
-                  style: pw.TextStyle(color: _onPrimaryMuted, fontSize: 9)),
+              pw.SizedBox(width: 6),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  // Mesma quebra de cor do logotipo na tela: o prefixo sai no
+                  // acento e o sufixo no tom de conteúdo.
+                  pw.RichText(
+                    text: pw.TextSpan(children: [
+                      pw.TextSpan(
+                        text: brand.identity.wordmarkPrefix,
+                        style: pw.TextStyle(
+                          color: _c(AppColors.primaryAccent),
+                          fontSize: 20,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                      pw.TextSpan(
+                        text: brand.identity.wordmarkSuffix,
+                        style: pw.TextStyle(
+                          color: _onPrimary,
+                          fontSize: 20,
+                          fontWeight: pw.FontWeight.bold,
+                        ),
+                      ),
+                    ]),
+                  ),
+                  pw.Text(brand.identity.tagline,
+                      style: pw.TextStyle(color: _onPrimaryMuted, fontSize: 9)),
+                ],
+              ),
             ],
           ),
           pw.Spacer(),

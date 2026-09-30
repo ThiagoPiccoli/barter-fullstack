@@ -143,9 +143,9 @@ describe('A mesa do comitê (e2e)', () => {
      * leitura dele existe para auditar uma decisão que não é dele, e escrever no
      * dossiê seria mexer na fundamentação dela.
      */
-    it('o admin não junta peça ao dossiê', async () => {
+    it('o admin também junta peça ao dossiê — ele tem todas as capacidades', async () => {
       const resposta = await anexar(await asUser(ADMIN));
-      expect(resposta.status).toBe(403);
+      expect(resposta.status).toBe(200);
     });
 
     it('a peça anexada por engano se remove, e o arquivo vai junto', async () => {

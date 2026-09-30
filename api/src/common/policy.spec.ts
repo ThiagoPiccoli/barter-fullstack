@@ -30,82 +30,64 @@ describe('Tabela de capacidades', () => {
   });
 
   /**
-   * O ADMIN NÃO DECIDE PERMUTA — e este é o teste que segura isso.
-   *
-   * `bartersReview` era dele, e a lista acima é justamente onde ela estava. Sair
-   * dali não é detalhe de arrumação: quem administra o acesso não pode ser
-   * também quem decide o negócio, porque aí é a mesma pessoa concedendo o poder
-   * e usando-o. Devolvê-la ao admin um dia — de propósito ou por engano ao mexer
-   * na tabela — quebra aqui.
+   * O ADMIN TEM TODAS AS CAPACIDADES — é o responsável final pelo sistema, e
+   * isso inclui decidir permuta ao lado do comitê.
    */
-  it('decidir permuta é só do comitê; o admin administra e não decide', () => {
-    expect(rolesWith(CAPABILITY.bartersReview)).toEqual([ROLE.committee]);
-    expect(can({ role: ROLE.admin }, CAPABILITY.bartersReview)).toBe(false);
+  it('decidir permuta é do comitê, e o admin também decide', () => {
+    expect(rolesWith(CAPABILITY.bartersReview).sort()).toEqual([ROLE.admin, ROLE.committee].sort());
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersReview)).toBe(true);
   });
 
-  /** Faturar é do faturista, e é a única coisa que ele escreve. */
-  it('faturar é só do faturista', () => {
-    expect(rolesWith(CAPABILITY.bartersInvoice)).toEqual([ROLE.biller]);
+  /** Faturar é do faturista (e do admin), e é a única coisa que o faturista escreve. */
+  it('faturar é do faturista, e o admin também fatura', () => {
+    expect(rolesWith(CAPABILITY.bartersInvoice).sort()).toEqual([ROLE.admin, ROLE.biller].sort());
   });
 
   /**
-   * LER a cédula e PREENCHER a cédula são duas perguntas.
-   *
-   * O admin ganhou a segunda via do documento — ele já enxerga a operação
-   * inteira e já responde pelo timbre dela, e pedir a outra pessoa uma cópia do
-   * papel que ele administra não fazia sentido. O que ele NÃO ganhou é o ato:
-   * preencher a cédula continua com quem apura a matrícula do imóvel, e faturar
-   * continua sendo do faturista.
-   *
-   * Este teste é o que segura as duas metades separadas. Dar `bartersInvoice`
-   * ao admin — que era o atalho óbvio para o mesmo pedido — quebra aqui.
+   * LER a cédula e PREENCHER a cédula são duas perguntas — e o admin responde
+   * sim às duas, junto com quem preenche e quem emite, porque o admin tem
+   * todas as capacidades do sistema.
    */
-  it('a cédula tem três mãos: o consultor preenche, o emissor emite, o admin lê', () => {
-    // LER é de quem preenche, de quem emite e de quem administra. São três
-    // perguntas diferentes sobre o mesmo documento, e a mesma porta responde às
-    // três.
+  it('a cédula: o consultor preenche, o emissor emite, e o admin faz as duas coisas também', () => {
+    // LER é de quem preenche, de quem emite e de quem administra.
     expect(rolesWith(CAPABILITY.bartersCprRead).sort()).toEqual(
       [ROLE.admin, ROLE.emitter, ROLE.consultant].sort(),
     );
 
-    // ESCREVER é só do consultor — é ele quem tem a matrícula da lavoura, o
-    // nome do cônjuge e o SCR. O faturista PERDEU isso, e é aqui que a perda
-    // fica travada: devolvê-la a ele quebra este teste.
-    expect(rolesWith(CAPABILITY.bartersCprFill)).toEqual([ROLE.consultant]);
+    // ESCREVER é do consultor e do admin — o faturista continua sem.
+    expect(rolesWith(CAPABILITY.bartersCprFill).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersCprFill)).toBe(false);
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersCprRead)).toBe(false);
 
-    // EMITIR é só do emissor, e ele não escreve o que confere: quem confere o
-    // próprio texto não está conferindo nada.
-    expect(rolesWith(CAPABILITY.bartersCprIssue)).toEqual([ROLE.emitter]);
+    // EMITIR é do emissor e do admin; o consultor não emite o que preenche.
+    expect(rolesWith(CAPABILITY.bartersCprIssue).sort()).toEqual([ROLE.admin, ROLE.emitter].sort());
     expect(can({ role: ROLE.emitter }, CAPABILITY.bartersCprFill)).toBe(false);
     expect(can({ role: ROLE.consultant }, CAPABILITY.bartersCprIssue)).toBe(false);
 
-    // O ADMIN lê e não age: nem fatura, nem emite.
+    // O ADMIN lê, preenche, fatura e emite — é o responsável final pelo sistema.
     expect(can({ role: ROLE.admin }, CAPABILITY.bartersCprRead)).toBe(true);
-    expect(can({ role: ROLE.admin }, CAPABILITY.bartersInvoice)).toBe(false);
-    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCprIssue)).toBe(false);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersInvoice)).toBe(true);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCprIssue)).toBe(true);
 
     // E não vazou para quem não tem nada com o documento.
     expect(can({ role: ROLE.committee }, CAPABILITY.bartersCprRead)).toBe(false);
     expect(can({ role: ROLE.manager }, CAPABILITY.bartersCprRead)).toBe(false);
   });
 
-  it('registrar permuta é só do consultor', () => {
-    expect(rolesWith(CAPABILITY.bartersRegister)).toEqual([ROLE.consultant]);
+  it('registrar permuta é do consultor, e o admin também registra', () => {
+    expect(rolesWith(CAPABILITY.bartersRegister).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
   });
 
   /**
-   * A ETAPA DO GERENTE é dele e de mais ninguém.
-   *
-   * O parecer técnico não é uma segunda aprovação: é o responsável pela unidade
-   * dizendo o que pensa da negociação que vai ser retirada lá. Dar isso ao
-   * admin "porque ele pode tudo" esvaziaria a etapa — ele passaria a opinar
-   * sobre praças que não conhece, e a permuta seguiria sem nunca ter passado
-   * pela unidade.
+   * A ETAPA DO GERENTE é dele — e o admin também a alcança, como responsável
+   * final por todas as etapas da esteira.
    */
-  it('o parecer técnico é só do gerente — nem o admin dá parecer', () => {
-    expect(rolesWith(CAPABILITY.bartersOpinion)).toEqual([ROLE.manager]);
+  it('o parecer técnico é do gerente, e o admin também pode dar parecer', () => {
+    expect(rolesWith(CAPABILITY.bartersOpinion).sort()).toEqual([ROLE.admin, ROLE.manager].sort());
   });
 
   /**
@@ -195,12 +177,15 @@ describe('Tabela de capacidades', () => {
   });
 
   /**
-   * O ESCOPO DA EMISSÃO é do emissor e de mais ninguém — e ele NÃO acumula com
-   * o do faturamento, pelo mesmo motivo do escopo de time do gerente: um papel
-   * com os dois enxergaria mais do que o próprio trecho da linha.
+   * O ESCOPO DA EMISSÃO é do emissor — e ele NÃO acumula com o do faturamento,
+   * pelo mesmo motivo do escopo de time do gerente: um papel com os dois
+   * enxergaria mais do que o próprio trecho da linha. O admin é a exceção
+   * deliberada: ele tem todos os escopos, porque enxerga a operação inteira.
    */
-  it('o escopo da emissão é do emissor, e não se acumula com o do faturamento', () => {
-    expect(rolesWith(CAPABILITY.bartersReadIssuance)).toEqual([ROLE.emitter]);
+  it('o escopo da emissão é do emissor (e do admin), e não se acumula com o do faturamento entre os postos', () => {
+    expect(rolesWith(CAPABILITY.bartersReadIssuance).sort()).toEqual(
+      [ROLE.admin, ROLE.emitter].sort(),
+    );
     expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReadInvoicing)).toBe(false);
     expect(can({ role: ROLE.emitter }, CAPABILITY.bartersReadAll)).toBe(false);
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersReadIssuance)).toBe(false);
@@ -216,22 +201,22 @@ describe('Tabela de capacidades', () => {
    * documentos da operação, e estas são a vida financeira de um cliente,
    * colhida para uma decisão de crédito.
    *
-   * E a ESCRITA é mais estreita ainda do que a leitura — ela não é do admin.
-   * Quem junta prova a uma decisão é quem decide; a leitura do admin existe para
-   * auditar isso, e ele escrever ali seria escrever dentro da fundamentação de
-   * uma decisão que não é dele.
+   * E a ESCRITA é do comitê — e também do admin, como responsável final pelo
+   * sistema.
    */
-  it('o dossiê do comitê é lido pelo comitê e pelo admin, e escrito só pelo comitê', () => {
+  it('o dossiê do comitê é lido pelo comitê e pelo admin, e escrito pelos dois', () => {
     expect(rolesWith(CAPABILITY.bartersCreditRead).sort()).toEqual(
       [ROLE.admin, ROLE.committee].sort(),
     );
-    expect(rolesWith(CAPABILITY.bartersCreditAttach)).toEqual([ROLE.committee]);
+    expect(rolesWith(CAPABILITY.bartersCreditAttach).sort()).toEqual(
+      [ROLE.admin, ROLE.committee].sort(),
+    );
 
     expect(can({ role: ROLE.consultant }, CAPABILITY.bartersCreditRead)).toBe(false);
     expect(can({ role: ROLE.manager }, CAPABILITY.bartersCreditRead)).toBe(false);
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersCreditRead)).toBe(false);
     expect(can({ role: ROLE.emitter }, CAPABILITY.bartersCreditRead)).toBe(false);
-    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCreditAttach)).toBe(false);
+    expect(can({ role: ROLE.admin }, CAPABILITY.bartersCreditAttach)).toBe(true);
   });
 
   /**
@@ -289,12 +274,12 @@ describe('Tabela de capacidades', () => {
   });
 
   /**
-   * O escopo de time é do gerente e de mais ninguém — e, principalmente, ele
-   * NÃO acumula com o de tudo. Um papel com as duas capacidades enxergaria a
-   * operação inteira, que é o oposto do que este escopo existe para dar.
+   * O escopo de time é do gerente — e, entre os postos da linha, ele NÃO
+   * acumula com o de tudo (`bartersReadAll`). O admin é a exceção: ele tem os
+   * dois, porque enxerga a operação inteira.
    */
-  it('só o gerente tem escopo de time, e ele não enxerga tudo', () => {
-    expect(rolesWith(CAPABILITY.bartersReadTeam)).toEqual([ROLE.manager]);
+  it('o escopo de time é do gerente (e do admin), e o gerente sozinho não enxerga tudo', () => {
+    expect(rolesWith(CAPABILITY.bartersReadTeam).sort()).toEqual([ROLE.admin, ROLE.manager].sort());
     expect(can({ role: ROLE.manager }, CAPABILITY.bartersReadAll)).toBe(false);
   });
 
@@ -309,7 +294,9 @@ describe('Tabela de capacidades', () => {
    */
   it('acompanham a operação inteira o admin e o comitê; o faturista, só o que chegou nele', () => {
     expect(rolesWith(CAPABILITY.bartersReadAll)).toEqual([ROLE.admin, ROLE.committee]);
-    expect(rolesWith(CAPABILITY.bartersReadInvoicing)).toEqual([ROLE.biller]);
+    expect(rolesWith(CAPABILITY.bartersReadInvoicing).sort()).toEqual(
+      [ROLE.admin, ROLE.biller].sort(),
+    );
     expect(can({ role: ROLE.biller }, CAPABILITY.bartersReadAll)).toBe(false);
   });
 

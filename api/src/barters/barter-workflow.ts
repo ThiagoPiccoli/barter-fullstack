@@ -572,11 +572,19 @@ function orderOf(step: WorkflowStep): number {
  *
  * Não é um campo da tabela porque seria a mesma verdade escrita duas vezes: a
  * política já diz quem tem `barters.review`, e uma etapa cuja capacidade
- * pertencesse a dois papéis seria uma etapa sem dono — o que os testes da
- * máquina de estados já não deixam acontecer.
+ * pertencesse a dois papéis especializados seria uma etapa sem dono — o que os
+ * testes da máquina de estados já não deixam acontecer.
+ *
+ * O ADMIN É EXCLUÍDO DESTA BUSCA, de propósito: ele tem todas as capacidades
+ * porque é o responsável final pelo sistema, mas a esteira mostra quem
+ * EXECUTA cada etapa na prática — o posto especializado (consultor, gerente,
+ * comitê, faturista, emissor) — e não o admin, que a compartilha por
+ * supervisão. Sem esta exclusão, `rolesWith` devolveria o admin para toda
+ * etapa (ele é o primeiro papel da tabela e tem a capacidade de todas), e a
+ * linha do tempo perderia o autor de cada etapa.
  */
 function ownerOf(step: WorkflowStep): Role | null {
-  return rolesWith(step.capability)[0] ?? null;
+  return rolesWith(step.capability).find((role) => role !== ROLE.admin) ?? null;
 }
 
 /**

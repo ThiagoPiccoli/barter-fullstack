@@ -705,14 +705,21 @@ describe('Barters (e2e)', () => {
       }
     });
 
-    it('nem admin nem consultor dão parecer — a etapa é do gerente', async () => {
-      for (const email of [ADMIN, JOAO]) {
-        const response = await request(app.getHttpServer())
-          .post('/api/v1/barters/PRM-2026-005/opinion')
-          .set('Authorization', await asUser(email))
-          .send({ note: opinion });
-        expect(response.status).toBe(403);
-      }
+    it('o consultor não dá parecer — a etapa é do gerente', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-005/opinion')
+        .set('Authorization', await asUser(JOAO))
+        .send({ note: opinion });
+      expect(response.status).toBe(403);
+    });
+
+    it('o admin dá parecer em qualquer permuta que espera o gerente', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/barters/PRM-2026-005/opinion')
+        .set('Authorization', await asUser(ADMIN))
+        .send({ note: opinion });
+      expect(response.status).toBe(200);
+      expect(response.body.data.status).toBe('pending');
     });
 
     /**
@@ -1249,20 +1256,14 @@ describe('Barters (e2e)', () => {
      * produzir: ele continua enxergando tudo e administrando tudo, e a única
      * coisa que perdeu foi decidir o negócio.
      */
-    it('o admin não decide permuta — ele administra o sistema', async () => {
+    it('o admin também decide permuta — ele tem todas as capacidades', async () => {
       const admin = await asUser(ADMIN);
       const decisão = await request(app.getHttpServer())
         .post('/api/v1/barters/PRM-2026-002/review')
         .set('Authorization', admin)
         .send({ status: 'approved' });
-      expect(decisão.status).toBe(403);
-      expect(decisão.body.message).toContain('Comitê');
-
-      // E o que ele perdeu foi só isso: continua vendo a operação inteira.
-      const lista = await request(app.getHttpServer())
-        .get('/api/v1/barters')
-        .set('Authorization', admin);
-      expect(lista.body.data).toHaveLength(8);
+      expect(decisão.status).toBe(200);
+      expect(decisão.body.data.status).toBe('approved');
     });
 
     it('a permuta aprovada é faturada pelo faturista, e aí ela passa ao emissor', async () => {

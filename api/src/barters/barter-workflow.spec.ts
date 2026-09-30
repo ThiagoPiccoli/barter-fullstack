@@ -159,10 +159,15 @@ describe('Máquina de estados da permuta', () => {
   /**
    * A tabela de capacidades responde "quem pode"; esta responde "em que ponto".
    * As duas precisam apontar para a mesma pessoa — uma etapa cuja capacidade
-   * pertença a dois papéis seria uma etapa sem dono.
+   * pertença a dois papéis ESPECIALIZADOS seria uma etapa sem dono. O admin é
+   * excluído desta contagem de propósito: ele tem todas as capacidades por ser
+   * o responsável final, e aparece ao lado do dono especializado em toda
+   * etapa — não é a ele que este teste pergunta "de quem é a etapa".
    */
-  it('cada etapa é de um papel só, e os postos se sucedem sem se repetir', () => {
-    const donos = Object.values(BARTER_STEPS).map((step) => rolesWith(step.capability));
+  it('cada etapa é de um papel só (fora o admin), e os postos se sucedem sem se repetir', () => {
+    const donos = Object.values(BARTER_STEPS).map((step) =>
+      rolesWith(step.capability).filter((role) => role !== ROLE.admin),
+    );
     for (const papéis of donos) expect(papéis).toHaveLength(1);
 
     // O consultor aparece duas vezes (registrar e encaminhar são o mesmo posto

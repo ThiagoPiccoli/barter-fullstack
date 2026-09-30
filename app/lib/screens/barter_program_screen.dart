@@ -1967,7 +1967,6 @@ class _OpenSeasonDialogState extends State<_OpenSeasonDialog> {
             controller: _name,
             decoration: const InputDecoration(
               labelText: 'Nome (opcional)',
-              hintText: 'Barter 2026/27',
             ),
           ),
           const SizedBox(height: 8),

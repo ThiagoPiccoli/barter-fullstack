@@ -70,14 +70,15 @@ describe('AccessGuard', () => {
 
     it('exige TODAS as capacidades quando há mais de uma', () => {
       const duas = {
-        [REQUIRED_CAPABILITIES_KEY]: [CAPABILITY.bartersReadAll, CAPABILITY.bartersReview],
+        [REQUIRED_CAPABILITIES_KEY]: [CAPABILITY.bartersReadAll, CAPABILITY.pricesRead],
       };
-      // O admin lê tudo e não decide; o faturista lê tudo e fatura, mas também
-      // não decide. Uma das duas capacidades faltando basta para barrar — quem
-      // passa é só quem tem as duas, que aqui é o comitê.
-      expect(() => guard.canActivate(contextWith(duas, ROLE.admin))).toThrow(ForbiddenException);
+      // O gerente vê preço e não enxerga tudo; o faturista vê preço e também
+      // não enxerga tudo. Uma das duas capacidades faltando basta para barrar —
+      // quem passa é só quem tem as duas, que aqui é o comitê (e o admin).
+      expect(() => guard.canActivate(contextWith(duas, ROLE.manager))).toThrow(ForbiddenException);
       expect(() => guard.canActivate(contextWith(duas, ROLE.biller))).toThrow(ForbiddenException);
       expect(guard.canActivate(contextWith(duas, ROLE.committee))).toBe(true);
+      expect(guard.canActivate(contextWith(duas, ROLE.admin))).toBe(true);
     });
 
     /** Papel desconhecido (banco adulterado, servidor à frente do app) não tem capacidade nenhuma. */

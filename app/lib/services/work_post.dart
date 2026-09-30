@@ -15,10 +15,7 @@ import '../models/models.dart';
 
 /// Os quatro postos que a permuta atravessa depois de sair da mão do consultor.
 ///
-/// O ADMIN não está aqui, e a ausência é a regra: ele administra o sistema e
-/// enxerga a operação inteira, mas não decide permuta — não há fila dele. Por
-/// isso [workPostOf] devolve `null` para ele, e o painel mostra a visão de quem
-/// acompanha, e não a de quem age.
+/// O ADMIN ocupa os quatro: ele tem todas as capacidades. Ver [workPostsOf].
 enum WorkPost {
   /// O gerente: escreve o parecer técnico das permutas do time dele.
   manager,
@@ -51,11 +48,22 @@ WorkPost? workPostOf(UserModel user) {
   return null;
 }
 
+/// TODOS os postos desta pessoa, na ordem da linha — para quem acumula etapas,
+/// como o admin.
+List<WorkPost> workPostsOf(UserModel user) => [
+      if (user.can(Capability.bartersOpinion)) WorkPost.manager,
+      if (user.can(Capability.bartersReview)) WorkPost.committee,
+      if (user.can(Capability.bartersInvoice)) WorkPost.biller,
+      if (user.can(Capability.bartersCprIssue)) WorkPost.emitter,
+    ];
+
 /// A FILA de um posto — o que espera ação dele agora.
 ///
 /// A do GERENTE é a única com destinatário: o parecer é dele, e a permuta de
 /// outro time não é assunto dele. As outras três são o ESTADO da permuta, como
 /// no servidor: o comitê é um só, o faturamento é um posto só, a emissão também.
+/// `managerId` nulo é a fila de TODOS os gerentes — a de quem enxerga a
+/// operação inteira e pode dar parecer em qualquer uma (o admin).
 ///
 /// A do EMISSOR tem os TRÊS degraus da cédula, e não só o primeiro: emitir,
 /// assinar e registrar acontecem em dias diferentes, e uma fila com só "a
@@ -63,10 +71,11 @@ WorkPost? workPostOf(UserModel user) {
 List<BarterModel> queueOf(
   WorkPost post,
   List<BarterModel> barters, {
-  String managerId = '',
+  String? managerId = '',
 }) {
   switch (post) {
     case WorkPost.manager:
+      if (managerId == null) return barters.where((b) => b.awaitsManager).toList();
       return barters.where((b) => b.awaitsOpinionFrom(managerId)).toList();
     case WorkPost.committee:
       return barters.where((b) => b.awaitsCommittee).toList();

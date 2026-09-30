@@ -47,12 +47,26 @@ void main() {
       expect(workPostOf(pessoa({Capability.bartersCprIssue})), WorkPost.emitter);
     });
 
-    /// O ADMIN NÃO TEM FILA, e a ausência é a regra: ele administra o sistema e
-    /// enxerga a operação, mas não decide permuta. O painel dele mostra a visão
-    /// de quem acompanha, não a de quem age.
     test('quem não age na linha não tem posto', () {
       expect(workPostOf(pessoa({Capability.producersManage, Capability.pricesRead})), isNull);
       expect(workPostOf(pessoa(const {})), isNull);
+      expect(workPostsOf(pessoa(const {})), isEmpty);
+    });
+
+    /// O ADMIN ocupa os quatro postos, na ordem da linha.
+    test('quem tem as quatro capacidades ocupa os quatro postos', () {
+      final todos = pessoa({
+        Capability.bartersOpinion,
+        Capability.bartersReview,
+        Capability.bartersInvoice,
+        Capability.bartersCprIssue,
+      });
+      expect(workPostsOf(todos), [
+        WorkPost.manager,
+        WorkPost.committee,
+        WorkPost.biller,
+        WorkPost.emitter,
+      ]);
     });
 
     /// Acumulando capacidades, vale a etapa MAIS CEDO da linha: o trabalho que
@@ -81,6 +95,12 @@ void main() {
     test('a do gerente traz só as endereçadas a ele', () {
       final fila = queueOf(WorkPost.manager, barters, managerId: '7');
       expect(fila.map((b) => b.id), ['gerente-meu']);
+    });
+
+    /// Sem destinatário, é a fila de TODOS os gerentes — a do admin.
+    test('sem gerente, a fila do parecer traz todas as que esperam parecer', () {
+      final fila = queueOf(WorkPost.manager, barters, managerId: null);
+      expect(fila.map((b) => b.id), ['gerente-meu', 'gerente-de-outro']);
     });
 
     test('a do comitê e a do faturista são o ESTADO da permuta', () {

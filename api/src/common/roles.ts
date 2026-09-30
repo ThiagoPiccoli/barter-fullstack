@@ -56,19 +56,6 @@ export const ROLE_LABELS: Record<Role, string> = {
 };
 
 /**
- * Papéis que o admin provisiona pelas rotas de usuário (`/consultants`,
- * `/managers`, `/committee`, `/billers`).
- *
- * `admin` fica de fora — e fica de fora no TIPO, não numa checagem que alguém
- * pode esquecer de escrever: o primeiro admin nasce do
- * bootstrap-admin.ts (banco vazio, variáveis de ambiente) e a senha dele se
- * redefine por scripts/reset-password.ts. Não existe rota que crie admin
- * porque não existe ninguém acima do admin para autorizá-la, e uma rota
- * dessas transformaria "provisionar usuário" em "fabricar um par seu".
- */
-export type ManagedRole = Exclude<Role, typeof ROLE.admin>;
-
-/**
  * Papéis cujo cadastro é ÚNICO no sistema — a conta é do ÓRGÃO, não de uma
  * pessoa.
  *

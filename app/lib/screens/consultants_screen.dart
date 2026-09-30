@@ -23,6 +23,8 @@ import 'edit_forms.dart';
 /// PRÓPRIA EMPRESA, como ela se identifica nos documentos que emite. Ela vem por
 /// último porque é a única que não participa do caminho de uma permuta; ela é o
 /// timbre do papel em que o caminho termina.
+/// `admins` fecha a fila: quem administra o sistema, com todas as
+/// capacidades.
 /// `insurance` entra depois das unidades e antes da empresa: ela é a outra
 /// coisa que não é gente — é o CUSTO DO LUGAR, a base que diz quanto vale
 /// segurar um hectare em cada praça. Vem colada às unidades porque as duas são
@@ -37,6 +39,7 @@ enum _Registry {
   units,
   insurance,
   creditor,
+  admins,
 }
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
@@ -91,6 +94,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           // A credora não tem "novo": ela é uma só, e o formulário dela é a
           // própria aba. O FAB some neste segmento — ver `showFab`.
           _Registry.creditor => const CreditorScreen(),
+          _Registry.admins => const EditStaffScreen(role: UserRole.admin),
         },
       ),
     );
@@ -142,6 +146,12 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             q.isEmpty ||
             u.name.toLowerCase().contains(q) ||
             u.city.toLowerCase().contains(q))
+        .toList();
+    final admins = AppData.admins
+        .where((a) =>
+            q.isEmpty ||
+            a.name.toLowerCase().contains(q) ||
+            a.email.toLowerCase().contains(q))
         .toList();
     final rates = AppData.insuranceRates
         .where((r) =>
@@ -210,6 +220,11 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           'A empresa como ela aparece nas cédulas emitidas',
           'Empresa',
         ),
+      _Registry.admins => (
+          'Buscar administrador ou e-mail...',
+          '${admins.length} administrador(es)',
+          'Novo admin',
+        ),
     };
 
     // O comitê já cadastrado não ganha botão de "novo": ele é único, e um botão
@@ -234,23 +249,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-              child: _SegmentedToggle(
-                tab: _tab,
-                counts: {
-                  _Registry.producers: AppData.producers.length,
-                  _Registry.consultants: AppData.consultants.length,
-                  _Registry.managers: AppData.managers.length,
-                  _Registry.committee: AppData.committee == null ? 0 : 1,
-                  _Registry.billers: AppData.billers.length,
-                  _Registry.emitters: AppData.emitters.length,
-                  _Registry.units: AppData.units.length,
-                  _Registry.insurance: AppData.insuranceRates.length,
-                  // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
-                  // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
-                  _Registry.creditor: 1,
-                },
-                onChanged: _setTab,
-              ),
+              child: _SegmentedToggle(tab: _tab, onChanged: _setTab),
             ),
             if (_tab != _Registry.committee && _tab != _Registry.creditor)
             Padding(
@@ -287,6 +286,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 _Registry.units => _buildUnitList(units),
                 _Registry.insurance => _buildInsuranceList(rates),
                 _Registry.creditor => const CreditorScreen(embedded: true),
+                _Registry.admins => _buildAdminList(admins),
               },
             ),
           ],
@@ -545,6 +545,39 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     );
   }
 
+  /// Os ADMINISTRADORES. A própria conta aparece marcada.
+  Widget _buildAdminList(List<UserModel> list) {
+    if (list.isEmpty) return const _EmptyState(label: 'Nenhum administrador encontrado');
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_admins'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final a = list[i];
+        return _PersonCard(
+          initials: a.avatarInitials,
+          name: a.name,
+          subtitle: a.email,
+          accent: AppColors.primaryAccent,
+          badgeIcon: Icons.admin_panel_settings,
+          chips: [
+            if (a.id == AppData.currentUser?.id)
+              _StatChip(label: 'Você', color: AppColors.primaryAccent),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => EditStaffScreen(user: a, role: UserRole.admin),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
   /// AS PRAÇAS da base de seguros. O cartão mostra o valor por hectare e
   /// quantos produtores da carteira estão naquele município — que é a leitura
   /// que interessa ao admin: uma praça sem produtor é cadastro adiantado, e um
@@ -766,13 +799,8 @@ List<Widget> _statChips(List<BarterModel> bs) {
 
 class _SegmentedToggle extends StatelessWidget {
   final _Registry tab;
-  final Map<_Registry, int> counts;
   final ValueChanged<_Registry> onChanged;
-  const _SegmentedToggle({
-    required this.tab,
-    required this.counts,
-    required this.onChanged,
-  });
+  const _SegmentedToggle({required this.tab, required this.onChanged});
 
   /// Rótulo, ícone e cor de cada segmento, em um lugar só. Com três abas, a
   /// forma anterior (um bloco por segmento, copiado) já era o começo de uma
@@ -787,6 +815,7 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.units: ('Unidades', Icons.store),
     _Registry.insurance: ('Seguros', Icons.shield_outlined),
     _Registry.creditor: ('Empresa', Icons.domain),
+    _Registry.admins: ('Admins', Icons.admin_panel_settings),
   };
 
   /// A cor de cada segmento é a da ETAPA dele no fluxo — o mesmo índigo do
@@ -803,6 +832,7 @@ class _SegmentedToggle extends StatelessWidget {
         _Registry.units => AppColors.primaryMedium,
         _Registry.insurance => AppColors.atManager,
         _Registry.creditor => AppColors.textMedium,
+        _Registry.admins => AppColors.primaryAccent,
       };
 
   @override
@@ -826,7 +856,6 @@ class _SegmentedToggle extends StatelessWidget {
               _seg(
                 label: entry.value.$1,
                 icon: entry.value.$2,
-                count: counts[entry.key] ?? 0,
                 selected: tab == entry.key,
                 accent: _accentOf(entry.key),
                 onTap: () => onChanged(entry.key),
@@ -840,7 +869,6 @@ class _SegmentedToggle extends StatelessWidget {
   Widget _seg({
     required String label,
     required IconData icon,
-    required int count,
     required bool selected,
     required Color accent,
     required VoidCallback onTap,
@@ -859,10 +887,8 @@ class _SegmentedToggle extends StatelessWidget {
               ? [BoxShadow(color: accent.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 2))]
               : null,
         ),
-        // Ícone em cima, rótulo e contagem embaixo: lado a lado eles não cabiam
-        // nem com quatro segmentos, e o `ellipsis` comia o rótulo até sobrar uma
-        // letra. O FittedBox garante que nada estoure quando a fonte do sistema
-        // for maior.
+        // Ícone em cima, rótulo embaixo. O FittedBox garante que nada estoure
+        // quando a fonte do sistema for maior.
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -870,34 +896,13 @@ class _SegmentedToggle extends StatelessWidget {
             const SizedBox(height: 3),
             FittedBox(
               fit: BoxFit.scaleDown,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(label,
-                      maxLines: 1,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: selected ? AppColors.onPrimary : AppColors.textMedium,
-                      )),
-                  const SizedBox(width: 5),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? AppColors.onPrimary.withValues(alpha: 0.25)
-                          : AppColors.textLight.withValues(alpha: 0.20),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text('$count',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: selected ? AppColors.onPrimary : AppColors.textMedium,
-                        )),
-                  ),
-                ],
-              ),
+              child: Text(label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? AppColors.onPrimary : AppColors.textMedium,
+                  )),
             ),
           ],
         ),

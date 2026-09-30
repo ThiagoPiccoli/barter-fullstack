@@ -1992,7 +1992,6 @@ void showProductRequestDialog(
                       onChanged: (_) => setLocal(() {}),
                       decoration: const InputDecoration(
                         labelText: 'Produto ou serviço',
-                        hintText: 'Adjuvante Prime, semeadura por drone…',
                       ),
                     ),
                     Row(
@@ -2014,7 +2013,6 @@ void showProductRequestDialog(
                             onChanged: (_) => setLocal(() {}),
                             decoration: const InputDecoration(
                               labelText: 'Unidade',
-                              hintText: 'l, kg, ha…',
                               counterText: '',
                             ),
                           ),

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminsController } from './admins.controller';
 import { BillersController } from './billers.controller';
 import { CommitteeController } from './committee.controller';
 import { ConsultantsController } from './consultants.controller';
@@ -20,11 +21,11 @@ import { UserProvisioningService } from './user-provisioning.service';
  * porque cadastra um ÓRGÃO: ele é uma reunião, e a conta é uma só — ver o
  * controller.
  *
- * `admin` não tem controller de propósito — ver `ManagedRole` em
- * common/roles.ts.
+ * `/admins` cadastra outros administradores — ver AdminsController.
  */
 @Module({
   controllers: [
+    AdminsController,
     ConsultantsController,
     ManagersController,
     CommitteeController,
