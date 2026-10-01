@@ -138,13 +138,13 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   mesmo é a primeira condição para os dois divergirem. Enquanto for rascunho ela
   se troca (`PUT /barters/:code/culture`) — os insumos ficam, as sacas e o penhor
   são refeitos.
-- **Os DADOS do produtor são do consultor; o CADASTRO continua do admin**: quem
-  visita a fazenda é quem sabe que o telefone mudou e que a propriedade está com
-  o nome errado, e enquanto isso foi só do admin a correção virava um chamado —
-  o cadastro envelhecia em silêncio. O consultor edita os produtores da própria
-  carteira (`producers.edit`); ficam de fora o CPF/CNPJ (a identidade do
-  cadastro), a área cultivável e o regime de Funrural (as duas réguas que medem
-  toda permuta dele) e a carteira (quem atende quem). Cadastrar e excluir
+- **O produtor é do consultor; a CARTEIRA continua do admin**: quem visita a
+  fazenda é quem conhece o cliente novo e sabe que a área desta cultura é outra,
+  e enquanto isso foi só do admin cada correção virava um chamado. O consultor
+  cadastra produtor (`producers.register`) — que nasce na carteira dele, e só na
+  dele — e edita todos os dados dos produtores da própria carteira
+  (`producers.edit`), CPF/CNPJ, área do Barter e Funrural inclusive. CPF/CNPJ já
+  cadastrado é barrado sem expor a carteira alheia. Definir a carteira e excluir
   continuam em `producers.manage`.
 - **NestJS** no backend: módulos por recurso (controller fino → service com a
   regra → Prisma), DTOs com `class-validator` na borda, guards para

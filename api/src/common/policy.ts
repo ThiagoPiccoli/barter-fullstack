@@ -24,29 +24,48 @@ import { ROLE, ROLES, type Role } from './roles';
 export const CAPABILITY = {
   /** Provisionar, editar, resetar senha e excluir usuários. */
   usersManage: 'users.manage',
-  /** Cadastrar/editar/excluir produtores e definir a carteira de cada um. */
+  /**
+   * Alcançar QUALQUER produtor: editar o de qualquer carteira, excluir e
+   * definir a carteira de cada um — quem atende quem.
+   */
   producersManage: 'producers.manage',
   /**
-   * EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — sem cadastrar, sem
-   * excluir e sem mexer em quem o atende.
+   * CADASTRAR um produtor novo.
+   *
+   * É do CONSULTOR também, e por isso é separada de `producersManage`: quem
+   * conhece o cliente novo é quem foi até a fazenda, e mandá-lo pedir o
+   * cadastro ao admin antes de poder registrar a primeira permuta transformava
+   * cada cliente novo num chamado.
+   *
+   * O que ela NÃO dá é a escolha da carteira. O produtor que o consultor
+   * cadastra nasce na carteira DELE, e só na dele — o service ignora qualquer
+   * outra e recusa a tentativa (ver `ownerOnCreate`). O admin, que tem
+   * `producersManage`, continua escolhendo o consultor no cadastro.
+   *
+   * A unicidade do CPF/CNPJ vale para os dois: o consultor que tenta cadastrar
+   * um cliente que já existe — dele ou de um colega — é barrado, e a mensagem
+   * diz o que fazer sem lhe mostrar a carteira alheia.
+   */
+  producersRegister: 'producers.register',
+  /**
+   * EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — todos eles, menos quem
+   * o atende.
    *
    * É do CONSULTOR, e é a leitura literal de quem gerencia os dados do produtor
    * na prática: quem visita a fazenda, sabe que o telefone mudou, que o cliente
-   * passou a plantar noutro município e que o nome da fazenda saiu errado no
-   * cadastro é ele. Enquanto isso foi do admin, a correção de um telefone virava
-   * um chamado — e o cadastro ficava velho em silêncio, que é pior do que ficar
-   * errado com alguém sabendo.
+   * arrendou mais terra para esta safra, que fez a opção pela folha e que o
+   * CPF saiu com um dígito trocado no cadastro é ele.
    *
-   * Ela é SEPARADA de `producersManage`, e a separação é o desenho: cadastrar,
-   * excluir e definir a carteira continuam do admin. Os três não são "dados do
-   * produtor", são decisões sobre o cadastro — quem entra na base, quem sai dela
-   * e quem atende quem. A carteira em especial: um consultor que a escrevesse
-   * poderia passar o próprio cliente adiante sem que ninguém decidisse isso.
+   * A ÁREA e o REGIME DE FUNRURAL já foram do admin, e saíram de lá: a área do
+   * Barter muda de uma cultura para outra (o cliente planta 400 ha de soja no
+   * verão e 250 de milho na safrinha), e quem sabe qual é a da permuta que está
+   * sendo montada é o consultor. O que já foi registrado não se mexe — a
+   * permuta congela a área e a alíquota que usou (`Barter.producerAreaHa`,
+   * `Barter.taxRate`).
    *
-   * O QUE ELA NÃO ALCANÇA, dentro da própria edição, está em `producers.service`
-   * (ver `assertEditable`): o documento, a área cultivável e o regime de
-   * Funrural. Os três não são contato nem endereço — são a identidade do
-   * cadastro e as duas réguas que medem toda permuta dele.
+   * O que ela NÃO alcança é a CARTEIRA (ver `assertEditable`): um consultor que
+   * a escrevesse poderia passar o próprio cliente adiante sem que ninguém
+   * decidisse isso. Excluir também continua em `producersManage`.
    */
   producersEdit: 'producers.edit',
   /**
@@ -479,9 +498,11 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   // que ele sabe sobre a lavoura entra no sistema em vez de sair por telefone.
   [ROLE.consultant]: [
     CAPABILITY.bartersRegister,
-    // OS DADOS DO PRODUTOR, dos da própria carteira. Quem visita a fazenda é
-    // quem sabe que o telefone mudou — ver `producersEdit`, inclusive para o
-    // que ela deliberadamente NÃO alcança.
+    // O PRODUTOR, da própria carteira: cadastrar o cliente novo (que nasce na
+    // carteira dele) e manter os dados de quem ele já atende. Quem visita a
+    // fazenda é quem sabe — ver `producersRegister` e `producersEdit`, inclusive
+    // para o que elas deliberadamente NÃO alcançam.
+    CAPABILITY.producersRegister,
     CAPABILITY.producersEdit,
     CAPABILITY.bartersChangeRequest,
     CAPABILITY.bartersProductRequest,

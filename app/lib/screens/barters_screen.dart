@@ -58,6 +58,28 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   late TabController _tabController;
   String _search = '';
 
+  /// O CONSULTOR escolhido no seletor do gerente; null é "Todos".
+  String? _consultantFilter;
+
+  /// A tela é a do GERENTE: a lista é a do time dele, e um time tem vários
+  /// consultores — daí o seletor. O admin, que vê a operação inteira, não passa
+  /// [BartersScreen.opinionManagerId] e não ganha o seletor; para ele a busca
+  /// por nome já resolve.
+  bool get _filtersByConsultant => widget.opinionManagerId != null;
+
+  /// As opções do seletor — ver [consultantsOf].
+  List<({String id, String name})> get _consultantOptions => consultantsOf(AppData.barters);
+
+  /// O filtro EM VIGOR. A escolha pode ter deixado de existir (a lista foi
+  /// recarregada e aquele consultor não tem mais permuta aqui): nesse caso o
+  /// recorte volta a ser "Todos", em vez de esvaziar a lista sem explicação e
+  /// deixar o seletor com um valor que não está nas opções.
+  String? get _activeConsultant => _consultantFilter != null &&
+          _filtersByConsultant &&
+          _consultantOptions.any((c) => c.id == _consultantFilter)
+      ? _consultantFilter
+      : null;
+
   /// A aba de simulações só existe para o consultor logado — ver
   /// [BartersScreen.consultant].
   bool get _hasSimulations => widget.consultant != null;
@@ -246,6 +268,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     var list = widget.isAdmin
         ? List<BarterModel>.from(AppData.barters)
         : ofConsultant(AppData.barters, widget.consultantId!);
+    final consultant = _activeConsultant;
+    if (consultant != null) list = ofConsultant(list, consultant);
     if (status != null) list = list.where((b) => _inTab(b, status)).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
@@ -290,14 +314,37 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           if (_hasSimulations) const OfflineBanner(),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: TextField(
-              onChanged: (v) => setState(() => _search = v),
-              decoration: InputDecoration(
-                hintText: 'Buscar por código ou produtor...',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              ),
+            // O seletor ao LADO da busca quando cabe, e embaixo dela no celular:
+            // dividir 360px entre os dois cortaria o nome do consultor e o texto
+            // da busca ao mesmo tempo.
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final search = TextField(
+                  onChanged: (v) => setState(() => _search = v),
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por código ou produtor...',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  ),
+                );
+                if (!_filtersByConsultant) return search;
+                final selector = _ConsultantSelector(
+                  options: _consultantOptions,
+                  selected: _activeConsultant,
+                  onChanged: (id) => setState(() => _consultantFilter = id),
+                );
+                if (constraints.maxWidth < 560) {
+                  return Column(children: [search, const SizedBox(height: 8), selector]);
+                }
+                return Row(
+                  children: [
+                    Expanded(child: search),
+                    const SizedBox(width: 8),
+                    SizedBox(width: 260, child: selector),
+                  ],
+                );
+              },
             ),
           ),
           Expanded(
@@ -321,6 +368,53 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             ),
           ),
         ],
+        ),
+      ),
+    );
+  }
+}
+
+/// O SELETOR DE CONSULTOR do gerente: "Todos" e um item por consultor que tem
+/// permuta na mesa dele.
+///
+/// É um DropdownButton controlado (e não um DropdownButtonFormField) porque o
+/// valor pode ser trocado por fora — a tela volta para "Todos" quando a escolha
+/// some da lista — e o campo de formulário só lê o valor inicial.
+class _ConsultantSelector extends StatelessWidget {
+  final List<({String id, String name})> options;
+  final String? selected;
+  final ValueChanged<String?> onChanged;
+
+  const _ConsultantSelector({
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: const InputDecoration(
+        prefixIcon: Icon(Icons.person_outline, size: 20),
+        isDense: true,
+        contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          key: const ValueKey('consultant-selector'),
+          value: selected,
+          isExpanded: true,
+          isDense: true,
+          style: TextStyle(fontSize: 14, color: AppColors.textDark),
+          items: [
+            const DropdownMenuItem<String?>(value: null, child: Text('Todos')),
+            for (final c in options)
+              DropdownMenuItem<String?>(
+                value: c.id,
+                child: Text(c.name, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: onChanged,
         ),
       ),
     );

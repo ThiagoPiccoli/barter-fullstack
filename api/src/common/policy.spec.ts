@@ -305,6 +305,21 @@ describe('Tabela de capacidades', () => {
     expect(can({ role: ROLE.consultant }, CAPABILITY.producersReadAll)).toBe(false);
   });
 
+  /**
+   * CADASTRAR e EDITAR o produtor são do consultor (e do admin); definir a
+   * carteira e excluir continuam só do admin. Em que carteira o produtor dele
+   * nasce é regra do service, não desta tabela.
+   */
+  it('o consultor cadastra e edita o produtor, mas não administra a base', () => {
+    expect(rolesWith(CAPABILITY.producersRegister).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
+    expect(rolesWith(CAPABILITY.producersEdit).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
+    expect(can({ role: ROLE.consultant }, CAPABILITY.producersManage)).toBe(false);
+  });
+
   it('papel desconhecido não tem capacidade nenhuma — falha fechando', () => {
     for (const capability of CAPABILITIES) {
       expect(can({ role: 'diretor' }, capability)).toBe(false);

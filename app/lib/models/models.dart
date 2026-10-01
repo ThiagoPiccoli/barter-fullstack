@@ -117,21 +117,22 @@ class Capability {
   /// MANTER a base de seguros por município (admin).
   static const insuranceManage = 'insurance.manage';
 
-  /// EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — do CONSULTOR (e do
-  /// admin, que também cadastra e exclui).
+  /// EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — todos eles, do
+  /// CONSULTOR (e do admin, que alcança qualquer carteira).
   ///
-  /// Quem visita a fazenda é quem sabe que o telefone mudou, que o cliente
-  /// passou a plantar noutro município e que o nome da propriedade saiu errado.
-  /// Enquanto isso foi só do admin, corrigir um telefone virava um chamado — e o
-  /// cadastro envelhecia em silêncio.
+  /// Quem visita a fazenda é quem sabe que o telefone mudou, que a área desta
+  /// cultura é outra, que o produtor fez a opção pela folha e que o CPF saiu com
+  /// um dígito trocado.
   ///
-  /// O que ela NÃO alcança, e o servidor recusa: o CPF/CNPJ (é a identidade do
-  /// cadastro), a área cultivável e o regime de Funrural (as duas réguas que
-  /// medem toda permuta dele) e a carteira (quem atende quem é decisão de quem
-  /// administra).
+  /// O que ela NÃO alcança, e o servidor recusa: a carteira (quem atende quem é
+  /// decisão de quem administra).
   static const producersEdit = 'producers.edit';
 
-  /// CADASTRAR, EXCLUIR e definir a CARTEIRA de um produtor — só do admin.
+  /// CADASTRAR um produtor novo — do CONSULTOR e do admin. O do consultor nasce
+  /// na carteira dele, e só na dele; quem escolhe outra é o admin.
+  static const producersRegister = 'producers.register';
+
+  /// Alcançar QUALQUER produtor: EXCLUIR e definir a CARTEIRA — só do admin.
   static const producersManage = 'producers.manage';
 
   /// Registrar permuta (consultor).

@@ -61,17 +61,46 @@ export class ProducersService {
     return producer.consultantId === consultantId;
   }
 
-  /** Cadastro é ato do admin: todo produtor nasce na carteira de alguém. */
-  async create(dto: ProducerDto): Promise<Producer> {
-    // A CARTEIRA é opcional no DTO (o formulário do consultor não a escreve) e
-    // obrigatória AQUI: um produtor que nasce sem consultor não aparece para
-    // quem registra permuta.
-    if (dto.consultantId === undefined) {
-      throw new UnprocessableEntityException('Escolha o consultor que atende este produtor');
+  /**
+   * O CADASTRO, com DOIS donos: o admin e o consultor. Todo produtor nasce na
+   * carteira de alguém — QUAL é a pergunta de `ownerOnCreate`.
+   */
+  async create(actor: User, dto: ProducerDto): Promise<Producer> {
+    const consultantId = this.ownerOnCreate(actor, dto);
+    await this.ensureConsultant(consultantId);
+    await this.ensureDocumentIsFree(actor, dto.document);
+    return this.prisma.producer.create({
+      data: { ...this.withDocumentDigits(dto), consultantId },
+    });
+  }
+
+  /**
+   * EM QUE CARTEIRA o produtor novo nasce.
+   *
+   * O ADMIN escolhe, e a escolha é obrigatória: a carteira é opcional no DTO
+   * (o formulário do consultor não a escreve), e um produtor que nasce sem
+   * consultor não aparece para quem registra permuta.
+   *
+   * O CONSULTOR não escolhe: o produtor que ele cadastra é DELE, e só dele. O
+   * campo ausente vira o id de quem cadastrou, e o próprio id de volta é aceito
+   * (é o que o app manda). Qualquer outro é RECUSADO, e não trocado em silêncio
+   * pelo dele — quem mandou outro consultor queria outra coisa, e gravar a
+   * carteira errada sem avisar é pior do que dizer não.
+   */
+  private ownerOnCreate(actor: User, dto: ProducerDto): number {
+    if (can(actor, CAPABILITY.producersManage)) {
+      if (dto.consultantId === undefined) {
+        throw new UnprocessableEntityException('Escolha o consultor que atende este produtor');
+      }
+      return dto.consultantId;
     }
-    await this.ensureConsultant(dto.consultantId);
-    await this.ensureDocumentIsFree(dto.document);
-    return this.prisma.producer.create({ data: this.withDocumentDigits(dto) });
+    if (dto.consultantId !== undefined && dto.consultantId !== actor.id) {
+      throw new ForbiddenException(
+        'O produtor que você cadastra entra na sua carteira. Para cadastrá-lo na ' +
+          'carteira de outro consultor, peça ao administrador',
+      );
+    }
+    return actor.id;
   }
 
   /**
@@ -80,9 +109,9 @@ export class ProducersService {
    * O ADMIN edita qualquer produtor e todos os campos, inclusive a carteira:
    * trocar o `consultantId` passa o produtor para outro consultor.
    *
-   * O CONSULTOR edita os produtores da PRÓPRIA CARTEIRA, e só os dados de
-   * contato e endereço deles — ver `assertEditable`, que é onde a lista do que
-   * ele não toca está escrita com o porquê de cada um, a carteira inclusive.
+   * O CONSULTOR edita os produtores da PRÓPRIA CARTEIRA, e todos os dados
+   * deles — o documento, a área do Barter e o regime de Funrural inclusive. A
+   * única coisa que ele não toca é a carteira (ver `assertEditable`).
    *
    * A carteira AUSENTE preserva a atual para os dois.
    */
@@ -100,7 +129,7 @@ export class ProducersService {
     if (dto.consultantId !== undefined && dto.consultantId !== current.consultantId) {
       await this.ensureConsultant(dto.consultantId);
     }
-    await this.ensureDocumentIsFree(dto.document, id);
+    await this.ensureDocumentIsFree(actor, dto.document, id);
 
     return this.prisma.producer.update({
       where: { id },
@@ -109,58 +138,27 @@ export class ProducersService {
   }
 
   /**
-   * O QUE O CONSULTOR NÃO REESCREVE no cadastro do cliente dele.
+   * O QUE O CONSULTOR NÃO REESCREVE no cadastro do cliente dele: a CARTEIRA.
+   * Um consultor que a escrevesse poderia passar o próprio cliente adiante sem
+   * que ninguém decidisse isso.
    *
-   * Os três são recusados por VALOR, e não por presença: o formulário manda o
-   * registro inteiro de volta, e recusar o campo que veio igual ao que já está
-   * gravado travaria toda edição de telefone. O que se recusa é a MUDANÇA.
+   * Ela é recusada por VALOR, e não por presença: o app manda o cadastro
+   * inteiro de volta, com o consultor que já estava lá, e recusar o campo que
+   * veio igual ao gravado travaria toda edição de telefone. O que se recusa é a
+   * MUDANÇA.
    *
-   * - o DOCUMENTO é a identidade do cadastro (a unicidade mora nele, ver
-   *   `documentDigits`): trocá-lo transforma o cliente A no cliente B mantendo as
-   *   permutas do A;
-   * - a ÁREA CULTIVÁVEL é o denominador de toda régua da permuta — os mínimos por
-   *   hectare, o custo do seguro, o investimento por hectare. Um arrendamento a
-   *   mais muda quanto insumo o Barter exige daquele cliente, e isso é decisão de
-   *   crédito, não atualização de contato;
-   * - o REGIME DE FUNRURAL é a opção formal do produtor perante o fisco, e é dela
-   *   que sai a alíquota gravada em cada entrega.
-   *
-   * Os três continuam existindo e continuam se corrigindo — pelo admin, que é
-   * quem responde pelo cadastro. A frase diz isso, porque quem a lê precisa saber
-   * o que fazer, e não só que não pode.
+   * O documento, a área e o regime de Funrural já estiveram nesta lista e
+   * saíram dela — ver `producersEdit` em policy.ts. O documento continua
+   * protegido, mas pela UNICIDADE (`ensureDocumentIsFree`), que vale para
+   * qualquer um: trocar para o CPF de outro cliente é recusado igual ao
+   * cadastro em duplicidade.
    */
   private assertEditable(current: Producer, dto: ProducerDto): void {
-    // A CARTEIRA também é por valor — e pelo mesmo motivo: o app manda o
-    // cadastro inteiro, com o consultor que já estava lá. Recusar a presença
-    // do campo travaria a edição de telefone do próprio cliente.
     if (dto.consultantId !== undefined && dto.consultantId !== current.consultantId) {
       throw new ForbiddenException(
         'Quem atende o produtor é definido pelo administrador. Peça a ele para mudar a carteira',
       );
     }
-
-    const locked: string[] = [];
-
-    if (documentDigitsOf(dto.document) !== current.documentDigits) locked.push('o CPF/CNPJ');
-    if (dto.areaHa !== current.areaHa) locked.push('a área cultivável');
-    if ((dto.taxRegime ?? current.taxRegime) !== current.taxRegime) {
-      locked.push('o regime de Funrural');
-    }
-
-    if (locked.length === 0) return;
-    // "QUEM ALTERA … É O ADMINISTRADOR" em vez de "… é alterado por …": os três
-    // campos têm gêneros diferentes ("o CPF/CNPJ", "a área cultivável"), e
-    // qualquer particípio concordaria com um e erraria o outro. A frase também
-    // diz o que fazer — uma recusa que só nega manda o consultor concluir que o
-    // app está quebrado.
-    const lista =
-      locked.length > 1
-        ? `${locked.slice(0, -1).join(', ')} e ${locked[locked.length - 1]}`
-        : locked[0];
-    throw new ForbiddenException(
-      `Quem altera ${lista} é o administrador. Peça a ele para corrigir e ` +
-        'edite o restante normalmente',
-    );
   }
 
   /** Grava junto a forma canônica do documento, que é onde mora a unicidade. */
@@ -169,20 +167,49 @@ export class ProducersService {
   }
 
   /**
+   * O CPF/CNPJ JÁ CADASTRADO — no cadastro e na edição, para todo mundo.
+   *
    * O índice único do banco é a garantia final, mas ele só sabe dizer "valor
-   * repetido". Conferir antes permite apontar QUEM já usa o documento — que é
-   * a informação de que o admin precisa para decidir o que fazer.
+   * repetido". Conferir antes permite dizer O QUE FAZER, e a resposta depende
+   * de quem pergunta:
+   *
+   * - quem enxerga todas as carteiras (o admin) lê o NOME de quem já usa o
+   *   documento — é a informação de que ele precisa para decidir;
+   * - o consultor, se o cliente já é DELE, também lê o nome: ele cadastrou duas
+   *   vezes o mesmo cliente, e o caminho é abrir o que já existe;
+   * - o consultor, se o cliente é de OUTRA carteira, NÃO lê o nome nem o
+   *   colega. A carteira dos outros não é dele (é a mesma regra de `findFor`),
+   *   e a recusa não pode virar uma consulta de "quem atende o CPF tal". Ele lê
+   *   o que precisa para agir: o cliente já existe, e quem muda a carteira é o
+   *   administrador.
    *
    * O caminho para "o mesmo produtor, agora atendido por outro consultor" não
    * passa por aqui: é a troca de consultor na edição dele, não cadastro novo.
    */
-  private async ensureDocumentIsFree(document: string, ignoreId?: number): Promise<void> {
-    const existing = await this.prisma.producer.findUnique({
-      where: { documentDigits: documentDigitsOf(document) },
-    });
+  private async ensureDocumentIsFree(
+    actor: User,
+    document: string,
+    ignoreId?: number,
+  ): Promise<void> {
+    const digits = documentDigitsOf(document);
+    const existing = await this.prisma.producer.findUnique({ where: { documentDigits: digits } });
     if (!existing || existing.id === ignoreId) return;
+
+    const kind = digits.length === 14 ? 'CNPJ' : 'CPF';
+    if (can(actor, CAPABILITY.producersReadAll)) {
+      throw new UnprocessableEntityException(
+        `Este ${kind} já está cadastrado para "${existing.name}"`,
+      );
+    }
+    if (this.isAttendedBy(existing, actor.id)) {
+      throw new UnprocessableEntityException(
+        `Este ${kind} já está cadastrado na sua carteira, para "${existing.name}". ` +
+          'Use o cadastro que já existe',
+      );
+    }
     throw new UnprocessableEntityException(
-      `Este documento já está cadastrado para "${existing.name}"`,
+      `Este ${kind} já está cadastrado e o produtor é atendido por outro consultor. ` +
+        'Para passar a atendê-lo, fale com o administrador',
     );
   }
 

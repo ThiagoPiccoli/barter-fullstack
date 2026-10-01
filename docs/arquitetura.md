@@ -393,6 +393,7 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | Capacidade | Quem tem |
 |---|---|
 | `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `audit.read` | admin |
+| `producers.register` | admin **e consultor** — cadastrar produtor (o do consultor nasce na carteira dele) |
 | `producers.edit` | admin **e consultor** — editar os dados do produtor da própria carteira |
 | `producers.readAll` | admin, gerente, comitê, faturista, emissor |
 | `barters.readAll` | admin, comitê |
@@ -1331,26 +1332,34 @@ visibilidade e os atos sobre ela não passam pela carteira. O consultor anterior
 perde o cadastro e a possibilidade de registrar permuta nova para o cliente; as
 que ele já registrou continuam com ele.
 
-**OS DADOS DO PRODUTOR, PORÉM, SÃO GERIDOS PELO CONSULTOR** (`producers.edit`,
-`PUT /producers/:id`). Quem visita a fazenda é quem sabe que o telefone mudou,
-que a propriedade está com o nome errado e que o cliente passou a plantar noutro
-município; enquanto isso foi só do admin, corrigir um telefone virava um chamado
-— e o cadastro envelhecia em silêncio, que é pior do que ficar errado com alguém
-sabendo. Ele alcança os produtores da PRÓPRIA carteira, e quatro campos ficam de
-fora, cada um por um motivo (ver `assertEditable`, em
-[producers.service.ts](../api/src/producers/producers.service.ts)):
+**O PRODUTOR, PORÉM, É GERIDO PELO CONSULTOR** — o cadastro do cliente novo
+(`producers.register`, `POST /producers`) e os dados dos que ele já atende
+(`producers.edit`, `PUT /producers/:id`). Quem visita a fazenda é quem conhece o
+cliente novo, sabe que o telefone mudou, que a área desta cultura é outra e que
+o produtor fez a opção pela folha; enquanto isso foi só do admin, cada um desses
+fatos virava um chamado — e o cadastro envelhecia em silêncio.
 
-| Campo | Por que continua do admin |
-|---|---|
-| CPF/CNPJ | é a IDENTIDADE do cadastro (a unicidade mora nele): trocá-lo transforma o cliente A no cliente B mantendo as permutas do A |
-| área cultivável | é o denominador de toda régua da permuta — mínimos por hectare, custo do seguro, investimento por hectare. Um arrendamento a mais é decisão de crédito, não atualização de contato |
-| regime de Funrural | é a opção formal do produtor perante o fisco, de onde sai a alíquota gravada em cada entrega |
-| a carteira | é quem atende quem: um consultor que a escrevesse poderia passar o próprio cliente adiante sem que ninguém decidisse isso |
-
-A recusa é por VALOR e não por presença (o formulário devolve o registro
-inteiro, e recusar o campo que veio igual travaria toda edição de telefone), e a
-frase diz **a quem pedir**: uma trava que só nega manda o consultor concluir que
-o app está quebrado. Cadastrar e excluir continuam em `producers.manage`.
+- **O cadastro do consultor nasce na carteira dele**, e só na dele (ver
+  `ownerOnCreate`, em
+  [producers.service.ts](../api/src/producers/producers.service.ts)): sem
+  carteira no corpo, vale a dele; o próprio id é aceito; o de outro consultor é
+  recusado (403), e não trocado em silêncio.
+- **Na edição ele altera todos os dados** do produtor da própria carteira — o
+  CPF/CNPJ, a área do Barter e o regime de Funrural inclusive. A área muda de
+  uma cultura para outra, e a permuta já registrada não acompanha: ela congela
+  a área e a alíquota que usou (`Barter.producerAreaHa`, `Barter.taxRate`).
+- **A carteira continua do admin** (ver `assertEditable`): um consultor que a
+  escrevesse poderia passar o próprio cliente adiante sem que ninguém decidisse
+  isso. A recusa é por VALOR e não por presença — o formulário devolve o
+  registro inteiro, com o consultor que já estava lá. Excluir continua em
+  `producers.manage`.
+- **O CPF/CNPJ é único para todo mundo**, no cadastro e na edição
+  (`ensureDocumentIsFree`), e a mensagem depende de quem pergunta: o admin lê o
+  nome de quem já usa o documento; o consultor lê o nome só se o cliente já é
+  dele ("use o cadastro que já existe"); se é de outra carteira, lê que o
+  produtor é atendido por outro consultor e que quem muda isso é o
+  administrador — sem o nome do produtor nem do colega, porque a recusa não
+  pode virar consulta de "quem atende o CPF tal".
 
 Excluir o consultor é `SetNull`: o produtor não some junto, fica **sem
 consultor** e espera realocação; até lá, só a retaguarda o enxerga. O caminho

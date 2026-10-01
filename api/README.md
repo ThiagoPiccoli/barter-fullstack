@@ -341,8 +341,9 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | POST | `/auth/password` | autenticado | Troca da própria senha (derruba as outras sessões) |
 | GET | `/producers` | autenticado | Carteira do consultor; admin vê todas (`?consultantId=`) |
 | GET | `/producers/:id` | autenticado | Detalhe (escopado por carteira) |
-| POST/DELETE | `/producers[/:id]` | admin | Cadastra e exclui produtor; a carteira é definida aqui |
-| PUT | `/producers/:id` | admin e **consultor da carteira** | Edita os dados do produtor. O consultor não altera CPF/CNPJ, área cultivável, Funrural nem a carteira — ver `assertEditable` |
+| POST | `/producers` | admin e **consultor** | Cadastra produtor. O admin escolhe a carteira; o do consultor nasce na carteira dele — ver `ownerOnCreate`. CPF/CNPJ já cadastrado é recusado (422) |
+| DELETE | `/producers/:id` | admin | Exclui produtor |
+| PUT | `/producers/:id` | admin e **consultor da carteira** | Edita os dados do produtor, inclusive CPF/CNPJ, área e Funrural. O consultor não altera a carteira — ver `assertEditable` |
 | GET | `/products` | autenticado | Catálogo com histórico de valores (`?type=grain\|input`) |
 | GET | `/products/:id` | autenticado | Produto + linha do tempo |
 | POST/PUT | `/products[/:id]` | admin | Criação/edição de cadastro |

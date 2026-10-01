@@ -354,16 +354,16 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'PUT /insurance-rates/:id', policy: 'capability:insurance.manage' },
         { route: 'DELETE /insurance-rates/:id', policy: 'capability:insurance.manage' },
 
-        // Produtores — leitura escopada pelo service; cadastro do admin.
+        // Produtores — leitura escopada pelo service; excluir é do admin.
         { route: 'DELETE /producers/:id', policy: 'capability:producers.manage' },
         { route: 'GET /producers', policy: 'any-authenticated' },
         { route: 'GET /producers/:id', policy: 'any-authenticated' },
-        { route: 'POST /producers', policy: 'capability:producers.manage' },
-        // A EDIÇÃO do produtor é mais larga que o cadastro dele: ela é do admin
-        // E do CONSULTOR da carteira (`producers.edit`), porque quem visita a
-        // fazenda é quem sabe que o telefone mudou. Cadastrar e excluir
-        // continuam em `producers.manage`, e o que o consultor não alcança
-        // dentro da edição é regra sobre o recurso, no service.
+        // O CADASTRO e a EDIÇÃO são do admin E do CONSULTOR
+        // (`producers.register`, `producers.edit`), porque quem visita a
+        // fazenda é quem conhece o cliente novo e sabe que a área mudou. A
+        // carteira — em que carteira o produtor nasce, e a troca dela — é
+        // regra sobre o recurso, no service.
+        { route: 'POST /producers', policy: 'capability:producers.register' },
         { route: 'PUT /producers/:id', policy: 'capability:producers.edit' },
 
         // Unidades — a LEITURA é de qualquer autenticado (o consultor precisa

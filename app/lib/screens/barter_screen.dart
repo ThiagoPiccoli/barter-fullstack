@@ -361,6 +361,21 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     });
   }
 
+  /// CADASTRA O CLIENTE NOVO de onde ele falta: na escolha do produtor.
+  ///
+  /// O produtor que o consultor cadastra nasce na carteira dele, e é por isso
+  /// que ele pode ser escolhido na volta. A escolha usa o produtor que a tela
+  /// DEVOLVE, e não o primeiro da carteira: cancelar escolheria um cliente que
+  /// ninguém acabou de cadastrar.
+  Future<void> _registerProducer() async {
+    final created = await Navigator.push<ProducerModel>(
+      context,
+      MaterialPageRoute(builder: (_) => const EditProducerScreen()),
+    );
+    if (created == null || !mounted) return;
+    _selectProducer(created.id);
+  }
+
   /// Troca o produtor: limpa a permuta em construção e volta à escolha.
   ///
   /// A unidade cai junto porque a etapa dela vem DEPOIS: voltar para a primeira
@@ -977,7 +992,21 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-            child: _searchBox('Buscar produtor, fazenda ou cidade...'),
+            child: Row(
+              children: [
+                Expanded(child: _searchBox('Buscar produtor, fazenda ou cidade...')),
+                // O CLIENTE NOVO se cadastra aqui, sem sair da permuta: é aqui
+                // que o consultor descobre que ele não está na carteira.
+                if (AppData.can(Capability.producersRegister)) ...[
+                  const SizedBox(width: 8),
+                  IconButton.filledTonal(
+                    tooltip: 'Cadastrar produtor',
+                    onPressed: _registerProducer,
+                    icon: const Icon(Icons.person_add_alt_1_outlined, size: 20),
+                  ),
+                ],
+              ],
+            ),
           ),
           Expanded(
             child: producers.isEmpty
@@ -1272,8 +1301,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           // outra tela para corrigir é o mesmo que não oferecer a correção — e o
           // cadastro continuaria envelhecendo em silêncio.
           //
-          // O que ele NÃO alcança (documento, área, Funrural e carteira) a tela
-          // de edição mostra travado, com o porquê. Ver `EditProducerScreen`.
+          // A ÁREA também se corrige daqui — ela muda de uma cultura para outra.
+          // O que ele NÃO alcança (a carteira) a tela de edição mostra travado,
+          // com o porquê. Ver `EditProducerScreen`.
           if (AppData.can(Capability.producersEdit))
             IconButton(
               tooltip: 'Editar os dados de ${p.name.split(' ').first}',
@@ -1530,7 +1560,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   }
 
   /// Aviso para o consultor sem produtores na carteira: sem carteira não há
-  /// permuta, e quem cadastra/atribui produtores é o administrador.
+  /// permuta — e o caminho é cadastrar o primeiro, ali mesmo.
   Widget _emptyWalletHint() => Center(
     child: Padding(
       padding: const EdgeInsets.all(32),
@@ -1546,11 +1576,22 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Peça ao administrador para cadastrar produtores na sua carteira '
-            'antes de registrar uma permuta.',
+            AppData.can(Capability.producersRegister)
+                ? 'Cadastre o primeiro produtor para registrar uma permuta. '
+                    'Ele entra na sua carteira.'
+                : 'Peça ao administrador para cadastrar produtores na sua carteira '
+                    'antes de registrar uma permuta.',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 13, color: AppColors.textMedium),
           ),
+          if (AppData.can(Capability.producersRegister)) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _registerProducer,
+              icon: const Icon(Icons.person_add_alt_1_outlined, size: 18),
+              label: const Text('Cadastrar produtor'),
+            ),
+          ],
         ],
       ),
     ),

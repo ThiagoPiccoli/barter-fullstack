@@ -1,6 +1,16 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { ADMIN, ANA, CONSULTANT, JOAO, ROBERTO, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  ANA,
+  CONSULTANT,
+  GERENTE,
+  JOAO,
+  ROBERTO,
+  createTestApp,
+  loginAs,
+  resetDb,
+} from './utils';
 
 describe('Producers — carteira (e2e)', () => {
   let app: INestApplication;
@@ -42,26 +52,18 @@ describe('Producers — carteira (e2e)', () => {
     expect(response.status).toBe(403);
   });
 
-  it('cadastro de produtor é ato do admin', async () => {
-    const payload = {
-      name: 'Produtor Novo',
-      consultantId: CONSULTANT.joao,
-      document: 'CPF 999.999.999-99',
-      farmName: 'Fazenda Teste',
-      city: 'Maringá/PR',
-      areaHa: 55,
-    };
-
-    const asConsultant = await request(app.getHttpServer())
-      .post('/api/v1/producers')
-      .set('Authorization', `Bearer ${await loginAs(app, JOAO)}`)
-      .send(payload);
-    expect(asConsultant.status).toBe(403);
-
+  it('o admin cadastra o produtor na carteira que escolher', async () => {
     const asAdmin = await request(app.getHttpServer())
       .post('/api/v1/producers')
       .set('Authorization', `Bearer ${await loginAs(app, ADMIN)}`)
-      .send(payload);
+      .send({
+        name: 'Produtor Novo',
+        consultantId: CONSULTANT.joao,
+        document: 'CPF 999.999.999-99',
+        farmName: 'Fazenda Teste',
+        city: 'Maringá/PR',
+        areaHa: 55,
+      });
     expect(asAdmin.status).toBe(201);
     expect(asAdmin.body.data.consultantId).toBe(CONSULTANT.joao);
 
@@ -69,6 +71,121 @@ describe('Producers — carteira (e2e)', () => {
     // abre a lista.
     const carteira = await get('/api/v1/producers', await loginAs(app, JOAO));
     expect(carteira.body.data[0].name).toBe('Produtor Novo');
+  });
+
+  /**
+   * O CONSULTOR CADASTRA O CLIENTE NOVO — e ele nasce na carteira dele, só na
+   * dele. Quem conhece o cliente é quem foi à fazenda; mandá-lo pedir o
+   * cadastro ao admin antes da primeira permuta fazia de cada cliente novo um
+   * chamado.
+   */
+  describe('o consultor cadastra produtor', () => {
+    const novo = {
+      name: 'Produtor do João',
+      document: 'CPF 999.999.999-99',
+      farmName: 'Fazenda Nova Esperança',
+      city: 'Maringá/PR',
+      areaHa: 55,
+      taxRegime: 'folha',
+    };
+
+    const cadastrar = async (email: string, body: Record<string, unknown>) =>
+      request(app.getHttpServer())
+        .post('/api/v1/producers')
+        .set('Authorization', `Bearer ${await loginAs(app, email)}`)
+        .send(body);
+
+    it('sem dizer a carteira, o produtor nasce na dele', async () => {
+      const response = await cadastrar(JOAO, novo);
+
+      expect(response.status).toBe(201);
+      expect(response.body.data).toMatchObject({
+        consultantId: CONSULTANT.joao,
+        areaHa: 55,
+        taxRegime: 'folha',
+      });
+
+      // E é DELE: aparece na carteira do João e em nenhuma outra.
+      const id = response.body.data.id;
+      expect((await get(`/api/v1/producers/${id}`, await loginAs(app, JOAO))).status).toBe(200);
+      expect((await get(`/api/v1/producers/${id}`, await loginAs(app, ANA))).status).toBe(403);
+    });
+
+    /** É o que o app manda: o formulário preenche a carteira com quem está logado. */
+    it('mandar o próprio id como carteira é o mesmo que não mandar', async () => {
+      const response = await cadastrar(JOAO, { ...novo, consultantId: CONSULTANT.joao });
+      expect(response.status).toBe(201);
+      expect(response.body.data.consultantId).toBe(CONSULTANT.joao);
+    });
+
+    /**
+     * A carteira de outro consultor é RECUSADA, e não trocada em silêncio pela
+     * dele: quem mandou outro id queria outra coisa.
+     */
+    it('a carteira de outro consultor é recusada, dizendo a quem pedir', async () => {
+      const response = await cadastrar(JOAO, { ...novo, consultantId: CONSULTANT.ana });
+
+      expect(response.status).toBe(403);
+      expect(response.body.message).toContain('administrador');
+      // E nada foi gravado.
+      const ana = await get(
+        `/api/v1/producers?consultantId=${CONSULTANT.ana}`,
+        await loginAs(app, ADMIN),
+      );
+      expect(namesOf(ana.body)).not.toContain('Produtor do João');
+    });
+
+    /** O cliente que já é dele: a mensagem o nomeia, e o caminho é abrir o que existe. */
+    it('CPF já cadastrado na carteira dele é barrado, nomeando o cliente', async () => {
+      // Antônio Carvalho (id 1) é do João; a formatação não engana a regra.
+      const response = await cadastrar(JOAO, { ...novo, document: '12345678900' });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toBe(
+        'Este CPF já está cadastrado na sua carteira, para "Antônio Carvalho". ' +
+          'Use o cadastro que já existe',
+      );
+    });
+
+    /**
+     * O cliente que é de OUTRO consultor: barrado, mas sem nome e sem colega. A
+     * recusa não pode virar uma consulta de "quem atende o CPF tal" — a carteira
+     * dos outros não é dele.
+     */
+    it('CPF/CNPJ de outra carteira é barrado sem expor quem é nem quem atende', async () => {
+      // Helena Prado (id 2) é da Ana.
+      const cpf = await cadastrar(JOAO, { ...novo, document: 'CPF 234.567.890-11' });
+      expect(cpf.status).toBe(422);
+      expect(cpf.body.message).toBe(
+        'Este CPF já está cadastrado e o produtor é atendido por outro consultor. ' +
+          'Para passar a atendê-lo, fale com o administrador',
+      );
+      expect(cpf.body.message).not.toContain('Helena');
+      expect(cpf.body.message).not.toContain('Ana');
+
+      // Joaquim Tavares (id 3) é do Roberto, e é CNPJ — a mensagem diz CNPJ.
+      const cnpj = await cadastrar(JOAO, { ...novo, document: '12.345.678/0001-90' });
+      expect(cnpj.status).toBe(422);
+      expect(cnpj.body.message).toContain('Este CNPJ já está cadastrado');
+      expect(cnpj.body.message).not.toContain('Joaquim');
+    });
+
+    /** Quem enxerga todas as carteiras continua lendo o nome: é o que ele precisa para decidir. */
+    it('para o admin, a recusa continua nomeando o produtor', async () => {
+      const response = await cadastrar(ADMIN, {
+        ...novo,
+        consultantId: CONSULTANT.joao,
+        document: 'CPF 234.567.890-11',
+      });
+      expect(response.status).toBe(422);
+      expect(response.body.message).toBe('Este CPF já está cadastrado para "Helena Prado"');
+    });
+
+    /** Quem não é consultor nem admin não cadastra — a retaguarda lê, não escreve. */
+    it('a retaguarda não cadastra', async () => {
+      const response = await cadastrar(GERENTE, { ...novo, consultantId: CONSULTANT.joao });
+      expect(response.status).toBe(403);
+    });
   });
 
   /**
@@ -257,13 +374,12 @@ describe('Producers — carteira (e2e)', () => {
    * OS DADOS DO PRODUTOR SÃO GERIDOS PELO CONSULTOR — e até onde.
    *
    * Quem visita a fazenda é quem sabe que o telefone mudou, que o cliente
-   * arrendou do outro lado do rio e que o nome da fazenda saiu errado no
-   * cadastro. Enquanto isso foi só do admin, a correção de um telefone virava um
-   * chamado, e o cadastro envelhecia em silêncio.
+   * arrendou mais terra para esta cultura e que o CPF saiu errado no cadastro.
+   * Ele altera TODOS os dados do cliente dele — o documento, a área do Barter e
+   * o regime de Funrural inclusive.
    *
    * O que ele NÃO alcança é o outro lado da mesma regra, e é o que estes testes
-   * fixam: a identidade do cadastro (o documento), as duas réguas que medem
-   * toda permuta dele (a área e o regime de Funrural) e a carteira — quem atende
+   * fixam: o produtor de outra carteira e a própria carteira — quem atende
    * quem é decisão de quem administra.
    */
   describe('o consultor gere os dados do produtor da carteira dele', () => {
@@ -325,37 +441,60 @@ describe('Producers — carteira (e2e)', () => {
     });
 
     /**
-     * A ÁREA é o denominador de toda régua da permuta — os mínimos por hectare,
-     * o custo do seguro, o investimento por hectare. Um arrendamento a mais muda
-     * quanto insumo o Barter exige daquele cliente: é decisão de crédito, não
-     * atualização de contato.
+     * A ÁREA DO BARTER muda de uma cultura para outra, e quem sabe qual é a
+     * desta safra é o consultor. O REGIME é a opção que o produtor fez perante o
+     * fisco, e quem a traz da fazenda é ele também.
      */
-    it('a área cultivável não é dele, e a recusa diz a quem pedir', async () => {
-      const response = await editar(1, JOAO, { ...antonio, areaHa: 400 });
+    it('o consultor altera a área e o regime de Funrural do cliente dele', async () => {
+      const response = await editar(1, JOAO, { ...antonio, areaHa: 400, taxRegime: 'folha' });
 
-      expect(response.status).toBe(403);
-      // A frase diz o que é e A QUEM PEDIR: uma recusa que só nega manda o
-      // consultor concluir que o app está quebrado.
-      expect(response.body.message).toBe(
-        'Quem altera a área cultivável é o administrador. ' +
-          'Peça a ele para corrigir e edite o restante normalmente',
-      );
+      expect(response.status).toBe(200);
+      expect(response.body.data).toMatchObject({ areaHa: 400, taxRegime: 'folha' });
     });
 
-    /** O documento é a IDENTIDADE do cadastro: trocá-lo faz o cliente A virar B. */
-    it('o CPF/CNPJ não é dele', async () => {
+    /**
+     * A permuta JÁ REGISTRADA não acompanha: ela congelou a área que usou, e é
+     * o denominador do sc/ha que alguém já aprovou.
+     */
+    it('a área nova não reescreve a das permutas já registradas', async () => {
+      // Lida pelo admin: `producerAreaHa` vai só para quem vê o sc/ha.
+      const auth = `Bearer ${await loginAs(app, ADMIN)}`;
+      const antes = await request(app.getHttpServer())
+        .get('/api/v1/barters')
+        .set('Authorization', auth);
+      const doAntonio = antes.body.data.find(
+        (b: { producerId: number; producerAreaHa: number }) =>
+          b.producerId === 1 && b.producerAreaHa > 0,
+      );
+      expect(doAntonio).toBeDefined();
+
+      await editar(1, JOAO, { ...antonio, areaHa: 400 }).then((r) => expect(r.status).toBe(200));
+
+      const depois = await request(app.getHttpServer())
+        .get(`/api/v1/barters/${doAntonio.code}`)
+        .set('Authorization', auth);
+      expect(depois.body.data.producerAreaHa).toBe(doAntonio.producerAreaHa);
+    });
+
+    /** O CPF/CNPJ também: um dígito trocado no cadastro, quem percebe é ele. */
+    it('o consultor corrige o CPF/CNPJ do cliente dele', async () => {
       const response = await editar(1, JOAO, { ...antonio, document: 'CPF 111.222.333-44' });
 
-      expect(response.status).toBe(403);
-      expect(response.body.message).toContain('CPF/CNPJ');
+      expect(response.status).toBe(200);
+      expect(response.body.data.document).toBe('CPF 111.222.333-44');
     });
 
-    /** A opção perante o fisco vale para o ano e para todas as entregas dele. */
-    it('o regime de Funrural não é dele', async () => {
-      const response = await editar(1, JOAO, { ...antonio, taxRegime: 'folha' });
+    /**
+     * Mas a UNICIDADE vale na edição também: trocar para o CPF de um cliente que
+     * já existe transformaria o A no B. E a recusa não expõe a carteira alheia.
+     */
+    it('trocar para um CPF/CNPJ já cadastrado é barrado', async () => {
+      // Helena Prado (id 2) é da Ana.
+      const response = await editar(1, JOAO, { ...antonio, document: 'CPF 234.567.890-11' });
 
-      expect(response.status).toBe(403);
-      expect(response.body.message).toContain('Funrural');
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Este CPF já está cadastrado');
+      expect(response.body.message).not.toContain('Helena');
     });
 
     /**
@@ -369,15 +508,9 @@ describe('Producers — carteira (e2e)', () => {
       expect(response.body.message).toContain('administrador');
     });
 
-    /** Cadastrar e excluir continuam onde estavam. */
-    it('cadastrar e excluir continuam fora do alcance do consultor', async () => {
+    /** Excluir continua onde estava: quem sai da base é decisão do admin. */
+    it('excluir continua fora do alcance do consultor', async () => {
       const token = `Bearer ${await loginAs(app, JOAO)}`;
-      const criado = await request(app.getHttpServer())
-        .post('/api/v1/producers')
-        .set('Authorization', token)
-        .send({ ...antonio, document: 'CPF 999.888.777-66', consultantId: CONSULTANT.joao });
-      expect(criado.status).toBe(403);
-
       const excluido = await request(app.getHttpServer())
         .delete('/api/v1/producers/1')
         .set('Authorization', token);

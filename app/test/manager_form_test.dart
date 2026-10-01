@@ -102,4 +102,55 @@ void main() {
 
     expect(find.textContaining('já tem gerente'), findsNothing);
   });
+
+  testWidgets('sem unidade, o aviso do cadastro de gerente não fala de consultor',
+      (tester) async {
+    AppData.units = [];
+    await abrir(tester, null);
+
+    expect(find.textContaining('Ainda não há unidade cadastrada.'), findsOneWidget);
+    expect(find.textContaining('O consultor precisa'), findsNothing);
+  });
+
+  /// O lado do CONSULTOR da mesma relação: o gerente responde por vários, e a
+  /// lista de gerentes do cadastro diz o tamanho do time de cada um.
+  group('cadastro de consultor', () {
+    Future<void> abrirConsultor(WidgetTester tester, UserModel? consultor) async {
+      tester.view.physicalSize = const Size(1000, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.theme,
+        home: EditStaffScreen(user: consultor, role: UserRole.consultant),
+      ));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> abrirGerentes(WidgetTester tester) async {
+      await tester.tap(find.text('Gerente responsável'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a lista de gerentes mostra o tamanho do time', (tester) async {
+      await abrirConsultor(tester, null);
+      await abrirGerentes(tester);
+
+      expect(find.textContaining('2 consultores no time', findRichText: true), findsOneWidget);
+      expect(find.textContaining('1 consultor no time', findRichText: true), findsOneWidget);
+    });
+
+    testWidgets('na edição, o próprio consultor não entra na conta do time', (tester) async {
+      await abrirConsultor(tester, AppData.consultants.first); // João, do time da Beatriz
+      await abrirGerentes(tester);
+
+      // Beatriz tem João e Ana; para o João, o resto do time é só a Ana. (Ela
+      // aparece duas vezes: no botão, já escolhida, e na lista aberta.)
+      expect(find.textContaining('Beatriz Nogueira  ·  1 consultor no time', findRichText: true),
+          findsWidgets);
+      expect(find.textContaining('Gustavo Ramires  ·  1 consultor no time', findRichText: true),
+          findsOneWidget);
+      expect(find.textContaining('2 consultores no time', findRichText: true), findsNothing);
+    });
+  });
 }

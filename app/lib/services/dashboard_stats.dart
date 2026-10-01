@@ -210,6 +210,28 @@ List<BarterModel> ofProducer(Iterable<BarterModel> barters, String producerId) =
 List<BarterModel> ofUnit(Iterable<BarterModel> barters, String unitId) =>
     barters.where((b) => b.unitId == unitId).toList();
 
+/// QUEM REGISTROU estas permutas — um por consultor, em ordem de nome.
+///
+/// É a lista do seletor de consultor na tela do gerente, e ela sai das
+/// PERMUTAS, não do cadastro, por dois motivos. O gerente não lê o cadastro de
+/// consultores (`/consultants` é do admin). E o que ele enxerga é o que foi
+/// ENDEREÇADO a ele (`managerId` da permuta, gravado no envio): o consultor que
+/// mudou de time continua com as permutas antigas na mesa deste gerente, e um
+/// seletor montado pelo time de hoje não teria como chegar nelas.
+///
+/// O nome vem do snapshot da permuta. Se o mesmo consultor aparece com nomes
+/// diferentes (o cadastro mudou entre uma permuta e outra), vale o da mais
+/// recente.
+List<({String id, String name})> consultantsOf(Iterable<BarterModel> barters) {
+  final latest = <String, BarterModel>{};
+  for (final b in barters) {
+    final seen = latest[b.consultantId];
+    if (seen == null || b.createdAt.isAfter(seen.createdAt)) latest[b.consultantId] = b;
+  }
+  return latest.values.map((b) => (id: b.consultantId, name: b.consultantName)).toList()
+    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+}
+
 /// O TRABALHO JÁ FEITO POR UMA PESSOA — o que o cadastro dela mostra ao lado do
 /// nome, e o que a exclusão precisa avisar que fica órfão.
 ///

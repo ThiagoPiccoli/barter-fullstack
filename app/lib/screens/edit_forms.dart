@@ -24,19 +24,17 @@ String initialsFrom(String name) {
 /// novo registro; caso contrário, edita o existente. Salva em [AppData.producers] e
 /// devolve o produtor resultante via Navigator.pop.
 ///
-/// A TELA TEM DOIS DONOS, e o que cada um alcança é diferente.
+/// A TELA TEM DOIS DONOS, e o que separa os dois é UM campo: a carteira.
 ///
-/// O ADMIN cadastra, exclui e edita tudo — inclusive a carteira, a área
-/// cultivável, o documento e o regime de Funrural.
+/// O ADMIN cadastra e edita qualquer produtor, e escolhe quem o atende.
 ///
-/// O CONSULTOR edita os dados de contato e endereço dos clientes da carteira
-/// dele: é ele quem visita a fazenda e sabe que o telefone mudou. Os outros
-/// quatro campos ficam VISÍVEIS e travados, com o porquê ao lado — escondê-los
-/// faria a tela parecer incompleta, e o consultor procuraria a área cultivável
-/// que ele acabou de conferir na fazenda sem entender por que ela sumiu.
+/// O CONSULTOR cadastra o cliente novo e edita os da carteira dele — todos os
+/// dados, o documento, a área do Barter e o Funrural inclusive: é ele quem
+/// visita a fazenda. A carteira fica VISÍVEL e travada, com o nome dele no
+/// cadastro novo: o produtor que ele cadastra é dele, e só dele.
 ///
-/// Quem recusa de verdade é o servidor (ver `assertEditable`, na API): esta tela
-/// é a tradução da regra, não a regra.
+/// Quem recusa de verdade é o servidor (ver `ownerOnCreate` e `assertEditable`,
+/// na API): esta tela é a tradução da regra, não a regra.
 class EditProducerScreen extends StatefulWidget {
   final ProducerModel? producer;
   const EditProducerScreen({super.key, this.producer});
@@ -67,11 +65,11 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
 
   bool get _isNew => widget.producer == null;
 
-  /// Quem está com a tela na mão pode mexer no CADASTRO — criar, excluir,
-  /// definir a carteira e corrigir as réguas (documento, área, regime)?
+  /// Quem está com a tela na mão escolhe a CARTEIRA — quem atende o produtor?
   ///
-  /// Falso para o consultor, que edita só o que ele apura na visita. A regra
-  /// mora no servidor; aqui ela desenha a tela.
+  /// Falso para o consultor: o cliente que ele cadastra nasce na carteira dele,
+  /// e a do cliente que ele edita não muda pela mão dele. A regra mora no
+  /// servidor; aqui ela desenha a tela.
   bool get _manages => AppData.can(Capability.producersManage);
 
   @override
@@ -81,6 +79,11 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     if (p != null) {
       _consultantId = p.consultantId;
       _taxRegime = p.taxRegime;
+    } else if (!_manages) {
+      // O CADASTRO DO CONSULTOR já nasce na carteira dele — é o que o servidor
+      // grava de qualquer jeito, e mandar o próprio id é aceito. Deixar vazio
+      // faria a tela mostrar "sem consultor" para um produtor que vai ser dele.
+      _consultantId = AppData.currentUser?.id;
     }
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
@@ -112,10 +115,24 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     super.dispose();
   }
 
+  /// O que a ÁREA é, para os dois donos da tela: a do Barter, que muda com a
+  /// cultura e não reescreve o que já foi registrado.
+  static const _areaNote =
+      'A área é a do Barter: ela define os insumos obrigatórios e a quantidade mínima '
+      'de cada um nas novas permutas deste produtor, e pode mudar de uma cultura para '
+      'outra. As permutas já registradas mantêm a área que usaram.';
+
   /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
+  ///
+  /// O próprio consultor vem de [AppData.currentUser], e não da lista de
+  /// consultores: ela é carregada para o admin escolher a carteira, e na sessão
+  /// do consultor pode nem ter sido.
   String get _walletLabel {
     final id = _consultantId;
-    return (id == null ? null : AppData.consultantById(id)?.name) ?? 'sem consultor';
+    if (id == null) return 'sem consultor';
+    final me = AppData.currentUser;
+    if (me != null && me.id == id) return me.name;
+    return AppData.consultantById(id)?.name ?? 'sem consultor';
   }
 
   /// Envia o cadastro à API e devolve o registro salvo (com id do servidor).
@@ -167,17 +184,10 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
                 value: _walletLabel,
               ),
             _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
-            // O DOCUMENTO é a IDENTIDADE do cadastro (a unicidade mora nele):
-            // trocá-lo transforma o cliente A no cliente B mantendo as permutas
-            // do A.
-            if (_manages)
-              _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true)
-            else
-              _LockedNote(
-                icon: Icons.badge_outlined,
-                label: 'Documento (CPF/CNPJ)',
-                value: _document.text,
-              ),
+            // O DOCUMENTO é a IDENTIDADE do cadastro, e a unicidade mora nele:
+            // o servidor recusa o CPF/CNPJ que já é de outro produtor, no
+            // cadastro e na edição, e a mensagem diz o que fazer.
+            _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true),
             _EditField(
               controller: _phone,
               label: 'Telefone',
@@ -186,56 +196,38 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             ),
             _EditField(controller: _farm, label: 'Propriedade', icon: Icons.agriculture_outlined, required: true),
             _EditField(controller: _city, label: 'Município/UF', icon: Icons.location_on_outlined, required: true),
-            // A ÁREA CULTIVÁVEL é o denominador de toda régua da permuta — os
+            // A ÁREA DO BARTER é o denominador de toda régua da permuta — os
             // mínimos por hectare, o custo do seguro, o investimento por
-            // hectare. Um arrendamento a mais muda quanto insumo o Barter exige
-            // daquele cliente: é decisão de crédito, não atualização de contato.
-            if (_manages)
-              _EditField(
-                controller: _area,
-                label: 'Área cultivável (ha)',
-                icon: Icons.straighten,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                required: true,
-                validator: (v) {
-                  final n = parseNumber(v ?? '');
-                  if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
-                  return null;
-                },
-              )
-            else
-              _LockedNote(
-                icon: Icons.straighten,
-                label: 'Área cultivável',
-                value: '${_area.text} ha',
-              ),
+            // hectare. Ela muda de uma cultura para outra, e quem sabe a desta
+            // safra é o consultor. A permuta já registrada congela a que usou.
+            _EditField(
+              controller: _area,
+              label: 'Área cultivável (ha)',
+              icon: Icons.straighten,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              required: true,
+              validator: (v) {
+                final n = parseNumber(v ?? '');
+                if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
+                return null;
+              },
+            ),
             // O IMPOSTO do produtor, no cadastro dele: é aqui que a opção pela
             // folha mora, porque é uma opção só — feita perante o fisco, valendo
             // para o ano e para todas as entregas. Cada permuta nova nasce com
             // ela e congela a alíquota que ela produziu.
-            if (_manages)
-              _TaxRegimeField(
-                selected: _taxRegime,
-                document: _document.text,
-                onChanged: (regime) => setState(() => _taxRegime = regime),
-              )
-            else
-              _LockedNote(
-                icon: Icons.receipt_long_outlined,
-                label: 'Funrural',
-                value: _taxRegime.label,
-              ),
+            _TaxRegimeField(
+              selected: _taxRegime,
+              document: _document.text,
+              onChanged: (regime) => setState(() => _taxRegime = regime),
+            ),
             const SizedBox(height: 8),
             Text(
               _manages
-                  ? 'A área define os insumos obrigatórios e a quantidade mínima de cada '
-                      'um nas novas permutas deste produtor. O produtor só aparece para o '
-                      'consultor escolhido acima; trocá-lo não leva as permutas já '
-                      'registradas, que continuam com quem as fez.'
-                  : 'O documento, a área cultivável, o Funrural e a carteira são '
-                      'alterados pelo administrador: os três primeiros são as réguas que '
-                      'medem todas as permutas deste cliente, e a carteira é quem o atende. '
-                      'Peça a ele e edite o restante normalmente.',
+                  ? '$_areaNote O produtor só aparece para o consultor escolhido acima; '
+                      'trocá-lo não leva as permutas já registradas, que continuam com quem '
+                      'as fez.'
+                  : '$_areaNote Quem atende o produtor é definido pelo administrador.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
@@ -249,11 +241,10 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
 
 /// UM CAMPO QUE ESTA PESSOA NÃO ESCREVE — o valor, visível, com o cadeado.
 ///
-/// Ele existe para o consultor não procurar o que sumiu: a área cultivável que
-/// ele acabou de conferir na fazenda continua na tela, dizendo quanto é, e o
-/// cadeado explica por que ela não se digita ali. Esconder o campo faria a tela
-/// parecer incompleta; deixá-lo editável faria o servidor recusar o que a tela
-/// ofereceu.
+/// Hoje é só a CARTEIRA, para o consultor: ele vê quem atende o cliente (ele
+/// mesmo, no cadastro novo), e o cadeado explica por que isso não se escolhe
+/// ali. Esconder o campo faria a tela parecer incompleta; deixá-lo editável
+/// faria o servidor recusar o que a tela ofereceu.
 class _LockedNote extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -651,9 +642,10 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
             // unidade; o consultor, das duas coisas.
             if (AppData.units.isEmpty || (_isConsultant && AppData.managers.isEmpty)) ...[
               _MissingPrerequisiteHint(
+                forConsultant: _isConsultant,
                 missing: [
-                  if (AppData.units.isEmpty) 'nenhuma unidade cadastrada',
-                  if (_isConsultant && AppData.managers.isEmpty) 'nenhum gerente cadastrado',
+                  if (AppData.units.isEmpty) 'unidade cadastrada',
+                  if (_isConsultant && AppData.managers.isEmpty) 'gerente cadastrado',
                 ],
               ),
               const SizedBox(height: 14),
@@ -742,14 +734,30 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
                     labelText: 'Gerente responsável',
                     prefixIcon: Icon(Icons.assignment_ind_outlined, size: 20),
                   ),
-                  items: AppData.managers
-                      .map((m) => DropdownMenuItem(
-                            value: m.id,
-                            child: Text(m.name,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 14)),
-                          ))
-                      .toList(),
+                  // O TAMANHO do time ao lado do nome: um gerente responde por
+                  // vários consultores, e o gerente que já tem time é escolha
+                  // tão válida quanto o que ainda não tem. Este consultor não
+                  // entra na conta — na edição, ele já está no time de alguém.
+                  items: AppData.managers.map((m) {
+                    final team = AppData.consultants
+                        .where((c) => c.managerId == m.id && c.id != widget.user?.id)
+                        .length;
+                    return DropdownMenuItem(
+                      value: m.id,
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: m.name),
+                          if (team > 0)
+                            TextSpan(
+                              text: '  ·  $team ${team == 1 ? 'consultor' : 'consultores'} no time',
+                              style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                            ),
+                        ]),
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    );
+                  }).toList(),
                   onChanged: (v) => setState(() => _managerId = v),
                   validator: (v) => v == null ? 'Escolha o gerente deste consultor' : null,
                 ),
@@ -765,9 +773,14 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 }
 
 /// O que falta cadastrar antes de este formulário poder ser concluído.
+///
+/// A explicação depende de QUEM está sendo cadastrado: só o consultor precisa
+/// de gerente. O texto antigo falava do consultor em qualquer cadastro, e o
+/// admin criando o primeiro gerente lia que "o consultor precisa dos dois".
 class _MissingPrerequisiteHint extends StatelessWidget {
   final List<String> missing;
-  const _MissingPrerequisiteHint({required this.missing});
+  final bool forConsultant;
+  const _MissingPrerequisiteHint({required this.missing, required this.forConsultant});
 
   @override
   Widget build(BuildContext context) {
@@ -785,8 +798,10 @@ class _MissingPrerequisiteHint extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Há ${missing.join(' e ')}. O consultor precisa dos dois: a unidade onde '
-              'trabalha e o gerente que dará o parecer das permutas dele.',
+              'Ainda não há ${missing.join(' nem ')}. '
+              '${forConsultant ? 'O consultor precisa dos dois: a unidade onde trabalha e o '
+                  'gerente que dará o parecer das permutas dele.' : 'Todo cadastro precisa da '
+                  'unidade onde a pessoa trabalha.'}',
               style: TextStyle(fontSize: 12, color: AppColors.textDark),
             ),
           ),

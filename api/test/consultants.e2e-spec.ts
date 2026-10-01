@@ -1,6 +1,17 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { ADMIN, ANA, JOAO, MANAGER, UNIT, createTestApp, loginAs, resetDb } from './utils';
+import {
+  ADMIN,
+  ANA,
+  CONSULTANT,
+  JOAO,
+  MANAGER,
+  ROBERTO,
+  UNIT,
+  createTestApp,
+  loginAs,
+  resetDb,
+} from './utils';
 
 describe('Consultants — gestão pelo admin (e2e)', () => {
   let app: INestApplication;
@@ -45,6 +56,57 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
       password: created.body.data.provisionalPassword,
     });
     expect(login.status).toBe(200);
+  });
+
+  /**
+   * O gerente responde por um TIME, não por um consultor. `User.managerId` é a
+   * ponta "muitos" da relação: nada impede dois consultores de apontarem para o
+   * mesmo gerente, e o cadastro de um não tira o outro do time.
+   */
+  it('um gerente responde por vários consultores', async () => {
+    const admin = await asUser(ADMIN);
+    const teamOf = async (managerId: number) => {
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/consultants')
+        .set('Authorization', admin)
+        .expect(200);
+      return list.body.data
+        .filter((c: { managerId: number | null }) => c.managerId === managerId)
+        .map((c: { id: number }) => c.id)
+        .sort((a: number, b: number) => a - b);
+    };
+
+    // O seed já nasce assim: Beatriz com João e Ana.
+    expect(await teamOf(MANAGER.beatriz)).toEqual([CONSULTANT.joao, CONSULTANT.ana]);
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/consultants')
+      .set('Authorization', admin)
+      .send({
+        fullName: 'Terceiro do Time',
+        email: 'terceiro.time@agrobarter.com.br',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
+      })
+      .expect(201);
+
+    // Roberto muda de time: entra no da Beatriz sem tirar ninguém de lá.
+    await request(app.getHttpServer())
+      .put(`/api/v1/consultants/${CONSULTANT.roberto}`)
+      .set('Authorization', admin)
+      .send({
+        fullName: 'Roberto Souza',
+        email: ROBERTO,
+        unitId: UNIT.filial34,
+        managerId: MANAGER.beatriz,
+      })
+      .expect(200);
+
+    expect(await teamOf(MANAGER.beatriz)).toEqual(
+      [CONSULTANT.joao, CONSULTANT.ana, CONSULTANT.roberto, created.body.data.id].sort(
+        (a, b) => a - b,
+      ),
+    );
   });
 
   /**

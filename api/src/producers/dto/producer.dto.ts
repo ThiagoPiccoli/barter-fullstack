@@ -23,10 +23,11 @@ export class ProducerDto {
   /**
    * O consultor que atende este produtor — a carteira dele, uma só.
    *
-   * OPCIONAL porque o CONSULTOR também edita o produtor, e a carteira continua
-   * sendo decisão do admin (ver `producersEdit` em policy.ts). Ausente significa
-   * "não mexa em quem atende"; quem exige o consultor no CADASTRO é o service:
-   * um produtor nasce na carteira de alguém.
+   * OPCIONAL porque o CONSULTOR também cadastra e edita o produtor, e a carteira
+   * continua sendo decisão do admin (ver `producersRegister` e `producersEdit`
+   * em policy.ts). Na edição, ausente significa "não mexa em quem atende"; no
+   * CADASTRO, quem resolve é o service: o do admin exige o consultor, e o do
+   * consultor nasce na carteira de quem cadastrou.
    *
    * Não aceita nulo: tirar o produtor de toda carteira não é uma escolha do
    * formulário. Ele só chega a esse estado pela exclusão do consultor, e aí o
@@ -59,7 +60,11 @@ export class ProducerDto {
   @MaxLength(80)
   city!: string;
 
-  /** Área cultivável (ha): base das exigências mínimas de insumo. */
+  /**
+   * A área do Barter (ha): base das exigências mínimas de insumo, do seguro e do
+   * investimento por hectare. Muda de uma cultura para outra, e o consultor a
+   * atualiza; cada permuta congela a que usou.
+   */
   @IsNumber()
   @IsPositive()
   areaHa!: number;
