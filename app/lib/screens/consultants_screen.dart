@@ -10,6 +10,9 @@ import '../widgets/common_widgets.dart';
 import 'creditor_screen.dart';
 import 'producer_profile_screen.dart';
 import 'consultant_profile_screen.dart';
+import 'staff_profile_screen.dart';
+import 'unit_profile_screen.dart';
+import 'insurance_rate_profile_screen.dart';
 import 'edit_forms.dart';
 
 /// O que a aba de cadastros administra.
@@ -331,16 +334,11 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     );
   }
 
-  /// A carteira do produtor num selo de uma linha: "Carteira: João",
-  /// "Carteira: João +1" quando ele é dividido, "sem consultor" quando o
-  /// último vínculo caiu junto com a exclusão do consultor.
+  /// A carteira do produtor num selo de uma linha: "Carteira: João", ou "sem
+  /// consultor" quando o dele foi excluído.
   String _walletLabel(ProducerModel p) {
-    final nomes = AppData.consultantNamesFor(p);
-    if (nomes.isEmpty) return 'Carteira: sem consultor';
-    final primeiro = nomes.first.split(' ').first;
-    return nomes.length == 1
-        ? 'Carteira: $primeiro'
-        : 'Carteira: $primeiro +${nomes.length - 1}';
+    final nome = AppData.consultantNameFor(p);
+    return nome == null ? 'Carteira: sem consultor' : 'Carteira: ${nome.split(' ').first}';
   }
 
   Widget _buildConsultantList(List<UserModel> list) {
@@ -408,7 +406,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: m, role: UserRole.manager),
+                builder: (_) => StaffProfileScreen(user: m, role: UserRole.manager),
               ),
             );
             if (mounted) setState(() {});
@@ -450,7 +448,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: committee, role: UserRole.committee),
+                builder: (_) => StaffProfileScreen(user: committee, role: UserRole.committee),
               ),
             );
             if (mounted) setState(() {});
@@ -496,7 +494,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: b, role: UserRole.biller),
+                builder: (_) => StaffProfileScreen(user: b, role: UserRole.biller),
               ),
             );
             if (mounted) setState(() {});
@@ -535,7 +533,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: e, role: UserRole.emitter),
+                builder: (_) => StaffProfileScreen(user: e, role: UserRole.emitter),
               ),
             );
             if (mounted) setState(() {});
@@ -568,7 +566,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: a, role: UserRole.admin),
+                builder: (_) => StaffProfileScreen(user: a, role: UserRole.admin),
               ),
             );
             if (mounted) setState(() {});
@@ -622,7 +620,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           onTap: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => EditInsuranceRateScreen(rate: rate)),
+              MaterialPageRoute(builder: (_) => InsuranceRateProfileScreen(rate: rate)),
             );
             if (mounted) setState(() {});
           },
@@ -773,7 +771,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           onTap: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => EditUnitScreen(unit: u)),
+              MaterialPageRoute(builder: (_) => UnitProfileScreen(unit: u)),
             );
             if (mounted) setState(() {});
           },

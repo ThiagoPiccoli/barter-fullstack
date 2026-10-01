@@ -331,7 +331,7 @@ void main() {
         ProducerModel.fromJson({
           'id': 1,
           'name': 'Osmar Dutra',
-          'consultantIds': [2],
+          'consultantId': 2,
           'document': '123.456.789-00',
           'farmName': 'Fazenda Boa Vista',
           'city': 'Campo Mourão/PR',

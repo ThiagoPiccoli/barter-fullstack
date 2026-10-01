@@ -219,6 +219,17 @@ class _CprFormScreenState extends State<CprFormScreen> {
   /// de uma remoção.
   List<CprGuarantor> _guarantors = const [];
 
+  /// A IDENTIDADE de cada linha das duas listas, paralela a elas: é a chave do
+  /// cartão. Ela não pode ser a posição — remover a primeira lavoura faria o
+  /// Flutter reaproveitar os campos dela na segunda —, nem o conteúdo — cada
+  /// letra digitada trocaria a chave, recriaria o campo e o foco iria embora
+  /// a cada caractere.
+  List<int> _areaIds = const [];
+  List<int> _guarantorIds = const [];
+  int _nextRowId = 0;
+
+  List<int> _newRowIds(int count) => List.generate(count, (_) => _nextRowId++);
+
   DateTime? _issuedAt;
 
   /// A DATA DA CONSULTA do SCR. O anexo em si não é campo — ele sobe por rota
@@ -351,6 +362,10 @@ class _CprFormScreenState extends State<CprFormScreen> {
     _insurancePolicy.text = draft.insurancePolicy;
     _areas = draft.areas;
     _guarantors = draft.guarantors;
+    // Identidades NOVAS: os campos das listas guardam o texto que receberam ao
+    // nascer, e só um cartão novo mostra o que o servidor gravou.
+    _areaIds = _newRowIds(draft.areas.length);
+    _guarantorIds = _newRowIds(draft.guarantors.length);
   }
 
   /// Zero vira campo VAZIO, e não "0": nos percentuais o zero significa "ainda
@@ -738,6 +753,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           // AVISOS: nenhum deles trava o encaminhamento. Ver `pledgeWarnings`.
           ...desk.pledgeWarnings.map((aviso) => _PledgeWarning(text: aviso)),
           ..._areas.asMap().entries.map((entry) => _AreaCard(
+                key: ValueKey('area-${_areaIds[entry.key]}'),
                 position: entry.key,
                 area: entry.value,
                 onChanged: (updated) => setState(() {
@@ -746,13 +762,16 @@ class _CprFormScreenState extends State<CprFormScreen> {
                   _areas = next;
                 }),
                 onRemove: () => setState(() {
-                  final next = [..._areas]..removeAt(entry.key);
-                  _areas = next;
+                  _areas = [..._areas]..removeAt(entry.key);
+                  _areaIds = [..._areaIds]..removeAt(entry.key);
                 }),
               )),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: () => setState(() => _areas = [..._areas, const CprArea()]),
+            onPressed: () => setState(() {
+              _areas = [..._areas, const CprArea()];
+              _areaIds = [..._areaIds, ..._newRowIds(1)];
+            }),
             icon: const Icon(Icons.add, size: 18),
             label: Text(_areas.isEmpty ? 'Adicionar lavoura' : 'Adicionar outra lavoura'),
           ),
@@ -764,6 +783,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           // empurrar para baixo o que a cédula realmente precisa.
           _section('AVALISTAS', Icons.handshake_outlined),
           ..._guarantors.asMap().entries.map((entry) => _GuarantorCard(
+                key: ValueKey('aval-${_guarantorIds[entry.key]}'),
                 position: entry.key,
                 guarantor: entry.value,
                 onChanged: (updated) => setState(() {
@@ -772,13 +792,15 @@ class _CprFormScreenState extends State<CprFormScreen> {
                   _guarantors = next;
                 }),
                 onRemove: () => setState(() {
-                  final next = [..._guarantors]..removeAt(entry.key);
-                  _guarantors = next;
+                  _guarantors = [..._guarantors]..removeAt(entry.key);
+                  _guarantorIds = [..._guarantorIds]..removeAt(entry.key);
                 }),
               )),
           OutlinedButton.icon(
-            onPressed: () =>
-                setState(() => _guarantors = [..._guarantors, const CprGuarantor()]),
+            onPressed: () => setState(() {
+              _guarantors = [..._guarantors, const CprGuarantor()];
+              _guarantorIds = [..._guarantorIds, ..._newRowIds(1)];
+            }),
             icon: const Icon(Icons.add, size: 18),
             label: Text(
                 _guarantors.isEmpty ? 'Adicionar avalista' : 'Adicionar outro avalista'),
@@ -1003,8 +1025,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('${_barter.id} • ${_barter.producerName}',
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+              BarterIdentity(barter: _barter),
               const SizedBox(height: 6),
               Text(
                 'Emitir é CONFERIR: você afirma que a qualificação, as matrículas e '
@@ -1208,8 +1229,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${_barter.id} • ${_barter.producerName}',
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                BarterIdentity(barter: _barter),
                 const SizedBox(height: 6),
                 Text(
                   explanation,
@@ -2493,18 +2513,54 @@ class _PledgeWarning extends StatelessWidget {
 /// Ela se redesenha a cada tecla a partir do estado da tela (sem controllers
 /// próprios) porque a lista muda de tamanho: com um controller por campo,
 /// remover a primeira área deixaria o texto dela colado na segunda.
-class _AreaCard extends StatelessWidget {
+class _AreaCard extends StatefulWidget {
   final int position;
   final CprArea area;
   final ValueChanged<CprArea> onChanged;
   final VoidCallback onRemove;
 
   const _AreaCard({
+    super.key,
     required this.position,
     required this.area,
     required this.onChanged,
     required this.onRemove,
   });
+
+  @override
+  State<_AreaCard> createState() => _AreaCardState();
+}
+
+class _AreaCardState extends State<_AreaCard> {
+  /// A identidade de cada PROPRIETÁRIO, pelo mesmo motivo das lavouras na
+  /// tela (ver `_areaIds`): a lista muda de tamanho, e a chave não pode ser a
+  /// posição nem o texto. Mora aqui porque só este cartão mexe nela.
+  late List<int> _ownerIds;
+  int _nextOwnerId = 0;
+
+  int get position => widget.position;
+  CprArea get area => widget.area;
+  ValueChanged<CprArea> get onChanged => widget.onChanged;
+  VoidCallback get onRemove => widget.onRemove;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownerIds = _newOwnerIds(widget.area.owners.length);
+  }
+
+  @override
+  void didUpdateWidget(_AreaCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Só este cartão acrescenta e remove proprietários, e ele acerta as
+    // identidades na hora. Se o tamanho divergir mesmo assim, a lista veio de
+    // fora — e campos novos são o certo para mostrá-la.
+    if (_ownerIds.length != widget.area.owners.length) {
+      _ownerIds = _newOwnerIds(widget.area.owners.length);
+    }
+  }
+
+  List<int> _newOwnerIds(int count) => List.generate(count, (_) => _nextOwnerId++);
 
   @override
   Widget build(BuildContext context) {
@@ -2568,15 +2624,21 @@ class _AreaCard extends StatelessWidget {
             (v) => onChanged(area.copyWith(registryDistrict: v))),
         // "Dentro de uma área maior" muda a frase do documento: é a diferença
         // entre penhorar a lavoura e parecer penhorar a fazenda inteira.
-        CheckboxListTile(
-          value: area.withinLargerArea,
-          onChanged: (v) => onChanged(area.copyWith(withinLargerArea: v ?? false)),
-          title: Text('O plantio ocupa parte de uma área maior',
-              style: TextStyle(fontSize: 12.5, color: AppColors.textMedium)),
-          controlAffinity: ListTileControlAffinity.leading,
-          contentPadding: EdgeInsets.zero,
-          visualDensity: VisualDensity.compact,
-          dense: true,
+        //
+        // O `Material` transparente é exigência do ListTile: sem ele, o fundo
+        // do cartão cobre o realce do toque, e o Flutter acusa isso em debug.
+        Material(
+          type: MaterialType.transparency,
+          child: CheckboxListTile(
+            value: area.withinLargerArea,
+            onChanged: (v) => onChanged(area.copyWith(withinLargerArea: v ?? false)),
+            title: Text('O plantio ocupa parte de uma área maior',
+                style: TextStyle(fontSize: 12.5, color: AppColors.textMedium)),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            dense: true,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
@@ -2594,7 +2656,7 @@ class _AreaCard extends StatelessWidget {
           style: TextStyle(fontSize: 11, color: AppColors.textLight),
         ),
         const SizedBox(height: 8),
-        ...area.owners.asMap().entries.map((entry) => Row(children: [
+        ...area.owners.asMap().entries.map((entry) => Row(key: ValueKey(_ownerIds[entry.key]), children: [
               Expanded(
                 flex: 3,
                 child: _field('Nome', entry.value.name, (v) {
@@ -2616,6 +2678,7 @@ class _AreaCard extends StatelessWidget {
                 tooltip: 'Remover proprietário',
                 onPressed: () {
                   final owners = [...area.owners]..removeAt(entry.key);
+                  _ownerIds = [..._ownerIds]..removeAt(entry.key);
                   onChanged(area.copyWith(owners: owners));
                 },
                 icon: Icon(Icons.close, size: 17, color: AppColors.textLight),
@@ -2623,8 +2686,10 @@ class _AreaCard extends StatelessWidget {
               ),
             ])),
         TextButton.icon(
-          onPressed: () =>
-              onChanged(area.copyWith(owners: [...area.owners, const CprOwner()])),
+          onPressed: () {
+            _ownerIds = [..._ownerIds, ..._newOwnerIds(1)];
+            onChanged(area.copyWith(owners: [...area.owners, const CprOwner()]));
+          },
           icon: const Icon(Icons.add, size: 16),
           label: const Text('Adicionar proprietário'),
           style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
@@ -2638,10 +2703,10 @@ class _AreaCard extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: TextFormField(
-          // A chave amarra o campo à POSIÇÃO na lista: sem ela, remover a
-          // primeira lavoura faria o Flutter reaproveitar o campo de texto e o
-          // conteúdo apareceria na linha seguinte.
-          key: ValueKey('$label-$position-${value.hashCode}'),
+          // SEM CHAVE, e de propósito: quem amarra o campo à lavoura certa é a
+          // chave do CARTÃO (e a da linha, nos proprietários). Uma chave com o
+          // conteúdo mudava a cada letra, recriava o campo e tirava o foco de
+          // quem estava digitando.
           initialValue: value,
           onChanged: onChanged,
           keyboardType:
@@ -2671,6 +2736,7 @@ class _GuarantorCard extends StatelessWidget {
   final VoidCallback onRemove;
 
   const _GuarantorCard({
+    super.key,
     required this.position,
     required this.guarantor,
     required this.onChanged,
@@ -2803,9 +2869,8 @@ class _GuarantorCard extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: TextFormField(
-          // A chave amarra o campo à POSIÇÃO na lista — sem ela, remover o
-          // primeiro avalista faria o texto dele reaparecer no segundo.
-          key: ValueKey('aval-$label-$position-${value.hashCode}'),
+          // SEM CHAVE: quem amarra o campo ao avalista certo é a chave do
+          // cartão. Ver `_AreaCard._field`.
           initialValue: value,
           onChanged: onChanged,
           textCapitalization:

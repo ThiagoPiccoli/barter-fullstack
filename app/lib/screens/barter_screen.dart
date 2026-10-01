@@ -349,8 +349,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// área com seus mínimos obrigatórios, calculados a partir da área dele.
   void _selectProducer(String id) {
     final p = AppData.producerById(id);
-    // Só aceita produtores da carteira do consultor logado — e a carteira é
-    // compartilhável, então a pergunta é "ele me atende?", não "ele é meu?".
+    // Só aceita produtores da carteira do consultor logado.
     if (p == null || !p.isAttendedBy(widget.consultant.id)) return;
     setState(() {
       _producerId = id;

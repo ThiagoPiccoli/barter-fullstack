@@ -70,6 +70,7 @@ export class UserProvisioningService {
   async create(actor: User, role: Role, dto: CreateUserDto): Promise<ProvisionedUser> {
     await this.ensureSingleAccountIsFree(role);
     await this.ensureEmailIsFree(dto.email);
+    await this.ensureUnitHasNoOtherManager(role, dto.unitId);
 
     const { password, unitId, managerId, ...data } = dto as CreateUserDto & {
       managerId?: number;
@@ -101,6 +102,7 @@ export class UserProvisioningService {
   async update(actor: User, role: Role, id: number, dto: UpdateUserDto): Promise<UserWithManager> {
     const user = await this.findWithRole(role, id);
     await this.ensureEmailIsFree(dto.email, user.id);
+    await this.ensureUnitHasNoOtherManager(role, dto.unitId, user.id);
     const { unitId, managerId, ...data } = dto as UpdateUserDto & { managerId?: number };
     const updated = await this.prisma.user.update({
       where: { id: user.id },
@@ -274,6 +276,36 @@ export class UserProvisioningService {
       throw new UnprocessableEntityException('Escolha uma unidade válida');
     }
     return { unitId: unit.id, branch: unit.name };
+  }
+
+  /**
+   * UM GERENTE POR UNIDADE: a unidade escolhida não pode ser a lotação de outro
+   * gerente.
+   *
+   * Vale também na EDIÇÃO que não muda a unidade, e de propósito: um gerente
+   * gravado antes desta regra, dividindo a unidade com outro, só se resolve
+   * quando alguém escolhe qual dos dois sai dela — e a recusa diz quem é o
+   * outro, que é o que o admin precisa para decidir.
+   *
+   * Conferida aqui, e não por índice no banco, pelo mesmo motivo da conta única
+   * do comitê: a unicidade é de um PAPEL dentro da tabela de usuários, e o
+   * Prisma não declara índice único parcial (`WHERE role = 'manager'`).
+   */
+  private async ensureUnitHasNoOtherManager(
+    role: Role,
+    unitId: number,
+    ignoreId?: number,
+  ): Promise<void> {
+    if (role !== ROLE.manager) return;
+    const other = await this.prisma.user.findFirst({
+      where: { role: ROLE.manager, unitId, ...(ignoreId ? { id: { not: ignoreId } } : {}) },
+      select: { fullName: true, unit: { select: { name: true } } },
+    });
+    if (!other) return;
+    throw new UnprocessableEntityException(
+      `A unidade ${other.unit?.name ?? ''} já tem gerente: ${other.fullName}. ` +
+        'Cada unidade tem um gerente só — escolha outra unidade, ou mude a dele antes',
+    );
   }
 
   /**

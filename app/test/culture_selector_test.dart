@@ -33,7 +33,7 @@ void main() {
   ProducerModel produtor() => ProducerModel(
     id: '10',
     name: 'Antônio Carvalho',
-    consultantIds: const ['2'],
+    consultantId: '2',
     document: '123.456.789-09',
     phone: '',
     farmName: 'Fazenda Boa Vista',

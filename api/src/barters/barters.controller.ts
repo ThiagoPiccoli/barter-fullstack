@@ -1,11 +1,16 @@
 import {
   Body,
+  type CallHandler,
   Controller,
   Delete,
+  type ExecutionContext,
   Get,
   HttpCode,
+  Injectable,
+  type NestInterceptor,
   Param,
   ParseIntPipe,
+  PayloadTooLargeException,
   Post,
   Put,
   Query,
@@ -16,6 +21,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import type { Observable } from 'rxjs';
 import type { User } from '@prisma/client';
 import {
   AnyRole,
@@ -25,7 +31,12 @@ import {
 } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterJson, toBarterVersionJson, toCprJson } from '../common/serializers';
-import { BartersService, MAX_ATTACHMENT_BYTES, type StoredFile } from './barters.service';
+import {
+  BartersService,
+  MAX_ATTACHMENT_BYTES,
+  megabytes,
+  type StoredFile,
+} from './barters.service';
 import {
   AttachCreditFileDto,
   AttachInvoiceDto,
@@ -57,12 +68,39 @@ import { IssueCprDto, RegisterCprDto, SaveCprDto, SignCprDto } from './dto/cpr.d
  *
  * O LIMITE é o do service, e não um número solto aqui: quem sabe quanto pesa um
  * anexo aceitável é o domínio. Ele corta a requisição antes de o corpo inteiro
- * ser recebido; o service confere de novo, e é ELE quem escreve a frase que a
- * pessoa lê (ver `requireAttachable`).
+ * ser recebido, e por isso a frase do arquivo grande demais nasce AQUI: o
+ * multer devolve "File too large", em inglês, e era isso que aparecia no aviso
+ * da tela. O service confere de novo (ver `requireAttachable`) para o anexo
+ * que chegue por outro caminho.
+ *
+ * O NOME do arquivo é lido em UTF-8 (`defParamCharset`). É assim que o `http`
+ * do Dart e o navegador o escrevem no multipart, e o padrão do multer é
+ * latin1: "NF março.pdf" era gravado como "NF marÃ§o.pdf", para sempre.
  */
-const ATTACHMENT_UPLOAD = FileInterceptor('file', {
+const MultipartAttachment = FileInterceptor('file', {
   limits: { fileSize: MAX_ATTACHMENT_BYTES },
+  defParamCharset: 'utf8',
 });
+
+@Injectable()
+class AttachmentUpload implements NestInterceptor {
+  private readonly multipart = new MultipartAttachment();
+
+  async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
+    try {
+      return await this.multipart.intercept(context, next);
+    } catch (error) {
+      if (error instanceof PayloadTooLargeException) {
+        throw new PayloadTooLargeException(
+          `O anexo passa do limite de ${megabytes(MAX_ATTACHMENT_BYTES)} MB`,
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+const ATTACHMENT_UPLOAD = AttachmentUpload;
 
 /**
  * Entrega um arquivo guardado como ANEXO (`attachment`), e não inline.
@@ -70,17 +108,18 @@ const ATTACHMENT_UPLOAD = FileInterceptor('file', {
  * `attachment` de propósito: o navegador salva em vez de abrir. Estes arquivos
  * chegaram de fora — quem os enviou foi um usuário —, e abri-los dentro da
  * origem da aplicação é o que transforma um XML enviado por alguém numa página
- * servida pelo nosso domínio. O nome do arquivo vai entre aspas e com as aspas
- * de dentro removidas, que é o que impede um nome de arquivo malicioso de
- * quebrar o cabeçalho.
+ * servida pelo nosso domínio.
+ *
+ * O cabeçalho é montado pelo `attachment` do Express (RFC 6266): o nome vai
+ * escapado em `filename`, para quem só lê latin1, e inteiro em `filename*`, em
+ * UTF-8. Escrito à mão, um travessão no nome derrubava o `setHeader` num 500 —
+ * cabeçalho HTTP não carrega nada acima de latin1. O tipo vem DEPOIS, porque o
+ * `attachment` o adivinha pela extensão, e o que vale é o gravado.
  */
 function sendFile(response: Response, file: StoredFile): void {
+  response.attachment(file.fileName);
   response.setHeader('Content-Type', file.contentType);
   response.setHeader('Content-Length', String(file.size));
-  response.setHeader(
-    'Content-Disposition',
-    `attachment; filename="${file.fileName.replace(/["\\\r\n]/g, '')}"`,
-  );
   response.end(Buffer.from(file.content));
 }
 

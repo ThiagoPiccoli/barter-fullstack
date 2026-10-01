@@ -346,35 +346,16 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
   // aqui para o dataset não precisar repetir o documento duas vezes.
-  //
-  // `consultants` é LISTA: o mesmo produtor pode ser atendido por mais de um
-  // consultor (ver ProducerConsultant no schema). Joaquim Tavares, abaixo, é o
-  // caso do dataset — a região de Mandaguari é dividida entre Roberto e João, e
-  // os dois atendem o mesmo cliente.
-  type ProducerSeed = Omit<
-    Prisma.ProducerUncheckedCreateInput,
-    'documentDigits' | 'consultants'
-  > & { consultants: number[] };
+  type ProducerSeed = Omit<Prisma.ProducerUncheckedCreateInput, 'documentDigits'>;
 
-  const mkProducer = ({ consultants, ...data }: ProducerSeed) =>
+  const mkProducer = (data: ProducerSeed) =>
     prisma.producer.create({
-      data: {
-        ...data,
-        documentDigits: documentDigitsOf(data.document),
-        // O vínculo nasce junto com o produtor, e por isso com a data dele: no
-        // dataset o compartilhamento é parte da história, não algo feito hoje.
-        consultants: {
-          create: consultants.map((consultantId) => ({
-            consultantId,
-            assignedAt: data.createdAt as Date,
-          })),
-        },
-      },
+      data: { ...data, documentDigits: documentDigitsOf(data.document) },
     });
 
   const antonio = await mkProducer({
     name: 'Antônio Carvalho',
-    consultants: [joao.id],
+    consultantId: joao.id,
     document: 'CPF 123.456.789-00',
     phone: '(44) 99800-1001',
     farmName: 'Fazenda Boa Vista',
@@ -384,7 +365,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const helena = await mkProducer({
     name: 'Helena Prado',
-    consultants: [ana.id],
+    consultantId: ana.id,
     document: 'CPF 234.567.890-11',
     phone: '(44) 99800-1002',
     farmName: 'Sítio das Águas',
@@ -392,13 +373,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     areaHa: 45,
     createdAt: at(2021, 5, 18),
   });
-  // O produtor COMPARTILHADO do dataset: Mandaguari é região dividida, e
-  // Roberto e João atendem os dois a Fazenda Santa Rita. É o caso que existe
-  // para as telas mostrarem uma carteira com mais de um nome — e para os testes
-  // separarem "vejo o meu" de "vejo só o meu".
   const joaquim = await mkProducer({
     name: 'Joaquim Tavares',
-    consultants: [roberto.id, joao.id],
+    consultantId: roberto.id,
     document: 'CNPJ 12.345.678/0001-90',
     phone: '(44) 99800-1003',
     farmName: 'Fazenda Santa Rita',
@@ -412,7 +389,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   // onde ela é feita: perante o fisco, uma vez, valendo para todas as entregas.
   const claudia = await mkProducer({
     name: 'Cláudia Nunes',
-    consultants: [ana.id],
+    consultantId: ana.id,
     document: 'CPF 345.678.901-22',
     phone: '(44) 99800-1004',
     farmName: 'Fazenda Recanto',
@@ -423,7 +400,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const sebastiao = await mkProducer({
     name: 'Sebastião Ramos',
-    consultants: [joao.id],
+    consultantId: joao.id,
     document: 'CPF 456.789.012-33',
     phone: '(44) 99800-1005',
     farmName: 'Sítio Bela Vista',
@@ -433,7 +410,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const vanessa = await mkProducer({
     name: 'Vanessa Lopes',
-    consultants: [lucas.id],
+    consultantId: lucas.id,
     document: 'CNPJ 23.456.789/0001-01',
     phone: '(44) 99800-1006',
     farmName: 'Fazenda Três Irmãos',
@@ -444,7 +421,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   });
   const osmar = await mkProducer({
     name: 'Osmar Dutra',
-    consultants: [maria.id],
+    consultantId: maria.id,
     document: 'CPF 567.890.123-44',
     phone: '(44) 99800-1007',
     farmName: 'Fazenda Alto da Serra',

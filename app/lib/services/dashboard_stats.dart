@@ -42,8 +42,8 @@ class BarterStats {
   /// a permuta continua devendo as sacas dela (ver `BarterModel.wasApproved`).
   final List<BarterModel> closed;
 
-  /// A fila do comitê, da mais antiga para a mais nova: é a ordem em que ela se
-  /// lê como "ação necessária".
+  /// A fila do comitê, da mais nova para a mais antiga — a mesma ordem de toda
+  /// lista do sistema.
   final List<BarterModel> pending;
 
   /// O que ainda espera o parecer do gerente.
@@ -103,7 +103,7 @@ class BarterStats {
 BarterStats statsOf(List<BarterModel> barters) {
   final closed = barters.where((b) => b.wasApproved).toList();
   final pending = barters.where((b) => b.status == BarterStatus.pending).toList()
-    ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
   return BarterStats(
     closed: closed,

@@ -103,6 +103,29 @@ void main() {
       expect(fila.map((b) => b.id), ['gerente-meu', 'gerente-de-outro']);
     });
 
+    /// TODA FILA SAI DA MAIS NOVA para a mais antiga — pela data dela, e não
+    /// pela posição em que o cache local a guardou.
+    test('a fila vem da mais nova para a mais antiga', () {
+      BarterModel em(String id, DateTime createdAt) => BarterModel(
+            id: id,
+            consultantId: '2',
+            consultantName: 'João Silva',
+            consultantBranch: 'Filial 02',
+            producerId: '10',
+            producerName: 'Antônio Carvalho',
+            status: BarterStatus.pending,
+            createdAt: createdAt,
+            grains: const [],
+            inputs: const [],
+          );
+      final fila = queueOf(WorkPost.committee, [
+        em('velha', DateTime(2026, 1, 1)),
+        em('nova', DateTime(2026, 5, 1)),
+        em('meio', DateTime(2026, 3, 1)),
+      ]);
+      expect(fila.map((b) => b.id), ['nova', 'meio', 'velha']);
+    });
+
     test('a do comitê e a do faturista são o ESTADO da permuta', () {
       expect(queueOf(WorkPost.committee, barters).map((b) => b.id), ['comite']);
       expect(queueOf(WorkPost.biller, barters).map((b) => b.id), ['a-faturar']);

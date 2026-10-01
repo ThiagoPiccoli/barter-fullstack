@@ -59,7 +59,7 @@ void main() {
   ProducerModel produtor() => ProducerModel(
     id: '10',
     name: 'Antônio Carvalho',
-    consultantIds: const ['2'],
+    consultantId: '2',
     document: 'CPF 123.456.789-00',
     phone: '(44) 99999-0000',
     farmName: 'Fazenda Boa Vista',
@@ -114,7 +114,7 @@ void main() {
 
     expect(campo('Documento (CPF/CNPJ)'), findsNothing);
     expect(campo('Área cultivável (ha)'), findsNothing);
-    expect(find.byType(CheckboxListTile), findsNothing);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
 
     // Travado não é escondido: o valor continua na tela, com o cadeado.
     expect(find.text('CPF 123.456.789-00'), findsOneWidget);
@@ -135,7 +135,7 @@ void main() {
 
     expect(campo('Documento (CPF/CNPJ)'), findsOneWidget);
     expect(campo('Área cultivável (ha)'), findsOneWidget);
-    expect(find.byType(CheckboxListTile), findsWidgets);
+    expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     expect(find.byIcon(Icons.lock_outline), findsNothing);
   });
 }

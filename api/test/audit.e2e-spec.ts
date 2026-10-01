@@ -76,11 +76,15 @@ describe('Auditoria (e2e)', () => {
     expect(await trail()).toEqual([]);
 
     const auth = await admin();
-    for (const email of ['primeiro@agrobarter.com.br', 'segundo@agrobarter.com.br']) {
+    // Unidades diferentes: cada unidade tem um gerente só.
+    for (const [email, unitId] of [
+      ['primeiro@agrobarter.com.br', UNIT.filial02],
+      ['segundo@agrobarter.com.br', UNIT.filial04],
+    ] as const) {
       await request(app.getHttpServer())
         .post('/api/v1/managers')
         .set('Authorization', auth)
-        .send({ fullName: 'Pessoa Nova', email, unitId: UNIT.matriz });
+        .send({ fullName: 'Pessoa Nova', email, unitId });
     }
 
     const rows = await trail();

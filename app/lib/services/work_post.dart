@@ -68,24 +68,38 @@ List<WorkPost> workPostsOf(UserModel user) => [
 /// A do EMISSOR tem os TRÊS degraus da cédula, e não só o primeiro: emitir,
 /// assinar e registrar acontecem em dias diferentes, e uma fila com só "a
 /// emitir" esconderia as cédulas assinadas paradas esperando cartório.
+///
+/// Toda fila sai da MAIS NOVA para a mais antiga, pela ordem dela mesma e não
+/// pela da lista recebida: o cache local é mexido no lugar (a permuta registrada
+/// entra no topo, a que muda de estado fica onde estava), e a fila não pode
+/// herdar esses acasos.
 List<BarterModel> queueOf(
   WorkPost post,
   List<BarterModel> barters, {
   String? managerId = '',
 }) {
+  final bool Function(BarterModel) waits;
   switch (post) {
     case WorkPost.manager:
-      if (managerId == null) return barters.where((b) => b.awaitsManager).toList();
-      return barters.where((b) => b.awaitsOpinionFrom(managerId)).toList();
+      waits = managerId == null
+          ? (b) => b.awaitsManager
+          : (b) => b.awaitsOpinionFrom(managerId);
     case WorkPost.committee:
-      return barters.where((b) => b.awaitsCommittee).toList();
+      waits = (b) => b.awaitsCommittee;
     case WorkPost.biller:
-      return barters.where((b) => b.awaitsInvoice).toList();
+      waits = (b) => b.awaitsInvoice;
     case WorkPost.emitter:
-      return barters
-          .where((b) => b.awaitsCprIssue || b.awaitsSignatures || b.awaitsRegistration)
-          .toList();
+      waits = (b) => b.awaitsCprIssue || b.awaitsSignatures || b.awaitsRegistration;
   }
+  final queue = barters.where(waits).toList();
+  // No EMPATE de data vale a ordem recebida — a da API, que desempata pelo id.
+  // O `sort` do Dart não é estável, então a posição entra na conta.
+  final position = {for (final (i, b) in queue.indexed) b.id: i};
+  return queue
+    ..sort((a, b) {
+      final byDate = b.createdAt.compareTo(a.createdAt);
+      return byDate != 0 ? byDate : position[a.id]!.compareTo(position[b.id]!);
+    });
 }
 
 /// A ETAPA VIZINHA que este posto acompanha — o segundo número do painel.

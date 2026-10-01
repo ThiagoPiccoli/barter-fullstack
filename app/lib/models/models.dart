@@ -378,15 +378,11 @@ class ProducerModel {
   final String id;
   final String name;
 
-  /// Os consultores que ATENDEM este produtor — a carteira dele.
+  /// O consultor que ATENDE este produtor — a carteira dele, uma só.
   ///
-  /// É lista porque consultores dividem região: o mesmo produtor pode ser
-  /// atendido por vários, e todos eles o veem e permutam com ele. Cada permuta
-  /// continua sendo de um consultor só — o que a registrou.
-  ///
-  /// Vazia quando o último consultor vinculado foi excluído: o produtor espera
-  /// realocação e, até lá, só a retaguarda o enxerga.
-  final List<String> consultantIds;
+  /// Nulo quando o consultor foi excluído: o produtor espera realocação e, até
+  /// lá, só a retaguarda o enxerga.
+  final String? consultantId;
 
   /// CPF ou CNPJ.
   final String document;
@@ -419,7 +415,7 @@ class ProducerModel {
   const ProducerModel({
     required this.id,
     required this.name,
-    required this.consultantIds,
+    required this.consultantId,
     required this.document,
     required this.phone,
     required this.farmName,
@@ -433,10 +429,8 @@ class ProducerModel {
   factory ProducerModel.fromJson(Map<String, dynamic> json) => ProducerModel(
         id: _asId(json['id']),
         name: json['name'] as String,
-        // Vazia quando o último consultor vinculado foi excluído (aguarda
-        // realocação) — e o app precisa desenhar essa lista vazia, não quebrar.
-        consultantIds:
-            ((json['consultantIds'] ?? const []) as List).map(_asId).toList(),
+        // Nulo quando o consultor foi excluído (aguarda realocação).
+        consultantId: json['consultantId'] == null ? null : _asId(json['consultantId']),
         document: json['document'] as String,
         phone: (json['phone'] ?? '') as String,
         farmName: json['farmName'] as String,
@@ -447,10 +441,9 @@ class ProducerModel {
         createdAt: _asDate(json['createdAt']),
       );
 
-  /// Este consultor atende o produtor? É a pergunta que a carteira passou a
-  /// responder quando deixou de ser um id só — e a que o servidor faz antes de
-  /// aceitar uma permuta.
-  bool isAttendedBy(String consultantId) => consultantIds.contains(consultantId);
+  /// Este consultor atende o produtor? É a pergunta que o servidor faz antes
+  /// de aceitar uma permuta.
+  bool isAttendedBy(String consultantId) => this.consultantId == consultantId;
 
   /// Localização resumida (ex.: "Fazenda Boa Vista – Maringá/PR").
   String get location => '$farmName, $city';

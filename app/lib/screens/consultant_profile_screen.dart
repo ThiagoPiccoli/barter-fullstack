@@ -283,7 +283,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
             else
               ...barters.map((b) => BarterLogItem(
                     barter: b,
-                    subtitle: 'Produtor: ${b.producerName}',
+                    subtitle: '${b.inputs.length} insumo(s) • ${formatCurrency(b.inputCost)}',
                   )),
             const SizedBox(height: 24),
             // Antes de excluir: quase sempre o problema é acesso, não cadastro.

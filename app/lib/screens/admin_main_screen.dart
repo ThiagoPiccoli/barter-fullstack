@@ -604,51 +604,41 @@ class _PendingActionCard extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Row(
+          // O trilho acompanha a altura da identificação, que tem duas ou três
+          // linhas conforme quem lê recebe a área e o investimento.
+          child: IntrinsicHeight(
+            child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
                 width: 4,
-                height: 46,
                 decoration: BoxDecoration(color: urgency, borderRadius: BorderRadius.circular(2)),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                child: BarterIdentity(
+                  barter: barter,
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: urgency.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(barter.id,
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: urgency.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.schedule, size: 11, color: urgency),
-                              const SizedBox(width: 3),
-                              Text(waitLabel,
-                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: urgency)),
-                            ],
-                          ),
-                        ),
+                        Icon(Icons.schedule, size: 11, color: urgency),
+                        const SizedBox(width: 3),
+                        Text(waitLabel,
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: urgency)),
                       ],
                     ),
-                    const SizedBox(height: 3),
-                    Text('${barter.consultantName} • ${barter.producerName}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-                  ],
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
@@ -662,6 +652,7 @@ class _PendingActionCard extends StatelessWidget {
               ),
               Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
             ],
+            ),
           ),
         ),
       ),

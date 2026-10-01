@@ -280,7 +280,15 @@ escreve um **parecer técnico** — texto, e só texto: ele não aprova nem nega
 - a permuta guarda **a quem foi enviada** (`Barter.managerId`, gravado no
   ENCAMINHAMENTO — que é onde o envio acontece). Trocar o gerente de um consultor
   vale para as próximas; as que já estão na mesa de alguém continuam lá — o contrário faria uma permuta mudar de
-  mãos sem ninguém ter agido sobre ela.
+  mãos sem ninguém ter agido sobre ela;
+- **cada unidade tem um gerente só** — na LOTAÇÃO dele (`User.unitId`), não na
+  retirada. É conferido no provisionamento (`ensureUnitHasNoOtherManager`, em
+  [user-provisioning.service.ts](../api/src/users/user-provisioning.service.ts)),
+  e não por índice no banco, pelo mesmo motivo da conta única do comitê: é
+  unicidade de um papel dentro da tabela de usuários, e o Prisma não declara
+  índice único parcial. A conferência vale também na edição que não muda a
+  unidade: um gerente gravado antes da regra, dividindo a unidade com outro, é
+  cobrado a sair dela na próxima vez que alguém abrir o cadastro.
 
 **A unidade de retirada não tem nada a ver com isso.** Ela é o lugar onde o
 produtor busca os insumos, escolhido pelo consultor a cada permuta, e pode ser
@@ -763,8 +771,7 @@ Vale ler linha a linha; a sequência é:
 2. **precisa haver Barter aberto** (`requireOpenVersion`) → é ele que traz o
    grão da safra e a tabela de valores; sem ele, 422 com "aguarde o próximo
    lançamento"
-3. **produtor precisa estar na carteira de quem registra** → 403 (a carteira é
-   compartilhável: basta ele atender o produtor, não ser o único a atendê-lo)
+3. **produtor precisa estar na carteira de quem registra** → 403
 4. quantidades repetidas no payload são **consolidadas por produto**
 5. preços vêm **da versão** — o payload nem tem campo de preço, e o `whitelist`
    do ValidationPipe descartaria se tivesse; insumo fora da tabela da versão é
@@ -1257,14 +1264,13 @@ corrigir um custo hoje reescreveria a margem apurada ontem.
 
 ```
 User ─┬─< AccessToken        (sessões revogáveis)
-      ├─< ProducerConsultant (carteira; Cascade — some o vínculo, não o produtor)
+      ├─< Producer           (carteira; SetNull — o produtor fica sem consultor)
       ├─< User               (time: o gerente e os consultores dele)
       ├─< Barter             (registrou; SetNull)
       └─< Barter             (recebeu para parecer; SetNull)
 Unit ─┬─< User               (lotação)
       └─< Barter             (local de retirada; SetNull, unitName fica)
-Producer ─┬─< ProducerConsultant   (quem o atende — N:N com User)
-          └─< Barter
+Producer ─< Barter
 Season ─< BarterVersion ─┬─< VersionPrice >─ Product   (a tabela de valores)
                          └─< Barter                     (SetNull; versionCode fica)
 ProductClass ─< Product ─┬─< PriceHistoryEntry
@@ -1310,21 +1316,20 @@ contagem de dígitos que diz se o produtor é pessoa física ou jurídica, e dis
 depende a alíquota do Funrural. A outra metade — a forma de recolhimento — é
 escolhida no fechamento da permuta (ver *O imposto da entrega*, em 1.5).
 
-### A carteira é N:N
+### Um consultor por produtor
 
-`ProducerConsultant` liga produtor e consultor, e a carteira deixou de ser uma
-coluna (`Producer.consultantId`) por causa da operação: **consultores dividem
-região e atendem o mesmo produtor**. Com um consultor por produtor, a única
-forma de representar isso era cadastrar o produtor duas vezes — exatamente o
-cadastro em duplicidade do parágrafo acima, com a área contando em dobro e as
-permutas do mesmo cliente partidas entre dois registros.
+A carteira é a coluna `Producer.consultantId`: **cada produtor é atendido por um
+consultor só**. Ela já foi N:N (`ProducerConsultant`, consultores dividindo
+região) e voltou a ser coluna quando a regra passou a ser um consultor por
+produtor — é a coluna que garante o "um só"; com a tabela de vínculos, a regra
+dependeria de toda gravação lembrar de apagar o vínculo anterior.
 
-Os vínculos são **iguais entre si**: não há dono nem principal. Todo consultor
-vinculado enxerga o produtor e registra permuta para ele; quem responde "de
-quem foi esta venda?" é a permuta, que guarda o consultor que a registrou
-(`Barter.consultantId`). Escrever a lista é ato do admin
-(`CAPABILITY.producersManage`) — o consultor não se acrescenta a uma carteira,
-nem tira alguém dela.
+Quem define e troca o consultor é o admin (`CAPABILITY.producersManage`), numa
+lista suspensa no cadastro do produtor. A troca move o **produtor**, não as
+permutas: cada permuta guarda quem a registrou (`Barter.consultantId`), e a
+visibilidade e os atos sobre ela não passam pela carteira. O consultor anterior
+perde o cadastro e a possibilidade de registrar permuta nova para o cliente; as
+que ele já registrou continuam com ele.
 
 **OS DADOS DO PRODUTOR, PORÉM, SÃO GERIDOS PELO CONSULTOR** (`producers.edit`,
 `PUT /producers/:id`). Quem visita a fazenda é quem sabe que o telefone mudou,
@@ -1340,24 +1345,24 @@ fora, cada um por um motivo (ver `assertEditable`, em
 | CPF/CNPJ | é a IDENTIDADE do cadastro (a unicidade mora nele): trocá-lo transforma o cliente A no cliente B mantendo as permutas do A |
 | área cultivável | é o denominador de toda régua da permuta — mínimos por hectare, custo do seguro, investimento por hectare. Um arrendamento a mais é decisão de crédito, não atualização de contato |
 | regime de Funrural | é a opção formal do produtor perante o fisco, de onde sai a alíquota gravada em cada entrega |
-| a carteira | é a lista inteira num campo só: quem a escrevesse poderia se remover do próprio cliente — ou remover um colega — sem que ninguém decidisse isso |
+| a carteira | é quem atende quem: um consultor que a escrevesse poderia passar o próprio cliente adiante sem que ninguém decidisse isso |
 
 A recusa é por VALOR e não por presença (o formulário devolve o registro
 inteiro, e recusar o campo que veio igual travaria toda edição de telefone), e a
 frase diz **a quem pedir**: uma trava que só nega manda o consultor concluir que
 o app está quebrado. Cadastrar e excluir continuam em `producers.manage`.
 
-A exclusão é `Cascade` dos dois lados: sai o consultor, sai o vínculo dele — não
-o produtor. Um produtor pode ficar **sem nenhum** consultor e esperar
-realocação (é o estado que o antigo `SetNull` produzia); até lá, só a retaguarda
-o enxerga. O caminho contrário, criar um produtor sem consultor, é recusado no
-DTO: cadastro que ninguém vê é cadastro perdido.
+Excluir o consultor é `SetNull`: o produtor não some junto, fica **sem
+consultor** e espera realocação; até lá, só a retaguarda o enxerga. O caminho
+contrário, criar um produtor sem consultor, é recusado: cadastro que ninguém vê é
+cadastro perdido.
 
 A migration
-[`20260818141058_produtor_em_varias_carteiras`](../api/prisma/migrations/20260818141058_produtor_em_varias_carteiras/migration.sql)
-copia os vínculos existentes para a tabela nova **antes** de dropar a coluna —
-na ordem inversa da que o `prisma migrate diff` gera, que deixaria todo produtor
-sem consultor nenhum.
+[`20261001120000_um_consultor_por_produtor`](../api/prisma/migrations/20261001120000_um_consultor_por_produtor/migration.sql)
+cria a coluna e a preenche **antes** de dropar a tabela de vínculos. O produtor
+que estava em mais de uma carteira fica com o consultor que registrou a permuta
+mais recente para ele; sem permuta de nenhum deles, com o vínculo mais antigo
+(o dono original); no empate, o menor id.
 
 ## 1.7 Ambiente, seed e primeiro acesso
 

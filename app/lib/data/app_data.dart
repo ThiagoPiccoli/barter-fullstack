@@ -582,17 +582,15 @@ class AppData {
     return producers.where((p) => p.isAttendedBy(consultantId)).toList();
   }
 
-  /// Os nomes dos consultores que atendem o produtor, para as telas mostrarem
-  /// a carteira por extenso.
+  /// O nome do consultor que atende o produtor, para as telas mostrarem a
+  /// carteira por extenso.
   ///
-  /// Um id sem nome é PULADO, não vira "?": só o admin tem a lista de
-  /// consultores carregada, e nas telas dele a ausência significa consultor
-  /// excluído — cujo vínculo já não existe mais no servidor.
-  static List<String> consultantNamesFor(ProducerModel producer) => producer.consultantIds
-      .map(consultantById)
-      .whereType<UserModel>()
-      .map((c) => c.name)
-      .toList();
+  /// Null quando não há nome: só o admin tem a lista de consultores carregada,
+  /// e nas telas dele a ausência significa produtor sem consultor.
+  static String? consultantNameFor(ProducerModel producer) {
+    final id = producer.consultantId;
+    return id == null ? null : consultantById(id)?.name;
+  }
 
   /// Busca um consultor pelo id (null se não encontrado). Só o admin tem a
   /// lista de consultores carregada.
@@ -1476,7 +1474,9 @@ class AppData {
     final saved = isNew ? await _producers.create(producer) : await _producers.update(producer);
     final index = producers.indexWhere((p) => p.id == saved.id);
     if (index == -1) {
-      producers.add(saved);
+      // O recém-cadastrado entra no TOPO: a carteira vem do mais recente para o
+      // mais antigo, como a API a devolve.
+      producers.insert(0, saved);
     } else {
       producers[index] = saved;
     }

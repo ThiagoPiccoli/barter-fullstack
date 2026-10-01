@@ -226,8 +226,22 @@ class ApiClient {
   }
 
   /// O nome do arquivo dentro de `attachment; filename="nota.pdf"`.
+  ///
+  /// `filename*` vem PRIMEIRO: é nele que o servidor manda o nome inteiro, em
+  /// UTF-8 (RFC 6266). O `filename` é a versão latin1 de quem não o lê, com `?`
+  /// no lugar do que latin1 não tem — "NF – soja.pdf" vira "NF ? soja.pdf".
   static String? _filenameFrom(String? disposition) {
     if (disposition == null) return null;
+    final utf8 = RegExp(r"filename\*=UTF-8''([^;\s]+)", caseSensitive: false)
+        .firstMatch(disposition);
+    if (utf8 != null) {
+      try {
+        return Uri.decodeComponent(utf8.group(1)!);
+      } catch (_) {
+        // Percent-encoding quebrado (ArgumentError) ou UTF-8 inválido
+        // (FormatException): sobra a versão latin1, logo abaixo.
+      }
+    }
     final match = RegExp('filename="([^"]+)"').firstMatch(disposition);
     return match?.group(1);
   }

@@ -912,14 +912,13 @@ void main() {
     });
   });
 
-  /// A CARTEIRA do produtor é lista, e não um id: consultores dividem região e
-  /// atendem o mesmo cliente. O parse é onde essa mudança de contrato chega ao
-  /// app, e é aqui que ela precisa estar fixada.
+  /// A CARTEIRA do produtor: um consultor só, ou nenhum enquanto espera
+  /// realocação.
   group('ProducerModel', () {
-    Map<String, dynamic> producerJson({List<dynamic> consultantIds = const [2]}) => {
+    Map<String, dynamic> producerJson({Object? consultantId = 2}) => {
           'id': 3,
           'name': 'Joaquim Tavares',
-          'consultantIds': consultantIds,
+          'consultantId': consultantId,
           'document': 'CNPJ 12.345.678/0001-90',
           'phone': '(44) 99800-1003',
           'farmName': 'Fazenda Santa Rita',
@@ -929,23 +928,23 @@ void main() {
           'createdAt': '2020-11-03T00:00:00.000Z',
         };
 
-    test('o produtor compartilhado responde aos dois consultores', () {
-      final producer = ProducerModel.fromJson(producerJson(consultantIds: [4, 2]));
+    test('o produtor responde ao consultor dele, e só a ele', () {
+      final producer = ProducerModel.fromJson(producerJson(consultantId: 4));
 
-      expect(producer.consultantIds, ['4', '2']);
-      expect(producer.isAttendedBy('2'), isTrue);
+      expect(producer.consultantId, '4');
       expect(producer.isAttendedBy('4'), isTrue);
-      expect(producer.isAttendedBy('3'), isFalse);
+      expect(producer.isAttendedBy('2'), isFalse);
       expect(producer.areaLabel, '320 ha');
     });
 
-    /// Produtor que perdeu o último consultor (a conta foi excluída) espera
-    /// realocação. A tela do admin precisa desenhá-lo; quebrar no parse levaria
-    /// a lista inteira junto, que é exatamente o caso que ninguém testa.
-    test('carteira vazia é um estado, não um erro', () {
-      expect(ProducerModel.fromJson(producerJson(consultantIds: [])).consultantIds, isEmpty);
-      final semCampo = producerJson()..remove('consultantIds');
-      expect(ProducerModel.fromJson(semCampo).consultantIds, isEmpty);
+    /// Produtor cujo consultor foi excluído espera realocação. A tela do admin
+    /// precisa desenhá-lo; quebrar no parse levaria a lista inteira junto.
+    test('produtor sem consultor é um estado, não um erro', () {
+      final semConsultor = ProducerModel.fromJson(producerJson(consultantId: null));
+      expect(semConsultor.consultantId, isNull);
+      expect(semConsultor.isAttendedBy('2'), isFalse);
+      final semCampo = producerJson()..remove('consultantId');
+      expect(ProducerModel.fromJson(semCampo).consultantId, isNull);
     });
   });
 

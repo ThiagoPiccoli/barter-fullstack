@@ -70,15 +70,15 @@ void main() {
       expect(stats.denied, 1);
     });
 
-    /// A FILA DO COMITÊ se lê da mais antiga para a mais nova: é a ordem de
-    /// "ação necessária", e a alfabética esconderia quem espera há mais tempo.
-    test('a fila do comitê vem da mais antiga para a mais nova', () {
+    /// A FILA DO COMITÊ se lê da mais nova para a mais antiga, como toda lista
+    /// do sistema — e não na ordem em que a lista chegou.
+    test('a fila do comitê vem da mais nova para a mais antiga', () {
       final stats = statsOf([
-        barter(id: 'nova', status: BarterStatus.pending, createdAt: DateTime(2026, 5, 1)),
         barter(id: 'velha', status: BarterStatus.pending, createdAt: DateTime(2026, 1, 1)),
+        barter(id: 'nova', status: BarterStatus.pending, createdAt: DateTime(2026, 5, 1)),
       ]);
 
-      expect(stats.pending.map((b) => b.id), ['velha', 'nova']);
+      expect(stats.pending.map((b) => b.id), ['nova', 'velha']);
     });
 
     test('produtores ativos conta cada cliente uma vez', () {

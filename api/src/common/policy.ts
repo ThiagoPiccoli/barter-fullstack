@@ -40,9 +40,8 @@ export const CAPABILITY = {
    * Ela é SEPARADA de `producersManage`, e a separação é o desenho: cadastrar,
    * excluir e definir a carteira continuam do admin. Os três não são "dados do
    * produtor", são decisões sobre o cadastro — quem entra na base, quem sai dela
-   * e quem atende quem. A carteira em especial: ela é a lista inteira num campo
-   * só, e um consultor que a escrevesse poderia se remover do próprio cliente
-   * (ou remover um colega) sem que ninguém decidisse isso.
+   * e quem atende quem. A carteira em especial: um consultor que a escrevesse
+   * poderia passar o próprio cliente adiante sem que ninguém decidisse isso.
    *
    * O QUE ELA NÃO ALCANÇA, dentro da própria edição, está em `producers.service`
    * (ver `assertEditable`): o documento, a área cultivável e o regime de

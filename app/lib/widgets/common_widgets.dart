@@ -831,6 +831,141 @@ class DashboardHeader extends StatelessWidget {
   }
 }
 
+/// A IDENTIFICAÇÃO DE UMA PERMUTA: o código, de quem ela é, quem a registrou e o
+/// tamanho dela na lavoura — a área e o investimento por hectare.
+///
+/// Existe porque o código sozinho não identifica nada para quem lê: "PRM-2026-008"
+/// só vira uma permuta quando se sabe de qual produtor ela é, e o comitê que vai
+/// decidir, o faturista que vai faturar e o emissor que vai assinar precisam
+/// saber disso ANTES de clicar. É o mesmo bloco em toda lista, cartão e diálogo,
+/// para a permuta se ler igual em qualquer lugar do app.
+///
+/// O INVESTIMENTO NÃO É CALCULADO AQUI. A divisão (sacas do grão ÷ área) mora
+/// numa função só, `investmentPerHa` no serializer da API, e chega pronta em
+/// [BarterModel.sacksPerHa]; a tela só a formata. Uma segunda conta no app
+/// seria uma segunda resposta possível para a mesma pergunta.
+///
+/// A área e o investimento chegam só a quem pode compará-los (admin, comitê,
+/// faturista e emissor — ver `barters.investmentPerHa`). Para os outros os dois
+/// campos nem vêm no JSON, e a linha de baixo some inteira; o mesmo vale para a
+/// permuta anterior ao campo de área, que não tem divisão a mostrar.
+class BarterIdentity extends StatelessWidget {
+  final BarterModel barter;
+
+  /// O que vai na ponta direita da linha do código: o status, a espera na fila.
+  final Widget? trailing;
+
+  const BarterIdentity({super.key, required this.barter, this.trailing});
+
+  @override
+  Widget build(BuildContext context) {
+    final area = barter.producerAreaHa;
+    final hasArea = area != null && area > 0;
+    final code = Text(barter.id,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark));
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Sem `trailing`, o código não leva `Expanded`: os diálogos medem a
+        // largura pelo conteúdo, e um filho flexível ali não teria largura.
+        if (trailing == null)
+          code
+        else
+          Row(children: [Expanded(child: code), const SizedBox(width: 8), trailing!]),
+        const SizedBox(height: 3),
+        Wrap(
+          spacing: 12,
+          runSpacing: 2,
+          children: [
+            _IdentityFact(
+              icon: Icons.person_outline,
+              tooltip: 'Produtor',
+              value: barter.producerName,
+              strong: true,
+            ),
+            _IdentityFact(
+              icon: Icons.badge_outlined,
+              tooltip: 'Consultor',
+              value: barter.consultantName,
+            ),
+          ],
+        ),
+        if (hasArea || barter.sacksPerHa != null) ...[
+          const SizedBox(height: 2),
+          Wrap(
+            spacing: 12,
+            runSpacing: 2,
+            children: [
+              if (hasArea)
+                _IdentityFact(
+                  icon: Icons.landscape_outlined,
+                  tooltip: 'Área cultivável do produtor no registro',
+                  value: '${formatQty(area)} ha',
+                ),
+              if (barter.sacksPerHa != null)
+                _IdentityFact(
+                  icon: Icons.straighten,
+                  tooltip: 'Investimento médio por hectare (sacas ÷ área)',
+                  label: 'Investimento',
+                  value: formatSacksPerHa(barter.sacksPerHa!),
+                  strong: true,
+                ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Um dado da [BarterIdentity]: ícone, rótulo opcional e valor.
+///
+/// O valor é um `Text` SEPARADO do rótulo de propósito — "2,10 sc/ha" tem de
+/// poder ser achado sozinho, nos testes e por quem lê a tela com leitor.
+class _IdentityFact extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final String? label;
+  final String value;
+  final bool strong;
+
+  const _IdentityFact({
+    required this.icon,
+    required this.tooltip,
+    required this.value,
+    this.label,
+    this.strong = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppColors.textLight),
+          const SizedBox(width: 4),
+          if (label != null)
+            Text('$label ', style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+          Flexible(
+            child: Text(value,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: strong ? FontWeight.w600 : FontWeight.w400,
+                  color: strong ? AppColors.textDark : AppColors.textMedium,
+                )),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Card compacto de permuta usado nos dashboards (admin e consultor). No modo
 /// admin mostra as iniciais do consultor; no modo consultor, um ícone de troca.
 class MiniBarterCard extends StatelessWidget {
@@ -884,19 +1019,10 @@ class MiniBarterCard extends StatelessWidget {
                 )
               : Icon(Icons.swap_horiz, color: AppColors.primary, size: 20),
         ),
-        title: Text(barter.id,
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
-        // O INVESTIMENTO POR HECTARE entra na linha de baixo do cartão do
-        // PAINEL pelo mesmo motivo de estar na lista: é a régua que compara, e
-        // o painel é onde se olha várias permutas de uma vez. Ele só aparece
-        // para quem o recebe do servidor — admin, comitê e faturista.
-        subtitle: Text(
-            [
-              if (isAdmin) barter.consultantName,
-              '${barter.inputs.length} insumo(s)',
-              if (!isAdmin) barter.producerName,
-              if (barter.sacksPerHa != null) formatSacksPerHa(barter.sacksPerHa!),
-            ].join(' • '),
+        // A IDENTIFICAÇÃO inteira, com o investimento por hectare: o painel é
+        // onde se olha várias permutas de uma vez, e é ali que a régua compara.
+        title: BarterIdentity(barter: barter),
+        subtitle: Text('${barter.inputs.length} insumo(s)',
             style: TextStyle(fontSize: 11, color: AppColors.textMedium),
             overflow: TextOverflow.ellipsis),
         trailing: Column(
@@ -936,11 +1062,14 @@ class BarterLogItem extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Row(
+          // O trilho acompanha a altura do cartão: a identificação tem duas ou
+          // três linhas, conforme quem lê recebe a área e o investimento.
+          child: IntrinsicHeight(
+            child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
                 width: 4,
-                height: 50,
                 decoration: BoxDecoration(color: statusColor(barter.status), borderRadius: BorderRadius.circular(2)),
               ),
               const SizedBox(width: 10),
@@ -948,14 +1077,7 @@ class BarterLogItem extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Text(barter.id,
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        const Spacer(),
-                        StatusBadge(status: barter.status),
-                      ],
-                    ),
+                    BarterIdentity(barter: barter, trailing: StatusBadge(status: barter.status)),
                     const SizedBox(height: 4),
                     Row(
                       children: [
@@ -978,6 +1100,7 @@ class BarterLogItem extends StatelessWidget {
               const SizedBox(width: 4),
               Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
             ],
+            ),
           ),
         ),
       ),
@@ -1109,8 +1232,7 @@ void reviewBarter(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Permuta: ${barter.id}',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  BarterIdentity(barter: barter),
                   if (copy.requiresNote) ...[
                     const SizedBox(height: 8),
                     Text(
@@ -1252,10 +1374,9 @@ void giveBarterOpinion(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Permuta: ${barter.id}',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  BarterIdentity(barter: barter),
                   const SizedBox(height: 2),
-                  Text('${barter.consultantName} • retirada em ${barter.unitLabel}',
+                  Text('Retirada em ${barter.unitLabel}',
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   const SizedBox(height: 12),
                   Text(
@@ -1355,10 +1476,9 @@ void requestBarterChange(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Permuta: ${barter.id}',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  BarterIdentity(barter: barter),
                   const SizedBox(height: 2),
-                  Text('${barter.producerName} • ${barter.statusLabel}',
+                  Text(barter.statusLabel,
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                   const SizedBox(height: 12),
                   Text(
@@ -1461,8 +1581,7 @@ void decideBarterChange(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Permuta: ${barter.id}',
-                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                  BarterIdentity(barter: barter),
                   const SizedBox(height: 2),
                   Text('${barter.changeRequestBy ?? barter.consultantName} pediu a alteração',
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),

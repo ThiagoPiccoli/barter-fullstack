@@ -5,6 +5,7 @@ import 'package:agrobarter_app/data/app_data.dart';
 import 'package:agrobarter_app/models/models.dart';
 import 'package:agrobarter_app/screens/consultants_screen.dart';
 import 'package:agrobarter_app/screens/edit_forms.dart';
+import 'package:agrobarter_app/screens/staff_profile_screen.dart';
 import 'package:agrobarter_app/theme/app_theme.dart';
 
 /// A ABA DE CADASTROS do admin, nos dois papéis que ela passou a administrar: o
@@ -81,7 +82,7 @@ void main() {
       expect(find.byType(FloatingActionButton), findsNothing);
     });
 
-    testWidgets('o formulário do comitê pede o nome do ÓRGÃO, e não exclui', (tester) async {
+    testWidgets('o formulário do comitê pede o nome do ÓRGÃO', (tester) async {
       await abrir(
         tester,
         EditStaffScreen(
@@ -95,6 +96,16 @@ void main() {
       // decisão, e o rótulo evita o cadastro nascer com o nome de quem preencheu.
       expect(find.text('Nome do comitê'), findsOneWidget);
       expect(find.text('E-mail de acesso do comitê'), findsOneWidget);
+    });
+
+    testWidgets('o perfil do comitê redefine a senha, e não exclui', (tester) async {
+      await abrir(
+        tester,
+        StaffProfileScreen(
+          user: staff('8', 'Comitê de Permutas', UserRole.committee),
+          role: UserRole.committee,
+        ),
+      );
 
       // A senha se redefine (a composição da reunião muda); o cadastro não se
       // exclui — sem ele nenhuma permuta é decidida.
@@ -128,17 +139,43 @@ void main() {
       expect(find.widgetWithText(FloatingActionButton, 'Novo faturista'), findsOneWidget);
     });
 
-    /// O faturista é PESSOA: são vários, e cada um sai sem travar nada — o que
-    /// ele faturou guarda o nome dele no próprio registro.
-    testWidgets('o formulário do faturista exclui, e não pergunta gerente', (tester) async {
+    testWidgets('o formulário do faturista não pergunta gerente', (tester) async {
       await abrir(
         tester,
         EditStaffScreen(user: staff('9', 'Patrícia Lemos', UserRole.biller), role: UserRole.biller),
       );
 
       expect(find.text('Editar Faturista'), findsOneWidget);
-      expect(find.text('Excluir faturista'), findsOneWidget);
       expect(find.text('Gerente responsável'), findsNothing);
+      // Senha e exclusão moram no perfil, como no consultor.
+      expect(find.textContaining('Excluir'), findsNothing);
+    });
+
+    /// Tocar no cartão abre o PERFIL, como no consultor — e não o formulário.
+    testWidgets('tocar no faturista abre o perfil dele', (tester) async {
+      AppData.billers = [staff('9', 'Patrícia Lemos', UserRole.biller)];
+      await abrir(tester, const ConsultantsScreen());
+      await tester.tap(find.text('Faturistas'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Patrícia Lemos'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(StaffProfileScreen), findsOneWidget);
+      expect(find.byType(EditStaffScreen), findsNothing);
+      expect(find.text('Faturista: Patrícia'), findsOneWidget);
+    });
+
+    /// O faturista é PESSOA: são vários, e cada um sai sem travar nada — o que
+    /// ele faturou guarda o nome dele no próprio registro.
+    testWidgets('o perfil do faturista exclui', (tester) async {
+      await abrir(
+        tester,
+        StaffProfileScreen(user: staff('9', 'Patrícia Lemos', UserRole.biller), role: UserRole.biller),
+      );
+
+      expect(find.text('Redefinir senha'), findsOneWidget);
+      expect(find.text('Excluir faturista'), findsOneWidget);
     });
   });
 }

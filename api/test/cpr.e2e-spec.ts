@@ -747,8 +747,8 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     // E a linha do tempo guarda o número do registro, que é o que se leva ao
     // cartório para pedir a certidão.
     const eventos = registrada.body.data.events as { action: string; note: string | null }[];
-    expect(eventos.at(-1)?.action).toBe('cprRegister');
-    expect(eventos.at(-1)?.note).toContain('R-4 / 18.442');
+    expect(eventos[0].action).toBe('cprRegister');
+    expect(eventos[0].note).toContain('R-4 / 18.442');
   });
 
   /**

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
-import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../services/num_input.dart';
 import '../services/tax_regime.dart';
@@ -55,10 +54,9 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   late final TextEditingController _city;
   late final TextEditingController _area;
 
-  /// Os consultores que atendem este produtor. PELO MENOS UM: um produtor que
-  /// ninguém atende não aparece para ninguém. Pode ser mais de um — consultores
-  /// dividem região e atendem o mesmo cliente.
-  final Set<String> _consultantIds = {};
+  /// O consultor que atende este produtor — obrigatório: um produtor que
+  /// ninguém atende não aparece para ninguém.
+  String? _consultantId;
 
   /// COMO ELE RECOLHE o Funrural — a opção formal dele perante o fisco.
   ///
@@ -80,12 +78,8 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   void initState() {
     super.initState();
     final p = widget.producer;
-    // Consultor excluído sai da lista: o vínculo dele já não existe no
-    // servidor, e mostrá-lo marcado prometeria salvar algo que seria recusado.
     if (p != null) {
-      _consultantIds.addAll(
-        p.consultantIds.where((id) => AppData.consultantById(id) != null),
-      );
+      _consultantId = p.consultantId;
       _taxRegime = p.taxRegime;
     }
     _name = TextEditingController(text: p?.name ?? '');
@@ -120,11 +114,8 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
 
   /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
   String get _walletLabel {
-    final names = _consultantIds
-        .map((id) => AppData.consultantById(id)?.name)
-        .whereType<String>()
-        .toList();
-    return names.isEmpty ? 'sem consultor' : names.join(', ');
+    final id = _consultantId;
+    return (id == null ? null : AppData.consultantById(id)?.name) ?? 'sem consultor';
   }
 
   /// Envia o cadastro à API e devolve o registro salvo (com id do servidor).
@@ -135,7 +126,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     final draft = ProducerModel(
       id: old?.id ?? '',
       name: name,
-      consultantIds: _consultantIds.toList(),
+      consultantId: _consultantId,
       document: _document.text.trim(),
       phone: _phone.text.trim(),
       farmName: _farm.text.trim(),
@@ -162,13 +153,12 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // A CARTEIRA é do admin: ela é a lista inteira num campo só, e um
-            // consultor que a escrevesse poderia se remover do próprio cliente
-            // (ou remover um colega) sem que ninguém tivesse decidido isso.
+            // A CARTEIRA é do admin: um consultor que a escrevesse poderia
+            // passar o próprio cliente adiante sem que ninguém decidisse isso.
             if (_manages)
-              _ConsultantWalletField(
-                selected: _consultantIds,
-                onChanged: () => setState(() {}),
+              _ConsultantField(
+                value: _consultantId,
+                onChanged: (id) => setState(() => _consultantId = id),
               )
             else
               _LockedNote(
@@ -239,8 +229,9 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             Text(
               _manages
                   ? 'A área define os insumos obrigatórios e a quantidade mínima de cada '
-                      'um nas novas permutas deste produtor. O produtor só aparece para os '
-                      'consultores marcados acima.'
+                      'um nas novas permutas deste produtor. O produtor só aparece para o '
+                      'consultor escolhido acima; trocá-lo não leva as permutas já '
+                      'registradas, que continuam com quem as fez.'
                   : 'O documento, a área cultivável, o Funrural e a carteira são '
                       'alterados pelo administrador: os três primeiros são as réguas que '
                       'medem todas as permutas deste cliente, e a carteira é quem o atende. '
@@ -403,129 +394,56 @@ class _TaxRegimeField extends StatelessWidget {
   }
 }
 
-/// A CARTEIRA do produtor: quais consultores o atendem.
+/// A CARTEIRA do produtor: o consultor que o atende, numa lista suspensa.
 ///
-/// Era um dropdown de escolha única, e a mudança para marcação múltipla é a
-/// própria funcionalidade — consultores dividem região e atendem o mesmo
-/// produtor. O dropdown obrigava a escolher um; a única forma de representar
-/// dois era cadastrar o produtor duas vezes, e aí a área cultivável passava a
-/// existir em dobro e as permutas do mesmo cliente se partiam entre dois
-/// registros.
+/// Um consultor por produtor. Já foi marcação múltipla, quando consultores
+/// dividiam o cliente; a regra mudou, e a lista suspensa é a forma da regra —
+/// não há como escolher dois.
 ///
-/// É um [FormField] e não uma lista solta para a exigência de "pelo menos um"
-/// entrar no mesmo `validate()` dos outros campos — em vez de virar um `if`
-/// antes do salvamento, que é o tipo de conferência que se esquece de fazer
-/// quando aparece um segundo botão de salvar.
-class _ConsultantWalletField extends StatelessWidget {
-  /// O conjunto vivo de ids marcados — a tela é dona dele; este campo escreve
-  /// dentro e avisa por [onChanged].
-  final Set<String> selected;
-  final VoidCallback onChanged;
+/// O id de um consultor que não existe mais (excluído com o produtor aberto em
+/// outra tela) não vira o valor inicial: o [DropdownButtonFormField] exige que
+/// o valor esteja entre os itens, e o campo abre vazio, pedindo a realocação.
+class _ConsultantField extends StatelessWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
 
-  const _ConsultantWalletField({required this.selected, required this.onChanged});
+  const _ConsultantField({required this.value, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final consultants = AppData.consultants;
+    final initial = consultants.any((c) => c.id == value) ? value : null;
 
-    return FormField<Set<String>>(
-      initialValue: selected,
-      validator: (_) =>
-          selected.isEmpty ? 'Marque pelo menos um consultor para atender este produtor' : null,
-      builder: (state) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: AppShape.field,
-                border: Border.all(
-                  color: state.hasError ? AppColors.denied : AppColors.borderSubtle,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-                    child: Row(
-                      children: [
-                        Icon(Icons.badge_outlined, size: 20, color: AppColors.textLight),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Consultores que atendem',
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: DropdownButtonFormField<String>(
+        initialValue: initial,
+        isExpanded: true,
+        decoration: const InputDecoration(
+          labelText: 'Consultor que atende',
+          prefixIcon: Icon(Icons.badge_outlined, size: 20),
+        ),
+        disabledHint: const Text('Nenhum consultor cadastrado ainda.',
+            style: TextStyle(fontSize: 14)),
+        items: consultants
+            .map((c) => DropdownMenuItem(
+                  value: c.id,
+                  child: Text.rich(
+                    TextSpan(children: [
+                      TextSpan(text: c.name),
+                      if (c.branch.isNotEmpty)
+                        TextSpan(
+                          text: '  ·  ${c.branch}',
                           style: TextStyle(fontSize: 12, color: AppColors.textLight),
                         ),
-                        const Spacer(),
-                        if (selected.isNotEmpty)
-                          Text(
-                            '${selected.length} marcado(s)',
-                            style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                          ),
-                      ],
-                    ),
+                    ]),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14),
                   ),
-                  if (consultants.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                      child: Text(
-                        'Nenhum consultor cadastrado ainda.',
-                        style: TextStyle(fontSize: 13, color: AppColors.textMedium),
-                      ),
-                    )
-                  else
-                    // Teto de altura, e não a lista inteira: a carteira cresce
-                    // com a operação, e sem isto o formulário viraria uma rolagem
-                    // em que o botão de salvar some conforme a empresa contrata.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 240),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.only(bottom: 4),
-                        itemCount: consultants.length,
-                        itemBuilder: (_, i) {
-                          final c = consultants[i];
-                          return CheckboxListTile(
-                            value: selected.contains(c.id),
-                            dense: true,
-                            controlAffinity: ListTileControlAffinity.leading,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                            title: Text(c.name,
-                                style: const TextStyle(fontSize: 14),
-                                overflow: TextOverflow.ellipsis),
-                            subtitle: Text(c.branch,
-                                style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                                overflow: TextOverflow.ellipsis),
-                            onChanged: (marked) {
-                              if (marked == true) {
-                                selected.add(c.id);
-                              } else {
-                                selected.remove(c.id);
-                              }
-                              // O campo revalida na hora: desmarcar o último
-                              // precisa acusar na hora, e não só ao salvar.
-                              state.didChange(selected);
-                              state.validate();
-                              onChanged();
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (state.hasError)
-              Padding(
-                padding: const EdgeInsets.only(left: 12, top: 6),
-                child: Text(
-                  state.errorText!,
-                  style: TextStyle(fontSize: 12, color: AppColors.denied),
-                ),
-              ),
-          ],
-        ),
+                ))
+            .toList(),
+        onChanged: onChanged,
+        validator: (v) => v == null ? 'Escolha o consultor que atende este produtor' : null,
       ),
     );
   }
@@ -573,26 +491,31 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 
   bool get _isNew => widget.user == null;
   bool get _isConsultant => widget.role == UserRole.consultant;
+  bool get _isManager => widget.role == UserRole.manager;
+
+  /// O OUTRO gerente lotado nesta unidade, se houver — cada unidade tem um
+  /// gerente só. Null fora do cadastro de gerente: consultor, faturista e os
+  /// demais dividem unidade normalmente.
+  ///
+  /// Quem recusa de verdade é o servidor; aqui a regra marca a lista e acusa
+  /// antes do envio.
+  UserModel? _otherManagerIn(String? unitId) => !_isManager || unitId == null
+      ? null
+      : AppData.managers
+          .where((m) => m.unitId == unitId && m.id != widget.user?.id)
+          .firstOrNull;
 
   /// O COMITÊ não é uma pessoa: é uma reunião, e o cadastro é um só.
   ///
-  /// Três coisas mudam por causa disso, e todas aparecem na tela: o campo de
-  /// nome pede o nome do ÓRGÃO (não "nome completo"), não há exclusão — sem o
-  /// cadastro nenhuma permuta é decidida — e o texto explica que o acesso é
+  /// Duas coisas mudam por causa disso nesta tela: o campo de nome pede o nome
+  /// do ÓRGÃO (não "nome completo"), e o texto explica que o acesso é
   /// compartilhado por quem participa. O servidor impõe o resto: um segundo
   /// cadastro leva 422 (ver committee.controller.ts).
+  ///
+  /// Senha e exclusão de todos os papéis ficam no PERFIL — o do consultor
+  /// ([ConsultantProfileScreen]) ou o da retaguarda ([StaffProfileScreen]) —,
+  /// e não aqui: este formulário é só o cadastro.
   bool get _isCommittee => widget.role == UserRole.committee;
-
-  bool get _isBiller => widget.role == UserRole.biller;
-
-  /// O EMISSOR — o posto da cédula. Ele compartilha o formulário do faturista
-  /// (pessoa, unidade, sem gerente), e por isso a única coisa que o distingue na
-  /// tela é o rótulo e o rodapé que explica o que ele faz.
-  bool get _isEmitter => widget.role == UserRole.emitter;
-
-  bool get _isAdmin => widget.role == UserRole.admin;
-
-  bool get _isSelf => widget.user != null && widget.user!.id == AppData.currentUser?.id;
 
   String get _roleLabel => widget.role.label;
 
@@ -675,99 +598,6 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
         UserRole.committee => AppData.updateCommittee(draft),
         UserRole.admin => AppData.updateAdmin(draft),
       };
-
-  /// Nova senha de primeira entrada. Derruba as sessões abertas do titular no
-  /// servidor — a confirmação avisa isso antes.
-  Future<void> _resetPassword() async {
-    final user = widget.user;
-    if (user == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.lock_reset, color: AppColors.pending, size: 40),
-        title: const Text('Redefinir senha?'),
-        content: Text(
-          _isCommittee
-              // Na conta compartilhada a frase é outra porque o efeito é outro:
-              // a senha circula entre quem participa da reunião, e trocá-la tira
-              // o acesso de TODO MUNDO que estava com a anterior — que é
-              // exatamente o que se quer quando a composição muda.
-              ? 'Uma nova senha provisória será gerada para o ${user.name}, e a atual '
-                  'deixa de valer para todos que a tinham.\n\n'
-                  'Qualquer sessão aberta nesta conta será encerrada.'
-              : 'Uma nova senha provisória será gerada para ${user.name.split(' ').first}, '
-                  'e a senha atual deixa de valer.\n\n'
-                  'Qualquer sessão aberta nesta conta será encerrada.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, color: AppColors.textMedium),
-        ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.lock_reset, size: 18),
-            label: const Text('Redefinir'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
-    try {
-      // O comitê não tem id na rota: o cadastro é um só (ver CommitteeRepository).
-      final provisioned = _isCommittee
-          ? await AppData.resetCommitteePassword()
-          : _isBiller
-              ? await AppData.resetBillerPassword(user.id)
-              : _isEmitter
-                  ? await AppData.resetEmitterPassword(user.id)
-                  : _isAdmin
-                      ? await AppData.resetAdminPassword(user.id)
-                      : await AppData.resetManagerPassword(user.id);
-      if (mounted) await showProvisionalPassword(context, provisioned, isReset: true);
-    } on ApiException catch (e) {
-      if (mounted) showErrorSnack(context, e);
-    }
-  }
-
-  /// Exclusão de GERENTE, FATURISTA e EMISSOR — as pessoas que este formulário
-  /// cadastra e que podem sair.
-  ///
-  /// No gerente o servidor RECUSA enquanto ele tiver consultores no time ou
-  /// permutas esperando o parecer dele, e a mensagem diz qual dos dois falta — a
-  /// tela só a exibe, em vez de repetir a regra aqui e arriscar divergir dela.
-  /// O faturista e o emissor saem sem trava: o que eles assinaram guarda o nome
-  /// deles no próprio registro, e a fila dos dois é o estado da permuta, não uma
-  /// caixa de entrada.
-  ///
-  /// O COMITÊ não tem este botão, e nem rota: o cadastro é a ETAPA, e sem ele
-  /// nenhuma permuta é decidida. Para tirar o acesso, redefine-se a senha.
-  Future<void> _delete() async {
-    final user = widget.user;
-    if (user == null) return;
-    await confirmDeleteRegistration(
-      context,
-      title: 'Excluir $_roleLabel',
-      name: user.name,
-      barterCount: _isBiller
-          ? invoicedBy(AppData.barters, user.name)
-          : _isEmitter
-              ? issuedBy(AppData.barters, user.name)
-              : _isAdmin
-                  ? 0
-                  : opinionsOf(AppData.barters, user.id),
-      onConfirm: () async {
-        await switch (widget.role) {
-          UserRole.biller => AppData.deleteBiller(user.id),
-          UserRole.emitter => AppData.deleteEmitter(user.id),
-          UserRole.admin => AppData.deleteAdmin(user.id),
-          _ => AppData.deleteManager(user.id),
-        };
-        if (mounted) Navigator.pop(context);
-      },
-    );
-  }
 
   /// O que este cadastro faz no fluxo, em uma frase — a linha que explica ao
   /// admin o que ele está criando, e por que a próxima etapa depende dela.
@@ -861,21 +691,43 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               child: DropdownButtonFormField<String>(
                 initialValue: _unitId,
                 isExpanded: true,
+                // Acusa no ato da escolha: a unidade ocupada por outro gerente
+                // aparece na hora, e não só ao salvar.
+                autovalidateMode: AutovalidateMode.onUserInteraction,
                 decoration: const InputDecoration(
                   labelText: 'Unidade',
                   prefixIcon: Icon(Icons.store_outlined, size: 20),
                 ),
-                items: AppData.units
-                    .map((u) => DropdownMenuItem(
-                          value: u.id,
-                          child: Text(u.label,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 14)),
-                        ))
-                    .toList(),
+                // No cadastro de gerente, a unidade que já tem gerente diz quem
+                // é: quem escolhe vê a ocupação antes de tropeçar na recusa.
+                items: AppData.units.map((u) {
+                  final other = _otherManagerIn(u.id);
+                  return DropdownMenuItem(
+                    value: u.id,
+                    child: Text.rich(
+                      TextSpan(children: [
+                        TextSpan(text: u.label),
+                        if (other != null)
+                          TextSpan(
+                            text: '  ·  gerente: ${other.name}',
+                            style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                          ),
+                      ]),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  );
+                }).toList(),
                 onChanged: (v) => setState(() => _unitId = v),
-                validator: (v) =>
-                    v == null ? 'Escolha a unidade ${_isCommittee ? 'em que o comitê se reúne' : 'de trabalho'}' : null,
+                validator: (v) {
+                  if (v == null) {
+                    return 'Escolha a unidade ${_isCommittee ? 'em que o comitê se reúne' : 'de trabalho'}';
+                  }
+                  final other = _otherManagerIn(v);
+                  return other == null
+                      ? null
+                      : 'Esta unidade já tem gerente: ${other.name}. Cada unidade tem um gerente só';
+                },
               ),
             ),
             // Só o consultor tem gerente. Perguntar isso a um gerente criaria
@@ -905,42 +757,6 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
             Text(_footerFor(widget.role), style: TextStyle(fontSize: 11, color: AppColors.textLight)),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
-            // Senha e exclusão de quem NÃO tem tela própria: o consultor tem as
-            // dele no perfil, que existe porque ele tem carteira e histórico
-            // para mostrar. Gerente, faturista e comitê não têm — e criar uma
-            // tela só para pendurar dois botões seria pior do que tê-los aqui.
-            // A PRÓPRIA CONTA não tem estes botões: a senha dela se troca por
-            // "Alterar senha", e o servidor recusa excluí-la.
-            if (!_isNew && !_isConsultant && !_isSelf) ...[
-              const SizedBox(height: 24),
-              const Divider(),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _resetPassword,
-                icon: Icon(Icons.lock_reset, color: AppColors.pending),
-                label: Text('Redefinir senha', style: TextStyle(color: AppColors.pending)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: AppColors.pending),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-              // O COMITÊ não se exclui: o cadastro é a ETAPA, e sem ele nenhuma
-              // permuta é decidida. Não há rota para isso no servidor, e a tela
-              // não oferece um botão que levaria a um 422.
-              if (!_isCommittee) ...[
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _delete,
-                  icon: Icon(Icons.delete_outline, color: AppColors.denied),
-                  label: Text('Excluir ${_roleLabel.toLowerCase()}',
-                      style: TextStyle(color: AppColors.denied)),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: AppColors.denied),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ],
-            ],
           ],
         ),
       ),
@@ -1527,11 +1343,16 @@ class _RuleOption extends StatelessWidget {
 /// Confirma e executa a exclusão de um cadastro via API. As permutas antigas
 /// não são afetadas: elas guardam o nome no próprio registro (snapshot no
 /// servidor). Erros da API viram SnackBar de erro.
+///
+/// [consequence] é o efeito que a exclusão tem FORA das permutas — quem fica
+/// sem unidade, que produtor fica sem taxa de seguro. Ele vai no diálogo, e não
+/// numa trava, porque é decisão do admin: o que ele precisa é saber antes.
 Future<void> confirmDeleteRegistration(
   BuildContext context, {
   required String title,
   required String name,
   required int barterCount,
+  String? consequence,
   required Future<void> Function() onConfirm,
 }) async {
   final ok = await showDialog<bool>(
@@ -1549,6 +1370,12 @@ Future<void> confirmDeleteRegistration(
             Text('As $barterCount permuta(s) já registradas serão mantidas no histórico.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+          ],
+          if (consequence != null) ...[
+            const SizedBox(height: 8),
+            Text(consequence,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: AppColors.pending)),
           ],
         ],
       ),

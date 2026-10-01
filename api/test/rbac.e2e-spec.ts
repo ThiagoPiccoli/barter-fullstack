@@ -199,7 +199,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       await expect(
         post('/api/v1/producers', {
           name: 'Produtor Novo',
-          consultantIds: [2],
+          consultantId: 2,
           document: 'CPF 999.999.999-99',
           farmName: 'Fazenda X',
           city: 'Maringá/PR',

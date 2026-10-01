@@ -1,16 +1,6 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import {
-  ADMIN,
-  ANA,
-  CONSULTANT,
-  JOAO,
-  MANAGER,
-  UNIT,
-  createTestApp,
-  loginAs,
-  resetDb,
-} from './utils';
+import { ADMIN, ANA, JOAO, MANAGER, UNIT, createTestApp, loginAs, resetDb } from './utils';
 
 describe('Consultants — gestão pelo admin (e2e)', () => {
   let app: INestApplication;
@@ -127,23 +117,13 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
       .set('Authorization', admin)
       .expect(204);
 
-    // Antônio Carvalho (id 1) era atendido só pelo João → fica sem consultor,
-    // esperando realocação. O produtor NÃO é excluído junto: o vínculo é que
-    // some (Cascade em ProducerConsultant).
+    // Antônio Carvalho (id 1) era do João → fica sem consultor, esperando
+    // realocação. O produtor NÃO é excluído junto (SetNull em Producer).
     const producer = await request(app.getHttpServer())
       .get('/api/v1/producers/1')
       .set('Authorization', admin);
     expect(producer.status).toBe(200);
-    expect(producer.body.data.consultantIds).toEqual([]);
-
-    // Joaquim Tavares (id 3) era atendido pelo João E pelo Roberto: perde um
-    // vínculo e segue na carteira do outro. É a diferença que a carteira
-    // compartilhada faz — antes, excluir o consultor deixava o produtor órfão
-    // mesmo havendo outra pessoa atendendo o mesmo cliente.
-    const compartilhado = await request(app.getHttpServer())
-      .get('/api/v1/producers/3')
-      .set('Authorization', admin);
-    expect(compartilhado.body.data.consultantIds).toEqual([CONSULTANT.roberto]);
+    expect(producer.body.data.consultantId).toBeNull();
 
     // A permuta histórica preserva o nome do consultor (snapshot).
     const barter = await request(app.getHttpServer())

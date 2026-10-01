@@ -405,45 +405,13 @@ class _BarterCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Text(
-                    barter.id,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textDark,
-                    ),
-                  ),
-                  const Spacer(),
-                  StatusBadge(status: barter.status),
-                ],
-              ),
-              if (isAdmin) ...[
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
-                    const SizedBox(width: 4),
-                    Text(
-                      barter.producerName,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMedium,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Vend.: ${barter.consultantName}',
-                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              // A IDENTIFICAÇÃO traz o INVESTIMENTO POR HECTARE, e a lista é
+              // onde ele mais serve: as duas pílulas abaixo dizem o TAMANHO
+              // desta permuta, e o tamanho sozinho não distingue R$ 400 mil numa
+              // fazenda de 2.000 ha de R$ 400 mil numa de 300. No detalhe ele
+              // também está, mas lá há uma permuta só na tela — e uma régua
+              // sem régua ao lado não compara nada.
+              BarterIdentity(barter: barter, trailing: StatusBadge(status: barter.status)),
               const SizedBox(height: 10),
               // Linha de troca: insumos retirados -> grãos que pagam
               Row(
@@ -472,41 +440,6 @@ class _BarterCard extends StatelessWidget {
                   ),
                 ],
               ),
-              // O INVESTIMENTO POR HECTARE fica AQUI, na lista, porque é aqui
-              // que se compara: as duas pílulas acima dizem o TAMANHO desta
-              // permuta, e o tamanho sozinho não distingue R$ 400 mil numa
-              // fazenda de 2.000 ha de R$ 400 mil numa de 300. No detalhe ele
-              // também está, mas lá há uma permuta só na tela — e uma régua
-              // sem régua ao lado não compara nada.
-              //
-              // Ele só chega a quem pode compará-lo (admin, comitê e faturista):
-              // para os outros o campo nem vem no JSON, e a linha não existe.
-              if (barter.sacksPerHa != null) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.straighten, size: 13, color: AppColors.textLight),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Investimento ',
-                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                    ),
-                    Text(
-                      formatSacksPerHa(barter.sacksPerHa!),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    if (barter.producerAreaHa != null && barter.producerAreaHa! > 0)
-                      Text(
-                        ' • ${formatQty(barter.producerAreaHa!)} ha',
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                      ),
-                  ],
-                ),
-              ],
               // O IMPOSTO DA ENTREGA na própria lista.
               //
               // Ele já estava no detalhe, e chegar lá custa um toque por

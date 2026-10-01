@@ -6,13 +6,13 @@ import 'package:agrobarter_app/models/models.dart';
 import 'package:agrobarter_app/screens/edit_forms.dart';
 import 'package:agrobarter_app/theme/app_theme.dart';
 
-/// O campo de CARTEIRA do cadastro de produtor — marcação múltipla, porque
-/// consultores dividem região e atendem o mesmo cliente.
+/// O campo de CARTEIRA do cadastro de produtor — uma lista suspensa, porque é
+/// um consultor por produtor.
 ///
-/// O que este teste guarda é a regra que a tela precisa impor sozinha: pelo
-/// menos um consultor marcado. Ela também vive no servidor (o DTO recusa lista
-/// vazia), mas quem descobre isso primeiro é quem está preenchendo o formulário
-/// — e um 422 depois de digitar sete campos é a pior hora de descobrir.
+/// O que este teste guarda é a regra que a tela precisa impor sozinha: um
+/// consultor escolhido. Ela também vive no servidor, mas quem descobre isso
+/// primeiro é quem está preenchendo o formulário — e um 422 depois de digitar
+/// sete campos é a pior hora de descobrir.
 void main() {
   UserModel consultor(String id, String nome, String unidade) => UserModel(
         id: id,
@@ -29,10 +29,10 @@ void main() {
         mustChangePassword: false,
       );
 
-  ProducerModel produtor(List<String> consultantIds) => ProducerModel(
+  ProducerModel produtor(String? consultantId) => ProducerModel(
         id: '3',
         name: 'Joaquim Tavares',
-        consultantIds: consultantIds,
+        consultantId: consultantId,
         document: 'CNPJ 12.345.678/0001-90',
         phone: '',
         farmName: 'Fazenda Santa Rita',
@@ -88,71 +88,65 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Checkbox caixaDe(WidgetTester tester, String nome) => tester.widget<Checkbox>(
-        find.descendant(
-          of: find.widgetWithText(CheckboxListTile, nome),
-          matching: find.byType(Checkbox),
-        ),
-      );
+  /// O valor que a lista suspensa está mostrando agora.
+  String? escolhido(WidgetTester tester) => tester
+      .state<FormFieldState<String>>(find.byType(DropdownButtonFormField<String>))
+      .value;
 
-  testWidgets('o produtor compartilhado abre com os dois consultores marcados',
+  Future<void> escolher(WidgetTester tester, String nome) async {
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
+    await tester.pumpAndSettle();
+    // O menu aberto desenha o item por cima do campo; o último achado é o do
+    // menu.
+    await tester.tap(find.textContaining(nome, findRichText: true).last);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('o produtor abre com o consultor dele escolhido', (tester) async {
+    await abrir(tester, produtor('4'));
+
+    expect(escolhido(tester), '4');
+    expect(find.textContaining('Roberto Souza', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('trocar o consultor é escolher outro na lista', (tester) async {
+    await abrir(tester, produtor('2'));
+    expect(escolhido(tester), '2');
+
+    await escolher(tester, 'Roberto Souza');
+
+    expect(escolhido(tester), '4');
+  });
+
+  testWidgets('a lista oferece todos os consultores, com a unidade de cada um',
       (tester) async {
-    await abrir(tester, produtor(['2', '4']));
-
-    expect(caixaDe(tester, 'João Silva').value, isTrue);
-    expect(caixaDe(tester, 'Roberto Souza').value, isTrue);
-    expect(caixaDe(tester, 'Ana Paula Ferreira').value, isFalse);
-    expect(find.text('2 marcado(s)'), findsOneWidget);
-  });
-
-  testWidgets('marcar outro consultor compartilha o produtor com ele', (tester) async {
-    await abrir(tester, produtor(['2']));
-    expect(find.text('1 marcado(s)'), findsOneWidget);
-
-    await tester.tap(find.widgetWithText(CheckboxListTile, 'Roberto Souza'));
+    await abrir(tester, produtor('2'));
+    await tester.tap(find.byType(DropdownButtonFormField<String>));
     await tester.pumpAndSettle();
-
-    expect(caixaDe(tester, 'João Silva').value, isTrue);
-    expect(caixaDe(tester, 'Roberto Souza').value, isTrue);
-    expect(find.text('2 marcado(s)'), findsOneWidget);
-  });
-
-  /// Sem nenhum marcado o formulário PARA aqui: não chega a chamar a API, que
-  /// é o que faz este teste rodar sem servidor nenhum no ar.
-  testWidgets('desmarcar todos acusa antes de salvar', (tester) async {
-    await abrir(tester, produtor(['2', '4']));
-
-    for (final nome in ['João Silva', 'Roberto Souza']) {
-      await tester.tap(find.widgetWithText(CheckboxListTile, nome));
-      await tester.pumpAndSettle();
-    }
-
-    // Acusa no ato de desmarcar o último — e não só quando alguém tenta salvar.
-    final erro = find.text('Marque pelo menos um consultor para atender este produtor');
-    expect(erro, findsOneWidget);
-
-    await tester.tap(find.text('Salvar alterações'));
-    await tester.pumpAndSettle();
-    expect(erro, findsOneWidget);
-  });
-
-  testWidgets('produtor novo começa sem ninguém marcado', (tester) async {
-    await abrir(tester, null);
 
     for (final nome in ['João Silva', 'Roberto Souza', 'Ana Paula Ferreira']) {
-      expect(caixaDe(tester, nome).value, isFalse);
+      expect(find.textContaining(nome, findRichText: true), findsWidgets);
     }
-    expect(find.textContaining('marcado(s)'), findsNothing);
-    expect(find.text('Cadastrar'), findsOneWidget);
+    expect(find.textContaining('Filial 34', findRichText: true), findsOneWidget);
   });
 
-  /// Consultor excluído já não tem vínculo no servidor. Mostrá-lo marcado
-  /// prometeria salvar algo que a API recusaria — e o admin só descobriria ao
-  /// tentar.
-  testWidgets('id de consultor que não existe mais não abre marcado', (tester) async {
-    await abrir(tester, produtor(['2', '999']));
+  /// Sem consultor o formulário PARA aqui: não chega a chamar a API, que é o
+  /// que faz este teste rodar sem servidor nenhum no ar.
+  testWidgets('produtor novo começa sem consultor, e salvar assim acusa', (tester) async {
+    await abrir(tester, null);
+    expect(escolhido(tester), isNull);
+    expect(find.text('Cadastrar'), findsOneWidget);
 
-    expect(caixaDe(tester, 'João Silva').value, isTrue);
-    expect(find.text('1 marcado(s)'), findsOneWidget);
+    await tester.tap(find.text('Cadastrar'));
+    await tester.pumpAndSettle();
+    expect(find.text('Escolha o consultor que atende este produtor'), findsOneWidget);
+  });
+
+  /// O produtor cujo consultor foi excluído espera realocação: o campo abre
+  /// vazio, pedindo um consultor, em vez de mostrar um id que não está na lista.
+  testWidgets('consultor que não existe mais não abre escolhido', (tester) async {
+    await abrir(tester, produtor('999'));
+
+    expect(escolhido(tester), isNull);
   });
 }

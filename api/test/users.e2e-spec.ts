@@ -56,7 +56,10 @@ describe('Usuários — uma rota por papel (e2e)', () => {
   const novoUsuario = (email: string) => ({
     fullName: 'Pessoa Nova',
     email,
-    unitId: UNIT.matriz,
+    // Unidade SEM gerente no seed (a Matriz é da Beatriz, a Filial 34 do
+    // Gustavo): a rota de gerentes também cria por aqui, e cada unidade tem um
+    // gerente só.
+    unitId: UNIT.filial02,
     // Só a rota de consultor declara `managerId`; nas outras três o whitelist
     // do ValidationPipe o descarta, que é justamente o que se quer provar.
     managerId: MANAGER.beatriz,
@@ -474,5 +477,103 @@ describe('Usuários — uma rota por papel (e2e)', () => {
       .get('/api/v1/barters/PRM-2026-001')
       .set('Authorization', auth);
     expect(depois.body.data.cprEmittedBy).toBe('Renata Bicudo');
+  });
+
+  /**
+   * UM GERENTE POR UNIDADE. No seed, a Beatriz (7) está na Matriz e o Gustavo
+   * (10) na Filial 34.
+   */
+  describe('um gerente por unidade', () => {
+    const gerente = (unitId: number, email = 'gerente.novo@agrobarter.com.br') => ({
+      fullName: 'Gerente Novo',
+      email,
+      unitId,
+    });
+
+    it('cadastrar gerente em unidade que já tem um é recusado, dizendo quem é', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/managers')
+        .set('Authorization', await admin())
+        .send(gerente(UNIT.filial34));
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Gustavo Ramires');
+      expect(response.body.message).toContain('Filial 34');
+    });
+
+    it('mover um gerente para a unidade de outro é recusado', async () => {
+      const response = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          unitId: UNIT.filial34,
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Gustavo Ramires');
+    });
+
+    it('editar o gerente na própria unidade não esbarra nele mesmo', async () => {
+      const response = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          phone: '(44) 99999-1111',
+          unitId: UNIT.matriz,
+        });
+
+      expect(response.status).toBe(200);
+    });
+
+    /**
+     * Gerente gravado antes da regra, dividindo a unidade com outro: a edição
+     * dele cobra a escolha, mesmo sem mudar a unidade. É o único momento em que
+     * alguém está olhando para o cadastro — e a recusa diz com quem ele divide.
+     */
+    it('gerente que já dividia a unidade precisa sair dela na próxima edição', async () => {
+      const prisma = app.get(PrismaService);
+      await prisma.user.update({
+        where: { id: MANAGER.beatriz },
+        data: { unitId: UNIT.filial34 },
+      });
+
+      const naMesma = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          unitId: UNIT.filial34,
+        });
+      expect(naMesma.status).toBe(422);
+      expect(naMesma.body.message).toContain('Gustavo Ramires');
+
+      const emOutra = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          unitId: UNIT.matriz,
+        });
+      expect(emOutra.status).toBe(200);
+    });
+
+    /** A regra é do GERENTE: consultores dividem unidade normalmente. */
+    it('outros papéis continuam dividindo a unidade', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/consultants')
+        .set('Authorization', await admin())
+        .send({
+          ...gerente(UNIT.filial34, 'consultor.novo@agrobarter.com.br'),
+          managerId: MANAGER.gustavo,
+        });
+
+      expect(response.status).toBe(201);
+    });
   });
 });

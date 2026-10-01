@@ -1,6 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { PrismaService } from '../src/prisma/prisma.service';
 import { ADMIN, ANA, CONSULTANT, JOAO, ROBERTO, createTestApp, loginAs, resetDb } from './utils';
 
 describe('Producers — carteira (e2e)', () => {
@@ -17,18 +16,12 @@ describe('Producers — carteira (e2e)', () => {
 
   const namesOf = (body: { data: { name: string }[] }) => body.data.map((p) => p.name).sort();
 
-  it('consultor enxerga a própria carteira — inclusive o que divide com outro', async () => {
+  it('consultor enxerga a própria carteira', async () => {
     const token = await loginAs(app, JOAO);
     const response = await get('/api/v1/producers', token);
 
     expect(response.status).toBe(200);
-    // Joaquim Tavares é do Roberto TAMBÉM: região compartilhada, um produtor,
-    // duas carteiras.
-    expect(namesOf(response.body)).toEqual([
-      'Antônio Carvalho',
-      'Joaquim Tavares',
-      'Sebastião Ramos',
-    ]);
+    expect(namesOf(response.body)).toEqual(['Antônio Carvalho', 'Sebastião Ramos']);
   });
 
   it('admin enxerga todas as carteiras e pode filtrar por consultor', async () => {
@@ -52,7 +45,7 @@ describe('Producers — carteira (e2e)', () => {
   it('cadastro de produtor é ato do admin', async () => {
     const payload = {
       name: 'Produtor Novo',
-      consultantIds: [CONSULTANT.joao],
+      consultantId: CONSULTANT.joao,
       document: 'CPF 999.999.999-99',
       farmName: 'Fazenda Teste',
       city: 'Maringá/PR',
@@ -70,7 +63,12 @@ describe('Producers — carteira (e2e)', () => {
       .set('Authorization', `Bearer ${await loginAs(app, ADMIN)}`)
       .send(payload);
     expect(asAdmin.status).toBe(201);
-    expect(asAdmin.body.data.consultantIds).toEqual([CONSULTANT.joao]);
+    expect(asAdmin.body.data.consultantId).toBe(CONSULTANT.joao);
+
+    // A carteira vem do MAIS RECENTE para o mais antigo: o recém-cadastrado
+    // abre a lista.
+    const carteira = await get('/api/v1/producers', await loginAs(app, JOAO));
+    expect(carteira.body.data[0].name).toBe('Produtor Novo');
   });
 
   /**
@@ -85,7 +83,7 @@ describe('Producers — carteira (e2e)', () => {
         .set('Authorization', `Bearer ${await loginAs(app, ADMIN)}`)
         .send({
           name: 'Produtor da Folha',
-          consultantIds: [CONSULTANT.joao],
+          consultantId: CONSULTANT.joao,
           document: 'CPF 888.888.888-88',
           farmName: 'Fazenda da Folha',
           city: 'Maringá/PR',
@@ -119,7 +117,7 @@ describe('Producers — carteira (e2e)', () => {
         .set('Authorization', admin)
         .send({
           name: 'Antônio Carvalho',
-          consultantIds: [CONSULTANT.joao],
+          consultantId: CONSULTANT.joao,
           document: 'CPF 123.456.789-00',
           farmName: 'Fazenda Boa Vista',
           city: 'Maringá/PR',
@@ -132,41 +130,34 @@ describe('Producers — carteira (e2e)', () => {
     });
   });
 
-  it('produtor precisa nascer na carteira de pelo menos um consultor válido', async () => {
+  it('produtor precisa nascer na carteira de um consultor válido', async () => {
     const admin = await loginAs(app, ADMIN);
-    const create = (consultantIds: unknown) =>
+    const create = (extra: Record<string, unknown>) =>
       request(app.getHttpServer())
         .post('/api/v1/producers')
         .set('Authorization', `Bearer ${admin}`)
         .send({
           name: 'Sem Carteira',
-          consultantIds,
           document: 'CPF 111.222.333-44',
           farmName: 'Fazenda X',
           city: 'Cidade/PR',
           areaHa: 10,
+          ...extra,
         });
 
-    // Lista vazia: um produtor que ninguém atende não aparece para ninguém.
-    const empty = await create([]);
-    expect(empty.status).toBe(422);
-    expect(empty.body.message).toContain('consultor');
+    // Sem consultor: um produtor que ninguém atende não aparece para ninguém.
+    const missing = await create({});
+    expect(missing.status).toBe(422);
+    expect(missing.body.message).toContain('consultor');
 
-    // O admin não tem carteira — e a mensagem NOMEIA quem não serve, porque com
-    // uma lista "escolha um consultor válido" deixaria adivinhando qual dos ids.
-    const notConsultant = await create([1]);
+    // O admin não tem carteira — e a mensagem NOMEIA quem não serve.
+    const notConsultant = await create({ consultantId: 1 });
     expect(notConsultant.status).toBe(422);
     expect(notConsultant.body.message).toContain('Carlos Mendes');
 
-    // Um id válido ao lado de um inválido também recusa: a carteira é gravada
-    // inteira ou não é gravada.
-    const mixed = await create([CONSULTANT.joao, 1]);
-    expect(mixed.status).toBe(422);
-
-    // E o mesmo consultor duas vezes é engano de quem chama, não um vínculo
-    // duplicado esbarrando na chave primária.
-    const repeated = await create([CONSULTANT.joao, CONSULTANT.joao]);
-    expect(repeated.status).toBe(422);
+    // Lista não é carteira: são dois consultores, e a regra é um.
+    const list = await create({ consultantId: [CONSULTANT.joao, CONSULTANT.ana] });
+    expect(list.status).toBe(422);
   });
 
   it('consultores diferentes têm carteiras diferentes', async () => {
@@ -178,151 +169,87 @@ describe('Producers — carteira (e2e)', () => {
   });
 
   /**
-   * O ponto da carteira compartilhada: consultores dividem região, e o mesmo
-   * produtor é atendido por mais de um. Antes disso, a única forma de
-   * representar essa realidade era cadastrar o produtor duas vezes — e aí a
-   * área cultivável passava a existir em dobro (os mínimos por hectare saem
-   * dela) e as permutas do mesmo cliente se partiam entre dois registros.
+   * UM CONSULTOR POR PRODUTOR. A troca de consultor é edição do cadastro, e o
+   * que ela move é o PRODUTOR — as permutas continuam de quem as registrou.
    */
-  describe('um produtor, várias carteiras', () => {
+  describe('um consultor por produtor', () => {
     const admin = () => loginAs(app, ADMIN);
 
-    it('os dois consultores enxergam o mesmo produtor', async () => {
-      const doJoao = await get('/api/v1/producers/3', await loginAs(app, JOAO));
-      const doRoberto = await get('/api/v1/producers/3', await loginAs(app, ROBERTO));
+    /** Joaquim Tavares (id 3), do Roberto no seed. */
+    const joaquim = {
+      name: 'Joaquim Tavares',
+      document: 'CNPJ 12.345.678/0001-90',
+      farmName: 'Fazenda Santa Rita',
+      city: 'Mandaguari/PR',
+      areaHa: 320,
+    };
 
-      expect(doJoao.status).toBe(200);
-      expect(doRoberto.status).toBe(200);
-      expect(doJoao.body.data.name).toBe('Joaquim Tavares');
-      // O MESMO registro, com a mesma área: é isso que o cadastro duplicado
-      // quebrava.
-      expect(doRoberto.body.data.id).toBe(doJoao.body.data.id);
-      expect(doRoberto.body.data.areaHa).toBe(doJoao.body.data.areaHa);
-    });
-
-    it('a carteira sai na resposta como lista, com todos os vínculos', async () => {
-      const response = await get('/api/v1/producers/3', await admin());
-      expect(new Set(response.body.data.consultantIds)).toEqual(
-        new Set([CONSULTANT.joao, CONSULTANT.roberto]),
-      );
-    });
-
-    it('o filtro por consultor acha o produtor pelos dois lados', async () => {
-      const token = await admin();
-      for (const id of [CONSULTANT.joao, CONSULTANT.roberto]) {
-        const response = await get(`/api/v1/producers?consultantId=${id}`, token);
-        expect(namesOf(response.body)).toContain('Joaquim Tavares');
-      }
-    });
-
-    it('o admin compartilha um produtor acrescentando um consultor à carteira', async () => {
-      const token = await admin();
-      // Antônio Carvalho (id 1) é só do João. A Ana passa a atendê-lo também.
-      const response = await request(app.getHttpServer())
-        .put('/api/v1/producers/1')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Antônio Carvalho',
-          consultantIds: [CONSULTANT.joao, CONSULTANT.ana],
-          document: 'CPF 123.456.789-00',
-          farmName: 'Fazenda Boa Vista',
-          city: 'Maringá/PR',
-          areaHa: 120,
-        });
-      expect(response.status).toBe(200);
-      expect(new Set(response.body.data.consultantIds)).toEqual(
-        new Set([CONSULTANT.joao, CONSULTANT.ana]),
-      );
-
-      // E ele aparece na carteira da Ana a partir de agora.
-      const daAna = await get('/api/v1/producers', await loginAs(app, ANA));
-      expect(namesOf(daAna.body)).toContain('Antônio Carvalho');
-    });
-
-    it('tirar um consultor da lista tira o produtor da carteira dele', async () => {
-      const token = await admin();
-      // Joaquim (id 3) deixa de ser atendido pelo João; segue com o Roberto.
-      const response = await request(app.getHttpServer())
+    const transferir = async (consultantId: number) =>
+      request(app.getHttpServer())
         .put('/api/v1/producers/3')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Joaquim Tavares',
-          consultantIds: [CONSULTANT.roberto],
-          document: 'CNPJ 12.345.678/0001-90',
-          farmName: 'Fazenda Santa Rita',
-          city: 'Mandaguari/PR',
-          areaHa: 320,
-        });
-      expect(response.status).toBe(200);
-      expect(response.body.data.consultantIds).toEqual([CONSULTANT.roberto]);
+        .set('Authorization', `Bearer ${await admin()}`)
+        .send({ ...joaquim, consultantId });
+
+    it('o produtor está na carteira de um consultor só', async () => {
+      const doRoberto = await get('/api/v1/producers/3', await loginAs(app, ROBERTO));
+      expect(doRoberto.status).toBe(200);
+      expect(doRoberto.body.data.consultantId).toBe(CONSULTANT.roberto);
 
       const doJoao = await get('/api/v1/producers/3', await loginAs(app, JOAO));
       expect(doJoao.status).toBe(403);
-      const doRoberto = await get('/api/v1/producers/3', await loginAs(app, ROBERTO));
-      expect(doRoberto.status).toBe(200);
+    });
+
+    it('trocar o consultor passa o produtor para a carteira do outro', async () => {
+      const response = await transferir(CONSULTANT.joao);
+      expect(response.status).toBe(200);
+      expect(response.body.data.consultantId).toBe(CONSULTANT.joao);
+
+      expect((await get('/api/v1/producers/3', await loginAs(app, JOAO))).status).toBe(200);
+      expect((await get('/api/v1/producers/3', await loginAs(app, ROBERTO))).status).toBe(403);
     });
 
     /**
-     * Editar o produtor sem mexer na carteira não pode reescrever os vínculos:
-     * `assignedAt` é desde quando aquele consultor atende o cliente, e apagar e
-     * recriar todos a cada salvamento diria que todo compartilhamento começou
-     * no último salvamento do cadastro.
-     *
-     * A conferência é no BANCO porque `assignedAt` não sai na resposta — ele é
-     * memória do vínculo, não campo de tela. O teste desce até lá justamente
-     * porque a regressão seria invisível pela API.
+     * A permuta é de quem a registrou (`Barter.consultantId`), não de quem
+     * atende o produtor hoje: a troca de carteira não tira do Roberto as
+     * permutas que ele fechou com o Joaquim, nem as entrega ao João.
      */
-    it('editar outros campos preserva a data dos vínculos que ficam', async () => {
-      const prisma = app.get(PrismaService);
-      const token = await admin();
-      const before = await prisma.producerConsultant.findMany({
-        where: { producerId: 3 },
-        orderBy: { consultantId: 'asc' },
-      });
+    it('a troca não leva as permutas que o consultor anterior registrou', async () => {
+      await transferir(CONSULTANT.joao).then((r) => expect(r.status).toBe(200));
 
-      await request(app.getHttpServer())
-        .put('/api/v1/producers/3')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Joaquim Tavares',
-          consultantIds: before.map((link) => link.consultantId),
-          document: 'CNPJ 12.345.678/0001-90',
-          farmName: 'Fazenda Santa Rita II',
-          city: 'Mandaguari/PR',
-          areaHa: 320,
-        })
-        .expect(200);
-
-      const after = await prisma.producerConsultant.findMany({
-        where: { producerId: 3 },
-        orderBy: { consultantId: 'asc' },
-      });
-      expect(after).toEqual(before);
+      const codes = async (email: string) =>
+        (await get('/api/v1/barters', await loginAs(app, email))).body.data.map(
+          (b: { code: string }) => b.code,
+        );
+      expect(await codes(ROBERTO)).toEqual(
+        expect.arrayContaining(['PRM-2026-003', 'PRM-2026-008']),
+      );
+      expect(await codes(JOAO)).not.toContain('PRM-2026-003');
     });
 
-    /** O vínculo NOVO, por outro lado, nasce agora — e não na data do produtor. */
-    it('o vínculo acrescentado hoje é datado de hoje', async () => {
-      const prisma = app.get(PrismaService);
+    it('o filtro por consultor acompanha a troca', async () => {
+      await transferir(CONSULTANT.joao).then((r) => expect(r.status).toBe(200));
       const token = await admin();
-      const antes = new Date();
 
-      await request(app.getHttpServer())
-        .put('/api/v1/producers/1')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          name: 'Antônio Carvalho',
-          consultantIds: [CONSULTANT.joao, CONSULTANT.ana],
-          document: 'CPF 123.456.789-00',
-          farmName: 'Fazenda Boa Vista',
-          city: 'Maringá/PR',
-          areaHa: 120,
-        })
-        .expect(200);
+      const doJoao = await get(`/api/v1/producers?consultantId=${CONSULTANT.joao}`, token);
+      expect(namesOf(doJoao.body)).toContain('Joaquim Tavares');
+      const doRoberto = await get(`/api/v1/producers?consultantId=${CONSULTANT.roberto}`, token);
+      expect(namesOf(doRoberto.body)).not.toContain('Joaquim Tavares');
+    });
 
-      const novo = await prisma.producerConsultant.findUnique({
-        where: { producerId_consultantId: { producerId: 1, consultantId: CONSULTANT.ana } },
-      });
-      expect(novo!.assignedAt.getTime()).toBeGreaterThanOrEqual(antes.getTime() - 1000);
+    it('editar sem mandar o consultor mantém o que estava', async () => {
+      const response = await request(app.getHttpServer())
+        .put('/api/v1/producers/3')
+        .set('Authorization', `Bearer ${await admin()}`)
+        .send({ ...joaquim, farmName: 'Fazenda Santa Rita II' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.consultantId).toBe(CONSULTANT.roberto);
+    });
+
+    it('a troca só aceita consultor', async () => {
+      const response = await transferir(1); // admin
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Carlos Mendes');
     });
   });
 
@@ -371,7 +298,23 @@ describe('Producers — carteira (e2e)', () => {
       });
       // E a carteira fica como estava: ele não mandou o campo, e o servidor não
       // o inventa.
-      expect(response.body.data.consultantIds).toEqual([CONSULTANT.joao]);
+      expect(response.body.data.consultantId).toBe(CONSULTANT.joao);
+    });
+
+    /**
+     * O app manda o cadastro INTEIRO de volta, com o consultor que já estava lá.
+     * A carteira é recusada por MUDANÇA, como a área e o documento — recusá-la
+     * por presença travaria a edição de telefone do próprio cliente.
+     */
+    it('mandar o próprio consultor de volta não é mexer na carteira', async () => {
+      const response = await editar(1, JOAO, {
+        ...antonio,
+        phone: '(44) 99999-1234',
+        consultantId: CONSULTANT.joao,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.consultantId).toBe(CONSULTANT.joao);
     });
 
     it('produtor de carteira alheia continua fora do alcance dele', async () => {
@@ -416,15 +359,11 @@ describe('Producers — carteira (e2e)', () => {
     });
 
     /**
-     * A CARTEIRA é a lista inteira num campo só: um consultor que a escrevesse
-     * poderia se remover do próprio cliente — ou remover um colega — sem que
-     * ninguém tivesse decidido isso.
+     * A CARTEIRA é de quem administra: um consultor que a escrevesse poderia
+     * passar o próprio cliente adiante sem que ninguém tivesse decidido isso.
      */
     it('a carteira continua sendo do admin', async () => {
-      const response = await editar(1, JOAO, {
-        ...antonio,
-        consultantIds: [CONSULTANT.joao, CONSULTANT.ana],
-      });
+      const response = await editar(1, JOAO, { ...antonio, consultantId: CONSULTANT.ana });
 
       expect(response.status).toBe(403);
       expect(response.body.message).toContain('administrador');
@@ -436,7 +375,7 @@ describe('Producers — carteira (e2e)', () => {
       const criado = await request(app.getHttpServer())
         .post('/api/v1/producers')
         .set('Authorization', token)
-        .send({ ...antonio, document: 'CPF 999.888.777-66', consultantIds: [CONSULTANT.joao] });
+        .send({ ...antonio, document: 'CPF 999.888.777-66', consultantId: CONSULTANT.joao });
       expect(criado.status).toBe(403);
 
       const excluido = await request(app.getHttpServer())
@@ -451,14 +390,15 @@ describe('Producers — carteira (e2e)', () => {
         ...antonio,
         areaHa: 400,
         taxRegime: 'folha',
-        consultantIds: [CONSULTANT.joao, CONSULTANT.ana],
+        consultantId: CONSULTANT.ana,
       });
 
       expect(response.status).toBe(200);
-      expect(response.body.data).toMatchObject({ areaHa: 400, taxRegime: 'folha' });
-      expect(response.body.data.consultantIds.sort()).toEqual(
-        [CONSULTANT.joao, CONSULTANT.ana].sort(),
-      );
+      expect(response.body.data).toMatchObject({
+        areaHa: 400,
+        taxRegime: 'folha',
+        consultantId: CONSULTANT.ana,
+      });
     });
   });
 
@@ -470,7 +410,7 @@ describe('Producers — carteira (e2e)', () => {
   describe('documento identifica o produtor', () => {
     const base = {
       name: 'Produtor Repetido',
-      consultantIds: [CONSULTANT.joao],
+      consultantId: CONSULTANT.joao,
       farmName: 'Fazenda Nova',
       city: 'Maringá/PR',
       areaHa: 30,
@@ -509,7 +449,7 @@ describe('Producers — carteira (e2e)', () => {
         .set('Authorization', `Bearer ${await loginAs(app, ADMIN)}`)
         .send({
           name: 'Antônio Carvalho',
-          consultantIds: [CONSULTANT.joao],
+          consultantId: CONSULTANT.joao,
           document: 'CPF 123.456.789-00',
           farmName: 'Fazenda Boa Vista II',
           city: 'Maringá/PR',
@@ -537,10 +477,9 @@ describe('Producers — carteira (e2e)', () => {
       const token = await loginAs(app, ADMIN);
       const response = await get(`/api/v1/producers?consultantId=${CONSULTANT.joao}`, token);
       expect(response.status).toBe(200);
-      // Todo produtor da resposta é atendido pelo João — e algum deles pode ser
-      // atendido por mais gente, que é o que a carteira compartilhada permite.
-      for (const producer of response.body.data as { consultantIds: number[] }[]) {
-        expect(producer.consultantIds).toContain(CONSULTANT.joao);
+      expect(response.body.data.length).toBeGreaterThan(0);
+      for (const producer of response.body.data as { consultantId: number }[]) {
+        expect(producer.consultantId).toBe(CONSULTANT.joao);
       }
     });
 

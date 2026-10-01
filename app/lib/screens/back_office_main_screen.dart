@@ -734,14 +734,9 @@ class _QueueRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  BarterIdentity(barter: barter),
                   Text(
-                    '${barter.id} • ${barter.producerName}',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    '${barter.consultantName} • retirada em ${barter.unitLabel}',
+                    'Retirada em ${barter.unitLabel}',
                     style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                     overflow: TextOverflow.ellipsis,
                   ),

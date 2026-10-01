@@ -193,22 +193,16 @@ export function toUnitJson(unit: Unit) {
 }
 
 /**
- * O produtor, com a CARTEIRA como lista.
+ * O produtor, com a CARTEIRA: o consultor que o atende.
  *
- * `consultantIds` substituiu o antigo `consultantId` — e substituiu mesmo, sem
- * deixar o campo velho para trás: mantê-lo obrigaria a eleger um dos
- * consultores como "o" consultor, e o primeiro da lista viraria dono por
- * acidente de ordenação. Os dois lados deste repositório sobem juntos; um
- * campo que mente é pior do que um campo que sumiu.
- *
- * Vazio significa produtor esperando realocação (o último consultor vinculado
- * foi excluído) — só a retaguarda o enxerga até o admin designar alguém.
+ * `consultantId` nulo significa produtor esperando realocação (o consultor
+ * dele foi excluído) — só a retaguarda o enxerga até o admin designar alguém.
  */
-export function toProducerJson(producer: Producer & { consultants: { consultantId: number }[] }) {
+export function toProducerJson(producer: Producer) {
   return {
     id: producer.id,
     name: producer.name,
-    consultantIds: producer.consultants.map((link) => link.consultantId),
+    consultantId: producer.consultantId,
     document: producer.document,
     phone: producer.phone,
     farmName: producer.farmName,
@@ -664,12 +658,21 @@ function toBarterProgressJson(
 ): ReturnType<typeof progressStepJson>[] {
   const byAction = new Map<string, BarterEvent>();
   // O primeiro evento de cada ato: um ato acontece uma vez só (a máquina de
-  // estados não deixa repetir), e na dúvida vale o que veio antes.
+  // estados não deixa repetir), e na dúvida vale o que veio antes. "Antes" pela
+  // DATA, e não pela posição: a linha do tempo chega do mais recente para o
+  // mais antigo, e quem casa etapa e evento não pode depender disso.
   for (const event of events) {
-    if (!byAction.has(event.action)) byAction.set(event.action, event);
+    const kept = byAction.get(event.action);
+    if (!kept || isEarlier(event, kept)) byAction.set(event.action, event);
   }
 
   return progressOf(barter).map((step) => progressStepJson(step, byAction.get(step.action)));
+}
+
+/** A ordem cronológica dos eventos, com o `id` desempatando o mesmo instante. */
+function isEarlier(a: BarterEvent, b: BarterEvent): boolean {
+  const diff = a.at.getTime() - b.at.getTime();
+  return diff !== 0 ? diff < 0 : a.id < b.id;
 }
 
 function progressStepJson(

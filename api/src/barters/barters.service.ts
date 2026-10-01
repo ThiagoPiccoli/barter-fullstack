@@ -164,6 +164,11 @@ export type CreditFileWithFile = BarterCreditFile & { file: FileMeta | null };
  */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
+/** Bytes em MB, como a frase os escreve: "10,0". */
+export function megabytes(bytes: number): string {
+  return (bytes / 1024 / 1024).toFixed(1).replace('.', ',');
+}
+
 /**
  * O QUE SE ACEITA como anexo — os formatos em que nota fiscal e SCR de fato
  * chegam.
@@ -292,7 +297,8 @@ type BarterDetail = BarterWithItems & {
  */
 const BARTER_INCLUDE = {
   items: true,
-  productRequests: { orderBy: { id: 'asc' } },
+  // Toda lista que a tela desenha vem do MAIS RECENTE para o mais antigo.
+  productRequests: { orderBy: { id: 'desc' } },
   // AS NOTAS do faturamento vão junto pelo mesmo motivo dos pedidos: elas são
   // ESTADO. "Esta permuta já tem nota?" é o que a fila do faturista pergunta, e
   // o que a cédula precisa saber para poder ser emitida.
@@ -301,7 +307,7 @@ const BARTER_INCLUDE = {
   // viajar numa listagem de cinquenta permutas para desenhar cinquenta linhas de
   // tabela. Quem quer o arquivo pede o arquivo (ver `invoiceFile`).
   invoices: {
-    orderBy: { id: 'asc' },
+    orderBy: { id: 'desc' },
     include: { file: { select: FILE_META } },
   },
 } as const satisfies Prisma.BarterInclude;
@@ -315,11 +321,11 @@ const BARTER_INCLUDE = {
  */
 const BARTER_DETAIL_INCLUDE = {
   ...BARTER_INCLUDE,
-  events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] },
+  events: { orderBy: [{ at: 'desc' }, { id: 'desc' }] },
   // O DOSSIÊ DO COMITÊ, sem os bytes — pelo mesmo motivo das notas: a tela lista
   // os documentos, e quem quer o arquivo pede o arquivo (ver `creditFile`).
   creditFiles: {
-    orderBy: { id: 'asc' },
+    orderBy: { id: 'desc' },
     include: { file: { select: FILE_META } },
   },
 } as const satisfies Prisma.BarterInclude;
@@ -793,21 +799,12 @@ export class BartersService {
       );
     }
 
-    // 2. O produtor precisa estar na carteira de QUEM REGISTRA. A carteira é
-    //    compartilhável (o mesmo produtor é atendido por vários consultores,
-    //    ver ProducerConsultant), então a pergunta é de pertencimento à lista —
-    //    e não mais igualdade com um dono único. A permuta continua sendo de um
-    //    consultor só: o que a registrou.
-    const producer = await this.prisma.producer.findUnique({
-      where: { id: dto.producerId },
-      include: {
-        consultants: { where: { consultantId: consultant.id }, select: { consultantId: true } },
-      },
-    });
+    // 2. O produtor precisa estar na carteira de QUEM REGISTRA.
+    const producer = await this.prisma.producer.findUnique({ where: { id: dto.producerId } });
     if (!producer) {
       throw new UnprocessableEntityException('Produtor não encontrado');
     }
-    if (producer.consultants.length === 0) {
+    if (producer.consultantId !== consultant.id) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
 
@@ -3488,11 +3485,10 @@ export class BartersService {
    * ESTE ARQUIVO PODE SER ANEXADO? — tipo e tamanho, nesta ordem.
    *
    * O TAMANHO é conferido aqui além do multer porque as duas travas respondem a
-   * coisas diferentes: o multer corta a requisição (e devolve um erro de
-   * transporte, sem língua nenhuma), e esta diz à pessoa, em pt-BR, qual é o
-   * limite e quanto o arquivo dela tem. Uma sem a outra é ou uma recusa que
-   * ninguém entende, ou um upload de 40 MB recebido inteiro para ser recusado no
-   * fim.
+   * coisas diferentes: o multer corta a requisição no limite (e o controller
+   * traduz o corte — ver `AttachmentUpload`), e esta cobre o anexo que chegue
+   * sem passar por ele, dizendo quanto o arquivo tem. Sem o corte, um upload de
+   * 40 MB seria recebido inteiro para ser recusado no fim.
    *
    * O TIPO vem do que o cliente declara, com a EXTENSÃO como segunda opinião
    * quando ele não declara nada de útil (ver `attachmentTypeOf`). Não é trava de
@@ -3514,9 +3510,8 @@ export class BartersService {
       );
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1).replace('.', ',');
       throw new UnprocessableEntityException(
-        `O anexo passa do limite: ${mb(file.size)} MB, e o máximo é ${mb(MAX_ATTACHMENT_BYTES)} MB`,
+        `O anexo passa do limite: ${megabytes(file.size)} MB, e o máximo é ${megabytes(MAX_ATTACHMENT_BYTES)} MB`,
       );
     }
     if (file.size === 0) {
@@ -3590,11 +3585,15 @@ export class BartersService {
       document,
       sackWeightKg,
       { name: culture?.seasonName ?? '', cprDueDate: culture?.cprDueDate ?? null },
-      barter.invoices.map((invoice) => ({
-        number: invoice.number,
-        series: invoice.series,
-        duplicateNumber: invoice.duplicateNumber,
-      })),
+      // A CÉDULA cita as notas na ordem em que foram emitidas: ela é documento,
+      // e não a lista da tela, que vem do mais recente para o mais antigo.
+      [...barter.invoices]
+        .sort((a, b) => a.id - b.id)
+        .map((invoice) => ({
+          number: invoice.number,
+          series: invoice.series,
+          duplicateNumber: invoice.duplicateNumber,
+        })),
     );
   }
 

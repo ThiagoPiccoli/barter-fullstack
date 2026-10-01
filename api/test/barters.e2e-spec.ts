@@ -4,6 +4,7 @@ import {
   ADMIN,
   ANA,
   COMITE,
+  CONSULTANT,
   FATURISTA,
   GERENTE,
   GERENTE_SUL,
@@ -391,12 +392,11 @@ describe('Barters (e2e)', () => {
 
     /** PF ou PJ não é escolha: sai do documento do produtor da permuta. */
     it('a mesma escolha cobra percentuais diferentes de CPF e CNPJ', async () => {
-      // Joaquim Tavares (id 3) é CNPJ e também é atendido pelo João. São 320 ha,
-      // então os mínimos por hectare sobem junto: 128 NPK, 800 glifosato, 48
-      // lambda.
+      // Joaquim Tavares (id 3, da carteira do Roberto) é CNPJ. São 320 ha, então
+      // os mínimos por hectare sobem junto: 128 NPK, 800 glifosato, 48 lambda.
       const doCnpj = await request(app.getHttpServer())
         .post('/api/v1/barters')
-        .set('Authorization', await asUser(JOAO))
+        .set('Authorization', await asUser(ROBERTO))
         .send({
           ...validPayload,
           producerId: 3,
@@ -523,12 +523,11 @@ describe('Barters (e2e)', () => {
   });
 
   /**
-   * A carteira compartilhada não afrouxa a regra acima — ela muda a pergunta,
-   * de "é o dono?" para "está na carteira?". Joaquim Tavares (id 3, 320 ha) é
-   * atendido pelo Roberto E pelo João, e os dois registram permuta para ele.
-   * Cada permuta continua sendo de UM consultor: o que a registrou.
+   * A TROCA DE CONSULTOR move quem registra permuta nova para o produtor: o
+   * consultor anterior deixa de poder, o novo passa a poder. Joaquim Tavares
+   * (id 3, 320 ha) é do Roberto no seed.
    */
-  it('produtor compartilhado permuta pelos dois consultores', async () => {
+  it('trocado o consultor, a permuta nova é do novo — e só dele', async () => {
     // Mínimos para 320 ha: 128 sacos NPK, 800 L glifosato, 48 L lambda.
     const payload = {
       ...validPayload,
@@ -540,19 +539,31 @@ describe('Barters (e2e)', () => {
         { productId: 7, quantity: 48 },
       ],
     };
-
-    for (const [email, nome] of [
-      [ROBERTO, 'Roberto Souza'],
-      [JOAO, 'João Silva'],
-    ]) {
-      const response = await request(app.getHttpServer())
+    const registrar = async (email: string) =>
+      request(app.getHttpServer())
         .post('/api/v1/barters')
         .set('Authorization', await asUser(email))
         .send(payload);
-      expect(response.status).toBe(201);
-      expect(response.body.data.producerName).toBe('Joaquim Tavares');
-      expect(response.body.data.consultantName).toBe(nome);
-    }
+
+    expect((await registrar(JOAO)).status).toBe(403);
+
+    await request(app.getHttpServer())
+      .put('/api/v1/producers/3')
+      .set('Authorization', await asUser(ADMIN))
+      .send({
+        name: 'Joaquim Tavares',
+        document: 'CNPJ 12.345.678/0001-90',
+        farmName: 'Fazenda Santa Rita',
+        city: 'Mandaguari/PR',
+        areaHa: 320,
+        consultantId: CONSULTANT.joao,
+      })
+      .expect(200);
+
+    const doJoao = await registrar(JOAO);
+    expect(doJoao.status).toBe(201);
+    expect(doJoao.body.data.consultantName).toBe('João Silva');
+    expect((await registrar(ROBERTO)).status).toBe(403);
   });
 
   it('admin não registra permuta (ato do consultor da carteira)', async () => {
@@ -1102,7 +1113,7 @@ describe('Barters (e2e)', () => {
           // Área MENOR, e de propósito: os mínimos por hectare caem junto, e o
           // mesmo payload continua válido para a permuta seguinte.
           areaHa: 60,
-          consultantIds: [2],
+          consultantId: 2,
         })
         .expect(200);
 
@@ -1538,35 +1549,36 @@ describe('Barters (e2e)', () => {
         note: string | null;
       }[];
 
+      // Do MAIS RECENTE para o mais antigo, como toda lista do sistema.
       expect(events.map((e) => [e.action, e.fromStatus, e.toStatus])).toEqual([
-        ['register', null, 'draft'],
-        ['forward', 'draft', 'sentToManager'],
-        ['opinion', 'sentToManager', 'pending'],
-        ['review', 'pending', 'approved'],
         ['invoice', 'approved', 'invoiced'],
+        ['review', 'pending', 'approved'],
+        ['opinion', 'sentToManager', 'pending'],
+        ['forward', 'draft', 'sentToManager'],
+        ['register', null, 'draft'],
       ]);
       expect(events.map((e) => e.actorRole)).toEqual([
-        'consultant',
-        // O ENCAMINHAMENTO é do mesmo consultor: os dois primeiros passos são
+        'biller',
+        'committee',
+        'manager',
+        // O ENCAMINHAMENTO é do mesmo consultor: os dois passos mais antigos são
         // dele, e é isso que a etapa nova acrescentou ao começo da linha.
         'consultant',
-        'manager',
-        'committee',
-        'biller',
+        'consultant',
       ]);
       expect(events.map((e) => e.actorName)).toEqual([
-        'João Silva',
-        'João Silva',
-        'Beatriz Nogueira',
-        'Comitê de Permutas',
         'Patrícia Lemos',
+        'Comitê de Permutas',
+        'Beatriz Nogueira',
+        'João Silva',
+        'João Silva',
       ]);
       // O texto de cada etapa fica no evento, e não só no campo da permuta —
       // que é sobrescrito.
-      expect(events[1].note).toContain('Cliente de cinco safras');
+      expect(events[3].note).toContain('Cliente de cinco safras');
       expect(events[2].note).toContain('Volume compatível');
-      expect(events[4].note).toContain('nota única');
-      expect(events[0].actorRoleLabel).toBe('Consultor');
+      expect(events[0].note).toContain('nota única');
+      expect(events[4].actorRoleLabel).toBe('Consultor');
     });
 
     it('cada ato acrescenta um passo, e nenhum apaga o anterior', async () => {
@@ -1593,7 +1605,7 @@ describe('Barters (e2e)', () => {
         .set('Authorization', await asUser(COMITE));
       const events = depois.body.data.events;
       expect(events).toHaveLength(4);
-      expect(events[3]).toMatchObject({
+      expect(events[0]).toMatchObject({
         action: 'review',
         fromStatus: 'pending',
         toStatus: 'denied',
@@ -1601,7 +1613,7 @@ describe('Barters (e2e)', () => {
         note: 'Fora da política de risco desta safra.',
       });
       // O parecer do gerente continua lá, intacto.
-      expect(events[2].action).toBe('opinion');
+      expect(events[1].action).toBe('opinion');
     });
 
     /**
@@ -1641,7 +1653,7 @@ describe('Barters (e2e)', () => {
       // ser reescrito.
       const enviada = await encaminhar(created.body.data.code as string, await asUser(JOAO));
       expect(enviada.body.data.events).toHaveLength(2);
-      expect(enviada.body.data.events[1]).toMatchObject({
+      expect(enviada.body.data.events[0]).toMatchObject({
         action: 'forward',
         fromStatus: 'draft',
         toStatus: 'sentToManager',
@@ -1656,10 +1668,10 @@ describe('Barters (e2e)', () => {
         .get('/api/v1/barters/PRM-2026-005')
         .set('Authorization', await asUser(JOAO));
       expect(response.status).toBe(200);
-      // Os dois passos dele: registrou e encaminhou.
+      // Os dois passos dele, do mais recente: encaminhou e registrou.
       expect(response.body.data.events.map((e: { action: string }) => e.action)).toEqual([
-        'register',
         'forward',
+        'register',
       ]);
       expect(response.body.data.waitingFor).toBe('manager');
     });

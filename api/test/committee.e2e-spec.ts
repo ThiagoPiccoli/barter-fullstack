@@ -103,9 +103,10 @@ describe('A mesa do comitê (e2e)', () => {
       const resposta = await anexar(await asUser(COMITE), CODE, 'indebtedness');
 
       expect(resposta.body.data.creditFiles).toHaveLength(2);
+      // A peça mais recente primeiro.
       expect(
         resposta.body.data.creditFiles.map((peça: { kindLabel: string }) => peça.kindLabel),
-      ).toEqual(['Consulta ao Serasa', 'Endividamento na cooperativa']);
+      ).toEqual(['Endividamento na cooperativa', 'Consulta ao Serasa']);
     });
 
     /**

@@ -28,9 +28,9 @@ class ProducerRepository {
 
   Map<String, dynamic> _payload(ProducerModel p) => {
         'name': p.name,
-        // A carteira inteira, sempre: o servidor SUBSTITUI a lista que estava
-        // lá pela que chega aqui, então mandar só o que mudou apagaria o resto.
-        'consultantIds': p.consultantIds.map(int.parse).toList(),
+        // O consultor vai sempre que existe — o do consultor logado inclusive:
+        // o servidor só recusa a TROCA a quem não administra a carteira.
+        if (p.consultantId != null) 'consultantId': int.parse(p.consultantId!),
         'document': p.document,
         if (p.phone.isNotEmpty) 'phone': p.phone,
         'farmName': p.farmName,
