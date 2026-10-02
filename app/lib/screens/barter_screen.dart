@@ -17,14 +17,12 @@ import 'send_simulation.dart';
 
 /// Construtor de permuta.
 ///
-/// O consultor escolhe o PRODUTOR e os INSUMOS. Só isso. O grão de pagamento e
-/// os valores vêm do Barter vigente — a versão que o admin lançou —, e é ela
-/// que converte o custo dos insumos em sacas.
-///
-/// Escolher grão era do desenho anterior, em que cada permuta carregava a
-/// própria cotação. Hoje o Barter é lançado sobre um grão, por um período: sem
-/// lançamento aberto não existe permuta nova, e a tela diz isso em vez de
-/// montar um pedido que o servidor recusaria.
+/// O consultor escolhe a CULTURA primeiro — cada cultura aberta (Soja 26/27,
+/// Milho 2027) é um Barter à parte, com a sua tabela —, depois o PRODUTOR, a
+/// UNIDADE e os INSUMOS, com a ÁREA PLANTADA daquela cultura. Os valores vêm da
+/// versão vigente da cultura escolhida, e é ela que converte o custo dos
+/// insumos em sacas. Sem Barter aberto não existe permuta nova, e a tela diz
+/// isso em vez de montar um pedido que o servidor recusaria.
 class NewBarterScreen extends StatefulWidget {
   final UserModel consultant;
 
@@ -84,24 +82,18 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   bool _onlyChosen = false;
   _InputSort _sort = _InputSort.name;
 
-  /// A CULTURA em que esta permuta será paga — a primeira decisão dela.
-  ///
-  /// Ela é do consultor, junto com o produtor: é ele quem sabe o que o cliente
-  /// vai plantar naquele talhão. Nula até a versão chegar, e aí vale a primeira
-  /// cultura do lançamento — que é a que o admin lançou primeiro.
-  String? _grainId;
+  /// A CULTURA em que esta permuta será paga — a SAFRA dela ("Soja 26/27"), e a
+  /// primeira decisão. É do consultor, junto com o produtor: é ele quem sabe o
+  /// que o cliente vai plantar naquele talhão. Fixa numa remontagem: a permuta
+  /// é de uma cultura só.
+  String? _seasonId;
 
-  /// A VERSÃO CONVERTIDA PELA CULTURA ESCOLHIDA.
-  ///
-  /// A tabela vem do servidor em sacas de UM grão por vez (ver
-  /// `pricedInGrainId` na API): o mesmo insumo custa 0,77 saca de soja e 1,78 de
-  /// milho, e mandar as duas conversões engordaria a resposta inteira para
-  /// entregar de uma vez o que a tela mostra uma por vez. Trocar o seletor pede
-  /// a tabela de novo — é um toque raro, feito antes de montar a permuta.
-  BarterVersionModel? _pricedVersion;
+  /// A ÁREA PLANTADA (ha) da cultura que a permuta cobre — a régua dos mínimos
+  /// por hectare, do seguro e do teto da garantia.
+  final _area = TextEditingController();
 
-  /// Está buscando a tabela na cultura nova?
-  bool _switchingCulture = false;
+  /// O SEGURO, quando a versão o oferece como opcional: o que o produtor quis.
+  bool _wantsInsurance = false;
 
   /// A simulação que esta tela está escrevendo, quando já existe uma.
   ///
@@ -126,9 +118,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     if (draft != null) {
       _producerId = draft.producerId;
       _unitId = draft.unitId;
-      // A CULTURA da permuta é a LINHA DE PAGAMENTO dela — o item de grão, que
-      // guarda o produto e a cotação congelados no registro.
-      _grainId = draft.grainItem?.productId;
+      // A CULTURA da permuta é a safra dela, fixa desde o registro; a área e a
+      // escolha do seguro vêm como foram gravadas, e podem ser corrigidas.
+      _seasonId = draft.seasonId;
+      if (draft.plantedAreaHa > 0) _area.text = formatQty(draft.plantedAreaHa);
+      _wantsInsurance = draft.insuranceChoice == InsuranceChoice.accepted;
       for (final item in draft.inputs) {
         if (item.quantity > 0) _inputQty[item.productId] = item.quantity;
       }
@@ -137,13 +131,20 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     }
 
     final simulation = widget.simulation;
-    if (simulation == null) return;
+    if (simulation == null) {
+      // UMA CULTURA SÓ aberta não vira escolha: ela já é a resposta.
+      if (AppData.currentVersions.length == 1) _seasonId = AppData.currentVersions.single.seasonId;
+      return;
+    }
     _simulationId = simulation.id;
     _producerId = simulation.producerId;
     _unitId = simulation.unitId;
-    // A CULTURA guardada com a simulação. Vazia nas montadas antes de elas
-    // coexistirem — e aí vale a primeira do lançamento, que era a única.
-    _grainId = simulation.grainId.isEmpty ? null : simulation.grainId;
+    // A CULTURA guardada com a simulação. As guardadas antes das safras por
+    // cultura só têm o grão — e a versão vigente dele é a resposta.
+    _seasonId = AppData.versionOfSimulation(simulation)?.seasonId ??
+        (simulation.seasonId.isEmpty ? null : simulation.seasonId);
+    if (simulation.plantedAreaHa > 0) _area.text = formatQty(simulation.plantedAreaHa);
+    _wantsInsurance = simulation.insurance ?? false;
     _inputQty.addAll(simulation.inputQuantities);
 
     // A simulação é mais velha do que o cadastro: entre guardar e retomar, o
@@ -182,7 +183,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// consultor zerar os insumos sem perceber.
   Future<void> _loadDraftVersion(BarterModel draft) async {
     try {
-      final version = await AppData.barterVersion(draft.id, grainId: _grainId);
+      final version = await AppData.barterVersion(draft.id);
       if (!mounted) return;
       setState(() => _draftVersion = version);
     } on ApiException catch (error) {
@@ -191,64 +192,55 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _area.dispose();
+    super.dispose();
+  }
+
   /// A VERSÃO que precifica esta tela.
   ///
-  /// Na permuta nova é a vigente — é ela que diz por quanto se permuta hoje. Na
-  /// REMONTAGEM é a da permuta, pelo motivo em [_draftVersion].
+  /// Na permuta nova é a vigente DA CULTURA escolhida — é ela que diz por quanto
+  /// se permuta hoje. Na REMONTAGEM é a da permuta, pelo motivo em
+  /// [_draftVersion].
   BarterVersionModel? get _version {
     if (widget.draft != null) return _draftVersion;
-    // A CONVERTIDA pela cultura escolhida, quando já veio; senão a do cache,
-    // que está na primeira cultura do lançamento — a mesma que o seletor mostra
-    // selecionada antes de qualquer troca.
-    return _pricedVersion ?? AppData.currentVersion;
+    final seasonId = _seasonId;
+    return seasonId == null ? null : AppData.versionForSeason(seasonId);
   }
 
-  /// A CULTURA em uso — a escolhida, ou a primeira do lançamento.
-  VersionGrainModel? get _grain {
-    final version = _version;
-    if (version == null) return null;
-    final chosen = _grainId;
-    return chosen == null ? version.grains.firstOrNull : version.grainFor(chosen);
-  }
+  /// A área plantada informada, ou zero enquanto ela não foi.
+  double get _plantedAreaHa => parseNumber(_area.text) ?? 0;
 
-  /// TROCA A CULTURA da permuta que está sendo montada.
+  /// ESCOLHE A CULTURA da permuta nova.
   ///
-  /// Numa permuta NOVA basta pedir a tabela convertida pela cultura nova: nada
-  /// foi registrado ainda, e o que muda são as sacas que a tela mostra. Num
-  /// RASCUNHO já registrado a troca é um ato no servidor (`PUT
-  /// /barters/:code/culture`), porque a permuta existe lá — os insumos ficam, e
-  /// as sacas e o penhor são recalculados por quem manda neles.
-  Future<void> _changeCulture(String grainId) async {
-    if (grainId == _grainId) return;
-    final draft = _draft;
-
+  /// Os insumos escolhidos antes caem: cada cultura tem a sua tabela, e o que
+  /// estava na tabela da soja pode nem existir na do milho. O produtor e a
+  /// unidade ficam — eles não dependem da cultura.
+  void _chooseCulture(String seasonId) {
     setState(() {
-      _grainId = grainId;
-      _switchingCulture = true;
+      _seasonId = seasonId;
+      _inputQty.clear();
+      _inputQty.addAll(_composition.requiredMinimums);
     });
+  }
 
-    try {
-      if (draft != null) {
-        await AppData.setBarterCulture(draft.id, grainId);
-        final version = await AppData.barterVersion(draft.id, grainId: grainId);
-        if (!mounted) return;
-        setState(() {
-          _draftVersion = version;
-          _switchingCulture = false;
-        });
-      } else {
-        final version = await AppData.versionPricedIn(grainId);
-        if (!mounted) return;
-        setState(() {
-          _pricedVersion = version;
-          _switchingCulture = false;
-        });
+  /// Volta à escolha da cultura (só na permuta nova, com mais de uma aberta).
+  void _changeCulture() => setState(() {
+        _seasonId = null;
+        _inputQty.clear();
+      });
+
+  /// A ÁREA mudou: os mínimos por hectare mudam com ela, e os insumos exigidos
+  /// sobem até o mínimo novo (nunca descem sozinhos — o que o consultor pôs a
+  /// mais é escolha dele).
+  void _onAreaChanged(String _) {
+    setState(() {
+      for (final entry in _composition.requiredMinimums.entries) {
+        final current = _inputQty[entry.key] ?? 0;
+        if (current < entry.value) _inputQty[entry.key] = entry.value;
       }
-    } on ApiException catch (error) {
-      if (!mounted) return;
-      setState(() => _switchingCulture = false);
-      showErrorSnack(context, error);
-    }
+    });
   }
 
   /// A PERMUTA SENDO MONTADA, do ponto de vista do DOMÍNIO.
@@ -263,15 +255,21 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// estado que ela lê muda a cada toque.
   BarterDraft get _composition {
     final producer = _producer;
+    final version = _version;
     return BarterDraft(
-      version: _version,
+      version: version,
       producer: producer,
       quantities: _inputQty,
       allInputs: AppData.inputs,
       classes: AppData.classes,
-      // A TAXA da praça do produtor entra pronta: a busca é do cache, e a regra
-      // — se ela se aplica, quanto custa, o que fazer quando falta — é de lá.
-      insuranceRate: producer == null ? null : AppData.insuranceRateFor(producer.city),
+      plantedAreaHa: _plantedAreaHa,
+      wantsInsurance: _wantsInsurance,
+      // A TAXA da praça do produtor entra pronta, na moeda da versão escolhida:
+      // a busca é do cache, e a regra — se ela se aplica, quanto custa, o que
+      // fazer quando falta — é de lá.
+      insuranceRate: producer == null
+          ? null
+          : AppData.insuranceRateFor(producer.city, versionSlug: version?.slug),
       offBarterCost: _offBarterCost,
     );
   }
@@ -303,11 +301,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// não tem pedido nenhum.
   double get _offBarterCost => _draft?.addedProductRequestsCost ?? 0;
 
-  /// O Barter leva seguro e a praça do produtor NÃO está na base — a recusa do
-  /// servidor, antecipada para cá.
+  /// O seguro é obrigatório e a praça do produtor NÃO está na base — a recusa
+  /// do servidor, antecipada para cá.
   bool get _insuranceMissing => _composition.insuranceMissing;
 
-  /// O CUSTO DO SEGURO na moeda da lente — área cultivável × taxa da praça.
+  /// O CUSTO DO SEGURO na moeda da lente — área plantada × taxa da praça.
   double get _insuranceCost => _composition.insuranceCost;
 
   /// Sacas da cultura escolhida necessárias para cobrir o custo. Mesmo
@@ -345,8 +343,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     });
   }
 
-  /// Escolhe o produtor (primeira etapa). Pré-preenche os insumos exigidos por
-  /// área com seus mínimos obrigatórios, calculados a partir da área dele.
+  /// Escolhe o produtor. Pré-preenche os insumos exigidos por área com seus
+  /// mínimos obrigatórios, calculados a partir da área plantada informada.
   void _selectProducer(String id) {
     final p = AppData.producerById(id);
     // Só aceita produtores da carteira do consultor logado.
@@ -416,7 +414,13 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// exatamente nas horas em que ele serve. Quem cobra o mínimo das classes é o
   /// ENVIO, lá na aba de simulações, e antes dele o próprio servidor.
   bool get _canSave =>
-      !_saving && _producerId != null && _unitId != null && _inputQty.values.any((qty) => qty > 0);
+      !_saving &&
+      _producerId != null &&
+      _unitId != null &&
+      _inputQty.values.any((qty) => qty > 0) &&
+      // Na REMONTAGEM a área é obrigatória: ela vai ao servidor junto. Na
+      // simulação, guardar sem ela é permitido — quem cobra é o envio.
+      (_draft == null || _plantedAreaHa > 0);
 
   /// Guarda a simulação NO APARELHO. Montar e guardar não falam com o servidor
   /// em momento algum — a permuta é montada na fazenda, onde pode não haver
@@ -466,8 +470,12 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       // A CULTURA escolhida, guardada com a simulação: ela fica no aparelho até
       // o envio, e enviá-la sem a cultura faria a permuta nascer numa que
       // ninguém escolheu.
-      grainId: _grain?.grainId ?? '',
-      grainName: _grain?.grainName ?? '',
+      seasonId: version?.seasonId ?? _seasonId ?? '',
+      seasonName: version?.seasonName ?? '',
+      grainId: version?.grainId ?? '',
+      grainName: version?.grainName ?? '',
+      plantedAreaHa: _plantedAreaHa,
+      insurance: _composition.insuranceChoice,
       // O REGIME é o do CADASTRO do produtor, lido agora: a permuta não escolhe
       // imposto, ela herda o que ele declarou ao fisco. Guardá-lo na simulação é
       // só o registro do que valia quando ela foi montada — quem aplica a
@@ -520,6 +528,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       _producerId = null;
       _unitId = null;
       _searchQuery = '';
+      _area.clear();
+      _wantsInsurance = false;
     });
     // Quem acabou de encaminhar já viu o diálogo do registro: repetir "envie em
     // Simulações" mandaria procurar uma simulação que não existe mais.
@@ -552,7 +562,12 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
     setState(() => _saving = true);
     try {
-      final updated = await AppData.replaceBarterInputs(draft.id, _inputQty);
+      final updated = await AppData.replaceBarterInputs(
+        draft.id,
+        _inputQty,
+        plantedAreaHa: _plantedAreaHa > 0 ? _plantedAreaHa : null,
+        insurance: _composition.insuranceChoice,
+      );
       if (!mounted) return;
       setState(() => _saving = false);
       Navigator.pop(context, updated);
@@ -645,6 +660,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           _producerId = null;
           _unitId = null;
           _searchQuery = '';
+          _area.clear();
+          _wantsInsurance = false;
         });
       },
     );
@@ -739,22 +756,23 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         ),
         actions: const [LogoutButton()],
       ),
-      // As três etapas, na ordem em que uma habilita a seguinte: o produtor
-      // define a área (e com ela os mínimos por hectare); a unidade define
-      // onde se retira e de quem é o parecer; só então os insumos.
+      // As etapas, na ordem em que uma habilita a seguinte: a CULTURA define a
+      // tabela; o produtor e a unidade dizem de quem é e onde se retira; só
+      // então os insumos, com a área plantada.
       // A REMONTAGEM depende da tabela DA PERMUTA, que vem do servidor: ela pode
       // ser de uma gestão anterior, e é ela que precifica esta tela.
       body: _draft != null && _draftVersion == null
           ? _buildLoadingDraftVersion()
-          : version == null || !version.isOpen
+          // A ALTERAÇÃO atravessa VERSÕES da mesma cultura, enquanto ela tiver
+          // Barter aberto. É a mesma regra que o servidor aplica (ver
+          // `change-request.ts`), dita aqui para a tela não abrir um caminho que
+          // termina em 422.
+          : _draft != null && !_draftCultureOpen
+          ? _buildDraftCultureClosed()
+          : _draft == null && _seasonId == null && AppData.currentVersions.isNotEmpty
+          ? _buildCultureStep()
+          : version == null || (_draft == null && !version.isOpen)
           ? _buildClosedBarter()
-          // A ALTERAÇÃO atravessa VERSÕES da mesma cultura, e não atravessa
-          // culturas: com o Barter do milho no ar, uma permuta de soja seria
-          // remontada com os insumos, os mínimos e o grão de outro negócio. É a
-          // mesma regra que o servidor aplica (ver `change-request.ts`), dita
-          // aqui para a tela não abrir um caminho que termina em 422.
-          : _draft != null && !_sameCultureAsOpenBarter
-          ? _buildDraftFromOtherCulture()
           : producer == null
           ? _buildProducerStep(version)
           : unit == null
@@ -763,21 +781,15 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     );
   }
 
-  /// A permuta em remontagem é da MESMA cultura do Barter aberto hoje?
+  /// A cultura da permuta em remontagem ainda tem Barter aberto?
   ///
-  /// Comparada pelo GRÃO, e não pelo código da versão: a alteração atravessa
-  /// versões (a permuta da primeira soja continua alterável com a terceira no
-  /// ar) e não atravessa culturas. Mesma regra do servidor, em `cultureRefusal`.
-  bool get _sameCultureAsOpenBarter {
-    final open = AppData.currentVersion;
-    final mine = _draft?.grainItem;
-    if (open == null || mine == null) return false;
-    // A pergunta mudou de forma junto com o domínio: era "as duas gestões são
-    // da mesma cultura?", porque cada gestão tinha uma; agora é "o Barter aberto
-    // ainda OFERECE a cultura desta permuta?", porque ele oferece várias.
-    return open.grains.any((grain) =>
-        grain.grainId == mine.productId ||
-        grain.grainName.trim().toLowerCase() == mine.productName.trim().toLowerCase());
+  /// A alteração atravessa versões (a permuta da primeira soja continua
+  /// alterável com a terceira no ar) e não atravessa o fim da venda daquela
+  /// cultura. Mesma regra do servidor, em `cultureRefusal`.
+  bool get _draftCultureOpen {
+    final seasonId = _draft?.seasonId ?? '';
+    if (seasonId.isEmpty) return false;
+    return AppData.versionForSeason(seasonId)?.isOpen == true;
   }
 
   /// A tabela da permuta está a caminho, ou não veio.
@@ -824,15 +836,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     );
   }
 
-  /// A permuta a remontar é de OUTRA CULTURA, e por isso ela não se remonta.
-  ///
-  /// Não é o código da versão que impede: a permuta de uma gestão anterior da
-  /// mesma cultura é alterável, e é para isso que a tela busca a tabela dela. O
-  /// que não atravessa é a cultura, porque os insumos, os mínimos por hectare e
-  /// o grão que paga são outros: remontá-la aqui seria montá-la com a régua de
-  /// um negócio diferente.
-  Widget _buildDraftFromOtherCulture() {
-    final open = AppData.currentVersion;
+  /// A cultura da permuta a remontar não tem Barter aberto, e por isso ela não
+  /// se remonta: remontá-la seria reabrir a venda de uma cultura que a operação
+  /// parou de vender.
+  Widget _buildDraftCultureClosed() {
+    final cultura = _draft!.seasonName.isNotEmpty ? _draft!.seasonName : 'desta cultura';
     return ListView(
       padding: const EdgeInsets.all(32),
       children: [
@@ -840,20 +848,68 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         Icon(Icons.grass_outlined, size: 56, color: AppColors.textLight),
         const SizedBox(height: 14),
         Text(
-          'Esta permuta é de outra cultura',
+          'O ${brand.copy.programTitle} de $cultura está fechado',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
         ),
         const SizedBox(height: 8),
         Text(
-          'A ${_draft!.id} é de ${_draftVersion?.grainName.toLowerCase() ?? 'outro grão'} '
-          '(${brand.copy.programTitle} ${_draft!.versionCode}), e o que está aberto hoje é '
-          '${open?.grainName.toLowerCase() ?? 'outra cultura'}. A alteração vale entre '
-          'gestões da mesma cultura. Fale com o administrador.',
+          'A ${_draft!.id} é de $cultura (${brand.copy.programTitle} ${_draft!.versionCode}). '
+          'A alteração vale enquanto a cultura da permuta tiver um ${brand.copy.programTitle} '
+          'aberto. Fale com o administrador.',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 13, color: AppColors.textMedium),
         ),
       ],
+    );
+  }
+
+  /// A ESCOLHA DA CULTURA — a primeira etapa da permuta nova.
+  ///
+  /// Cada cultura aberta é um Barter à parte, com a sua tabela de insumos, a
+  /// sua cotação e o seu seguro: a escolha vem antes de tudo porque ela decide
+  /// quais insumos existem na lista.
+  Widget _buildCultureStep() {
+    final versions = AppData.currentVersions;
+    return RefreshIndicator(
+      onRefresh: _refreshVersion,
+      color: AppColors.primary,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          const OfflineBanner(),
+          _hint(
+            icon: Icons.grass,
+            color: AppColors.grain,
+            text: 'Etapa 1: escolha a cultura em que o produtor vai pagar.',
+          ),
+          const SizedBox(height: 10),
+          for (final version in versions)
+            Card(
+              margin: const EdgeInsets.only(bottom: 10),
+              child: ListTile(
+                enabled: version.isOpen,
+                onTap: version.isOpen ? () => _chooseCulture(version.seasonId) : null,
+                leading: CircleAvatar(
+                  backgroundColor: AppColors.grainBg,
+                  child: Icon(Icons.grass, color: AppColors.grain),
+                ),
+                title: Text(
+                  version.seasonName.isNotEmpty ? version.seasonName : version.grainName,
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                ),
+                subtitle: Text(
+                  '${brand.copy.programTitle} ${version.code}'
+                  '${version.endsAt != null ? ' • até ${_BarterBanner._shortDate(version.endsAt!)}' : ''}'
+                  '${version.insurancePolicy != InsurancePolicy.none ? ' • ${version.insurancePolicy.label.toLowerCase()}' : ''}'
+                  '${version.isOpen ? '' : ' • fechado'}',
+                  style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                ),
+                trailing: Icon(Icons.chevron_right, color: AppColors.textLight),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -870,6 +926,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     final version = _version;
     final neverSynced = AppData.lastSyncAt == null;
     final closed = version != null && !version.isOpen;
+    // Outra cultura ainda vende? Então a saída é escolher outra, e não esperar.
+    final others = AppData.currentVersions.where((v) => v.isOpen && v.seasonId != _seasonId);
 
     final String title;
     final String body;
@@ -880,9 +938,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           'internet e atualize: depois disso você monta simulações offline, '
           'inclusive abrindo o app sem sinal.';
     } else if (closed) {
-      title = '${brand.copy.programTitle} encerrado';
+      title = '${brand.copy.programTitle} de ${version.seasonName} fechado';
       body =
-          'A versão ${version.code} foi encerrada. Assim que o administrador '
+          'A versão ${version.code} não aceita permuta agora. Assim que o administrador '
           'publicar a próxima, ela aparece aqui.';
     } else {
       title = '${brand.copy.programTitle} fechado no momento';
@@ -944,6 +1002,16 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               label: Text(neverSynced ? 'Baixar agora' : 'Verificar novamente'),
             ),
           ),
+          if (_draft == null && others.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Center(
+              child: TextButton.icon(
+                onPressed: _changeCulture,
+                icon: const Icon(Icons.grass, size: 18),
+                label: const Text('Escolher outra cultura'),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -972,9 +1040,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         const OfflineBanner(),
         _BarterBanner(
           version: version,
-          grainId: _grain?.grainId,
-          onCultureChanged: _changeCulture,
-          switching: _switchingCulture,
+          onChangeCulture: _draft == null && AppData.currentVersions.length > 1 ? _changeCulture : null,
         ),
         if (wallet.isEmpty)
           Expanded(child: _emptyWalletHint())
@@ -985,9 +1051,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               icon: Icons.person_pin_circle_outlined,
               color: AppColors.primary,
               // Só o que fazer agora. Que a área manda nos obrigatórios é
-              // verdade, mas é assunto da etapa 3 — e lá ela é dita no lugar
-              // onde a pessoa vê o efeito, em vez de duas telas antes.
-              text: 'Etapa 1: escolha um produtor da sua carteira.',
+              // verdade, mas é assunto da etapa dos insumos — e lá ela é dita no
+              // lugar onde a pessoa vê o efeito, em vez de duas telas antes.
+              text: 'Escolha um produtor da sua carteira.',
             ),
           ),
           Padding(
@@ -1047,9 +1113,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         const OfflineBanner(),
         _BarterBanner(
           version: version,
-          grainId: _grain?.grainId,
-          onCultureChanged: _changeCulture,
-          switching: _switchingCulture,
+          onChangeCulture: _draft == null && AppData.currentVersions.length > 1 ? _changeCulture : null,
         ),
         _buildProducerHeader(producer),
         Padding(
@@ -1058,7 +1122,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             icon: Icons.store_outlined,
             color: AppColors.primary,
             text:
-                'Etapa 2: onde ${producer.name.split(' ').first} vai retirar os insumos. '
+                'Onde ${producer.name.split(' ').first} vai retirar os insumos. '
                 'Pode ser qualquer unidade, combine com ele.',
           ),
         ),
@@ -1125,9 +1189,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         const OfflineBanner(),
         _BarterBanner(
           version: version,
-          grainId: _grain?.grainId,
-          onCultureChanged: _changeCulture,
-          switching: _switchingCulture,
+          onChangeCulture: _draft == null && AppData.currentVersions.length > 1 ? _changeCulture : null,
         ),
         _buildProducerHeader(producer),
         _buildUnitHeader(unit),
@@ -1136,7 +1198,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           child: BarterBalanceBar(
             inputCost: _inputCost,
             referenceValue: version.costPerSack,
-            referenceGrainName: _grain?.grainName ?? version.grainName,
+            referenceGrainName: version.grainName,
             inputCount: inputCount,
             showValue: false,
           ),
@@ -1149,6 +1211,30 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         Expanded(child: _buildInputList()),
         _buildFooter(version, producer),
       ],
+    );
+  }
+
+  /// A ÁREA PLANTADA da cultura que esta permuta cobre.
+  ///
+  /// Ela era a área do cadastro do produtor, e saiu de lá porque a fazenda
+  /// planta mais de uma coisa: dos 120 ha, 60 de soja e 60 de trigo. Aqui ela é
+  /// a área DAQUELA cultura, e é a régua de tudo o que é "por hectare": os
+  /// mínimos dos insumos, o seguro e o teto da garantia.
+  Widget _buildAreaField(BarterVersionModel version) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: _area,
+        onChanged: _onAreaChanged,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: InputDecoration(
+          isDense: true,
+          prefixIcon: const Icon(Icons.straighten, size: 18),
+          labelText: 'Área plantada de ${version.grainName.toLowerCase()} (ha)',
+          helperText: 'Define os mínimos por hectare, o seguro e o teto da garantia.',
+          errorText: _plantedAreaHa > 0 || _area.text.isEmpty ? null : 'Informe uma área maior que zero',
+        ),
+      ),
     );
   }
 
@@ -1230,11 +1316,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     if (updated == null || !mounted) return;
     setState(() {});
     if (_draft != null) {
-      _toast('Cadastro atualizado. Esta permuta mantém a área congelada no registro.');
+      _toast('Cadastro atualizado. A área plantada é desta permuta, e se corrige aqui.');
     }
   }
 
-  /// Cabeçalho fixo com o produtor escolhido e sua área, com opção de trocar.
+  /// Cabeçalho fixo com o produtor escolhido, com opção de trocar.
   Widget _buildProducerHeader(ProducerModel p) {
     return Container(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
@@ -1273,17 +1359,15 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                 ),
                 Row(
                   children: [
-                    Icon(Icons.straighten, size: 12, color: AppColors.primary),
+                    Icon(Icons.location_on_outlined, size: 12, color: AppColors.primary),
                     const SizedBox(width: 3),
                     // Expanded, e não Text solto — o mesmo motivo dos 33 pixels
                     // do rodapé: numa Row sem Expanded o texto recebe largura
                     // infinita, e `ellipsis` só corta DEPOIS que existe uma
-                    // largura máxima. Aqui vinha "1.200 ha • Nome da Cidade/PR"
-                    // estourando 127 pixels num telefone de 360 — a linha
-                    // vermelha por cima do cabeçalho do produtor.
+                    // largura máxima.
                     Expanded(
                       child: Text(
-                        '${p.areaLabel} • ${p.city}',
+                        p.location,
                         style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1301,7 +1385,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           // outra tela para corrigir é o mesmo que não oferecer a correção — e o
           // cadastro continuaria envelhecendo em silêncio.
           //
-          // A ÁREA também se corrige daqui — ela muda de uma cultura para outra.
           // O que ele NÃO alcança (a carteira) a tela de edição mostra travado,
           // com o porquê. Ver `EditProducerScreen`.
           if (AppData.can(Capability.producersEdit))
@@ -1312,9 +1395,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               visualDensity: VisualDensity.compact,
             ),
           // TROCAR só existe na permuta que está sendo MONTADA. Numa remontagem
-          // o produtor está congelado no registro — a área dele é o denominador
-          // dos mínimos e do investimento —, e trocá-lo seria outra permuta, não
-          // uma alteração desta.
+          // o produtor está congelado no registro, e trocá-lo seria outra
+          // permuta, não uma alteração desta.
           if (_draft == null)
             TextButton.icon(
               onPressed: _changeProducer,
@@ -1421,7 +1503,13 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     // O cabeçalho (dica + barras de mínimo por classe) só aparece sem busca:
     // quem está procurando um item quer a lista, não a explicação.
     final filtrando = query.isNotEmpty || _classId != null || _onlyChosen;
+    final version = _version;
     final header = <Widget>[
+      // A ÁREA PLANTADA abre a lista — sempre, com ou sem busca: é ela que
+      // define os mínimos que a lista abaixo aplica. Dentro da lista, e não
+      // fixa no alto, porque a tela de um telefone estreito não tem altura
+      // para mais uma faixa fixa.
+      if (version != null) _buildAreaField(version),
       // Com filtro ativo, quantos itens sobraram de quantos — é o que diz se
       // vale continuar rolando ou refinar a busca.
       if (filtrando && inputs.isNotEmpty)
@@ -1627,6 +1715,54 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             // A PRAÇA SEM TAXA aparece como aviso, e não como silêncio: é a
             // recusa que o servidor vai dar no registro, antecipada para agora
             // — quando ainda dá tempo de alguém cadastrar o município.
+            // A ÁREA ainda não informada: sem ela não há mínimo por hectare nem
+            // seguro, e o registro é recusado.
+            if (_plantedAreaHa <= 0) ...[
+              Row(
+                children: [
+                  Icon(Icons.straighten, size: 14, color: AppColors.pending),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Informe a área plantada para fechar a conta e poder registrar.',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+            ],
+            // O SEGURO OPCIONAL: o produtor decide, e a escolha fica gravada —
+            // inclusive a recusa. Praça sem taxa deixa a opção BLOQUEADA, com o
+            // porquê; a permuta segue sem seguro.
+            if (_composition.insuranceOffered) ...[
+              Row(
+                children: [
+                  Icon(Icons.shield_outlined, size: 16, color: AppColors.atManager),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _composition.insuranceBlocked
+                          ? 'Seguro opcional indisponível: ${producer.city} não tem valor por '
+                              'hectare cadastrado. Peça ao administrador.'
+                          : 'Incluir seguro agrícola (opcional)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _composition.insuranceBlocked ? AppColors.pending : AppColors.textDark,
+                      ),
+                    ),
+                  ),
+                  Switch(
+                    value: _wantsInsurance && !_composition.insuranceBlocked,
+                    onChanged: _composition.insuranceBlocked
+                        ? null
+                        : (value) => setState(() => _wantsInsurance = value),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+            ],
             if (_insuranceMissing) ...[
               Row(
                 children: [
@@ -1634,7 +1770,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'Este Barter leva seguro e ${producer.city} não tem valor por hectare '
+                      'O seguro é obrigatório e ${producer.city} não tem valor por hectare '
                       'cadastrado: o registro será recusado.',
                       style: TextStyle(
                         fontSize: 12,
@@ -1653,7 +1789,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      'Seguro de ${producer.city}: ${formatQty(producer.areaHa)} ha • '
+                      'Seguro de ${producer.city}: ${formatQty(_plantedAreaHa)} ha • '
                       '${version.showsCurrency ? formatCurrency(_insuranceCost) : '${formatSacks(_insuranceCost)} ${version.grainName.toLowerCase()}'}',
                       style: TextStyle(
                         fontSize: 12,
@@ -1899,38 +2035,20 @@ class _TaxRegimeNotice extends StatelessWidget {
   }
 }
 
-/// Faixa do Barter vigente: qual lançamento está valendo e EM QUE CULTURA a
-/// permuta será paga. Sem R\$ — o consultor não vê valores.
+/// Faixa do Barter: qual lançamento está valendo e EM QUE CULTURA a permuta
+/// será paga. Sem R\$ — o consultor não vê valores.
 ///
-/// A cultura deixou de ser informação e virou ESCOLHA quando elas passaram a
-/// coexistir: o mesmo Barter aceita soja e milho, e quem decide qual delas paga
-/// aquele cliente é o consultor, junto com o produtor — é ele quem sabe o que
-/// vai ser plantado naquele talhão.
-///
-/// O seletor fica AQUI, no alto e antes dos insumos, porque a escolha muda a
-/// conta inteira: a tabela é a mesma em R\$, mas o mesmo insumo custa 0,77 saca
-/// de soja e 1,78 de milho. Trocá-la depois de montar a permuta é legítimo (e a
-/// tela refaz a conta), mas o lugar de decidir é antes.
-///
-/// UMA CULTURA SÓ não vira seletor: um menu com uma opção é uma escolha que não
-/// existe, e ela volta a ser a informação que sempre foi.
+/// A CULTURA é a primeira escolha da permuta, e a faixa a mantém à vista o tempo
+/// todo: ela decide a tabela inteira. Trocar volta à escolha da cultura (e
+/// limpa os insumos, que eram da tabela da outra).
 class _BarterBanner extends StatelessWidget {
   final BarterVersionModel version;
 
-  /// A cultura escolhida e o que fazer quando ela muda. Nulos quando não há o
-  /// que escolher (tela de leitura, ou lançamento com uma cultura só).
-  final String? grainId;
-  final ValueChanged<String>? onCultureChanged;
+  /// Voltar à escolha da cultura. Nulo quando não há o que escolher (uma
+  /// cultura só aberta, ou remontagem — a permuta é de uma cultura só).
+  final VoidCallback? onChangeCulture;
 
-  /// A tabela da cultura nova está a caminho.
-  final bool switching;
-
-  const _BarterBanner({
-    required this.version,
-    this.grainId,
-    this.onCultureChanged,
-    this.switching = false,
-  });
+  const _BarterBanner({required this.version, this.onChangeCulture});
 
   @override
   Widget build(BuildContext context) {
@@ -1950,66 +2068,36 @@ class _BarterBanner extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // UMA LINHA cada, cortada: a faixa fica no alto de uma tela que já
+                // não tem altura sobrando num telefone estreito.
                 Text(
-                  '${brand.copy.programTitle} ${version.code}',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.textDark,
-                  ),
+                  version.seasonName.isNotEmpty
+                      ? '${version.seasonName} • ${version.code}'
+                      : '${brand.copy.programTitle} ${version.code}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textDark),
                 ),
                 Text(
-                  'Pagamento em ${_chosen.grainName.toLowerCase()}'
+                  'Pagamento em ${version.grainName.toLowerCase()}'
                   '${version.endsAt != null ? ' • até ${_shortDate(version.endsAt!)}' : ''}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                 ),
               ],
             ),
           ),
-          if (switching)
-            const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          else if (_choosable)
-            DropdownButton<String>(
-              value: _chosen.grainId,
-              underline: const SizedBox.shrink(),
-              isDense: true,
-              icon: Icon(Icons.expand_more, size: 18, color: AppColors.grain),
-              items: [
-                for (final grain in version.grains)
-                  DropdownMenuItem(
-                    value: grain.grainId,
-                    child: Text(
-                      grain.grainName,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.grain,
-                      ),
-                    ),
-                  ),
-              ],
-              onChanged: (value) {
-                if (value != null) onCultureChanged!(value);
-              },
+          if (onChangeCulture != null)
+            TextButton(
+              onPressed: onChangeCulture,
+              style: TextButton.styleFrom(foregroundColor: AppColors.grain),
+              child: const Text('Trocar cultura', style: TextStyle(fontSize: 12)),
             ),
         ],
       ),
     );
   }
-
-  /// A cultura que a faixa mostra: a escolhida, ou a primeira do lançamento.
-  VersionGrainModel get _chosen =>
-      (grainId == null ? null : version.grainFor(grainId!)) ??
-      (version.grains.isEmpty
-          ? const VersionGrainModel(grainId: '', grainName: '', grainUnit: '')
-          : version.grains.first);
-
-  /// Há escolha a fazer? Duas culturas ou mais, e alguém ouvindo a troca.
-  bool get _choosable => onCultureChanged != null && version.grains.length > 1;
 
   static String _shortDate(DateTime date) =>
       '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
@@ -2307,29 +2395,6 @@ class _ProducerChoiceTile extends StatelessWidget {
                       producer.location,
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium),
                       overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.straighten, size: 12, color: AppColors.primary),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Área: ${producer.areaLabel}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primary,
-                            ),
-                          ),
-                        ],
-                      ),
                     ),
                   ],
                 ),

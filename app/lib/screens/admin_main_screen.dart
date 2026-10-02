@@ -109,7 +109,10 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     // conta como aprovada" é regra, não layout. Dentro do `build` elas eram
     // reescritas a cada mudança de tela e não tinham teste fora do widget.
     final stats = statsOf(AppData.barters);
-    final grainEntries = sacksByGrain(stats.closed);
+    // POR SAFRA DA CULTURA, e não só por grão: cada safra é um Barter à parte,
+    // com a sua meta e o seu encerramento.
+    final grainEntries = sacksBySeason(stats.closed);
+    final seasonStats = statsBySeason(AppData.barters);
     final branchEntries = sacksByBranch(stats.closed);
     final inputEntries = topInputs(stats.closed);
 
@@ -170,12 +173,21 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
                     ),
                   if (grainEntries.isNotEmpty)
                     _DashboardSection(
-                      title: 'Sacas a Receber por ${brand.copy.grainTitle}',
+                      title: 'Sacas a Receber por Safra',
                       child: _GrainBreakdownCard(
                           entries: grainEntries, total: stats.sacksReceivable),
                     ),
                 ],
               ),
+              const SizedBox(height: 20),
+            ],
+
+            // O PAINEL POR CULTURA: os mesmos números do topo, safra a safra.
+            if (seasonStats.length > 1) ...[
+              Text('Por Safra',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+              const SizedBox(height: 12),
+              _SeasonStatsCard(entries: seasonStats),
               const SizedBox(height: 20),
             ],
 
@@ -771,3 +783,60 @@ class _LegendItem extends StatelessWidget {
   }
 }
 
+
+/// O PAINEL POR CULTURA — uma linha por safra, com o que fechou, o que espera e
+/// as sacas que ela tem a receber.
+class _SeasonStatsCard extends StatelessWidget {
+  final List<({String label, BarterStats stats})> entries;
+  const _SeasonStatsCard({required this.entries});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: Column(
+          children: [
+            for (final (index, entry) in entries.indexed) ...[
+              if (index > 0) const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Row(
+                  children: [
+                    Icon(Icons.grass, size: 18, color: AppColors.grain),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(entry.label,
+                              style: TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                          Text(
+                            '${entry.stats.closedCount} fechada(s) • '
+                            '${entry.stats.pendingCount} no comitê • '
+                            '${entry.stats.atManagerCount} no gerente',
+                            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(formatSacks(entry.stats.sacksReceivable),
+                            style: TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.grain)),
+                        Text('sc a receber', style: TextStyle(fontSize: 10, color: AppColors.textLight)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}

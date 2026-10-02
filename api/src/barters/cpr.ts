@@ -282,13 +282,12 @@ export interface CprContext {
   /** A safra em que a permuta foi fechada, para endereçar a pendência do vencimento. */
   seasonName: string;
   /**
-   * A CULTURA em que esta permuta é paga — soja, milho —, para a mesma
-   * pendência. Com mais de uma cultura no mesmo lançamento, "defina o
-   * vencimento no Barter" não diz em qual delas, e quem lê a frase é quem vai
-   * resolvê-la. Opcional porque nem todo chamador a tem (ver `consultantCprGaps`,
-   * que monta um contexto mínimo).
+   * A VERSÃO do Barter em que esta permuta foi fechada, para a mesma pendência:
+   * o vencimento é de cada versão, e "defina o vencimento no Barter" não diz em
+   * qual — com várias culturas abertas, há várias. Opcional porque nem todo
+   * chamador a tem (ver `consultantCprGaps`, que monta um contexto mínimo).
    */
-  grainName?: string;
+  versionCode?: string;
   /**
    * O DIMENSIONAMENTO DO PENHOR — quanta área esta permuta exige em garantia.
    *
@@ -408,15 +407,15 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
   // esteira num número que só existe semanas depois. Quem o informa é o emissor,
   // no ato de emitir (ver `IssueCprDto`).
   of(CPR_GAP_OWNER.emitter)(cpr.number, 'número da CPR');
-  // O VENCIMENTO é da CULTURA (ele muda de um grão para o outro), e a frase diz
-  // isso: quem lê esta lista não tem campo de vencimento em tela nenhuma, e
-  // precisa saber em qual cultura do lançamento a data se acerta.
+  // O VENCIMENTO é da VERSÃO do Barter, e a frase diz qual: quem lê esta lista
+  // não tem campo de vencimento em tela nenhuma, e precisa saber em qual
+  // lançamento a data se acerta.
   if (!cpr.dueDate) {
     gaps.push({
       owner: CPR_GAP_OWNER.admin,
-      label: `vencimento da CPR (defina-o na cultura${
-        context.grainName ? ` ${context.grainName}` : ''
-      }, no lançamento do Barter)`,
+      label: `vencimento da CPR (defina-o no lançamento${
+        context.versionCode ? ` ${context.versionCode}` : ''
+      } do Barter)`,
     });
   }
 
@@ -592,11 +591,11 @@ export interface CprKnown {
   emitterDocument: string;
   grainName: string;
   /**
-   * O VENCIMENTO da entrega — da SAFRA, e não da cédula.
+   * O VENCIMENTO da entrega — da VERSÃO do Barter, e não da cédula.
    *
    * Ele está aqui, entre o que ninguém digita, porque essa é a correção: o
-   * vencimento muda conforme a CULTURA e vale para a safra inteira. `null`
-   * enquanto a safra não o tiver acertado, e aí `cprGaps` cobra dizendo onde.
+   * vencimento é o mesmo para todas as cédulas da versão. `null` enquanto a
+   * versão não o tiver acertado, e aí `cprGaps` cobra dizendo onde.
    */
   dueDate: Date | null;
   /** O nome da safra — é ele que endereça a pendência do vencimento. */

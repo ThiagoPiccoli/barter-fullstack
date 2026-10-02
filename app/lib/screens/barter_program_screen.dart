@@ -2,29 +2,30 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
 import '../data/app_data.dart';
-import '../repositories/barter_program_repository.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
-import 'edit_forms.dart';
 
-/// O LANÇAMENTO do Barter, do lado do admin.
+/// O LANÇAMENTO do Barter, do lado do admin — uma SAFRA POR CULTURA.
 ///
-/// É aqui que se responde "por quanto se permuta agora": a safra corrente, a
-/// versão vigente com o valor da saca, o quanto falta para cada meta e o botão
-/// que publica a próxima versão a partir da planilha do fornecedor.
+/// Cada cultura é um Barter à parte: a Soja 26/27 e a Canola 2027 abrem,
+/// publicam as suas versões (cada uma com a planilha, a cotação, a meta e o
+/// seguro dela), batem meta e encerram sem que a outra perceba. A tela responde
+/// "por quanto se permuta ESTA cultura agora": o admin escolhe a safra no topo e
+/// vê a versão vigente dela, o vencimento, o seguro, as metas e o histórico.
 ///
-/// O ENCERRAMENTO POR META é uma OPÇÃO do lançamento, e as duas metades dela
-/// aparecem aqui: o interruptor no formulário de publicação e o mesmo
-/// interruptor no cartão de metas, para quem mudou de ideia no meio do Barter.
+/// DOIS ENCERRAMENTOS, e eles são diferentes de propósito:
 ///
-/// Nenhuma das duas fecha nada nesta tela. Quem encerra, no automático, é a
-/// aprovação do comitê que cruza a meta — no servidor, com autor e hora (ver
-/// `closeIfGoalReached` na API). O que esta tela faz é dizer em que modo o
-/// Barter está e avisar antes de ligar o automático com a meta já batida, porque
-/// aí o Barter fecha no mesmo toque.
+/// - encerrar a VERSÃO pausa a cultura (a meta bateu, a tabela venceu) — e pode
+///   sair outra versão depois, com outra meta;
+/// - encerrar a SAFRA é o fim do ciclo daquela cultura. Ela pode ser reaberta,
+///   e isso fica na trilha.
+///
+/// O ENCERRAMENTO POR META é uma OPÇÃO da versão. Nenhum interruptor desta tela
+/// fecha nada por conta própria: quem encerra, no automático, é a aprovação do
+/// comitê que cruza a meta — no servidor, com autor e hora.
 class BarterProgramTab extends StatefulWidget {
   final VoidCallback onChanged;
   const BarterProgramTab({super.key, required this.onChanged});
@@ -36,8 +37,12 @@ class BarterProgramTab extends StatefulWidget {
 class _BarterProgramTabState extends State<BarterProgramTab> {
   bool _loading = false;
 
-  /// A versão vigente com METAS. O cache guarda a versão "crua" (é a mesma que
-  /// o consultor recebe, sem números de retaguarda); o realizado vem do detalhe.
+  /// A safra que o admin está olhando. Começa na primeira aberta.
+  String? _seasonId;
+
+  /// A versão vigente DA SAFRA ESCOLHIDA com METAS. O cache guarda a versão
+  /// "crua" (a mesma que o consultor recebe, sem números de retaguarda); o
+  /// realizado vem do detalhe.
   BarterVersionModel? _detailed;
 
   @override
@@ -46,18 +51,38 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
     _loadDetail();
   }
 
+  List<SeasonModel> get _openSeasons => AppData.seasons.where((s) => s.isOpen).toList();
+  List<SeasonModel> get _closedSeasons => AppData.seasons.where((s) => !s.isOpen).toList();
+
+  /// A safra em foco: a escolhida, se ela ainda está aberta; senão a primeira.
+  SeasonModel? get _season {
+    final open = _openSeasons;
+    for (final season in open) {
+      if (season.id == _seasonId) return season;
+    }
+    return open.isEmpty ? null : open.first;
+  }
+
   Future<void> _loadDetail() async {
-    final current = AppData.currentVersion;
+    final current = _season?.activeVersion;
     if (current == null) {
       if (mounted) setState(() => _detailed = null);
       return;
     }
     try {
-      final detail = await AppData.versionDetail(current.code);
+      final detail = await AppData.versionDetail(current.slug);
       if (mounted) setState(() => _detailed = detail);
     } on ApiException {
       // Sem o detalhe a tela ainda funciona: mostra a versão sem as metas.
     }
+  }
+
+  /// Recarrega depois de um ato do admin: safras, versões vigentes e o detalhe.
+  Future<void> _afterChange() async {
+    await _loadDetail();
+    if (!mounted) return;
+    setState(() {});
+    widget.onChanged();
   }
 
   Future<void> _refresh() async {
@@ -72,52 +97,37 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
     widget.onChanged();
   }
 
-  SeasonModel? get _openSeason {
-    for (final season in AppData.seasons) {
-      if (season.isOpen) return season;
-    }
-    return null;
+  void _select(SeasonModel season) {
+    setState(() {
+      _seasonId = season.id;
+      _detailed = null;
+    });
+    _loadDetail();
   }
 
-  Future<void> _publish() async {
-    final season = _openSeason;
-    if (season == null) {
-      _toast('Abra uma safra antes de lançar um Barter.');
-      return;
-    }
-
-    // SEM GRÃO NO CATÁLOGO não há cultura a lançar — e o formulário abriria com
-    // um seletor vazio, sem dizer por quê. A conferência era da abertura da
-    // safra, enquanto era ela que tinha o grão; veio para cá junto com a
-    // escolha. A planilha cria INSUMOS; o grão é cadastro à parte, porque ele
-    // não é comprado — é a moeda da permuta.
-    if (AppData.grains.isEmpty) {
-      _toast(
-        'Cadastre um grão antes de publicar: aba Valores › Histórico › + › '
-        'Novo ${brand.copy.grain.toLowerCase()}.',
-      );
-      return;
-    }
-
+  Future<void> _publish(SeasonModel season) async {
     final result = await showModalBottomSheet<_PublishRequest>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _PublishSheet(season: season, previous: AppData.currentVersion),
+      builder: (_) => _PublishSheet(season: season),
     );
     if (result == null || !mounted) return;
 
     setState(() => _loading = true);
     try {
       final version = await AppData.publishVersion(
-        seasonCode: season.code,
+        seasonSlug: season.slug,
         filename: result.filename,
         bytes: result.bytes,
-        grains: result.grains,
+        grainPrice: result.grainPrice,
+        estimatedYield: result.estimatedYield,
+        cprDueDate: result.cprDueDate,
+        insurancePolicy: result.insurancePolicy,
         endsAt: result.endsAt,
         targetSales: result.targetSales,
+        targetSacks: result.targetSacks,
         targetBarters: result.targetBarters,
         closeOnGoal: result.closeOnGoal,
-        insuranceRequired: result.insuranceRequired,
         note: result.note,
         carryOver: result.carryOver,
       );
@@ -144,33 +154,20 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
   }
 
   Future<void> _closeVersion(BarterVersionModel version) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.lock_outline, color: AppColors.pending, size: 36),
-        title: Text('Encerrar ${version.code}?'),
-        content: const Text(
-          'Os consultores param de registrar permutas imediatamente. As permutas '
-          'já enviadas continuam valendo pelos valores desta versão.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.denied),
-            child: const Text('Encerrar'),
-          ),
-        ],
-      ),
+    final confirmed = await _confirm(
+      icon: Icons.lock_outline,
+      title: 'Encerrar ${version.code}?',
+      text: 'Os consultores param de registrar permutas de '
+          '${version.grainName.toLowerCase()} imediatamente. As outras culturas '
+          'seguem abertas, e uma nova versão desta pode ser publicada depois. As '
+          'permutas já enviadas continuam valendo pelos valores desta versão.',
+      action: 'Encerrar versão',
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     try {
-      await AppData.closeVersion(version.code);
-      await _loadDetail();
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
+      await AppData.closeVersion(version.slug);
+      await _afterChange();
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
@@ -179,39 +176,23 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
   /// Liga ou desliga o encerramento automático por meta na versão vigente.
   ///
   /// O diálogo aparece só num caso, e é o caso que importa: ligar com a meta JÁ
-  /// batida encerra o Barter na hora. Sem ele, o admin marcaria um interruptor
-  /// para valer "daqui para a frente" e descobriria a operação parada.
+  /// batida encerra a versão na hora.
   Future<void> _setCloseOnGoal(BarterVersionModel version, bool enabled) async {
     if (enabled && version.anyGoalMet) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          icon: Icon(Icons.flag, color: AppColors.pending, size: 36),
-          title: const Text('A meta já foi atingida'),
-          content: Text(
-            'Ligar o encerramento automático agora encerra ${version.code} '
-            'imediatamente: os consultores param de registrar permutas. As '
-            'permutas já enviadas continuam valendo.',
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              style: ElevatedButton.styleFrom(backgroundColor: AppColors.denied),
-              child: const Text('Ligar e encerrar'),
-            ),
-          ],
-        ),
+      final confirmed = await _confirm(
+        icon: Icons.flag,
+        title: 'A meta já foi atingida',
+        text: 'Ligar o encerramento automático agora encerra ${version.code} '
+            'imediatamente: os consultores param de registrar permutas desta cultura. '
+            'As permutas já enviadas continuam valendo.',
+        action: 'Ligar e encerrar',
       );
-      if (confirmed != true) return;
+      if (!confirmed) return;
     }
 
     try {
-      final updated = await AppData.setVersionCloseOnGoal(version.code, enabled);
-      await _loadDetail();
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
+      final updated = await AppData.setVersionCloseOnGoal(version.slug, enabled);
+      await _afterChange();
       // O servidor pode ter ENCERRADO a versão nesta mesma chamada. Quem conta é
       // a resposta dele, e não o que o app pediu.
       _toast(updated.isOpen
@@ -224,12 +205,15 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
     }
   }
 
-  /// ABRE A SAFRA — o CICLO, e não mais a cultura.
-  ///
-  /// Não há grão a escolher aqui: as culturas entram no LANÇAMENTO, e mudam de
-  /// uma versão para a outra. O Barter pode abrir só com soja e ganhar o milho
-  /// na versão seguinte sem que a safra tenha deixado de ser a mesma.
+  /// ABRE A SAFRA DE UMA CULTURA.
   Future<void> _openSeasonDialog() async {
+    if (AppData.grains.isEmpty) {
+      _toast(
+        'Cadastre um grão antes de abrir a safra: aba Valores › + › '
+        'Novo ${brand.copy.grain.toLowerCase()}.',
+      );
+      return;
+    }
     final result = await showDialog<_SeasonRequest>(
       context: context,
       builder: (_) => const _OpenSeasonDialog(),
@@ -238,91 +222,68 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
 
     try {
       await AppData.openSeason(
-        year: result.year,
-        name: result.name,
-        letter: result.letter,
+        grainId: result.grainId,
+        startYear: result.startYear,
+        endYear: result.endYear,
+        insurancePolicy: result.insurancePolicy,
       );
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
+      // A safra recém-aberta vira a safra em foco: é dela o próximo passo.
+      final opened = AppData.seasons.where((s) => s.isOpen && s.grainId == result.grainId);
+      if (opened.isNotEmpty) _seasonId = opened.first.id;
+      await _afterChange();
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
 
-  /// ACERTA O VENCIMENTO DA CPR de UMA CULTURA do lançamento.
+  /// ACERTA O VENCIMENTO DA CPR da versão vigente.
   ///
-  /// Ele era da safra, quando a safra era a cultura. Hoje o mesmo Barter tem
-  /// soja vencendo em junho e milho em setembro, e a data é de cada uma — mexer
-  /// na do milho não pode alcançar as cédulas de soja.
-  ///
-  /// O diálogo AVISA o alcance antes de perguntar a data, e não depois: mexer
-  /// aqui muda a entrega de toda cédula daquela cultura que ainda não foi
-  /// emitida — as já emitidas congelaram a data delas. Sem o aviso, o admin
-  /// corrigiria "a data desta cultura" achando que corrige um cadastro, e
-  /// antecipando (ou adiando) a colheita de dezenas de produtores num campo que
-  /// ninguém mais confere depois.
-  Future<void> _cprDueDateDialog(
-    BarterVersionModel version,
-    VersionGrainModel grain,
-  ) async {
-    final cultura = grain.grainName.toLowerCase();
+  /// O diálogo AVISA o alcance antes de perguntar a data: mexer aqui muda a
+  /// entrega de toda cédula desta versão que ainda não foi emitida — as já
+  /// emitidas congelaram a data delas.
+  Future<void> _cprDueDateDialog(BarterVersionModel version) async {
+    final season = _season;
+    final baseYear = season?.endYear ?? DateTime.now().year;
     final picked = await showDatePicker(
       context: context,
-      initialDate: grain.cprDueDate ?? DateTime(_openSeason?.year ?? DateTime.now().year, 6, 30),
-      firstDate: DateTime((_openSeason?.year ?? DateTime.now().year) - 1, 1, 1),
-      lastDate: DateTime((_openSeason?.year ?? DateTime.now().year) + 2, 12, 31),
-      helpText: 'Vencimento da CPR de $cultura',
+      initialDate: version.cprDueDate ?? DateTime(baseYear, 6, 30),
+      firstDate: DateTime(baseYear - 2, 1, 1),
+      lastDate: DateTime(baseYear + 2, 12, 31),
+      helpText: 'Vencimento da CPR de ${version.code}',
     );
     if (picked == null || !mounted) return;
 
-    final confirmado = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Mudar o vencimento da CPR?'),
-        content: Text(
-          'As CPRs pagas em $cultura passam a vencer em ${_fullDate(picked)}.\n\n'
-          'Vale para as cédulas desta cultura que ainda NÃO foram emitidas. '
-          'As já emitidas mantêm a data com que saíram — elas estão assinadas. '
-          'As outras culturas do Barter não são tocadas.',
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Mudar')),
-        ],
-      ),
+    final confirmado = await _confirm(
+      icon: Icons.event_outlined,
+      title: 'Mudar o vencimento da CPR?',
+      text: 'As CPRs desta versão passam a vencer em ${_fullDate(picked)}.\n\n'
+          'Vale para as cédulas que ainda NÃO foram emitidas. As já emitidas mantêm a '
+          'data com que saíram — elas estão assinadas. As outras versões e culturas não '
+          'são tocadas.',
+      action: 'Mudar',
+      danger: false,
     );
-    if (confirmado != true) return;
+    if (!confirmado) return;
 
     try {
-      await AppData.updateVersionGrain(version.code, grain.grainId, cprDueDate: picked);
-      await _loadDetail();
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
-      _toast('Vencimento da CPR de $cultura: ${_fullDate(picked)}.');
+      await AppData.updateVersionTerms(version.slug, cprDueDate: picked);
+      await _afterChange();
+      _toast('Vencimento da CPR de ${version.code}: ${_fullDate(picked)}.');
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
 
-  /// ACERTA A PRODUTIVIDADE ESTIMADA de uma cultura — a taxa que dimensiona a
-  /// área do penhor das permutas dela.
-  ///
-  /// Existe pelo mesmo motivo do vencimento: republicar a tabela inteira por
-  /// causa de um número de dois dígitos encerraria a versão vigente e
-  /// reiniciaria a contagem do realizado.
-  Future<void> _estimatedYieldDialog(
-    BarterVersionModel version,
-    VersionGrainModel grain,
-  ) async {
+  /// ACERTA A PRODUTIVIDADE ESTIMADA da versão vigente — a taxa que dimensiona
+  /// a área do penhor das permutas dela.
+  Future<void> _estimatedYieldDialog(BarterVersionModel version) async {
     final controller = TextEditingController(
-      text: grain.estimatedYield > 0 ? grain.estimatedYield.toStringAsFixed(0) : '',
+      text: version.estimatedYield > 0 ? version.estimatedYield.toStringAsFixed(0) : '',
     );
     final informado = await showDialog<double>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Produção estimada de ${grain.grainName.toLowerCase()}'),
+        title: Text('Produção estimada de ${version.grainName.toLowerCase()}'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -354,110 +315,133 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
         ],
       ),
     );
+    controller.dispose();
     if (informado == null) return;
 
     try {
-      await AppData.updateVersionGrain(version.code, grain.grainId, estimatedYield: informado);
-      await _loadDetail();
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
-      _toast('${grain.grainName}: ${informado.toStringAsFixed(0)} sc/ha.');
+      await AppData.updateVersionTerms(version.slug, estimatedYield: informado);
+      await _afterChange();
+      _toast('${version.grainName}: ${informado.toStringAsFixed(0)} sc/ha.');
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
   }
 
   Future<void> _closeSeasonDialog(SeasonModel season) async {
+    final confirmed = await _confirm(
+      icon: Icons.event_busy_outlined,
+      title: 'Encerrar a safra ${season.name}?',
+      text: 'É o fim do ciclo de ${season.grainName.toLowerCase()}: a versão vigente '
+          'fecha junto e nenhuma versão nova sai nesta safra. As outras culturas '
+          'seguem. Se precisar, a safra pode ser reaberta depois.',
+      action: 'Encerrar safra',
+    );
+    if (!confirmed) return;
+
+    try {
+      await AppData.closeSeason(season.slug);
+      await _afterChange();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  Future<void> _reopenSeason(SeasonModel season) async {
+    final confirmed = await _confirm(
+      icon: Icons.lock_open_outlined,
+      title: 'Reabrir a safra ${season.name}?',
+      text: 'Versões novas voltam a poder ser publicadas nela. A última versão '
+          'continua encerrada: a venda recomeça com uma tabela publicada agora. '
+          'A reabertura fica registrada na auditoria.',
+      action: 'Reabrir',
+      danger: false,
+    );
+    if (!confirmed) return;
+
+    try {
+      await AppData.reopenSeason(season.slug);
+      _seasonId = season.id;
+      await _afterChange();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  /// A POLÍTICA DE SEGURO da versão vigente.
+  ///
+  /// O diálogo aparece ao tornar o seguro OBRIGATÓRIO, e não é cerimônia: cada
+  /// permuta nova passa a carregar área plantada × taxa da praça — custo que vira
+  /// saca. E ele conta quantos produtores estão em município SEM taxa, porque a
+  /// permuta deles passa a ser recusada no registro.
+  Future<void> _setInsurance(BarterVersionModel version, InsurancePolicy policy) async {
+    if (policy == version.insurancePolicy) return;
+    if (policy == InsurancePolicy.required) {
+      final semTaxa = AppData.producers.where((p) => AppData.insuranceRateFor(p.city) == null).length;
+      final confirmed = await _confirm(
+        icon: Icons.shield_outlined,
+        title: 'Seguro obrigatório em ${version.code}',
+        text: 'Toda permuta registrada nesta versão a partir de agora vai incluir o '
+            'seguro agrícola: a área plantada informada vezes o valor por hectare do '
+            'município do produtor. O custo entra na conta e é pago em sacas.'
+            '${semTaxa > 0 ? '\n\nAtenção: $semTaxa produtor(es) estão em município sem taxa '
+                'cadastrada, e a permuta deles será recusada no registro até a praça entrar '
+                'na base de seguros.' : ''}',
+        action: 'Tornar obrigatório',
+        danger: false,
+      );
+      if (!confirmed) return;
+    }
+
+    try {
+      await AppData.setVersionInsurance(version.slug, policy);
+      await _afterChange();
+      _toast('${version.code}: ${policy.label.toLowerCase()} nas permutas novas. '
+          'As já registradas não mudam.');
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  /// O SEGURO PADRÃO da safra — o que vem preenchido na próxima versão.
+  Future<void> _setSeasonInsurance(SeasonModel season, InsurancePolicy policy) async {
+    if (policy == season.insurancePolicy) return;
+    try {
+      await AppData.setSeasonInsurance(season.slug, policy);
+      await _afterChange();
+      _toast('${season.name}: as próximas versões nascem com ${policy.label.toLowerCase()}.');
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+  }
+
+  Future<bool> _confirm({
+    required IconData icon,
+    required String title,
+    required String text,
+    required String action,
+    bool danger = true,
+  }) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.event_busy_outlined, color: AppColors.denied, size: 36),
-        title: Text('Encerrar a safra ${season.name}?'),
-        content: const Text(
-          'A safra e o Barter vigente são encerrados. Depois disso é preciso '
-          'abrir uma safra nova para voltar a permutar.',
-        ),
+        icon: Icon(icon, color: danger ? AppColors.denied : AppColors.primary, size: 36),
+        title: Text(title),
+        content: Text(text),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           ElevatedButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.denied),
-            child: const Text('Encerrar safra'),
+            style: danger ? ElevatedButton.styleFrom(backgroundColor: AppColors.denied) : null,
+            child: Text(action),
           ),
         ],
       ),
     );
-    if (confirmed != true) return;
-
-    try {
-      await AppData.closeSeason(season.code);
-      await _loadDetail();
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
-    } on ApiException catch (e) {
-      if (mounted) showErrorSnack(context, e);
-    }
-  }
-
-  /// LIGA ou DESLIGA o seguro agrícola do Barter vigente.
-  ///
-  /// O diálogo aparece ao LIGAR, e não é cerimônia: ligar acrescenta, a cada
-  /// permuta nova, a área cultivável do produtor vezes a taxa da praça dele —
-  /// custo que vira saca e que o produtor vai pagar na colheita. E ele conta
-  /// quantos produtores estão em município SEM taxa cadastrada, porque a
-  /// permuta deles passa a ser recusada no registro: melhor saber disso aqui do
-  /// que pelo telefonema do consultor com o produtor na frente.
-  ///
-  /// Desligar não pede confirmação: ele não cria custo para ninguém, e as
-  /// permutas que já nasceram com seguro continuam com ele (a taxa está
-  /// congelada em cada uma).
-  Future<void> _setInsurance(BarterVersionModel version, bool enabled) async {
-    if (enabled) {
-      final semTaxa = AppData.producers
-          .where((p) => AppData.insuranceRateFor(p.city) == null)
-          .length;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          icon: Icon(Icons.shield_outlined, color: AppColors.atManager, size: 36),
-          title: const Text('Incluir o seguro neste Barter'),
-          content: Text(
-            'Toda permuta registrada em ${version.code} a partir de agora vai incluir o '
-            'seguro agrícola: a área cultivável do produtor vezes o valor por hectare do '
-            'município dele. O custo entra na conta e é pago em sacas, como os insumos.'
-            '${semTaxa > 0 ? '\n\nAtenção: $semTaxa produtor(es) estão em município sem taxa '
-                'cadastrada, e a permuta deles será recusada no registro até a praça entrar '
-                'na base de seguros.' : ''}',
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Incluir o seguro'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true) return;
-    }
-
-    try {
-      await AppData.setVersionInsurance(version.code, enabled);
-      await _loadDetail();
-      if (!mounted) return;
-      setState(() {});
-      widget.onChanged();
-      _toast(enabled
-          ? 'As permutas novas passam a incluir o seguro agrícola.'
-          : 'As permutas novas deixam de incluir o seguro. As já registradas não mudam.');
-    } on ApiException catch (e) {
-      if (mounted) showErrorSnack(context, e);
-    }
+    return confirmed == true;
   }
 
   void _toast(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message), behavior: SnackBarBehavior.floating));
@@ -465,8 +449,11 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
 
   @override
   Widget build(BuildContext context) {
-    final season = _openSeason;
-    final current = _detailed ?? AppData.currentVersion;
+    final season = _season;
+    final cached = season?.activeVersion;
+    // O detalhe só vale se for da versão vigente DESTA safra: trocar de safra no
+    // seletor não pode mostrar as metas da outra por um instante.
+    final current = _detailed != null && _detailed!.id == cached?.id ? _detailed : cached;
 
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -474,51 +461,73 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          Row(
+            children: [
+              Expanded(child: _sectionTitle('Safras abertas')),
+              TextButton.icon(
+                onPressed: _openSeasonDialog,
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Abrir safra'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
           if (season == null)
             _NoSeasonCard(onOpen: _openSeasonDialog)
           else ...[
-            // O cartão da safra saiu daqui: ele repetia o que o cartão da
-            // versão e a lista abaixo já dizem (o grão, a contagem de versões).
-            // A safra aparece como subtítulo do lançamento vigente, e encerrá-la
-            // é uma ação do fim da lista de versões — onde ela pertence.
+            // AS CULTURAS ABERTAS, uma ficha cada: é aqui que o admin troca de
+            // Barter. Cada uma mostra se está vendendo agora.
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final open in _openSeasons)
+                  ChoiceChip(
+                    label: Text(open.name),
+                    avatar: Icon(
+                      open.activeVersion?.isOpen == true ? Icons.circle : Icons.pause_circle_outline,
+                      size: 12,
+                      color: open.activeVersion?.isOpen == true ? AppColors.approved : AppColors.textLight,
+                    ),
+                    selected: open.id == season.id,
+                    onSelected: (_) => _select(open),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
             if (current == null)
-              _EmptyVersionCard(season: season, loading: _loading, onPublish: _publish)
+              _EmptyVersionCard(
+                season: season,
+                loading: _loading,
+                onPublish: () => _publish(season),
+              )
             else ...[
               _CurrentVersionCard(
                 season: season,
                 version: current,
                 loading: _loading,
-                onPublish: _publish,
+                onPublish: () => _publish(season),
                 onClose: () => _closeVersion(current),
-                onEditYield:
-                    current.isOpen ? (grain) => _estimatedYieldDialog(current, grain) : null,
+                onEditYield: current.isOpen ? () => _estimatedYieldDialog(current) : null,
               ),
               const SizedBox(height: 16),
-              // O VENCIMENTO DA CPR, uma linha por CULTURA.
-              //
-              // Ele vem logo abaixo do cartão do lançamento porque é dele que
-              // depende: cada cultura tem a sua data, e é aqui que o admin a
-              // acerta antes de a primeira cédula travar. Era um cartão da
-              // SAFRA, quando a safra tinha um grão só.
               _sectionTitle('Vencimento das cédulas'),
               const SizedBox(height: 8),
-              _CulturesDueDateCard(
-                version: current,
-                onEdit: (grain) => _cprDueDateDialog(current, grain),
-              ),
+              _DueDateCard(version: current, onEdit: () => _cprDueDateDialog(current)),
               const SizedBox(height: 16),
               // O SEGURO vem antes das metas de propósito: ele muda o CUSTO de
-              // cada permuta, e as metas medem o que já foi vendido. O que
-              // decide dinheiro fica mais perto do cartão do lançamento.
+              // cada permuta, e as metas medem o que já foi vendido.
               _sectionTitle('Seguro agrícola'),
               const SizedBox(height: 8),
               _InsuranceCard(
+                season: season,
                 version: current,
-                onChanged: (enabled) => _setInsurance(current, enabled),
+                onVersionPolicy: (policy) => _setInsurance(current, policy),
+                onSeasonPolicy: (policy) => _setSeasonInsurance(season, policy),
               ),
               const SizedBox(height: 16),
               if (current.goals.isNotEmpty) ...[
-                _sectionTitle('Metas do lançamento'),
+                _sectionTitle('Metas de ${current.code}'),
                 const SizedBox(height: 8),
                 _GoalsCard(
                   version: current,
@@ -531,7 +540,7 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
             const SizedBox(height: 8),
             ...season.versions.map((version) => _VersionHistoryTile(
                   version: version,
-                  isCurrent: version.code == current?.code,
+                  isCurrent: version.id == current?.id,
                 )),
             if (season.versions.isEmpty)
               Padding(
@@ -553,9 +562,15 @@ class _BarterProgramTabState extends State<BarterProgramTab> {
           const SizedBox(height: 12),
           _sectionTitle('Safras encerradas'),
           const SizedBox(height: 8),
-          ...AppData.seasons
-              .where((s) => !s.isOpen)
-              .map((s) => _ClosedSeasonTile(season: s)),
+          if (_closedSeasons.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text('Nenhuma safra encerrada.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+            ),
+          ..._closedSeasons.map(
+            (s) => _ClosedSeasonTile(season: s, onReopen: () => _reopenSeason(s)),
+          ),
           const SizedBox(height: 24),
         ],
       ),
@@ -585,8 +600,8 @@ class _NoSeasonCard extends StatelessWidget {
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 6),
             Text(
-              'A safra é a temporada do Barter sobre um grão. Sem ela não há '
-              'lançamento, e sem lançamento os consultores não registram permuta.',
+              'Cada cultura tem a sua safra (Soja 26/27, Canola 2027). Sem safra aberta '
+              'não há lançamento, e sem lançamento os consultores não registram permuta.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: AppColors.textMedium),
             ),
@@ -625,11 +640,16 @@ class _EmptyVersionCard extends StatelessWidget {
           children: [
             Icon(Icons.upload_file_outlined, size: 40, color: AppColors.primary),
             const SizedBox(height: 10),
-            Text('${season.name}: nenhum ${brand.copy.program} lançado',
+            Text(
+                season.versions.isEmpty
+                    ? '${season.name}: nenhum ${brand.copy.program} lançado'
+                    : '${season.name}: sem versão vigente',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 6),
-            Text('Suba a planilha de insumos e informe o valor da saca para publicar a primeira versão.',
+            Text(
+                'Suba a planilha de insumos desta cultura e informe o valor da saca para '
+                'publicar a próxima versão.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
             const SizedBox(height: 14),
@@ -648,7 +668,8 @@ class _EmptyVersionCard extends StatelessWidget {
   }
 }
 
-/// O cartão-estrela: a versão vigente, o valor da saca e a vigência.
+/// O cartão-estrela: a versão vigente da cultura, o valor da saca, a produção
+/// estimada e a vigência.
 class _CurrentVersionCard extends StatelessWidget {
   final SeasonModel season;
   final BarterVersionModel version;
@@ -656,9 +677,9 @@ class _CurrentVersionCard extends StatelessWidget {
   final VoidCallback onPublish;
   final VoidCallback onClose;
 
-  /// ACERTAR A PRODUÇÃO ESTIMADA de uma cultura, sem republicar a tabela.
-  /// Nulo quando a versão está encerrada: ali a taxa é registro do que valeu.
-  final void Function(VersionGrainModel grain)? onEditYield;
+  /// ACERTAR A PRODUÇÃO ESTIMADA, sem republicar a tabela. Nulo quando a versão
+  /// está encerrada: ali a taxa é registro do que valeu.
+  final VoidCallback? onEditYield;
 
   const _CurrentVersionCard({
     required this.season,
@@ -683,9 +704,12 @@ class _CurrentVersionCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text(version.code,
-                  style: TextStyle(
-                      color: AppColors.onPrimary, fontSize: 22, fontWeight: FontWeight.w800)),
+              Flexible(
+                child: Text(version.code,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        color: AppColors.onPrimary, fontSize: 22, fontWeight: FontWeight.w800)),
+              ),
               const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -700,89 +724,72 @@ class _CurrentVersionCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          Text(
-              '${season.name} • ${version.prices.length} insumo(s) na tabela • '
-              '${version.grains.length} cultura(s)',
+          Text('${season.name} • ${version.prices.length} insumo(s) na tabela',
               style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12)),
           const SizedBox(height: 14),
-          // AS CULTURAS deste lançamento, uma linha cada. Elas coexistem: o
-          // produtor escolhe em qual paga, e cada uma tem a própria cotação e a
-          // própria produtividade — a segunda é o que dimensiona o penhor, e 60
-          // sc/ha de soja não é 170 de milho.
-          //
-          // PRODUTIVIDADE ZERO É UM ALARME, e não um campo em branco: aquela
-          // cultura está VIGENTE e recusando toda permuta nova, porque sem a
-          // taxa não há como dimensionar a garantia. Sem este aviso, o admin
-          // veria um Barter aberto e um time de vendas parado, sem ligar as duas
-          // coisas — o erro apareceria como "a API está recusando permuta", na
-          // voz do consultor.
-          for (final grain in version.grains) ...[
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.onPrimaryOverlay,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.grass, color: AppColors.onPrimaryMuted, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text('Saca de ${grain.grainName.toLowerCase()}',
-                            style: TextStyle(color: AppColors.onPrimary, fontSize: 12)),
-                      ),
-                      Text(formatCurrency(grain.price),
-                          style: TextStyle(
-                              color: AppColors.onPrimary,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800)),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(
-                        grain.estimatedYield > 0
-                            ? Icons.agriculture_outlined
-                            : Icons.warning_amber_rounded,
-                        color: AppColors.onPrimaryMuted,
-                        size: 16,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          grain.estimatedYield > 0
-                              ? 'Produção estimada (penhor)'
-                              : 'Sem produção estimada — recusa permuta nesta cultura',
-                          style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11),
-                        ),
-                      ),
-                      if (grain.estimatedYield > 0)
-                        Text('${grain.estimatedYield.toStringAsFixed(0)} sc/ha',
-                            style: TextStyle(
-                                color: AppColors.onPrimary,
-                                fontSize: 13,
-                                fontWeight: FontWeight.w700)),
-                      if (onEditYield != null)
-                        IconButton(
-                          onPressed: () => onEditYield!(grain),
-                          icon: Icon(Icons.edit_outlined,
-                              size: 14, color: AppColors.onPrimarySubtle),
-                          visualDensity: VisualDensity.compact,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(),
-                          tooltip: 'Acertar a produção estimada',
-                        ),
-                    ],
-                  ),
-                ],
-              ),
+          // A COTAÇÃO e a PRODUÇÃO ESTIMADA desta cultura. PRODUÇÃO ZERO É UM
+          // ALARME, e não um campo em branco: a versão está VIGENTE e recusando
+          // toda permuta nova, porque sem a taxa não há como dimensionar a
+          // garantia.
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.onPrimaryOverlay,
+              borderRadius: BorderRadius.circular(10),
             ),
-          ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.grass, color: AppColors.onPrimaryMuted, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text('Saca de ${version.grainName.toLowerCase()}',
+                          style: TextStyle(color: AppColors.onPrimary, fontSize: 12)),
+                    ),
+                    Text(formatCurrency(version.grainPrice),
+                        style: TextStyle(
+                            color: AppColors.onPrimary, fontSize: 16, fontWeight: FontWeight.w800)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Icon(
+                      version.estimatedYield > 0
+                          ? Icons.agriculture_outlined
+                          : Icons.warning_amber_rounded,
+                      color: AppColors.onPrimaryMuted,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        version.estimatedYield > 0
+                            ? 'Produção estimada (penhor)'
+                            : 'Sem produção estimada — recusa permuta nesta cultura',
+                        style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11),
+                      ),
+                    ),
+                    if (version.estimatedYield > 0)
+                      Text('${version.estimatedYield.toStringAsFixed(0)} sc/ha',
+                          style: TextStyle(
+                              color: AppColors.onPrimary, fontSize: 13, fontWeight: FontWeight.w700)),
+                    if (onEditYield != null)
+                      IconButton(
+                        onPressed: onEditYield,
+                        icon: Icon(Icons.edit_outlined, size: 14, color: AppColors.onPrimarySubtle),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        tooltip: 'Acertar a produção estimada',
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 10),
           Row(
             children: [
@@ -833,7 +840,7 @@ class _CurrentVersionCard extends StatelessWidget {
                   child: OutlinedButton.icon(
                     onPressed: onClose,
                     icon: const Icon(Icons.lock_outline, size: 16),
-                    label: const Text('Encerrar'),
+                    label: const Text('Encerrar versão'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.onPrimary,
                       side: BorderSide(color: AppColors.onPrimaryMuted),
@@ -848,52 +855,26 @@ class _CurrentVersionCard extends StatelessWidget {
       ),
     );
   }
-
 }
 
-/// A data por extenso curto (30/06/2026). Fora de qualquer cartão porque três
-/// deles a usam — a vigência da versão, o vencimento da CPR e a correção dele.
+/// A data por extenso curto (30/06/2026).
 String _fullDate(DateTime date) =>
     '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
 
-/// O VENCIMENTO DA CPR DE CADA CULTURA — o dia em que o produtor entrega
-/// aquele grão.
+/// O VENCIMENTO DA CPR da versão — o dia em que o produtor entrega.
 ///
-/// Ele existe como cartão porque é uma decisão do LANÇAMENTO que ninguém mais
-/// toma, e porque ele muda de cultura para cultura: soja vence na colheita da
-/// soja, milho safrinha no dele. Já foi campo do formulário da cédula, digitado
-/// uma vez por permuta por quem não tinha como saber a data certa daquela
-/// cultura — e duas cédulas da mesma safra saíam com vencimentos diferentes, sem
-/// ninguém ter como descobrir qual estava certa a não ser comparando os papéis.
-///
-/// Depois disso ele morou na SAFRA, e de lá saiu pelo mesmo motivo que o grão:
-/// a safra passou a aceitar mais de uma cultura, e uma data só para as duas
-/// seria uma delas errada.
-///
-/// VAZIO É ÂMBAR, e não neutro: nada quebra até a primeira emissão daquela
-/// cultura, e então TODA cédula dela trava de uma vez. O aviso é o que separa
-/// "acerto isto hoje" de "descubro isto com o produtor esperando na sala do
-/// emissor".
-class _CulturesDueDateCard extends StatelessWidget {
+/// VAZIO É ÂMBAR, e não neutro: nada quebra até a primeira emissão, e então TODA
+/// cédula da versão trava de uma vez. O aviso é o que separa "acerto isto hoje"
+/// de "descubro isto com o produtor esperando na sala do emissor".
+class _DueDateCard extends StatelessWidget {
   final BarterVersionModel version;
-  final void Function(VersionGrainModel grain) onEdit;
+  final VoidCallback onEdit;
 
-  const _CulturesDueDateCard({required this.version, required this.onEdit});
+  const _DueDateCard({required this.version, required this.onEdit});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (final grain in version.grains) ...[
-          _row(grain),
-          if (grain != version.grains.last) const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-
-  Widget _row(VersionGrainModel grain) {
-    final due = grain.cprDueDate;
+    final due = version.cprDueDate;
     final acertado = due != null;
     return Container(
       padding: const EdgeInsets.all(14),
@@ -917,20 +898,14 @@ class _CulturesDueDateCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Vencimento da CPR • ${grain.grainName}',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
-                  ),
+                  'Vencimento da CPR • ${version.code}',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   acertado
-                      ? '${_fullDate(due)} • todas as cédulas pagas em '
-                          '${grain.grainName.toLowerCase()} vencem neste dia'
-                      : 'Ainda não acertado. Sem ele, nenhuma cédula paga em '
-                          '${grain.grainName.toLowerCase()} pode ser emitida.',
+                      ? '${_fullDate(due)} • todas as cédulas desta versão vencem neste dia'
+                      : 'Ainda não acertado. Sem ele, nenhuma cédula desta versão pode ser emitida.',
                   style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.3),
                 ),
               ],
@@ -938,9 +913,9 @@ class _CulturesDueDateCard extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           acertado
-              ? TextButton(onPressed: () => onEdit(grain), child: const Text('Mudar'))
+              ? TextButton(onPressed: onEdit, child: const Text('Mudar'))
               : ElevatedButton(
-                  onPressed: () => onEdit(grain),
+                  onPressed: onEdit,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.pending,
                     foregroundColor: AppColors.onPrimary,
@@ -953,30 +928,56 @@ class _CulturesDueDateCard extends StatelessWidget {
   }
 }
 
-/// As metas com o realizado, e o que acontece quando uma delas bate.
-///
-/// O interruptor mora aqui, junto das barras, porque é aqui que o admin olha
-/// quando a meta está para bater — e é nesse momento que ele decide se o Barter
-/// O SEGURO AGRÍCOLA deste lançamento — o interruptor e o que ele significa.
-///
-/// Cartão próprio, e não uma linha dentro do cartão da versão, pelo mesmo
-/// motivo do vencimento da CPR: ele não é um dado do lançamento, é uma DECISÃO
-/// sobre ele — e uma que muda o custo de toda permuta que vier depois.
-///
-/// O que ele mostra além do interruptor é o estado da BASE: quantas praças
-/// estão cadastradas e quantos produtores ficariam de fora. Ligado o seguro,
-/// essa segunda contagem é a lista de recusas que o consultor vai encontrar.
-class _InsuranceCard extends StatelessWidget {
-  final BarterVersionModel version;
-  final ValueChanged<bool> onChanged;
+/// O seletor de política de seguro — obrigatório, opcional ou sem seguro.
+class _PolicySelector extends StatelessWidget {
+  final InsurancePolicy value;
+  final ValueChanged<InsurancePolicy>? onChanged;
+  const _PolicySelector({required this.value, this.onChanged});
 
-  const _InsuranceCard({required this.version, required this.onChanged});
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<InsurancePolicy>(
+      showSelectedIcon: false,
+      segments: [
+        for (final policy in InsurancePolicy.values)
+          ButtonSegment(value: policy, label: Text(policy.label, style: const TextStyle(fontSize: 12))),
+      ],
+      selected: {value},
+      onSelectionChanged: onChanged == null ? null : (selected) => onChanged!(selected.first),
+    );
+  }
+}
+
+/// O SEGURO AGRÍCOLA da cultura: a política DESTA versão e o padrão da safra.
+///
+/// Os dois moram juntos porque o admin os decide juntos: a versão é o que vale
+/// para as permutas de hoje; o padrão é o que vem preenchido na próxima versão.
+/// O cartão mostra também o estado da BASE: quantos produtores ficariam de fora.
+class _InsuranceCard extends StatelessWidget {
+  final SeasonModel season;
+  final BarterVersionModel version;
+  final ValueChanged<InsurancePolicy> onVersionPolicy;
+  final ValueChanged<InsurancePolicy> onSeasonPolicy;
+
+  const _InsuranceCard({
+    required this.season,
+    required this.version,
+    required this.onVersionPolicy,
+    required this.onSeasonPolicy,
+  });
+
+  String get _explain => switch (version.insurancePolicy) {
+        InsurancePolicy.required =>
+          'Cada permuta nova inclui a área plantada × o valor por hectare da praça do produtor.',
+        InsurancePolicy.optional =>
+          'O consultor oferece o seguro, e o produtor decide. A recusa fica registrada na permuta.',
+        InsurancePolicy.none => 'As permutas desta versão saem sem seguro.',
+      };
 
   @override
   Widget build(BuildContext context) {
     final cities = AppData.insuranceRates.length;
-    final semTaxa =
-        AppData.producers.where((p) => AppData.insuranceRateFor(p.city) == null).length;
+    final semTaxa = AppData.producers.where((p) => AppData.insuranceRateFor(p.city) == null).length;
 
     return Card(
       child: Padding(
@@ -984,19 +985,44 @@ class _InsuranceCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: version.insuranceRequired,
-              onChanged: onChanged,
-              title: const Text('Este Barter leva seguro', style: TextStyle(fontSize: 13)),
-              subtitle: Text(
-                version.insuranceRequired
-                    ? 'Cada permuta nova inclui a área do produtor × o valor por hectare da praça dele.'
-                    : 'As permutas saem sem seguro. A base por município continua cadastrada.',
-                style: TextStyle(fontSize: 11, color: AppColors.textLight),
-              ),
+            Text('Nesta versão (${version.code})',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            const SizedBox(height: 8),
+            _PolicySelector(
+              value: version.insurancePolicy,
+              onChanged: version.isOpen ? onVersionPolicy : null,
             ),
-            const Divider(height: 20),
+            const SizedBox(height: 6),
+            Text(_explain, style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+            const Divider(height: 24),
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Padrão da safra ${season.name}',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+                ),
+                PopupMenuButton<InsurancePolicy>(
+                  tooltip: 'Mudar o padrão',
+                  initialValue: season.insurancePolicy,
+                  onSelected: onSeasonPolicy,
+                  itemBuilder: (_) => [
+                    for (final policy in InsurancePolicy.values)
+                      PopupMenuItem(value: policy, child: Text(policy.label)),
+                  ],
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(season.insurancePolicy.label,
+                          style: TextStyle(fontSize: 12, color: AppColors.primary, fontWeight: FontWeight.w700)),
+                      Icon(Icons.arrow_drop_down, color: AppColors.primary),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            Text('É o que vem preenchido ao publicar a próxima versão desta cultura.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+            const Divider(height: 24),
             Row(
               children: [
                 Icon(Icons.shield_outlined, size: 16, color: AppColors.atManager),
@@ -1016,11 +1042,14 @@ class _InsuranceCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (version.insuranceRequired && semTaxa > 0) ...[
+            if (version.insurancePolicy != InsurancePolicy.none && semTaxa > 0) ...[
               const SizedBox(height: 8),
               Text(
-                'A permuta de um produtor sem taxa é RECUSADA no registro, com o nome do '
-                'município na mensagem. Quem a lê é o consultor, e quem a resolve é você.',
+                version.insuranceRequired
+                    ? 'A permuta de um produtor sem taxa é RECUSADA no registro, com o nome do '
+                        'município na mensagem. Quem a lê é o consultor, e quem a resolve é você.'
+                    : 'Para um produtor sem taxa, o seguro aparece bloqueado na tela do consultor, '
+                        'e a permuta segue sem ele.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ],
@@ -1031,11 +1060,16 @@ class _InsuranceCard extends StatelessWidget {
   }
 }
 
-/// para sozinho ou espera um toque dele.
+/// As metas com o realizado, e o que acontece quando uma delas bate.
+///
+/// O interruptor mora aqui, junto das barras, porque é aqui que o admin olha
+/// quando a meta está para bater — e é nesse momento que ele decide se a versão
+/// para sozinha ou espera um toque dele. Fechada, uma nova versão pode sair com
+/// outra meta.
 class _GoalsCard extends StatelessWidget {
   final BarterVersionModel version;
 
-  /// Ligar/desligar o encerramento automático. Pode ENCERRAR o Barter (a tela
+  /// Ligar/desligar o encerramento automático. Pode ENCERRAR a versão (a tela
   /// avisa antes) — ver `_setCloseOnGoal`.
   final ValueChanged<bool> onModeChanged;
 
@@ -1046,8 +1080,8 @@ class _GoalsCard extends StatelessWidget {
 
   /// A frase da faixa verde: o que a meta batida SIGNIFICA neste modo.
   String get _metMessage => version.closeOnGoal
-      ? 'Meta atingida. O Barter foi encerrado: a próxima aprovação já não entra nesta versão.'
-      : 'Meta atingida. O Barter continua aberto até você encerrá-lo.';
+      ? 'Meta atingida. A versão foi encerrada: publique a próxima para voltar a vender esta cultura.'
+      : 'Meta atingida. A versão continua aberta até você encerrá-la.';
 
   @override
   Widget build(BuildContext context) {
@@ -1070,8 +1104,7 @@ class _GoalsCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         _metMessage,
-                        style: TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark),
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark),
                       ),
                     ),
                   ],
@@ -1087,12 +1120,12 @@ class _GoalsCard extends StatelessWidget {
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: version.closeOnGoal,
-              onChanged: onModeChanged,
+              onChanged: version.isOpen ? onModeChanged : null,
               title: const Text('Encerrar ao bater meta', style: TextStyle(fontSize: 13)),
               subtitle: Text(
                 version.closeOnGoal
-                    ? 'A aprovação que cruzar a meta encerra o Barter na hora.'
-                    : 'A meta só avisa: o Barter fica aberto até você encerrá-lo.',
+                    ? 'A aprovação que cruzar a meta encerra esta versão na hora.'
+                    : 'A meta só avisa: a versão fica aberta até você encerrá-la.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ),
@@ -1111,8 +1144,7 @@ class _GoalsCard extends StatelessWidget {
           children: [
             Expanded(
               child: Text(goal.label,
-                  style: TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             ),
             Text('${_value(goal, goal.realized)} de ${_value(goal, goal.target)}',
                 style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
@@ -1150,7 +1182,9 @@ class _VersionHistoryTile extends StatelessWidget {
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
-            Container(width: 4, height: 38,
+            Container(
+                width: 4,
+                height: 38,
                 decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
             const SizedBox(width: 10),
             Expanded(
@@ -1159,11 +1193,13 @@ class _VersionHistoryTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Text(version.code,
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                      Flexible(
+                        child: Text(version.code,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                      ),
                       const SizedBox(width: 8),
-                      if (isCurrent)
+                      if (isCurrent && version.isOpen)
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
@@ -1171,24 +1207,20 @@ class _VersionHistoryTile extends StatelessWidget {
                             borderRadius: BorderRadius.circular(20),
                           ),
                           child: Text('vigente',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.approved)),
+                              style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.approved)),
                         ),
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    version.note ?? version.sourceFile ?? 'Publicada em ${_date(version.startsAt)}',
+                    version.note ?? version.sourceFile ?? 'Publicada em ${_fullDate(version.startsAt)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                   ),
                   // POR QUE ela fechou — uma pessoa, ou a meta que a encerrou
-                  // sozinha. É a única resposta disponível meses depois, e o
-                  // servidor escreve as duas no mesmo campo.
-                  if (!isCurrent && version.closedBy != null)
+                  // sozinha. É a única resposta disponível meses depois.
+                  if (version.status != 'active' && version.closedBy != null)
                     Text(
                       'Encerrada: ${version.closedBy}',
                       maxLines: 1,
@@ -1202,8 +1234,7 @@ class _VersionHistoryTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 Text(formatCurrency(version.grainPrice),
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.primary)),
                 Text('a saca', style: TextStyle(fontSize: 10, color: AppColors.textLight)),
               ],
             ),
@@ -1212,14 +1243,12 @@ class _VersionHistoryTile extends StatelessWidget {
       ),
     );
   }
-
-  static String _date(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
 }
 
 class _ClosedSeasonTile extends StatelessWidget {
   final SeasonModel season;
-  const _ClosedSeasonTile({required this.season});
+  final VoidCallback onReopen;
+  const _ClosedSeasonTile({required this.season, required this.onReopen});
 
   @override
   Widget build(BuildContext context) {
@@ -1228,10 +1257,13 @@ class _ClosedSeasonTile extends StatelessWidget {
       child: ListTile(
         dense: true,
         leading: Icon(Icons.inventory_2_outlined, color: AppColors.textLight),
-        title: Text('${season.code} • ${season.name}',
+        title: Text(season.name,
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
-        subtitle: Text('${season.versions.length} versão(ões)',
+        subtitle: Text(
+            '${season.code} • ${season.versions.length} versão(ões)'
+            '${season.closedAt != null ? ' • encerrada em ${_fullDate(season.closedAt!)}' : ''}',
             style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+        trailing: TextButton(onPressed: onReopen, child: const Text('Reabrir')),
       ),
     );
   }
@@ -1239,25 +1271,23 @@ class _ClosedSeasonTile extends StatelessWidget {
 
 /* ── Publicação ───────────────────────────────────────────────────────── */
 
-/// O que o admin escolheu para publicar a próxima versão.
+/// O que o admin escolheu para publicar a próxima versão da cultura.
 class _PublishRequest {
   final String filename;
   final List<int> bytes;
 
-  /// AS CULTURAS deste lançamento — pelo menos uma.
-  ///
-  /// Cada uma leva a cotação da saca, a produtividade estimada (as duas metades
-  /// da mesma conversão: a primeira leva o custo a sacas, a segunda as sacas à
-  /// área do penhor), o vencimento da entrega e a meta de sacas dela.
-  final List<VersionGrainInput> grains;
+  /// A cotação da saca e a produtividade — as duas metades da mesma conversão:
+  /// a primeira leva o custo a sacas, a segunda as sacas à área do penhor.
+  final double grainPrice;
+  final double estimatedYield;
+  final DateTime? cprDueDate;
+  final InsurancePolicy insurancePolicy;
 
   final DateTime? endsAt;
   final double? targetSales;
+  final double? targetSacks;
   final int? targetBarters;
   final bool closeOnGoal;
-
-  /// ESTE LANÇAMENTO LEVA SEGURO? Ver `BarterVersionModel.insuranceRequired`.
-  final bool insuranceRequired;
 
   final String? note;
   final bool carryOver;
@@ -1265,50 +1295,29 @@ class _PublishRequest {
   const _PublishRequest({
     required this.filename,
     required this.bytes,
-    required this.grains,
+    required this.grainPrice,
+    required this.estimatedYield,
+    required this.insurancePolicy,
+    this.cprDueDate,
     this.endsAt,
     this.targetSales,
+    this.targetSacks,
     this.targetBarters,
     this.closeOnGoal = false,
-    this.insuranceRequired = false,
     this.note,
     this.carryOver = false,
   });
 }
 
-/// O RASCUNHO DE UMA CULTURA no formulário de publicação.
+/// Formulário de publicação: a PLANILHA DESTA CULTURA + a cotação da saca, a
+/// produtividade, o vencimento, o seguro, a vigência e as metas.
 ///
-/// Ele guarda os controladores dos quatro campos que mudam de grão para grão,
-/// porque eles são editados juntos e descartados juntos — uma cultura removida
-/// da lista leva os campos dela embora.
-class _GrainDraft {
-  String? grainId;
-  final price = TextEditingController();
-  final yield_ = TextEditingController();
-  final targetSacks = TextEditingController();
-  DateTime? cprDueDate;
-
-  _GrainDraft({this.grainId});
-
-  void dispose() {
-    price.dispose();
-    yield_.dispose();
-    targetSacks.dispose();
-  }
-}
-
-/// Formulário de publicação: a planilha dos insumos + AS CULTURAS + a vigência
-/// e as metas.
-///
-/// A planilha traz os INSUMOS, e ela é UMA para todas as culturas: o litro de
-/// glifosato custa os mesmos R$ 40 quer ele vá ser pago em soja ou em milho. O
-/// que se digita aqui é o que muda de um grão para o outro — a cotação da saca,
-/// a produtividade, o vencimento e a meta —, porque nada disso vem do
-/// fornecedor: é a cooperativa que decide por quanto recebe.
+/// Cada cultura sobe a sua planilha. O que se digita aqui é o que não vem do
+/// fornecedor: é a cooperativa que decide por quanto recebe a saca, quanto
+/// espera colher, quando vence a entrega e se a versão leva seguro.
 class _PublishSheet extends StatefulWidget {
   final SeasonModel season;
-  final BarterVersionModel? previous;
-  const _PublishSheet({required this.season, this.previous});
+  const _PublishSheet({required this.season});
 
   @override
   State<_PublishSheet> createState() => _PublishSheetState();
@@ -1318,50 +1327,47 @@ class _PublishSheetState extends State<_PublishSheet> {
   String? _filename;
   List<int>? _bytes;
   DateTime? _endsAt;
+  DateTime? _cprDueDate;
   bool _carryOver = false;
   bool _closeOnGoal = false;
 
-  /// ESTE LANÇAMENTO LEVA SEGURO? Padrão desligado, como no servidor: o que
-  /// acrescenta custo à permuta de todo mundo se escolhe, não se herda.
-  bool _insuranceRequired = false;
+  /// O SEGURO desta versão. Nasce com o PADRÃO DA SAFRA — "a soja leva seguro" —
+  /// e o admin muda quando esta versão é diferente.
+  late InsurancePolicy _insurancePolicy = widget.season.insurancePolicy;
   String? _error;
 
-  /// AS CULTURAS sendo lançadas. A lista nasce com as da versão anterior —
-  /// republicar uma tabela raramente muda quais grãos o Barter aceita, e
-  /// redigitar a produtividade a cada vez é a chance de sair um 6 no lugar de
-  /// 60, com o efeito de a permuta seguinte exigir dez vezes mais terra em
-  /// garantia. Sem versão anterior, uma linha em branco.
-  late final List<_GrainDraft> _grains = _initialGrains();
-
-  List<_GrainDraft> _initialGrains() {
-    final previous = widget.previous?.grains ?? const <VersionGrainModel>[];
-    if (previous.isEmpty) return [_GrainDraft()];
-    return previous.map((grain) {
-      final draft = _GrainDraft(grainId: grain.grainId)
-        ..cprDueDate = grain.cprDueDate;
-      if (grain.price > 0) {
-        draft.price.text = grain.price.toStringAsFixed(2).replaceAll('.', ',');
-      }
-      if (grain.estimatedYield > 0) {
-        draft.yield_.text = grain.estimatedYield.toStringAsFixed(0);
-      }
-      if ((grain.targetSacks ?? 0) > 0) {
-        draft.targetSacks.text = grain.targetSacks!.toStringAsFixed(0);
-      }
-      return draft;
-    }).toList();
-  }
-
+  final _price = TextEditingController();
+  final _yield = TextEditingController();
   final _sales = TextEditingController();
+  final _sacks = TextEditingController();
   final _barters = TextEditingController();
   final _note = TextEditingController();
 
   @override
-  void dispose() {
-    for (final grain in _grains) {
-      grain.dispose();
+  void initState() {
+    super.initState();
+    // OS TERMOS da versão anterior desta safra vêm preenchidos: republicar uma
+    // tabela raramente muda a produtividade, e redigitá-la a cada vez é a chance
+    // de sair um 6 no lugar de 60 — e a permuta seguinte exigir dez vezes mais
+    // terra em garantia. As metas NÃO vêm: cada versão tem a sua.
+    final previous = widget.season.versions.isEmpty ? null : widget.season.versions.first;
+    if (previous != null) {
+      if (previous.grainPrice > 0) {
+        _price.text = previous.grainPrice.toStringAsFixed(2).replaceAll('.', ',');
+      }
+      if (previous.estimatedYield > 0) {
+        _yield.text = previous.estimatedYield.toStringAsFixed(0);
+      }
+      _cprDueDate = previous.cprDueDate;
     }
+  }
+
+  @override
+  void dispose() {
+    _price.dispose();
+    _yield.dispose();
     _sales.dispose();
+    _sacks.dispose();
     _barters.dispose();
     _note.dispose();
     super.dispose();
@@ -1369,7 +1375,7 @@ class _PublishSheetState extends State<_PublishSheet> {
 
   Future<void> _pickFile() async {
     final file = await FilePicker.pickFile(
-      dialogTitle: 'Planilha de insumos',
+      dialogTitle: 'Planilha de insumos de ${widget.season.name}',
       type: FileType.custom,
       allowedExtensions: const ['xlsx'],
     );
@@ -1397,54 +1403,44 @@ class _PublishSheetState extends State<_PublishSheet> {
     if (chosen != null) setState(() => _endsAt = chosen);
   }
 
+  Future<void> _pickDueDate() async {
+    final now = DateTime.now();
+    final chosen = await showDatePicker(
+      context: context,
+      initialDate: _cprDueDate ?? DateTime(widget.season.endYear, 6, 30),
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 3),
+      helpText: 'Vencimento da CPR desta versão',
+    );
+    if (chosen != null) setState(() => _cprDueDate = chosen);
+  }
+
   double? _number(TextEditingController controller) => parseNumber(controller.text);
+
+  /// Alguma meta foi digitada? É o que dá sentido ao encerramento automático.
+  bool get _hasTarget => [_sales, _sacks, _barters].any((c) => (_number(c) ?? 0) > 0);
 
   void _submit() {
     final bytes = _bytes;
     final filename = _filename;
     if (bytes == null || filename == null) {
-      setState(() => _error = 'Escolha a planilha .xlsx com os insumos.');
+      setState(() => _error = 'Escolha a planilha .xlsx com os insumos desta cultura.');
       return;
     }
-    // AS CULTURAS, conferidas uma a uma antes de subir a planilha: o 422 do
-    // servidor chegaria depois do upload inteiro, e a mensagem dele não diz em
-    // qual linha do formulário está o problema.
-    final grains = <VersionGrainInput>[];
-    for (final (index, draft) in _grains.indexed) {
-      final numero = _grains.length > 1 ? ' da ${index + 1}ª cultura' : '';
-      final grainId = draft.grainId;
-      if (grainId == null) {
-        setState(() => _error = 'Escolha o grão$numero.');
-        return;
-      }
-      if (grains.any((grain) => grain.grainId == grainId)) {
-        setState(() => _error = 'A mesma cultura aparece duas vezes.');
-        return;
-      }
-      final price = _number(draft.price);
-      if (price == null || price <= 0) {
-        setState(() => _error = 'Informe o valor da saca$numero.');
-        return;
-      }
-      final estimatedYield = _number(draft.yield_);
-      if (estimatedYield == null || estimatedYield <= 0) {
-        setState(() => _error = 'Informe a produção estimada$numero (sacas por hectare).');
-        return;
-      }
-      grains.add(VersionGrainInput(
-        grainId: grainId,
-        price: price,
-        estimatedYield: estimatedYield,
-        cprDueDate: draft.cprDueDate,
-        targetSacks: _number(draft.targetSacks),
-      ));
+    final price = _number(_price);
+    if (price == null || price <= 0) {
+      setState(() => _error = 'Informe o valor da saca.');
+      return;
     }
-
+    final estimatedYield = _number(_yield);
+    if (estimatedYield == null || estimatedYield <= 0) {
+      setState(() => _error = 'Informe a produção estimada (sacas por hectare).');
+      return;
+    }
     // A mesma regra do servidor, respondida antes de subir a planilha: sem meta,
-    // "encerrar ao bater meta" é uma opção ligada que nunca aconteceria. O 422
-    // chegaria depois do upload inteiro.
+    // "encerrar ao bater meta" é uma opção ligada que nunca aconteceria.
     if (_closeOnGoal && !_hasTarget) {
-      setState(() => _error = 'Defina ao menos uma meta para o Barter encerrar ao atingi-la.');
+      setState(() => _error = 'Defina ao menos uma meta para a versão encerrar ao atingi-la.');
       return;
     }
 
@@ -1453,31 +1449,26 @@ class _PublishSheetState extends State<_PublishSheet> {
       _PublishRequest(
         filename: filename,
         bytes: bytes,
-        grains: grains,
+        grainPrice: price,
+        estimatedYield: estimatedYield,
+        cprDueDate: _cprDueDate,
+        insurancePolicy: _insurancePolicy,
         endsAt: _endsAt,
         targetSales: _number(_sales),
+        targetSacks: _number(_sacks),
         targetBarters: _number(_barters)?.round(),
         closeOnGoal: _closeOnGoal,
-        insuranceRequired: _insuranceRequired,
         note: _note.text.trim().isEmpty ? null : _note.text.trim(),
         carryOver: _carryOver,
       ),
     );
   }
 
-  /// Alguma meta foi digitada? É o que dá sentido ao encerramento automático.
-  ///
-  /// As METAS DE SACAS entram na conta mesmo sendo de cada cultura: "encerrar ao
-  /// bater meta" com uma meta de sacas só no milho é uma combinação legítima —
-  /// o Barter fecha quando o milho enche.
-  bool get _hasTarget =>
-      [_sales, _barters].any((c) => (_number(c) ?? 0) > 0) ||
-      _grains.any((grain) => (_number(grain.targetSacks) ?? 0) > 0);
-
   @override
   Widget build(BuildContext context) {
-    final nextNumber = (widget.season.versions.isEmpty ? 0 : widget.season.versions.first.number) + 1;
-    final nextCode = '${widget.season.code}.${nextNumber.toString().padLeft(2, '0')}';
+    final season = widget.season;
+    final nextNumber = (season.versions.isEmpty ? 0 : season.versions.first.number) + 1;
+    final nextCode = '${season.code}.${nextNumber.toString().padLeft(2, '0')}';
 
     return Padding(
       padding: EdgeInsets.only(
@@ -1497,23 +1488,19 @@ class _PublishSheetState extends State<_PublishSheet> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text('Publicar $nextCode',
-                      style: TextStyle(
-                          fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
                 ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close),
-                ),
+                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close)),
               ],
             ),
             Text(
-              'A planilha traz os insumos (nome, unidade, classe, preço e custo). '
-              'A versão anterior é encerrada na hora, e as permutas já registradas '
-              'continuam com os valores delas.',
+              'A planilha traz os insumos de ${season.grainName.toLowerCase()} (nome, unidade, '
+              'classe, preço). A versão anterior desta safra é encerrada na hora, e as '
+              'permutas já registradas continuam com os valores delas. As outras culturas '
+              'não são tocadas.',
               style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
             const SizedBox(height: 16),
-
             OutlinedButton.icon(
               onPressed: _pickFile,
               icon: const Icon(Icons.attach_file, size: 18),
@@ -1524,58 +1511,54 @@ class _PublishSheetState extends State<_PublishSheet> {
               ),
             ),
             const SizedBox(height: 12),
-
-            // AS CULTURAS. Elas coexistem: o Barter pode abrir só com soja e
-            // acrescentar o milho aqui, e a partir daí o consultor escolhe em
-            // qual delas cada cliente paga. A tabela de insumos é a mesma para
-            // todas — o que muda é a cotação que converte o custo em sacas.
             Row(
               children: [
-                Icon(Icons.grass, color: AppColors.primary, size: 18),
-                const SizedBox(width: 6),
                 Expanded(
-                  child: Text('Culturas do lançamento',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textDark)),
+                  child: TextField(
+                    controller: _price,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: 'Saca de ${season.grainName.toLowerCase()} (R\$)',
+                      isDense: true,
+                    ),
+                  ),
                 ),
-                // CADASTRAR O GRÃO daqui de dentro. É aqui que a falta aparece:
-                // o admin abre o lançamento, procura o milho no seletor e ele
-                // não está no catálogo. Mandá-lo fechar o formulário, achar a
-                // aba certa e recomeçar a publicação é o caminho que ele já
-                // fazia — e que fazia a tela parecer quebrada.
-                TextButton.icon(
-                  onPressed: _createGrain,
-                  icon: const Icon(Icons.grass, size: 16),
-                  label: const Text('Cadastrar grão'),
-                ),
-                TextButton.icon(
-                  onPressed: () => setState(() => _grains.add(_GrainDraft())),
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text('Acrescentar'),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _yield,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Produção (sc/ha)', isDense: true),
+                  ),
                 ),
               ],
             ),
+            const SizedBox(height: 4),
             Text(
-              'O produtor escolhe em qual delas paga. Cada uma tem a própria '
-              'cotação, produção estimada e data de entrega.',
-              style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              'A cotação converte o custo em sacas; a produção divide as sacas para achar a '
+              'área do penhor.',
+              style: TextStyle(fontSize: 10, color: AppColors.textLight),
             ),
-            const SizedBox(height: 10),
-            for (final (index, draft) in _grains.indexed) ...[
-              _grainCard(index, draft),
-              const SizedBox(height: 10),
-            ],
-            const SizedBox(height: 2),
-
+            const SizedBox(height: 4),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.event_available_outlined, color: AppColors.primary),
+              title: Text(
+                _cprDueDate == null ? 'Vencimento da CPR' : 'CPR vence ${_fullDate(_cprDueDate!)}',
+                style: const TextStyle(fontSize: 14),
+              ),
+              subtitle: Text('Opcional agora: sem ele as cédulas não são emitidas',
+                  style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+              trailing: TextButton(
+                onPressed: _pickDueDate,
+                child: Text(_cprDueDate == null ? 'Definir' : 'Mudar'),
+              ),
+            ),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: Icon(Icons.event_outlined, color: AppColors.primary),
               title: Text(
-                _endsAt == null
-                    ? 'Sem data de encerramento'
-                    : 'Vigente até ${_endsAt!.day.toString().padLeft(2, '0')}/${_endsAt!.month.toString().padLeft(2, '0')}/${_endsAt!.year}',
+                _endsAt == null ? 'Sem data de encerramento' : 'Vigente até ${_fullDate(_endsAt!)}',
                 style: const TextStyle(fontSize: 14),
               ),
               subtitle: Text('Depois desta data a API recusa permuta nova',
@@ -1589,6 +1572,25 @@ class _PublishSheetState extends State<_PublishSheet> {
             ),
 
             const Divider(height: 24),
+            Text('Seguro agrícola',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            Text('Vem com o padrão da safra (${season.insurancePolicy.label.toLowerCase()}).',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight)),
+            const SizedBox(height: 8),
+            _PolicySelector(
+              value: _insurancePolicy,
+              onChanged: (policy) => setState(() => _insurancePolicy = policy),
+            ),
+            if (_insurancePolicy != InsurancePolicy.none && AppData.insuranceRates.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'A base de seguros está vazia: cadastre as praças em Cadastros › Seguros.',
+                  style: TextStyle(fontSize: 11, color: AppColors.pending),
+                ),
+              ),
+
+            const Divider(height: 24),
             Text('Metas (opcionais)',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             Text('Medem o realizado das permutas aprovadas nesta versão.',
@@ -1598,19 +1600,13 @@ class _PublishSheetState extends State<_PublishSheet> {
               children: [
                 Expanded(child: _target(_sales, 'Vendas (R\$)')),
                 const SizedBox(width: 10),
+                Expanded(child: _target(_sacks, 'Sacas')),
+                const SizedBox(width: 10),
                 Expanded(child: _target(_barters, 'Permutas')),
               ],
             ),
-            const SizedBox(height: 4),
-            // A META DE SACAS não está aqui: ela é de cada CULTURA, e fica no
-            // cartão dela. Sacas de soja e de milho não somam — um número único
-            // juntando as duas seria uma barra de progresso sem significado.
-            Text('A meta de sacas é de cada cultura, no cartão dela.',
-                style: TextStyle(fontSize: 11, color: AppColors.textLight)),
-
             // O QUE FAZER quando a meta bater. Fica encostado nos campos de meta
-            // de propósito: é a segunda metade da mesma decisão, e o admin que
-            // digita um número precisa dizer se ele avisa ou desliga a operação.
+            // de propósito: é a segunda metade da mesma decisão.
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: _closeOnGoal,
@@ -1618,51 +1614,18 @@ class _PublishSheetState extends State<_PublishSheet> {
               title: const Text('Encerrar ao bater meta', style: TextStyle(fontSize: 13)),
               subtitle: Text(
                 _closeOnGoal
-                    ? 'A aprovação que cruzar a meta encerra este Barter na hora.'
+                    ? 'A aprovação que cruzar a meta encerra esta versão na hora.'
                     : 'A meta só avisa no painel: quem encerra é você.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ),
             const SizedBox(height: 4),
-
-            const Divider(height: 24),
-            // O SEGURO fica com as metas, e não com o preço da saca: as duas
-            // taxas de cima (cotação e produtividade) são obrigatórias e a
-            // conta não sai sem elas; isto aqui é uma OPÇÃO do lançamento, como
-            // o encerramento automático.
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _insuranceRequired,
-              onChanged: (v) => setState(() => _insuranceRequired = v),
-              title: const Text('Incluir seguro agrícola', style: TextStyle(fontSize: 13)),
-              subtitle: Text(
-                _insuranceRequired
-                    ? 'Cada permuta inclui a área do produtor × o valor por hectare do município dele.'
-                    : 'As permutas saem sem seguro. Pode ser ligado depois, sem republicar.',
-                style: TextStyle(fontSize: 11, color: AppColors.textLight),
-              ),
-            ),
-            if (_insuranceRequired && AppData.insuranceRates.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'A base de seguros está vazia: sem praça cadastrada, toda permuta será '
-                  'recusada no registro. Cadastre-as em Cadastros › Seguros.',
-                  style: TextStyle(fontSize: 11, color: AppColors.pending),
-                ),
-              ),
-            const SizedBox(height: 4),
-
             TextField(
               controller: _note,
               maxLength: 300,
-              decoration: const InputDecoration(
-                labelText: 'Observação do lançamento',
-                counterText: '',
-              ),
+              decoration: const InputDecoration(labelText: 'Observação do lançamento', counterText: ''),
             ),
             const SizedBox(height: 4),
-
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               value: _carryOver,
@@ -1671,12 +1634,11 @@ class _PublishSheetState extends State<_PublishSheet> {
                   style: TextStyle(fontSize: 13)),
               subtitle: Text(
                 _carryOver
-                    ? 'Os ausentes seguem com o valor da versão anterior.'
+                    ? 'Os ausentes seguem com o valor da versão anterior desta safra.'
                     : 'A planilha é a tabela: o que não estiver nela sai do Barter.',
                 style: TextStyle(fontSize: 11, color: AppColors.textLight),
               ),
             ),
-
             if (_error != null) ...[
               const SizedBox(height: 8),
               Text(_error!, style: TextStyle(fontSize: 12, color: AppColors.denied)),
@@ -1697,176 +1659,6 @@ class _PublishSheetState extends State<_PublishSheet> {
     );
   }
 
-  /// CADASTRA UM GRÃO sem sair da publicação, e já o escolhe.
-  ///
-  /// O formulário do produto é o mesmo da aba de cadastro (`NewProductScreen`),
-  /// e o que muda é o que acontece na volta: o grão recém-criado entra na linha
-  /// que estava vazia — ou numa nova, se todas já tiverem cultura. Cadastrar e
-  /// ter de escolher de novo, num seletor que acabou de mudar de tamanho, é o
-  /// tipo de passo que se esquece com o formulário inteiro preenchido atrás.
-  ///
-  /// O RASCUNHO da publicação sobrevive: esta tela é um `showModalBottomSheet`
-  /// e o cadastro entra por cima dela, sem desmontá-la. Os campos já digitados
-  /// continuam onde estavam.
-  Future<void> _createGrain() async {
-    // O QUE VOLTA é o produto salvo, e não a lista do catálogo: cancelar o
-    // cadastro devolve `null`, e ler "o último grão cadastrado" escolheria um
-    // grão que ninguém acabou de criar — justamente no caso em que o admin
-    // desistiu.
-    final novo = await Navigator.push<ProductModel>(
-      context,
-      MaterialPageRoute(builder: (_) => const NewProductScreen(type: ProductType.grain)),
-    );
-    if (novo == null || !mounted) return;
-
-    setState(() {
-      // O catálogo em memória já foi atualizado pelo cadastro; aqui só se
-      // aponta para o que nasceu. Ele entra na linha que estava vazia — ou numa
-      // nova, se todas já tiverem cultura.
-      if (_grains.any((draft) => draft.grainId == novo.id)) return;
-      final vaga = _grains.where((draft) => draft.grainId == null).firstOrNull;
-      if (vaga != null) {
-        vaga.grainId = novo.id;
-      } else {
-        _grains.add(_GrainDraft(grainId: novo.id));
-      }
-    });
-  }
-
-  /// UMA CULTURA no formulário: o grão, a cotação, a produção estimada, o
-  /// vencimento da entrega e a meta de sacas dela.
-  ///
-  /// O GRÃO vem do CATÁLOGO (os produtos do tipo grão), e o campo diz isso: a
-  /// lista é curta, e quem a vê pela primeira vez não tem como adivinhar se ela
-  /// é a safra, a cultura ou o produto. Com um grão só cadastrado, o seletor
-  /// mostraria uma escolha que não existe sem explicar onde se cadastram os
-  /// outros — e é aí que ele parece quebrado.
-  ///
-  /// O VENCIMENTO é opcional aqui de propósito: o Barter é lançado antes de a
-  /// colheita ter data fechada, e travar a publicação por causa dele pararia a
-  /// venda por um campo que a cédula sabe cobrar sozinha, de quem o resolve.
-  Widget _grainCard(int index, _GrainDraft draft) {
-    final grains = AppData.grains;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.borderSubtle),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: DropdownButtonFormField<String>(
-                  initialValue: draft.grainId,
-                  isExpanded: true,
-                  decoration: InputDecoration(
-                    labelText: 'Grão do catálogo',
-                    isDense: true,
-                    helperText: grains.length > 1
-                        ? '${grains.length} grãos cadastrados'
-                        : 'Só um grão cadastrado — os outros entram em Valores › Histórico',
-                    helperMaxLines: 2,
-                  ),
-                  items: [
-                    for (final grain in grains)
-                      DropdownMenuItem(
-                        value: grain.id,
-                        child: Text('${grain.name} • ${grain.unit}',
-                            overflow: TextOverflow.ellipsis),
-                      ),
-                  ],
-                  onChanged: (value) => setState(() => draft.grainId = value),
-                ),
-              ),
-              // A PRIMEIRA cultura não se remove: um Barter sem cultura nenhuma
-              // é uma tabela de insumos que ninguém tem como pagar.
-              if (_grains.length > 1)
-                IconButton(
-                  tooltip: 'Remover esta cultura',
-                  onPressed: () => setState(() {
-                    _grains.removeAt(index).dispose();
-                  }),
-                  icon: Icon(Icons.close, size: 18, color: AppColors.textLight),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: draft.price,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: 'Saca (R\$)',
-                    isDense: true,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: TextField(
-                  controller: draft.yield_,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: 'Produção (sc/ha)',
-                    isDense: true,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'A cotação converte o custo em sacas; a produção divide as sacas '
-            'para achar a área do penhor.',
-            style: TextStyle(fontSize: 10, color: AppColors.textLight),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Expanded(
-                child: TextButton.icon(
-                  onPressed: () async {
-                    final now = DateTime.now();
-                    final chosen = await showDatePicker(
-                      context: context,
-                      initialDate: draft.cprDueDate ?? DateTime(now.year + 1, 6, 30),
-                      firstDate: now,
-                      lastDate: DateTime(now.year + 3),
-                      helpText: 'Vencimento da CPR desta cultura',
-                    );
-                    if (chosen != null) setState(() => draft.cprDueDate = chosen);
-                  },
-                  icon: const Icon(Icons.event_outlined, size: 16),
-                  label: Text(
-                    draft.cprDueDate == null
-                        ? 'Vencimento da CPR'
-                        : 'Vence ${_fullDate(draft.cprDueDate!)}',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  style: TextButton.styleFrom(alignment: Alignment.centerLeft),
-                ),
-              ),
-              SizedBox(
-                width: 110,
-                child: TextField(
-                  controller: draft.targetSacks,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(labelText: 'Meta (sacas)', isDense: true),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _target(TextEditingController controller, String label) => TextField(
         controller: controller,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1877,23 +1669,24 @@ class _PublishSheetState extends State<_PublishSheet> {
 /* ── Abertura de safra ────────────────────────────────────────────────── */
 
 class _SeasonRequest {
-  final int year;
-  final String? name;
-  final String? letter;
+  final String grainId;
+  final int startYear;
+  final int endYear;
+  final InsurancePolicy insurancePolicy;
 
-  const _SeasonRequest({required this.year, this.name, this.letter});
+  const _SeasonRequest({
+    required this.grainId,
+    required this.startYear,
+    required this.endYear,
+    required this.insurancePolicy,
+  });
 }
 
-/// A ABERTURA DA SAFRA — o CICLO em que o Barter vai acontecer.
+/// A ABERTURA DA SAFRA DE UMA CULTURA — "Soja 26/27", "Canola 2027".
 ///
-/// NÃO HÁ GRÃO AQUI, e é a mudança que esta tela carrega: as culturas são do
-/// LANÇAMENTO (ver o formulário de publicação), porque elas coexistem e mudam de
-/// uma versão para a outra. O Barter pode abrir só com soja e ganhar o milho na
-/// versão seguinte sem que a safra tenha deixado de ser a mesma — e, enquanto o
-/// grão morou aqui, oferecer duas culturas exigia abrir duas safras.
-///
-/// O VENCIMENTO DA CPR saiu junto, pelo mesmo motivo: ele é a data de entrega
-/// DAQUELE grão, e uma safra com soja e milho tem duas.
+/// O ANO é o que o admin escolhe: a cultura que cruza o ano (planta num, colhe
+/// no outro) sai como 26/27; a que cabe num ano só sai como 2027. O SEGURO é o
+/// padrão da cultura, que vem preenchido em cada versão publicada nela.
 class _OpenSeasonDialog extends StatefulWidget {
   const _OpenSeasonDialog();
 
@@ -1902,90 +1695,103 @@ class _OpenSeasonDialog extends StatefulWidget {
 }
 
 class _OpenSeasonDialogState extends State<_OpenSeasonDialog> {
+  late String? _grainId = AppData.grains.isEmpty ? null : AppData.grains.first.id;
   late final _year = TextEditingController(text: '${DateTime.now().year}');
-  final _name = TextEditingController();
-  final _letter = TextEditingController();
+  bool _crossesYear = true;
+  InsurancePolicy _insurancePolicy = InsurancePolicy.none;
 
   @override
   void dispose() {
     _year.dispose();
-    _name.dispose();
-    _letter.dispose();
     super.dispose();
   }
 
-  /// A sugestão de código, para o admin ver o que vai nascer: B2026.
-  ///
-  /// A letra era a inicial do grão ("S de soja") e hoje é a do CICLO — o `B` de
-  /// Barter, que é o padrão do servidor. Ela continua editável porque quem roda
-  /// dois ciclos no mesmo ano (verão e inverno) os separa por ela.
+  int? get _startYear => int.tryParse(_year.text.trim());
+
+  /// O nome que vai nascer, para o admin ver antes de abrir: "Soja 26/27".
   String get _preview {
-    final letter = _letter.text.trim().isEmpty ? 'B' : _letter.text.trim().toUpperCase();
-    return '$letter${_year.text.trim()}';
+    final start = _startYear;
+    final grain = AppData.grains.where((g) => g.id == _grainId).firstOrNull;
+    if (start == null || grain == null) return '';
+    final years = _crossesYear
+        ? '${(start % 100).toString().padLeft(2, '0')}/${((start + 1) % 100).toString().padLeft(2, '0')}'
+        : '$start';
+    return '${grain.name} $years';
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Abrir safra'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'A safra é o CICLO. As culturas em que o produtor pode pagar — e a '
-            'cotação, a produção estimada e o vencimento de cada uma — são '
-            'escolhidas ao publicar o Barter.',
-            style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _year,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Ano'),
-                  onChanged: (_) => setState(() {}),
-                ),
-              ),
-              const SizedBox(width: 10),
-              SizedBox(
-                width: 90,
-                child: TextField(
-                  controller: _letter,
-                  maxLength: 2,
-                  textCapitalization: TextCapitalization.characters,
-                  decoration: const InputDecoration(labelText: 'Letra', counterText: ''),
-                  onChanged: (_) => setState(() {}),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _name,
-            decoration: const InputDecoration(
-              labelText: 'Nome (opcional)',
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Cada cultura tem a sua safra: ela abre, publica versões, bate meta e encerra '
+              'sem mexer nas outras. Só uma safra aberta por grão.',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
             ),
-          ),
-          const SizedBox(height: 8),
-          Text('Código da safra: $_preview • versões $_preview.01, $_preview.02…',
-              style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-        ],
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              initialValue: _grainId,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Cultura (grão do catálogo)', isDense: true),
+              items: [
+                for (final grain in AppData.grains)
+                  DropdownMenuItem(value: grain.id, child: Text(grain.name, overflow: TextOverflow.ellipsis)),
+              ],
+              onChanged: (value) => setState(() => _grainId = value),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _year,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Ano do plantio', isDense: true),
+              onChanged: (_) => setState(() {}),
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _crossesYear,
+              onChanged: (v) => setState(() => _crossesYear = v),
+              title: const Text('A safra cruza o ano', style: TextStyle(fontSize: 13)),
+              subtitle: Text(
+                _crossesYear
+                    ? 'Planta num ano e colhe no seguinte (ex.: soja 26/27).'
+                    : 'Planta e colhe no mesmo ano (ex.: canola 2027).',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text('Seguro padrão da cultura',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+            const SizedBox(height: 6),
+            _PolicySelector(
+              value: _insurancePolicy,
+              onChanged: (policy) => setState(() => _insurancePolicy = policy),
+            ),
+            const SizedBox(height: 10),
+            if (_preview.isNotEmpty)
+              Text('Safra: $_preview',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.primary)),
+          ],
+        ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
         ElevatedButton(
           onPressed: () {
-            final year = int.tryParse(_year.text.trim());
-            if (year == null) return;
+            final start = _startYear;
+            final grainId = _grainId;
+            if (start == null || grainId == null) return;
             Navigator.pop(
               context,
               _SeasonRequest(
-                year: year,
-                name: _name.text.trim().isEmpty ? null : _name.text.trim(),
-                letter: _letter.text.trim().isEmpty ? null : _letter.text.trim(),
+                grainId: grainId,
+                startYear: start,
+                endYear: _crossesYear ? start + 1 : start,
+                insurancePolicy: _insurancePolicy,
               ),
             );
           },
@@ -1996,15 +1802,16 @@ class _OpenSeasonDialogState extends State<_OpenSeasonDialog> {
   }
 }
 
+/// Corrige um valor DENTRO de uma versão vigente — um insumo ou a saca.
 Future<void> showVersionPriceDialog(
   BuildContext context, {
+  required BarterVersionModel version,
   required String productId,
   required String productName,
   required double price,
   required VoidCallback onUpdated,
 }) {
   final priceCtrl = TextEditingController(text: price.toStringAsFixed(2).replaceAll('.', ','));
-  final version = AppData.currentVersion;
 
   return showDialog(
     context: context,
@@ -2015,9 +1822,8 @@ Future<void> showVersionPriceDialog(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(productName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-          if (version != null)
-            Text('Vale a partir de agora no Barter ${version.code}',
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+          Text('Vale a partir de agora no Barter ${version.code}',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
           const SizedBox(height: 16),
           TextField(
             controller: priceCtrl,
@@ -2039,7 +1845,7 @@ Future<void> showVersionPriceDialog(
             final novo = parseNumber(priceCtrl.text);
             if (novo == null || novo <= 0) return;
             try {
-              await AppData.updateVersionPrice(productId, novo);
+              await AppData.updateVersionPrice(version.slug, productId, novo);
               if (!ctx.mounted) return;
               Navigator.pop(ctx);
               onUpdated();

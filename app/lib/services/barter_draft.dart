@@ -22,8 +22,9 @@ import '../models/models.dart';
 import 'barter_math.dart';
 
 class BarterDraft {
-  /// A versão que precifica: a vigente numa permuta nova, a da permuta numa
-  /// remontagem. `null` é "Barter fechado", e aí não há o que montar.
+  /// A versão que precifica: a vigente DA CULTURA escolhida numa permuta nova,
+  /// a da permuta numa remontagem. `null` é "Barter fechado" (ou cultura ainda
+  /// não escolhida), e aí não há o que montar.
   final BarterVersionModel? version;
 
   /// O produtor escolhido. `null` antes da primeira etapa — e é por isso que
@@ -42,6 +43,15 @@ class BarterDraft {
   /// As classes de insumo, com as réguas de mínimo delas.
   final List<ProductClassModel> classes;
 
+  /// A ÁREA PLANTADA (ha) da cultura que a permuta cobre — o que o consultor
+  /// informa. É a régua de tudo o que é "por hectare": os mínimos, o seguro e o
+  /// teto do penhor. Zero enquanto ele não informou.
+  final double plantedAreaHa;
+
+  /// O SEGURO, quando a versão o oferece como OPCIONAL: o que o produtor
+  /// escolheu. Ignorado nas outras políticas.
+  final bool wantsInsurance;
+
   /// A TAXA DE SEGURO da praça do produtor, quando ela existe na base.
   ///
   /// Ela entra pronta porque a busca é I/O (o cache do app); o que é regra —
@@ -59,6 +69,8 @@ class BarterDraft {
     required this.quantities,
     required this.allInputs,
     required this.classes,
+    this.plantedAreaHa = 0,
+    this.wantsInsurance = false,
     this.insuranceRate,
     this.offBarterCost = 0,
   });
@@ -95,25 +107,39 @@ class BarterDraft {
   /// paga.
   double get inputsCost => inputCost(pricedInputs);
 
-  /// ESTA PERMUTA LEVA SEGURO? É do LANÇAMENTO, e não do consultor: a empresa
-  /// fechou apólice para a safra, ou não.
-  bool get insuranceApplies => version?.insuranceRequired == true && producer != null;
+  /// A versão OFERECE o seguro como opcional — e aí a tela mostra o interruptor.
+  bool get insuranceOffered => version?.insuranceOptional == true && producer != null;
 
-  /// O Barter leva seguro e a praça do produtor NÃO está na base.
+  /// O seguro opcional não pode ser ligado: a praça do produtor não tem taxa.
+  /// A opção aparece BLOQUEADA, com o aviso — a permuta pode seguir sem seguro.
+  bool get insuranceBlocked => insuranceOffered && insuranceRate == null;
+
+  /// ESTA PERMUTA LEVA SEGURO? A política é da VERSÃO: obrigatório leva sempre;
+  /// opcional leva quando o produtor quis (e a praça tem taxa).
+  bool get insuranceApplies {
+    if (producer == null || version == null) return false;
+    if (version!.insuranceRequired) return true;
+    return insuranceOffered && wantsInsurance && !insuranceBlocked;
+  }
+
+  /// O seguro é OBRIGATÓRIO e a praça do produtor NÃO está na base.
   ///
   /// É a recusa que o servidor vai dar no registro, antecipada: sem ela, o
   /// consultor monta a permuta inteira com o produtor ao lado e só descobre o
   /// problema ao salvar.
-  bool get insuranceMissing => insuranceApplies && insuranceRate == null;
+  bool get insuranceMissing =>
+      version?.insuranceRequired == true && producer != null && insuranceRate == null;
 
-  /// O custo do seguro na moeda da lente — área cultivável × taxa da praça. A
+  /// O custo do seguro na moeda da lente — área plantada × taxa da praça. A
   /// mesma conta do servidor (`insuranceCostFor`).
   double get insuranceCost {
     final rate = insuranceRate;
-    final farm = producer;
-    if (!insuranceApplies || rate == null || farm == null) return 0;
-    return rate.showsCurrency ? rate.costFor(farm.areaHa) : rate.sacksFor(farm.areaHa);
+    if (!insuranceApplies || rate == null) return 0;
+    return rate.showsCurrency ? rate.costFor(plantedAreaHa) : rate.sacksFor(plantedAreaHa);
   }
+
+  /// O que vai no campo `insurance` do registro: a escolha, só no opcional.
+  bool? get insuranceChoice => insuranceOffered ? (wantsInsurance && !insuranceBlocked) : null;
 
   /// SACAS da cultura escolhida necessárias para cobrir o custo.
   ///
@@ -126,13 +152,12 @@ class BarterDraft {
     return sacksToCover(inputsCost + offBarterCost + insuranceCost, current.costPerSack);
   }
 
-  /// Quantidade mínima obrigatória de um insumo para este produtor: taxa por
-  /// hectare × área. Zero sem produtor ou sem exigência.
+  /// Quantidade mínima obrigatória de um insumo para esta permuta: taxa por
+  /// hectare × área plantada. Zero sem área ou sem exigência.
   double minimumFor(String productId) {
-    final farm = producer;
     final input = productById(productId);
-    if (farm == null || input == null) return 0;
-    return minQuantityFor(input.requiredPerHa, farm.areaHa);
+    if (producer == null || input == null || plantedAreaHa <= 0) return 0;
+    return minQuantityFor(input.requiredPerHa, plantedAreaHa);
   }
 
   /// Há algum insumo com exigência por área para este produtor?
@@ -164,16 +189,15 @@ class BarterDraft {
 
   /// O mínimo exigido por uma classe, dado o estado atual da permuta.
   ///
-  /// Sem produtor escolhido não há área, e a régua por hectare não tem base de
-  /// cálculo — o servidor sempre tem, porque a permuta chega com produtor.
+  /// Sem área plantada informada, a régua por hectare não tem base de cálculo —
+  /// o servidor sempre tem, porque a permuta chega com a área.
   double requiredOn(ProductClassModel productClass) {
-    final farm = producer;
-    if (farm == null && productClass.ruleType == ClassRuleType.valuePerHa) return 0;
+    if (plantedAreaHa <= 0 && productClass.ruleType == ClassRuleType.valuePerHa) return 0;
     return classRequired(
       ClassRule.values.byName(productClass.ruleType.name),
       productClass.ruleValue,
       totalCost: inputsCost,
-      areaHa: farm?.areaHa ?? 0,
+      areaHa: plantedAreaHa,
     );
   }
 
@@ -211,14 +235,15 @@ class BarterDraft {
 
   /// A PERMUTA PODE SER ENVIADA?
   ///
-  /// As quatro travas do servidor, na ordem em que ele as aplica: há Barter
-  /// aberto, há produtor, há ao menos um insumo, e as réguas das classes estão
-  /// cumpridas. O seguro sem taxa na praça entra junto porque é recusa certa no
-  /// registro — e descobri-la aqui é de graça.
+  /// As travas do servidor, na ordem em que ele as aplica: há Barter aberto na
+  /// cultura, há produtor, há área plantada, há ao menos um insumo, e as réguas
+  /// das classes estão cumpridas. O seguro obrigatório sem taxa na praça entra
+  /// junto porque é recusa certa no registro — e descobri-la aqui é de graça.
   bool get canSubmit =>
       version != null &&
       version!.isOpen &&
       producer != null &&
+      plantedAreaHa > 0 &&
       chosenCount > 0 &&
       unmetClasses.isEmpty &&
       !insuranceMissing;

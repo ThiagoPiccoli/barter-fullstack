@@ -5,6 +5,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Put,
   UnprocessableEntityException,
   UploadedFile,
   UseInterceptors,
@@ -14,7 +15,12 @@ import type { User } from '@prisma/client';
 import { CurrentUser, RequireCapability } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterVersionJson, toSeasonJson } from '../common/serializers';
-import { ImportVersionDto, OpenSeasonDto, PublishVersionDto } from './dto/season.dto';
+import {
+  ImportVersionDto,
+  InsurancePolicyDto,
+  OpenSeasonDto,
+  PublishVersionDto,
+} from './dto/season.dto';
 import { SeasonsService } from './seasons.service';
 
 /**
@@ -25,10 +31,13 @@ import { SeasonsService } from './seasons.service';
 const SHEET_LIMIT_BYTES = 5 * 1024 * 1024;
 
 /**
- * A SAFRA — o ciclo em que o Barter acontece.
+ * A SAFRA DA CULTURA — "Soja 26/27", "Canola 2027" — e as versões dela.
  *
  * Só quem lança o Barter enxerga esta rota: para o consultor, safra é
- * consequência (ele vê a versão vigente em /barter-versions/current).
+ * consequência (ele vê as versões vigentes em /barter-versions/current).
+ *
+ * O `:slug` é o código sem a barra (`SOJA2627`): a barra de `SOJA26/27` não
+ * cabe numa URL.
  */
 @Controller('seasons')
 export class SeasonsController {
@@ -46,46 +55,63 @@ export class SeasonsController {
     return toSeasonJson(await this.seasons.open(admin, dto), admin);
   }
 
-  // O VENCIMENTO DA CPR não está mais aqui: ele é de cada CULTURA, e as culturas
-  // são do lançamento (ver `PUT /barter-versions/:code/grains/:grainId`). A
-  // safra deixou de ter grão, e com ele foi embora a única coisa dela que se
-  // editava depois de aberta.
-
-  /** Encerra a safra e a versão vigente dela. */
-  @Post(':code/close')
+  /** Encerra a safra da cultura e a versão vigente dela. As outras culturas seguem. */
+  @Post(':slug/close')
   @RequireCapability(CAPABILITY.barterManage)
   @HttpCode(200)
-  async close(@CurrentUser() admin: User, @Param('code') code: string) {
-    return toSeasonJson(await this.seasons.close(admin, code), admin);
+  async close(@CurrentUser() admin: User, @Param('slug') slug: string) {
+    return toSeasonJson(await this.seasons.close(admin, slug), admin);
+  }
+
+  /** Reabre a safra encerrada — versões novas voltam a poder sair nela. */
+  @Post(':slug/reopen')
+  @RequireCapability(CAPABILITY.barterManage)
+  @HttpCode(200)
+  async reopen(@CurrentUser() admin: User, @Param('slug') slug: string) {
+    return toSeasonJson(await this.seasons.reopen(admin, slug), admin);
+  }
+
+  /**
+   * O SEGURO PADRÃO da cultura — o que vem preenchido ao publicar a próxima
+   * versão. `PUT` porque é um estado que se declara.
+   */
+  @Put(':slug/insurance')
+  @RequireCapability(CAPABILITY.barterManage)
+  async insurance(
+    @CurrentUser() admin: User,
+    @Param('slug') slug: string,
+    @Body() dto: InsurancePolicyDto,
+  ) {
+    return toSeasonJson(await this.seasons.setSeasonInsurance(admin, slug, dto.policy), admin);
   }
 
   /**
    * Publica a próxima versão com a tabela no corpo. O caminho do admin no app
-   * é a planilha (`/seasons/:code/versions/import`); este existe para o seed,
+   * é a planilha (`/seasons/:slug/versions/import`); este existe para o seed,
    * os testes e integrações que já têm os dados na mão.
    */
-  @Post(':code/versions')
+  @Post(':slug/versions')
   @RequireCapability(CAPABILITY.barterManage)
   async publish(
     @CurrentUser() admin: User,
-    @Param('code') code: string,
+    @Param('slug') slug: string,
     @Body() dto: PublishVersionDto,
   ) {
-    return toBarterVersionJson(await this.seasons.publish(admin, code, dto), undefined, admin);
+    return toBarterVersionJson(await this.seasons.publish(admin, slug, dto), undefined, admin);
   }
 
   /**
-   * Publica a próxima versão a partir da PLANILHA (.xlsx) — o caminho do admin
-   * no app. O arquivo traz os insumos; as culturas (com cotação, produtividade,
-   * vencimento e meta de cada uma), a vigência e as metas da versão vêm nos
-   * campos do formulário.
+   * Publica a próxima versão a partir da PLANILHA (.xlsx) DA CULTURA — o
+   * caminho do admin no app. O arquivo traz os insumos; a cotação da saca, a
+   * produtividade, o vencimento, o seguro, a vigência e as metas vêm nos campos
+   * do formulário.
    */
-  @Post(':code/versions/import')
+  @Post(':slug/versions/import')
   @RequireCapability(CAPABILITY.barterManage)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: SHEET_LIMIT_BYTES } }))
   async import(
     @CurrentUser() admin: User,
-    @Param('code') code: string,
+    @Param('slug') slug: string,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: ImportVersionDto,
   ) {
@@ -95,6 +121,6 @@ export class SeasonsController {
     if (!/\.xlsx$/i.test(file.originalname)) {
       throw new UnprocessableEntityException('O arquivo precisa ser uma planilha .xlsx');
     }
-    return toBarterVersionJson(await this.seasons.import(admin, code, file, dto), undefined, admin);
+    return toBarterVersionJson(await this.seasons.import(admin, slug, file, dto), undefined, admin);
   }
 }

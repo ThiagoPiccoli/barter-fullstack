@@ -40,7 +40,7 @@ void main() {
         // O `?` é o "só se não for nulo": um campo AUSENTE é o que o servidor
         // manda a quem não pode compará-lo, e é diferente de um campo nulo (a
         // permuta sem área). Os dois casos são testados abaixo.
-        'producerAreaHa': ?areaHa,
+        'plantedAreaHa': ?areaHa,
         'sacksPerHa': ?sacksPerHa,
         'items': [
           {
@@ -90,7 +90,10 @@ void main() {
     // duas permutas, e é para comparar que ela existe.
     expect(find.textContaining('2,10 sc/ha'), findsNWidgets(2));
     expect(find.text('Investimento'), findsNWidgets(2));
-    expect(find.textContaining('120 ha'), findsNWidgets(2));
+    // E a ÁREA PLANTADA da permuta ganhou linha própria na ficha — ela é dado
+    // da permuta, e não só o denominador do investimento.
+    expect(find.textContaining('120 ha'), findsNWidgets(3));
+    expect(find.text('Área plantada'), findsOneWidget);
   });
 
   /// Ele SOME para quem não pode compará-lo — o servidor nem manda o campo.

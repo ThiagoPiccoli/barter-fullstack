@@ -129,7 +129,7 @@ class CprText {
       CprParagraph(
         '',
         'a) Safra – O produto comprometido refere-se ao produto a ser colhido na '
-            'safra ${known.versionCode};',
+            'safra ${_safraOf(known)};',
         indented: true,
       ),
       CprParagraph(
@@ -141,7 +141,7 @@ class CprText {
       CprParagraph(
         '',
         'c) Características do Produto: ${known.grainName} em grão, cultivar '
-            '${cpr.cultivar}, safra ${known.versionCode}, limpo e seco, tipo indústria, '
+            '${cpr.cultivar}, safra ${_safraOf(known)}, limpo e seco, tipo indústria, '
             'com máximo de ${_num(cpr.maxMoisture)}% (${extensoPercentual(cpr.maxMoisture)}) '
             'de Umidade (Aparelho Modelo Eletrônico) e, máximo de '
             '${_num(cpr.maxImpurities)}% (${extensoPercentual(cpr.maxImpurities)}) de '
@@ -178,7 +178,7 @@ class CprText {
             // quarenta)" aqui — um número em algarismo e outro por extenso, na
             // cláusula que descreve a garantia.
             '(${extensoDecimal(known.sacks)}) sacas de ${known.grainName}, comercial em '
-            'grãos tipo indústria, da safra ${known.versionCode}, de propriedade de '
+            'grãos tipo indústria, da safra ${_safraOf(known)}, de propriedade de '
             '${known.emitterName}, área de terra plantada pelo emitente nas seguintes '
             'áreas: ${_lavouras(cpr.areas)}',
         indented: true,
@@ -640,3 +640,9 @@ class CprSignature {
     required this.coopId,
   });
 }
+
+/// A SAFRA que a cédula nomeia: a da cultura ("Soja 26/27") — é a que o
+/// produtor planta e colhe. O código da versão fica para as cédulas cuja permuta
+/// é anterior às safras por cultura.
+String _safraOf(CprKnown known) =>
+    known.seasonName.isNotEmpty ? known.seasonName : known.versionCode;

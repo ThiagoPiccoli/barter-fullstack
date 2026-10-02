@@ -12,18 +12,25 @@ void main() {
   Map<String, dynamic> row(String id) => {'id': id, 'name': 'Item $id'};
 
   OfflinePackage package({
-    Map<String, dynamic>? version,
+    List<Map<String, dynamic>>? versions,
     List<Map<String, dynamic>>? products,
   }) =>
       OfflinePackage(
         savedAt: DateTime(2026, 8, 18, 14, 32),
         user: {'id': 2, 'email': 'ana@coop.test', 'fullName': 'Ana Ferreira'},
-        version: version ?? {'code': 'S2026.02', 'grainPrice': 100},
+        versions: versions ??
+            [
+              {'code': 'SOJA26/27.02', 'grainPrice': 100},
+              {'code': 'MILHO2027.01', 'grainPrice': 64.5},
+            ],
         products: products ?? [row('5'), row('9')],
         classes: [row('c1')],
         producers: [row('10')],
         units: [row('3')],
         insuranceRates: [row('r1')],
+        insuranceRatesByVersion: {
+          'SOJA2627.02': [row('r1')],
+        },
       );
 
   group('OfflinePackage', () {
@@ -32,7 +39,8 @@ void main() {
 
       expect(restored.savedAt, DateTime(2026, 8, 18, 14, 32));
       expect(restored.user!['fullName'], 'Ana Ferreira');
-      expect(restored.version!['code'], 'S2026.02');
+      // AS VERSÕES VIGENTES, uma por cultura aberta.
+      expect(restored.versions.map((v) => v['code']), ['SOJA26/27.02', 'MILHO2027.01']);
       expect(restored.products.map((p) => p['id']), ['5', '9']);
       expect(restored.classes, hasLength(1));
       expect(restored.producers, hasLength(1));
@@ -41,6 +49,18 @@ void main() {
       // mostraria "praça sem taxa cadastrada" para todo produtor, e a permuta
       // pareceria impossível de registrar.
       expect(restored.insuranceRates, hasLength(1));
+      // E a base em sacas de cada versão, para a prévia do consultor offline.
+      expect(restored.insuranceRatesByVersion['SOJA2627.02'], hasLength(1));
+    });
+
+    /// O PACOTE DO APP ANTERIOR tinha UMA versão com as culturas dentro — formato
+    /// que o app novo não lê. Ele abre como "sem Barter" até a próxima
+    /// sincronização, em vez de virar uma tabela parseada pela metade.
+    test('pacote com a versão única do formato antigo abre sem versões', () {
+      final antigo = Map<String, dynamic>.from(package().toJson())
+        ..remove('versions')
+        ..['version'] = {'code': 'B2026.02'};
+      expect(OfflinePackage.fromJson(antigo).versions, isEmpty);
     });
 
     /// O PACOTE ANTIGO — gravado antes de o seguro existir — continua abrindo,
@@ -62,16 +82,16 @@ void main() {
           {'productId': 5, 'price': 115.0},
         ],
       };
-      final restored = OfflinePackage.fromJson(package(version: original).toJson());
+      final restored = OfflinePackage.fromJson(package(versions: [original]).toJson());
 
-      expect(restored.version, original);
+      expect(restored.versions.single, original);
     });
 
-    test('versão nula é resposta legítima: não há Barter aberto', () {
+    test('lista vazia é resposta legítima: não há Barter aberto', () {
       final semBarter = OfflinePackage(
         savedAt: DateTime(2026, 8, 18),
         user: null,
-        version: null,
+        versions: const [],
         products: [row('5')],
         classes: const [],
         producers: const [],
@@ -81,7 +101,7 @@ void main() {
 
       // Diferente de nunca ter sincronizado — quem separa as duas é o
       // `lastSyncAt`, que só existe depois de um pacote bem-sucedido.
-      expect(restored.version, isNull);
+      expect(restored.versions, isEmpty);
       expect(restored.savedAt, isNotNull);
     });
 

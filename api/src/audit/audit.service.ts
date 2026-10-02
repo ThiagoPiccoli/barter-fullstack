@@ -148,6 +148,20 @@ export const AUDIT_ACTION = {
   // valem tanto quanto aprovar uma permuta, e pelo mesmo motivo — é dinheiro.
   seasonOpened: 'season.opened',
   seasonClosed: 'season.closed',
+  /**
+   * REABRIU a safra de uma cultura que tinha sido encerrada.
+   *
+   * Encerrar a safra é o fim do ciclo daquela cultura, e desfazê-lo volta a
+   * permitir versões novas — crédito novo numa cultura que a operação já tinha
+   * dado por terminada. É um ato raro, e por isso mesmo precisa de autor.
+   */
+  seasonReopened: 'season.reopened',
+  /**
+   * Mudou o SEGURO PADRÃO da safra — o que vem preenchido ao publicar a próxima
+   * versão daquela cultura. Não muda permuta nenhuma por si: quem vale é a
+   * política de cada versão (ver `versionInsuranceChanged`).
+   */
+  seasonInsuranceChanged: 'season.insurance-changed',
   versionPublished: 'barter.version-published',
   versionPriceChanged: 'barter.price-changed',
   versionClosed: 'barter.version-closed',
@@ -160,8 +174,8 @@ export const AUDIT_ACTION = {
    */
   versionCloseRuleChanged: 'barter.version-close-rule',
   /**
-   * ACERTOU UMA CULTURA da versão: a cotação da saca, a produtividade estimada,
-   * o vencimento da CPR ou a meta de sacas.
+   * ACERTOU OS TERMOS DA CULTURA na versão: a cotação da saca, a produtividade
+   * estimada, o vencimento da CPR ou a meta de sacas.
    *
    * Uma ação para os quatro campos porque eles são o mesmo ato — "acertar a
    * cultura" —, e o detalhe da linha diz qual deles mudou e de quanto para
@@ -171,24 +185,21 @@ export const AUDIT_ACTION = {
    *   de 60 para 50 sc/ha faz cada permuta nova pedir 20% mais lavoura, e subi-la
    *   afrouxa a garantia de todas elas na mesma proporção;
    * - a COTAÇÃO decide quantas sacas o produtor deve por R$ 1 de insumo;
-   * - o VENCIMENTO vale para todas as cédulas daquela cultura que ainda não
-   *   saíram: mudá-lo antecipa ou adia a entrega de cada produtor, num campo que
+   * - o VENCIMENTO vale para todas as cédulas da versão que ainda não saíram:
+   *   mudá-lo antecipa ou adia a entrega de cada produtor, num campo que
    *   ninguém mais confere depois;
    * - a META decide quando o Barter fecha sozinho, quando o automático está
    *   ligado.
-   *
-   * Era `versionYieldChanged`, de quando a produtividade era da versão inteira —
-   * e a versão tinha uma cultura só. Ver `VersionGrain`.
    */
   versionGrainChanged: 'barter.version-grain-changed',
   /**
-   * LIGOU ou DESLIGOU o seguro agrícola da versão.
+   * Mudou a POLÍTICA DE SEGURO da versão (obrigatório, opcional ou sem seguro).
    *
-   * Entra pelo mesmo critério das duas de cima: é um interruptor de dois
-   * estados que muda o custo de toda permuta registrada dali em diante — ligado,
-   * cada uma passa a carregar área × taxa do município em custo novo, pago em
-   * sacas. "Por que as permutas de outubro ficaram mais caras?" se responde
-   * aqui, e não na tabela de valores, que não mudou.
+   * Entra pelo mesmo critério das duas de cima: muda o custo de toda permuta
+   * registrada dali em diante — com seguro, cada uma passa a carregar área ×
+   * taxa do município em custo novo, pago em sacas. "Por que as permutas de
+   * outubro ficaram mais caras?" se responde aqui, e não na tabela de valores,
+   * que não mudou.
    */
   versionInsuranceChanged: 'barter.version-insurance-changed',
   /**

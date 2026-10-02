@@ -61,6 +61,18 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// O CONSULTOR escolhido no seletor do gerente; null é "Todos".
   String? _consultantFilter;
 
+  /// A SAFRA DA CULTURA escolhida no filtro; null é "Todas". O filtro só
+  /// aparece quando a lista tem permutas de mais de uma safra.
+  String? _seasonFilter;
+
+  /// As safras presentes nas permutas desta tela — ver [seasonsOf].
+  List<({String id, String name})> get _seasonOptions => seasonsOf(AppData.barters);
+
+  /// O filtro de safra EM VIGOR — a escolha que deixou de existir volta a
+  /// "Todas", pelo mesmo motivo de [_activeConsultant].
+  String? get _activeSeason =>
+      _seasonFilter != null && _seasonOptions.any((s) => s.id == _seasonFilter) ? _seasonFilter : null;
+
   /// A tela é a do GERENTE: a lista é a do time dele, e um time tem vários
   /// consultores — daí o seletor. O admin, que vê a operação inteira, não passa
   /// [BartersScreen.opinionManagerId] e não ganha o seletor; para ele a busca
@@ -270,6 +282,8 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
         : ofConsultant(AppData.barters, widget.consultantId!);
     final consultant = _activeConsultant;
     if (consultant != null) list = ofConsultant(list, consultant);
+    final season = _activeSeason;
+    if (season != null) list = ofSeason(list, season);
     if (status != null) list = list.where((b) => _inTab(b, status)).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
@@ -347,6 +361,31 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
               },
             ),
           ),
+          // O FILTRO POR CULTURA: cada safra é um Barter à parte, e a pergunta
+          // "como está a soja?" se responde aqui sem ler a lista inteira.
+          if (_seasonOptions.length > 1)
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                children: [
+                  ChoiceChip(
+                    label: const Text('Todas as safras'),
+                    selected: _activeSeason == null,
+                    onSelected: (_) => setState(() => _seasonFilter = null),
+                  ),
+                  for (final option in _seasonOptions) ...[
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      label: Text(option.name),
+                      selected: _activeSeason == option.id,
+                      onSelected: (_) => setState(() => _seasonFilter = option.id),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           Expanded(
             child: TabBarView(
               controller: _tabController,

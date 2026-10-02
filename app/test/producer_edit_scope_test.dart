@@ -9,9 +9,11 @@ import 'package:agrobarter_app/theme/app_theme.dart';
 /// O CADASTRO DO PRODUTOR TEM DOIS DONOS, e a tela diz qual é qual.
 ///
 /// O CONSULTOR cadastra o cliente novo e gere todos os dados dos clientes
-/// dele: quem visita a fazenda é quem sabe que o telefone mudou, que a área
-/// desta cultura é outra, que o produtor fez a opção pela folha e que o CPF
-/// saiu com um dígito trocado.
+/// dele: quem visita a fazenda é quem sabe que o telefone mudou, que o
+/// produtor fez a opção pela folha e que o CPF saiu com um dígito trocado.
+///
+/// A ÁREA não está mais aqui: ela é a área plantada de cada permuta, por
+/// cultura — e o cadastro diz isso a quem procurar o campo.
 ///
 /// O que ele NÃO alcança é a CARTEIRA — quem atende quem é decisão de quem
 /// administra. Ela fica VISÍVEL e travada, e no cadastro novo mostra o nome
@@ -65,7 +67,6 @@ void main() {
     phone: '(44) 99999-0000',
     farmName: 'Fazenda Boa Vista',
     city: 'Maringá/PR',
-    areaHa: 120,
     avatarInitials: 'AC',
     createdAt: DateTime(2020, 1, 1),
   );
@@ -110,11 +111,13 @@ void main() {
       'Telefone',
       'Propriedade',
       'Município/UF',
-      'Área cultivável (ha)',
     ]) {
       expect(campo(rotulo), findsOneWidget, reason: rotulo);
     }
     expect(regimes(), findsNWidgets(TaxRegime.values.length));
+    // A área saiu do cadastro, e a tela diz onde ela foi parar.
+    expect(campo('Área cultivável (ha)'), findsNothing);
+    expect(find.textContaining('área plantada é informada em cada permuta'), findsOneWidget);
   });
 
   /// A CARTEIRA aparece travada — com o nome à vista, porque saber quem atende
@@ -140,7 +143,6 @@ void main() {
     expect(find.text('João Silva'), findsOneWidget);
     expect(find.byIcon(Icons.lock_outline), findsOneWidget);
     expect(campo('Documento (CPF/CNPJ)'), findsOneWidget);
-    expect(campo('Área cultivável (ha)'), findsOneWidget);
     expect(regimes(), findsNWidgets(TaxRegime.values.length));
   });
 
@@ -148,7 +150,6 @@ void main() {
     await abrir(tester, admin(), p: produtor());
 
     expect(campo('Documento (CPF/CNPJ)'), findsOneWidget);
-    expect(campo('Área cultivável (ha)'), findsOneWidget);
     expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     expect(find.byIcon(Icons.lock_outline), findsNothing);
   });

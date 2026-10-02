@@ -203,7 +203,6 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
           document: 'CPF 999.999.999-99',
           farmName: 'Fazenda X',
           city: 'Maringá/PR',
-          areaHa: 10,
         }).then((r) => r.status),
       ).resolves.toBe(403);
 
@@ -322,7 +321,8 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     const payload = {
       producerId: 1,
       unitId: UNIT.filial02,
-      grainId: 1,
+      seasonId: 3, // Soja 26/27
+      plantedAreaHa: 120,
       inputs: [
         { productId: 5, quantity: 48 },
         { productId: 6, quantity: 300 },

@@ -86,6 +86,14 @@ void main() {
         CprText.closing(d),
       ].join('\n');
 
+  /// A SAFRA que a cédula nomeia é a da CULTURA — a que o produtor planta e
+  /// colhe —, e não o código da versão do Barter.
+  test('a cédula nomeia a safra da cultura', () {
+    final texto = textoDe(desk);
+    expect(texto, contains('a ser colhido na safra Soja 2026;'));
+    expect(texto, isNot(contains('safra S2026.02')));
+  });
+
   test('o cabeçalho leva o número da cédula', () {
     expect(CprText.heading(desk), 'CÉDULA DE PRODUTO RURAL – CPR Nº CPR-2026-014');
   });

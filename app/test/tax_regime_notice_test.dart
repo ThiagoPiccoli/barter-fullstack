@@ -42,7 +42,6 @@ void main() {
     phone: '',
     farmName: 'Fazenda Boa Vista',
     city: 'Mandaguari/PR',
-    areaHa: 120,
     taxRegime: taxRegime,
     avatarInitials: 'AC',
     createdAt: DateTime(2020, 1, 1),
@@ -55,12 +54,15 @@ void main() {
     producerName: 'Antônio Carvalho',
     unitId: '3',
     unitName: 'Filial 02',
-    versionCode: 'B2026.02',
+    versionCode: 'SOJA26/27.02',
     items: const [
       SimulationItem(productId: '5', productName: 'NPK', unit: 'saco 50kg', quantity: 48),
     ],
     simulatedSacks: 48,
+    seasonId: '3',
+    grainId: '1',
     grainName: 'Soja',
+    plantedAreaHa: 120,
     taxRegime: TaxRegime.comercializacao,
     createdAt: DateTime(2026, 3, 1),
     updatedAt: DateTime(2026, 3, 2),
@@ -82,22 +84,18 @@ void main() {
         priceHistory: [],
       ),
     ];
-    AppData.currentVersion = BarterVersionModel(
+    AppData.currentVersions = [BarterVersionModel(
       id: 'v1',
-      code: 'B2026.02',
+      code: 'SOJA26/27.02',
       number: 2,
-      seasonCode: 'B2026',
-      seasonName: 'Barter 2026',
-      grains: const [
-        VersionGrainModel(
-          grainId: '1',
-          grainName: 'Soja',
-          grainUnit: 'saca 60kg',
-          price: 100,
-          estimatedYield: 60,
-        ),
-      ],
-      pricedInGrainId: '1',
+      seasonId: '3',
+      seasonCode: 'SOJA26/27',
+      seasonName: 'Soja 26/27',
+      grainId: '1',
+      grainName: 'Soja',
+      grainUnit: 'saca 60kg',
+      grainPrice: 100,
+      estimatedYield: 60,
       status: 'open',
       isOpen: true,
       startsAt: DateTime(2026, 2, 1),
@@ -109,7 +107,7 @@ void main() {
           perUnit: 100,
         ),
       ],
-    );
+    )];
   });
 
   tearDown(() {
@@ -117,7 +115,7 @@ void main() {
     AppData.producers = [];
     AppData.units = [];
     AppData.inputs = [];
-    AppData.currentVersion = null;
+    AppData.currentVersions = [];
     AppData.classes = [];
   });
 

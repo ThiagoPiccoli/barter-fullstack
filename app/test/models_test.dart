@@ -44,31 +44,21 @@ void main() {
 
   Map<String, dynamic> versionJson({bool withGoals = false}) => {
         'id': 4,
-        'code': 'B2026.02',
+        'code': 'SOJA26/27.02',
+        'slug': 'SOJA2627.02',
         'number': 2,
-        'seasonCode': 'B2026',
-        'seasonName': 'Barter 2026/27',
-        // AS CULTURAS que este lançamento aceita, e em qual delas a tabela está
-        // convertida. Duas aqui de propósito: é o caso que o modelo passou a
-        // ter de responder.
-        'grains': [
-          {
-            'grainId': 1,
-            'grainName': 'Soja',
-            'grainUnit': 'saca 60kg',
-            'price': 148.5,
-            'estimatedYield': 60,
-            'cprDueDate': '2026-06-30T12:00:00.000Z',
-          },
-          {
-            'grainId': 2,
-            'grainName': 'Milho',
-            'grainUnit': 'saca 60kg',
-            'price': 64.5,
-            'estimatedYield': 170,
-          },
-        ],
-        'pricedInGrainId': 1,
+        'seasonId': 3,
+        'seasonCode': 'SOJA26/27',
+        'seasonSlug': 'SOJA2627',
+        'seasonName': 'Soja 26/27',
+        // A CULTURA desta versão — uma por versão.
+        'grainId': 1,
+        'grainName': 'Soja',
+        'grainUnit': 'saca 60kg',
+        'grainPrice': 148.5,
+        'estimatedYield': 60,
+        'cprDueDate': '2026-06-30T12:00:00.000Z',
+        'insurancePolicy': 'optional',
         'status': 'active',
         'isOpen': true,
         'startsAt': '2026-01-08T00:00:00.000Z',
@@ -83,9 +73,7 @@ void main() {
         if (withGoals) ...{
           'realized': {
             'sales': 5520.0,
-            'sacks': [
-              {'grainId': 1, 'grainName': 'Soja', 'sacks': 80.4},
-            ],
+            'sacks': 80.4,
             'barters': 1,
           },
           'goals': [
@@ -297,21 +285,37 @@ void main() {
     test('sc/ha ausente é null, e não zero', () {
       final semMetrica = BarterModel.fromJson(barterJson(status: 'approved'));
       expect(semMetrica.sacksPerHa, isNull);
-      expect(semMetrica.producerAreaHa, isNull);
 
       final comMetrica = BarterModel.fromJson(barterJson(status: 'approved')
-        ..['producerAreaHa'] = 120
+        ..['plantedAreaHa'] = 120
         ..['sacksPerHa'] = 0.67037);
-      expect(comMetrica.producerAreaHa, 120);
+      expect(comMetrica.plantedAreaHa, 120);
       expect(comMetrica.sacksPerHa, closeTo(0.67037, 0.00001));
 
       // Permuta anterior ao campo de área: o servidor manda a área que tem (0) e
       // `null` no lugar da divisão que não dá para fazer.
       final semArea = BarterModel.fromJson(barterJson(status: 'approved')
-        ..['producerAreaHa'] = 0
+        ..['plantedAreaHa'] = 0
         ..['sacksPerHa'] = null);
-      expect(semArea.producerAreaHa, 0);
+      expect(semArea.plantedAreaHa, 0);
       expect(semArea.sacksPerHa, isNull);
+    });
+
+    /// A SAFRA DA CULTURA e a ESCOLHA DO SEGURO chegam com a permuta: a recusa
+    /// do seguro opcional é informação que o comitê lê.
+    test('lê a safra da cultura e a escolha do seguro', () {
+      final barter = BarterModel.fromJson(barterJson(status: 'approved')
+        ..['seasonId'] = 3
+        ..['seasonName'] = 'Soja 26/27'
+        ..['insuranceChoice'] = 'declined');
+      expect(barter.seasonId, '3');
+      expect(barter.seasonName, 'Soja 26/27');
+      expect(barter.insuranceChoice, InsuranceChoice.declined);
+      // Escolha que este app não conhece cai em "sem seguro".
+      expect(
+        BarterModel.fromJson(barterJson()..['insuranceChoice'] = 'talvez').insuranceChoice,
+        InsuranceChoice.none,
+      );
     });
 
     /// A LINHA DO TEMPO só vem no detalhe. Na listagem ela não vem, e a tela
@@ -565,14 +569,16 @@ void main() {
   group('BarterVersionModel', () {
     test('lê a versão vigente com a tabela de valores', () {
       final version = BarterVersionModel.fromJson(versionJson());
-      expect(version.code, 'B2026.02');
-      // OS ATALHOS respondem pela cultura EM USO — a que a tabela converteu.
+      expect(version.code, 'SOJA26/27.02');
+      expect(version.slug, 'SOJA2627.02');
+      expect(version.seasonId, '3');
+      expect(version.seasonName, 'Soja 26/27');
       expect(version.grainName, 'Soja');
       expect(version.grainPrice, 148.5);
-      // E as duas culturas chegam inteiras: é entre elas que o consultor
-      // escolhe.
-      expect(version.grains.map((g) => g.grainName), ['Soja', 'Milho']);
-      expect(version.grainFor('2')?.estimatedYield, 170);
+      expect(version.estimatedYield, 60);
+      expect(version.insurancePolicy, InsurancePolicy.optional);
+      expect(version.insuranceOptional, isTrue);
+      expect(version.showsCurrency, isTrue);
       expect(version.isOpen, isTrue);
       expect(version.priceOf('5')?.perUnit, 115.0);
       // Insumo fora da tabela não é permutável nesta gestão.
@@ -595,6 +601,7 @@ void main() {
       expect(version.goals[1].kind, GoalKind.sales); // desconhecida → leitura mais comum
       expect(version.anyGoalMet, isTrue);
       expect(version.realizedBarters, 1);
+      expect(version.realizedSacks, 80.4);
     });
 
     /// O MODO de encerramento por meta. Ausente vale MANUAL: é o padrão do
@@ -741,56 +748,46 @@ void main() {
   });
 
   group('SeasonModel', () {
-    test('lê a safra com as versões dentro', () {
+    test('lê a safra da cultura com as versões dentro', () {
       final season = SeasonModel.fromJson({
         'id': 3,
-        'code': 'S2026',
-        'name': 'Soja 2026',
-        'year': 2026,
+        'code': 'SOJA26/27',
+        'slug': 'SOJA2627',
+        'name': 'Soja 26/27',
         'grainId': 1,
         'grainName': 'Soja',
+        'startYear': 2026,
+        'endYear': 2027,
+        'insurancePolicy': 'required',
         'status': 'open',
         'openedAt': '2026-01-05T00:00:00.000Z',
         'versions': [versionJson()],
       });
       expect(season.isOpen, isTrue);
-      expect(season.versions.single.code, 'B2026.02');
+      expect(season.slug, 'SOJA2627');
+      expect(season.crossesYear, isTrue);
+      expect(season.insurancePolicy, InsurancePolicy.required);
+      expect(season.versions.single.code, 'SOJA26/27.02');
+      expect(season.activeVersion?.code, 'SOJA26/27.02');
     });
 
-    /// O VENCIMENTO DA CPR é da CULTURA, e o app só o transporta: soja vence na
-    /// colheita da soja, milho safrinha no dele — e as duas convivem na mesma
-    /// gestão. Ele saiu da SAFRA junto com o grão, pelo mesmo motivo.
-    test('o vencimento da CPR chega com a cultura do lançamento', () {
-      final grain = VersionGrainModel.fromJson({
-        'grainId': 1,
-        'grainName': 'Soja',
-        'grainUnit': 'saca 60kg',
-        'price': 148.5,
-        'estimatedYield': 60,
-        'cprDueDate': '2026-06-30T12:00:00.000Z',
-      });
+    /// O VENCIMENTO DA CPR é da VERSÃO, e o app só o transporta.
+    test('o vencimento da CPR chega com a versão', () {
+      final version = BarterVersionModel.fromJson(versionJson());
 
       // O modelo guarda o instante em hora LOCAL, como todas as datas do app.
       // O que precisa sobreviver é o DIA — e é o meio-dia UTC que garante isso
       // em qualquer fuso (ver `cprDueDateInstant`).
-      expect(grain.cprDueDate!.toUtc(), DateTime.utc(2026, 6, 30, 12));
-      expect(grain.cprDueDate!.day, 30);
-      expect(grain.cprDueDate!.month, 6);
+      expect(version.cprDueDate!.toUtc(), DateTime.utc(2026, 6, 30, 12));
+      expect(version.cprDueDate!.day, 30);
+      expect(version.cprDueDate!.month, 6);
     });
 
-    /// SEM VENCIMENTO é um estado legítimo, e não um erro: o Barter é lançado
-    /// antes de o calendário da colheita estar fechado. Quem cobra a falta é a
-    /// cédula, endereçando a pendência ao admin.
-    test('cultura sem vencimento acertado não inventa uma data', () {
-      final grain = VersionGrainModel.fromJson({
-        'grainId': 2,
-        'grainName': 'Milho',
-        'grainUnit': 'saca 60kg',
-        'price': 64.5,
-        'estimatedYield': 170,
-      });
-
-      expect(grain.cprDueDate, isNull);
+    /// SEM VENCIMENTO é um estado legítimo: o Barter é lançado antes de o
+    /// calendário da colheita estar fechado. Quem cobra a falta é a cédula.
+    test('versão sem vencimento acertado não inventa uma data', () {
+      final version = BarterVersionModel.fromJson(versionJson()..remove('cprDueDate'));
+      expect(version.cprDueDate, isNull);
     });
 
     /// O DIA ESCOLHIDO NO CALENDÁRIO vira MEIO-DIA UTC, e não a meia-noite
@@ -934,7 +931,9 @@ void main() {
       expect(producer.consultantId, '4');
       expect(producer.isAttendedBy('4'), isTrue);
       expect(producer.isAttendedBy('2'), isFalse);
-      expect(producer.areaLabel, '320 ha');
+      // A área não é mais do cadastro: o rótulo é de quem tem a área.
+      expect(areaLabelOf(320), '320 ha');
+      expect(areaLabelOf(85.5), '85,5 ha');
     });
 
     /// Produtor cujo consultor foi excluído espera realocação. A tela do admin

@@ -56,12 +56,11 @@ export const CAPABILITY = {
    * arrendou mais terra para esta safra, que fez a opção pela folha e que o
    * CPF saiu com um dígito trocado no cadastro é ele.
    *
-   * A ÁREA e o REGIME DE FUNRURAL já foram do admin, e saíram de lá: a área do
-   * Barter muda de uma cultura para outra (o cliente planta 400 ha de soja no
-   * verão e 250 de milho na safrinha), e quem sabe qual é a da permuta que está
-   * sendo montada é o consultor. O que já foi registrado não se mexe — a
-   * permuta congela a área e a alíquota que usou (`Barter.producerAreaHa`,
-   * `Barter.taxRate`).
+   * O REGIME DE FUNRURAL já foi do admin, e saiu de lá: quem traz a opção do
+   * produtor da fazenda é o consultor. O que já foi registrado não se mexe — a
+   * permuta congela a alíquota que usou (`Barter.taxRate`). A ÁREA nem mora mais
+   * no cadastro: ela é a área plantada de cada permuta (`Barter.plantedAreaHa`),
+   * informada pelo consultor no registro.
    *
    * O que ela NÃO alcança é a CARTEIRA (ver `assertEditable`): um consultor que
    * a escrevesse poderia passar o próprio cliente adiante sem que ninguém
@@ -318,8 +317,8 @@ export const CAPABILITY = {
    * insumo em dívida; a taxa do seguro acrescenta custo à dívida antes da
    * conversão.
    *
-   * NÃO foi fundida com `barterManage` — que é quem liga o seguro no lançamento
-   * (ver `BarterVersion.insuranceRequired`) — pelo mesmo motivo de
+   * NÃO foi fundida com `barterManage` — que é quem decide a política de seguro
+   * do lançamento (ver `BarterVersion.insurancePolicy`) — pelo mesmo motivo de
    * `pledgePolicyManage` não ter sido: são dois atos com donos possivelmente
    * diferentes. Publicar a tabela de valores é decisão comercial da safra;
    * manter a base de seguros é transcrever a cotação que a seguradora mandou, e
@@ -390,7 +389,7 @@ export const CAPABILITY = {
   pricesRead: 'prices.read',
   /**
    * Ver o INVESTIMENTO POR HECTARE da permuta — quantas sacas do grão a lavoura
-   * está comprometendo por hectare de área cultivável (sc/ha).
+   * está comprometendo por hectare plantado (sc/ha).
    *
    * É a única medida que compara duas permutas de tamanhos diferentes: R$ 400
    * mil numa fazenda de 2.000 ha e R$ 400 mil numa de 300 ha são negócios

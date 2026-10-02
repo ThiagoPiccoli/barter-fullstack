@@ -140,6 +140,58 @@ List<StatSlice> sacksByGrain(Iterable<BarterModel> barters) {
   return _ranked(byGrain);
 }
 
+/// A SAFRA DA CULTURA de uma permuta, como os painéis a nomeiam: a safra
+/// ("Soja 26/27"), ou o grão nas permutas anteriores às safras por cultura, ou
+/// "sem safra" — para a permuta não sumir da conta.
+String seasonLabelOf(BarterModel barter) => barter.seasonName.isNotEmpty
+    ? barter.seasonName
+    : (barter.referenceGrainName.isNotEmpty ? barter.referenceGrainName : 'sem safra');
+
+/// SACAS POR SAFRA DA CULTURA — Soja 26/27, Milho 2027.
+///
+/// É a leitura que o encerramento por cultura pede: cada safra é um Barter à
+/// parte, com a sua meta, e o admin olha o compromisso de cada uma separado.
+List<StatSlice> sacksBySeason(Iterable<BarterModel> barters) {
+  final bySeason = <String, double>{};
+  for (final barter in barters) {
+    final label = seasonLabelOf(barter);
+    bySeason[label] = (bySeason[label] ?? 0) + barter.totalGrainQty;
+  }
+  return _ranked(bySeason);
+}
+
+/// OS NÚMEROS DE CADA SAFRA DA CULTURA — o painel por cultura.
+///
+/// Um [BarterStats] por safra, sobre o mesmo recorte que o painel geral usa:
+/// "3 fechadas, 4.000 sacas a receber, 2 no comitê" lido cultura por cultura.
+/// Da safra com mais sacas a receber para a com menos.
+List<({String label, BarterStats stats})> statsBySeason(Iterable<BarterModel> barters) {
+  final grouped = <String, List<BarterModel>>{};
+  for (final barter in barters) {
+    grouped.putIfAbsent(seasonLabelOf(barter), () => []).add(barter);
+  }
+  return [
+    for (final entry in grouped.entries) (label: entry.key, stats: statsOf(entry.value)),
+  ]..sort((a, b) => b.stats.sacksReceivable.compareTo(a.stats.sacksReceivable));
+}
+
+/// As SAFRAS presentes nestas permutas — o seletor do filtro por cultura. Sai
+/// das permutas, e não do cadastro de safras (que é do admin), pelo mesmo
+/// motivo de [consultantsOf]. Permutas sem safra não viram opção.
+List<({String id, String name})> seasonsOf(Iterable<BarterModel> barters) {
+  final names = <String, String>{};
+  for (final barter in barters) {
+    if (barter.seasonId.isEmpty) continue;
+    names[barter.seasonId] = barter.seasonName;
+  }
+  return names.entries.map((e) => (id: e.key, name: e.value)).toList()
+    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+}
+
+/// As permutas de UMA safra da cultura.
+List<BarterModel> ofSeason(Iterable<BarterModel> barters, String seasonId) =>
+    barters.where((b) => b.seasonId == seasonId).toList();
+
 /// Sacas por FILIAL do consultor que registrou — o volume por praça.
 List<StatSlice> sacksByBranch(Iterable<BarterModel> barters) {
   final byBranch = <String, double>{};

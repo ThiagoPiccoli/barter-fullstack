@@ -359,10 +359,12 @@ void main() {
       ];
       // O consultor não vê R$: a tabela chega a ele em SACAS por unidade, e é
       // por isso que o preço vem em `sacksPerUnit`.
-      AppData.currentVersion = BarterVersionModel.fromJson({
+      AppData.currentVersions = [BarterVersionModel.fromJson({
         'id': 2,
-        'code': 'S2026.02',
+        'code': 'SOJA26/27.02',
         'number': 2,
+        'seasonId': 3,
+        'seasonName': 'Soja 26/27',
         'grainId': 1,
         'grainName': 'Soja',
         'grainUnit': 'saca 60kg',
@@ -377,13 +379,13 @@ void main() {
             'sacksPerUnit': 0.7744,
           },
         ],
-      });
+      })];
     });
 
     tearDown(() {
       AppData.producers = [];
       AppData.units = [];
-      AppData.currentVersion = null;
+      AppData.currentVersions = [];
     });
 
     testWidgets('a porta do pedido fica no fim da lista de insumos', (tester) async {

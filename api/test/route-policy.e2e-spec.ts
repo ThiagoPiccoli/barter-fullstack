@@ -274,59 +274,45 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         // do consultor e os insumos. As duas são o mesmo tipo de ato — a
         // bancada de quem montou a permuta, reescrita quantas vezes for preciso
         // enquanto ela não sair da mão dele. Daí o PUT nas duas.
-        // A CULTURA do rascunho entra na mesma lista e sob a mesma capacidade:
-        // trocar o grão em que a permuta será paga é bancada do consultor, como
-        // trocar um insumo — e é dele a escolha, junto com o produtor.
-        { route: 'PUT /barters/:code/culture', policy: 'capability:barters.register' },
         { route: 'PUT /barters/:code/inputs', policy: 'capability:barters.register' },
         { route: 'PUT /barters/:code/note', policy: 'capability:barters.register' },
 
-        // Lançamento do Barter — safra e versões são do admin. A exceção é a
-        // versão VIGENTE: o consultor precisa dela para saber se há Barter
-        // aberto e para a prévia das sacas.
+        // Lançamento do Barter — safras e versões são do admin. A exceção são as
+        // versões VIGENTES: o consultor precisa delas para saber quais culturas
+        // têm Barter aberto e para a prévia das sacas.
         { route: 'GET /barter-versions/current', policy: 'any-authenticated' },
-        { route: 'GET /barter-versions/:code', policy: 'capability:barter.manage' },
-        { route: 'POST /barter-versions/:code/close', policy: 'capability:barter.manage' },
+        { route: 'GET /barter-versions/:slug', policy: 'capability:barter.manage' },
+        { route: 'POST /barter-versions/:slug/close', policy: 'capability:barter.manage' },
         // O MODO de encerramento por meta é da mesma alçada do encerramento
         // manual: quem pode fechar o Barter é quem pode dizer que ele fecha
         // sozinho.
         {
-          route: 'PUT /barter-versions/:code/close-on-goal',
+          route: 'PUT /barter-versions/:slug/close-on-goal',
           policy: 'capability:barter.manage',
         },
-        // O ACERTO DE UMA CULTURA (cotação da saca, produtividade estimada,
-        // vencimento da CPR e meta de sacas) é da mesma alçada da publicação:
-        // são as taxas do lançamento, e quem publica a tabela é quem as acerta.
-        // A produtividade decide quanta área de penhor cada permuta nova vai
-        // exigir, então não é campo de cadastro — é decisão de risco, e mora com
-        // quem gere o Barter.
+        // OS TERMOS DA CULTURA (cotação da saca, produtividade estimada,
+        // vencimento da CPR e meta de sacas) são da mesma alçada da publicação:
+        // a produtividade decide quanta área de penhor cada permuta nova vai
+        // exigir — é decisão de risco, e mora com quem gere o Barter.
+        { route: 'PUT /barter-versions/:slug/terms', policy: 'capability:barter.manage' },
+        // O SEGURO da versão é da mesma alçada: ele acrescenta área × taxa do
+        // município ao custo de toda permuta nova. Quem MANTÉM a base de
+        // cotações é o admin por outra porta (`insurance.manage`).
         {
-          route: 'PUT /barter-versions/:code/grains/:grainId',
-          policy: 'capability:barter.manage',
-        },
-        // O SEGURO do lançamento é da mesma alçada, e pelo mesmo raciocínio:
-        // ligá-lo acrescenta área × taxa do município ao custo de toda permuta
-        // nova — é decisão comercial da safra, e mora com quem publica a tabela.
-        // Quem MANTÉM a base de cotações é o admin por outra porta
-        // (`insurance.manage`), e as duas são separadas de propósito: uma decide
-        // se a safra tem seguro, a outra transcreve o que a seguradora cobra.
-        {
-          route: 'PUT /barter-versions/:code/insurance',
+          route: 'PUT /barter-versions/:slug/insurance',
           policy: 'capability:barter.manage',
         },
         {
-          route: 'PUT /barter-versions/:code/prices/:productId',
+          route: 'PUT /barter-versions/:slug/prices/:productId',
           policy: 'capability:barter.manage',
         },
         { route: 'GET /seasons', policy: 'capability:barter.manage' },
         { route: 'POST /seasons', policy: 'capability:barter.manage' },
-        { route: 'POST /seasons/:code/close', policy: 'capability:barter.manage' },
-        // A SAFRA não tem mais o que editar depois de aberta: o grão saiu dela
-        // (as culturas são do lançamento) e com ele foi embora o vencimento da
-        // CPR, que era a única coisa que se acertava depois. Quem acerta a data
-        // agora é `PUT /barter-versions/:code/grains/:grainId`, acima.
-        { route: 'POST /seasons/:code/versions', policy: 'capability:barter.manage' },
-        { route: 'POST /seasons/:code/versions/import', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:slug/close', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:slug/reopen', policy: 'capability:barter.manage' },
+        { route: 'PUT /seasons/:slug/insurance', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:slug/versions', policy: 'capability:barter.manage' },
+        { route: 'POST /seasons/:slug/versions/import', policy: 'capability:barter.manage' },
 
         // Catálogo — leitura comum, gestão do admin.
         // Classes: a lista é FIXA (vem da migration), então só há leitura e o

@@ -61,8 +61,13 @@ class InsuranceImportResult {
 class InsuranceRepository {
   Future<List<InsuranceRateModel>> list() async => parse(await listRaw());
 
-  Future<List<Map<String, dynamic>>> listRaw() async =>
-      (await api.get('/insurance-rates') as List).cast<Map<String, dynamic>>();
+  /// [versionSlug] pede a base convertida em sacas DAQUELA versão — é o que a
+  /// lente do consultor precisa, já que o mesmo hectare custa sacas diferentes
+  /// em cada cultura. Para a retaguarda, que lê R$, ele não muda nada.
+  Future<List<Map<String, dynamic>>> listRaw({String? versionSlug}) async => (await api.get(
+        '/insurance-rates${versionSlug == null ? '' : '?version=${Uri.encodeQueryComponent(versionSlug)}'}',
+      ) as List)
+          .cast<Map<String, dynamic>>();
 
   List<InsuranceRateModel> parse(List<Map<String, dynamic>> rows) =>
       rows.map(InsuranceRateModel.fromJson).toList();

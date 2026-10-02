@@ -32,6 +32,8 @@ void main() {
     required BarterStatus status,
     String producerId = '10',
     String branch = 'Filial 02',
+    String seasonId = '',
+    String seasonName = '',
     String grainName = 'Soja',
     double sacks = 100,
     double inputValue = 100,
@@ -47,6 +49,8 @@ void main() {
         status: status,
         createdAt: createdAt ?? DateTime(2026, 3, 1),
         managerName: managerName,
+        seasonId: seasonId,
+        seasonName: seasonName,
         grains: [grain(grainName, sacks)],
         inputs: [input('NPK', 10, inputValue)],
       );
@@ -95,6 +99,43 @@ void main() {
     test('sem permuta fechada, o ticket médio é zero', () {
       expect(statsOf(const []).averageSacks, 0);
       expect(statsOf([barter(id: 'A', status: BarterStatus.pending)]).averageSacks, 0);
+    });
+  });
+
+  /// CADA SAFRA DA CULTURA É UM BARTER À PARTE, e o painel a lê separada: a
+  /// Soja 25/26 e a Soja 26/27 são compromissos de anos diferentes, mesmo sendo
+  /// o mesmo grão.
+  group('por safra da cultura', () {
+    final permutas = [
+      barter(id: 'A', status: BarterStatus.approved, seasonId: '3', seasonName: 'Soja 26/27', sacks: 100),
+      barter(id: 'B', status: BarterStatus.approved, seasonId: '1', seasonName: 'Soja 25/26', sacks: 300),
+      barter(id: 'C', status: BarterStatus.pending, seasonId: '3', seasonName: 'Soja 26/27', sacks: 50),
+      barter(id: 'D', status: BarterStatus.approved, seasonId: '4', seasonName: 'Milho 2027', sacks: 70),
+    ];
+
+    test('as sacas se agrupam por safra, e não só por grão', () {
+      final fatias = sacksBySeason(permutas.where((b) => b.wasApproved));
+      expect(fatias.map((f) => f.label), ['Soja 25/26', 'Soja 26/27', 'Milho 2027']);
+      expect(fatias.map((f) => f.value), [300, 100, 70]);
+    });
+
+    test('cada safra tem os seus números', () {
+      final porSafra = statsBySeason(permutas);
+      final soja2627 = porSafra.firstWhere((e) => e.label == 'Soja 26/27').stats;
+      expect(soja2627.closedCount, 1);
+      expect(soja2627.pendingCount, 1);
+      expect(soja2627.sacksReceivable, 100);
+    });
+
+    test('o filtro lista as safras presentes e recorta por uma delas', () {
+      expect(seasonsOf(permutas).map((s) => s.name), ['Milho 2027', 'Soja 25/26', 'Soja 26/27']);
+      expect(ofSeason(permutas, '3').map((b) => b.id), ['A', 'C']);
+    });
+
+    /// A PERMUTA ANTERIOR ÀS SAFRAS POR CULTURA cai no grão dela, e não some.
+    test('permuta sem safra cai no grão', () {
+      expect(seasonLabelOf(barter(id: 'X', status: BarterStatus.approved)), 'Soja');
+      expect(seasonsOf([barter(id: 'X', status: BarterStatus.approved)]), isEmpty);
     });
   });
 

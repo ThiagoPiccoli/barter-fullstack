@@ -2,7 +2,6 @@ import { Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
-  IsNumber,
   IsOptional,
   IsPositive,
   IsString,
@@ -60,14 +59,9 @@ export class ProducerDto {
   @MaxLength(80)
   city!: string;
 
-  /**
-   * A área do Barter (ha): base das exigências mínimas de insumo, do seguro e do
-   * investimento por hectare. Muda de uma cultura para outra, e o consultor a
-   * atualiza; cada permuta congela a que usou.
-   */
-  @IsNumber()
-  @IsPositive()
-  areaHa!: number;
+  // A ÁREA não é mais do cadastro: ela é de cada PERMUTA (a área plantada da
+  // cultura que ela cobre — ver `Barter.plantedAreaHa`). A fazenda planta mais de
+  // uma coisa, e um número só para ela media soja contra a terra do trigo.
 
   /**
    * COMO ESTE PRODUTOR RECOLHE o Funrural: `comercializacao` (sobre a receita da

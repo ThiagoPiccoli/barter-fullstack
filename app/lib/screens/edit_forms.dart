@@ -50,7 +50,6 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   late final TextEditingController _phone;
   late final TextEditingController _farm;
   late final TextEditingController _city;
-  late final TextEditingController _area;
 
   /// O consultor que atende este produtor — obrigatório: um produtor que
   /// ninguém atende não aparece para ninguém.
@@ -95,13 +94,6 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     _phone = TextEditingController(text: p?.phone ?? '');
     _farm = TextEditingController(text: p?.farmName ?? '');
     _city = TextEditingController(text: p?.city ?? '');
-    _area = TextEditingController(
-      text: p == null
-          ? ''
-          : (p.areaHa == p.areaHa.roundToDouble()
-              ? p.areaHa.toStringAsFixed(0)
-              : p.areaHa.toStringAsFixed(1).replaceAll('.', ',')),
-    );
   }
 
   @override
@@ -111,16 +103,14 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     _phone.dispose();
     _farm.dispose();
     _city.dispose();
-    _area.dispose();
     super.dispose();
   }
 
-  /// O que a ÁREA é, para os dois donos da tela: a do Barter, que muda com a
-  /// cultura e não reescreve o que já foi registrado.
+  /// Onde a ÁREA foi parar — ela saiu do cadastro, e quem procurar o campo
+  /// precisa saber que agora ela é de cada permuta.
   static const _areaNote =
-      'A área é a do Barter: ela define os insumos obrigatórios e a quantidade mínima '
-      'de cada um nas novas permutas deste produtor, e pode mudar de uma cultura para '
-      'outra. As permutas já registradas mantêm a área que usaram.';
+      'A área plantada é informada em cada permuta, por cultura: ela define o seguro, '
+      'os insumos obrigatórios e o teto da garantia daquela permuta.';
 
   /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
   ///
@@ -148,7 +138,6 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
       phone: _phone.text.trim(),
       farmName: _farm.text.trim(),
       city: _city.text.trim(),
-      areaHa: parseNumberOr(_area.text),
       taxRegime: _taxRegime,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
@@ -196,22 +185,6 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             ),
             _EditField(controller: _farm, label: 'Propriedade', icon: Icons.agriculture_outlined, required: true),
             _EditField(controller: _city, label: 'Município/UF', icon: Icons.location_on_outlined, required: true),
-            // A ÁREA DO BARTER é o denominador de toda régua da permuta — os
-            // mínimos por hectare, o custo do seguro, o investimento por
-            // hectare. Ela muda de uma cultura para outra, e quem sabe a desta
-            // safra é o consultor. A permuta já registrada congela a que usou.
-            _EditField(
-              controller: _area,
-              label: 'Área cultivável (ha)',
-              icon: Icons.straighten,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              required: true,
-              validator: (v) {
-                final n = parseNumber(v ?? '');
-                if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
-                return null;
-              },
-            ),
             // O IMPOSTO do produtor, no cadastro dele: é aqui que a opção pela
             // folha mora, porque é uma opção só — feita perante o fisco, valendo
             // para o ano e para todas as entregas. Cada permuta nova nasce com

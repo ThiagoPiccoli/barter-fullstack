@@ -312,7 +312,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
         return _PersonCard(
           initials: p.avatarInitials,
           name: p.name,
-          subtitle: '${p.location} • ${p.areaLabel}',
+          subtitle: p.location,
           accent: AppColors.primary,
           badgeIcon: Icons.agriculture,
           chips: [

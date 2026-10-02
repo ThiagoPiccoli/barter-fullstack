@@ -90,15 +90,29 @@ class BarterSimulation {
   /// qual o envio confere se a conta mudou.
   final double simulatedSacks;
 
-  /// A CULTURA em que a simulação foi montada — o grão que vai pagá-la.
+  /// A CULTURA em que a simulação foi montada — a SAFRA dela ("Soja 26/27") e o
+  /// grão que vai pagá-la.
   ///
-  /// Ela é ESCOLHA do consultor desde que o Barter passou a aceitar mais de uma
-  /// (ver `VersionGrainModel`), e por isso viaja guardada: a simulação fica no
+  /// É ESCOLHA do consultor, e por isso viaja guardada: a simulação fica no
   /// aparelho até o envio, e enviá-la sem a cultura faria a permuta nascer numa
-  /// que ninguém escolheu. O nome vai junto do id para o cartão dizer "sc de
+  /// que ninguém escolheu. Os nomes vão junto dos ids para o cartão dizer "sc de
   /// soja" sem depender do catálogo carregado.
+  ///
+  /// As guardadas antes das safras por cultura só têm o grão — e o envio acha a
+  /// versão vigente dele (ver `AppData.versionOfSimulation`).
+  final String seasonId;
+  final String seasonName;
   final String grainId;
   final String grainName;
+
+  /// A ÁREA PLANTADA (ha) da cultura que a permuta vai cobrir — o consultor a
+  /// informa na simulação, com o produtor ao lado. Zero nas guardadas antes do
+  /// campo, e aí a tela pede antes do envio.
+  final double plantedAreaHa;
+
+  /// O SEGURO, quando a versão o oferece como opcional: o que o produtor
+  /// escolheu. Null quando a escolha não é dele (obrigatório ou sem seguro).
+  final bool? insurance;
 
   /// COMO o Funrural desta entrega vai ser recolhido — a escolha do fechamento,
   /// entre a comercialização e a folha de pagamento. Ver
@@ -123,8 +137,12 @@ class BarterSimulation {
     required this.versionCode,
     required this.items,
     required this.simulatedSacks,
+    this.seasonId = '',
+    this.seasonName = '',
     this.grainId = '',
     this.grainName = '',
+    this.plantedAreaHa = 0,
+    this.insurance,
     this.taxRegime = TaxRegime.comercializacao,
     required this.createdAt,
     required this.updatedAt,
@@ -134,8 +152,11 @@ class BarterSimulation {
     String? versionCode,
     List<SimulationItem>? items,
     double? simulatedSacks,
+    String? seasonId,
+    String? seasonName,
     String? grainId,
     String? grainName,
+    double? plantedAreaHa,
     TaxRegime? taxRegime,
     DateTime? updatedAt,
   }) =>
@@ -149,8 +170,12 @@ class BarterSimulation {
         versionCode: versionCode ?? this.versionCode,
         items: items ?? this.items,
         simulatedSacks: simulatedSacks ?? this.simulatedSacks,
+        seasonId: seasonId ?? this.seasonId,
+        seasonName: seasonName ?? this.seasonName,
         grainId: grainId ?? this.grainId,
         grainName: grainName ?? this.grainName,
+        plantedAreaHa: plantedAreaHa ?? this.plantedAreaHa,
+        insurance: insurance,
         taxRegime: taxRegime ?? this.taxRegime,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
@@ -180,8 +205,12 @@ class BarterSimulation {
         'versionCode': versionCode,
         'items': [for (final item in items) item.toJson()],
         'simulatedSacks': simulatedSacks,
+        'seasonId': seasonId,
+        'seasonName': seasonName,
         'grainId': grainId,
         'grainName': grainName,
+        'plantedAreaHa': plantedAreaHa,
+        'insurance': insurance,
         'taxRegime': taxRegime.apiValue,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
@@ -217,8 +246,12 @@ class BarterSimulation {
       versionCode: '${json['versionCode'] ?? ''}',
       items: items,
       simulatedSacks: toQuantity(json['simulatedSacks']),
+      seasonId: '${json['seasonId'] ?? ''}',
+      seasonName: '${json['seasonName'] ?? ''}',
       grainId: '${json['grainId'] ?? ''}',
       grainName: '${json['grainName'] ?? ''}',
+      plantedAreaHa: toQuantity(json['plantedAreaHa']),
+      insurance: json['insurance'] is bool ? json['insurance'] as bool : null,
       // Simulação montada por uma versão anterior do app não tem o campo: cai
       // na comercialização, que é o que vale para quem não fez a opção formal
       // pela folha.

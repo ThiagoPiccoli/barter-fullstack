@@ -10,10 +10,10 @@ import { normalizeName } from '../seasons/product-name';
  *
  * A REGRA inteira cabe em uma linha:
  *
- *     custo do seguro = área cultivável do produtor (ha) × taxa do município (R$/ha)
+ *     custo do seguro = área plantada da permuta (ha) × taxa do município (R$/ha)
  *
- * A ÁREA é a do CADASTRO do produtor — a mesma que mede os mínimos por hectare
- * e o investimento por hectare —, e não a área penhorada na cédula. As duas são
+ * A ÁREA é a PLANTADA que a permuta cobre — a mesma que mede os mínimos por
+ * hectare e o investimento por hectare —, e não a área penhorada na cédula. As duas são
  * diferentes de propósito: a penhorada é quanto de lavoura garante ESTA dívida
  * (ver `pledgeAreaFor`), e o que se segura é a lavoura que o produtor planta.
  * Segurar só a área do penhor deixaria de fora justamente o pedaço da fazenda

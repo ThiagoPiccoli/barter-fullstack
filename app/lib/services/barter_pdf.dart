@@ -228,9 +228,13 @@ class BarterPdf {
               // A gestão em que a permuta foi fechada. O comprovante precisa
               // dizer isso: são os valores desta versão que valem para ela,
               // mesmo depois que a próxima for publicada.
+              // E a SAFRA DA CULTURA ao lado: "Soja 26/27 • Barter SOJA26/27.02".
               if (barter.versionCode.isNotEmpty) ...[
                 pw.SizedBox(height: 1),
-                pw.Text('Barter ${barter.versionCode}',
+                pw.Text(
+                    barter.seasonName.isNotEmpty
+                        ? '${barter.seasonName} • Barter ${barter.versionCode}'
+                        : 'Barter ${barter.versionCode}',
                     style: pw.TextStyle(color: _onPrimaryMuted, fontSize: 8)),
               ],
               pw.SizedBox(height: 4),
@@ -311,8 +315,11 @@ class BarterPdf {
                     if (producer != null) ...[
                       _kv('Documento', producer.document),
                       _kv('Propriedade', producer.location),
-                      _kv('Área cultivável', producer.areaLabel),
                     ],
+                    // A ÁREA PLANTADA da cultura que esta permuta cobre — a do
+                    // registro, e não a da fazenda inteira.
+                    if (barter.plantedAreaHa > 0)
+                      _kv('Área plantada', areaLabelOf(barter.plantedAreaHa)),
                   ],
                 ),
               ),

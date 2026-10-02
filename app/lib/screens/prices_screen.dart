@@ -152,9 +152,10 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
   }
 }
 
-/// A tabela de valores da versão VIGENTE: a saca do grão no topo e um cartão
-/// por insumo, com preço, custo e margem. É a foto do que está valendo agora —
-/// e o único lugar do app onde um valor pode ser corrigido.
+/// A tabela de valores de uma versão VIGENTE — uma por cultura aberta, e o
+/// admin escolhe qual: a saca do grão no topo e um cartão por insumo. É a foto
+/// do que está valendo agora — e o único lugar do app onde um valor pode ser
+/// corrigido.
 class _VersionPriceTable extends StatefulWidget {
   final String query;
   final VoidCallback onUpdate;
@@ -172,6 +173,10 @@ enum _ValueSort { name, priceDesc, priceAsc }
 class _VersionPriceTableState extends State<_VersionPriceTable> {
   /// Quantos itens da lista são cabeçalho (cotação da saca e título).
   static const int _headerCount = 2;
+
+  /// A CULTURA cuja tabela está na tela (a versão vigente dela). Começa na
+  /// primeira; cada cultura tem a própria planilha.
+  String? _versionId;
 
   /// Classe escolhida (null = todas). A tabela da versão não carrega a classe:
   /// ela é atributo do CADASTRO, então vem do catálogo pelo productId.
@@ -231,20 +236,43 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
 
   @override
   Widget build(BuildContext context) {
-    final version = AppData.currentVersion;
-    if (version == null) {
+    final versions = AppData.currentVersions;
+    if (versions.isEmpty) {
       return const _EmptyState(
         icon: Icons.price_change_outlined,
         title: 'Nenhum Barter lançado',
-        text: 'Publique uma versão na aba Lançamento para definir os valores da safra.',
+        text: 'Publique uma versão na aba Lançamento para definir os valores de uma cultura.',
       );
     }
+    final version = versions.firstWhere((v) => v.id == _versionId, orElse: () => versions.first);
 
     final rows = _apply(version.prices);
     final classes = _classesInVersion(version);
 
     return Column(
       children: [
+        // A CULTURA: cada uma tem a sua tabela, e a escolha vem antes do filtro.
+        if (versions.length > 1)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  for (final option in versions)
+                    ChoiceChip(
+                      label: Text(option.seasonName.isNotEmpty ? option.seasonName : option.code),
+                      selected: option.id == version.id,
+                      onSelected: (_) => setState(() {
+                        _versionId = option.id;
+                        _classId = null;
+                      }),
+                    ),
+                ],
+              ),
+            ),
+          ),
         FilterBar(
           chips: [
             FilterChipData(label: 'Todas', selected: _classId == null, onTap: () {
@@ -318,6 +346,7 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
               }
               final row = rows[index - _headerCount];
               return _VersionPriceCard(
+                version: version,
                 row: row,
                 code: _productOf(row.productId)?.sku,
                 productClass: AppData.classById(_classOf(row.productId)),
@@ -343,11 +372,8 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
   }
 }
 
-/// AS COTAÇÕES DAS CULTURAS — uma por grão que este Barter aceita.
-///
-/// São várias porque as culturas coexistem: o mesmo lançamento paga em soja e
-/// em milho, sobre a MESMA tabela de insumos, e é a cotação de cada uma que
-/// converte o custo em sacas daquele grão. Corrigir uma não toca a outra.
+/// A COTAÇÃO DA SACA da cultura desta versão — o que converte o custo dos
+/// insumos em sacas.
 class _GrainPricesCard extends StatelessWidget {
   final BarterVersionModel version;
   final VoidCallback onUpdate;
@@ -355,17 +381,6 @@ class _GrainPricesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (final grain in version.grains) ...[
-          _card(context, grain),
-          if (grain != version.grains.last) const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-
-  Widget _card(BuildContext context, VersionGrainModel grain) {
     return Card(
       color: AppColors.grainBg,
       child: Padding(
@@ -386,26 +401,27 @@ class _GrainPricesCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Saca de ${grain.grainName.toLowerCase()}',
+                  Text('Saca de ${version.grainName.toLowerCase()}',
                       style: TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                   Text(
                       'Cotação do Barter ${version.code}'
-                      '${grain.estimatedYield > 0 ? ' • ${grain.estimatedYield.toStringAsFixed(0)} sc/ha' : ''}',
+                      '${version.estimatedYield > 0 ? ' • ${version.estimatedYield.toStringAsFixed(0)} sc/ha' : ''}',
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                 ],
               ),
             ),
-            Text(formatCurrency(grain.price),
+            Text(formatCurrency(version.grainPrice),
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.grain)),
-            if (version.isOpen && grain.grainId.isNotEmpty)
+            if (version.isOpen && version.grainId.isNotEmpty)
               IconButton(
                 tooltip: 'Corrigir',
                 onPressed: () => showVersionPriceDialog(
                   context,
-                  productId: grain.grainId,
-                  productName: 'Saca de ${grain.grainName.toLowerCase()}',
-                  price: grain.price,
+                  version: version,
+                  productId: version.grainId,
+                  productName: 'Saca de ${version.grainName.toLowerCase()}',
+                  price: version.grainPrice,
                   onUpdated: onUpdate,
                 ),
                 icon: Icon(Icons.edit_outlined, size: 18, color: AppColors.grain),
@@ -419,6 +435,7 @@ class _GrainPricesCard extends StatelessWidget {
 
 /// Uma linha da tabela: preço, custo e a margem que alimenta a meta de lucro.
 class _VersionPriceCard extends StatelessWidget {
+  final BarterVersionModel version;
   final VersionPriceModel row;
 
   /// Código do item no cadastro — a linha da versão não o guarda.
@@ -429,6 +446,7 @@ class _VersionPriceCard extends StatelessWidget {
   final bool editable;
   final VoidCallback onUpdate;
   const _VersionPriceCard({
+    required this.version,
     required this.row,
     required this.code,
     required this.productClass,
@@ -479,6 +497,7 @@ class _VersionPriceCard extends StatelessWidget {
                   TextButton(
                     onPressed: () => showVersionPriceDialog(
                       context,
+                      version: version,
                       productId: row.productId,
                       productName: row.productName,
                       price: row.perUnit,
@@ -682,14 +701,12 @@ class _HistoryCard extends StatelessWidget {
   /// na alta e a de aprovação na queda. É a leitura do lado da cooperativa.
   Color get _trendColor => deltaPct >= 0 ? AppColors.denied : AppColors.approved;
 
-  /// O produto está na tabela do Barter vigente? Fora dela ele existe no
-  /// cadastro mas não é permutável — e isso precisa aparecer aqui, senão o
-  /// admin só descobre quando o consultor reclama.
-  bool get _inCurrentVersion {
-    final version = AppData.currentVersion;
-    if (version == null) return false;
-    return version.grainFor(product.id) != null || version.priceOf(product.id) != null;
-  }
+  /// O produto está na tabela de algum Barter vigente (ou é o grão de algum)?
+  /// Fora deles ele existe no cadastro mas não é permutável — e isso precisa
+  /// aparecer aqui, senão o admin só descobre quando o consultor reclama.
+  bool get _inCurrentVersion => AppData.currentVersions.any(
+        (version) => version.grainId == product.id || version.priceOf(product.id) != null,
+      );
 
   @override
   Widget build(BuildContext context) {

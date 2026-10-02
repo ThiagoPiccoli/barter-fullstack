@@ -13,14 +13,14 @@ import {
 } from './utils';
 
 /**
- * O SEGURO DO PRODUTOR — opcional, decidido no LANÇAMENTO e precificado pelo
- * MUNICÍPIO.
+ * O SEGURO DO PRODUTOR — uma POLÍTICA por versão da cultura (obrigatório,
+ * opcional ou sem seguro) e precificado pelo MUNICÍPIO.
  *
  * A regra inteira cabe em três frases, e é isto que estas provas travam:
  *
- * 1. **quem liga é o admin, na versão do Barter** — não o consultor, não o
- *    produtor: contratar seguro é decisão comercial da safra;
- * 2. **quanto custa é do lugar** — área cultivável × taxa do município, porque
+ * 1. **a política é do admin, na versão do Barter** — e, quando ela é opcional,
+ *    quem decide a permuta é o consultor com o produtor;
+ * 2. **quanto custa é do lugar** — área plantada × taxa do município, porque
  *    o que a seguradora cota é o risco da praça (chuva, granizo, seca);
  * 3. **é custo, e custo vira saca** — o seguro entra na conta como qualquer
  *    coisa que a empresa adianta, e sai na colheita junto com os insumos.
@@ -40,11 +40,11 @@ describe('Seguro do produtor (e2e)', () => {
 
   const asUser = async (email: string) => `Bearer ${await loginAs(app, email)}`;
 
-  /** O Barter vigente do dataset — é nele que uma permuta nova cai. */
-  const VERSAO = 'B2026.02';
+  /** O Barter vigente da soja no dataset — é nele que uma permuta nova de soja cai. */
+  const VERSAO = 'SOJA2627.02';
 
   /**
-   * Antônio Carvalho: 120 ha em Maringá/PR, carteira do João. Os insumos são os
+   * Antônio Carvalho, em Maringá/PR, carteira do João, com 120 ha de soja. Os insumos são os
    * mínimos por hectare, e custam R$ 11.946,00 — ver `validPayload` em
    * barters.e2e-spec.ts, de onde este payload é a cópia deliberada: os dois
    * testes precisam registrar a MESMA permuta para que a diferença entre eles
@@ -53,7 +53,8 @@ describe('Seguro do produtor (e2e)', () => {
   const payload = {
     producerId: 1,
     unitId: UNIT.filial02,
-    grainId: 1,
+    seasonId: 3, // Soja 26/27
+    plantedAreaHa: 120,
     inputs: [
       { productId: 5, quantity: 48 },
       { productId: 6, quantity: 300 },
@@ -61,18 +62,18 @@ describe('Seguro do produtor (e2e)', () => {
     ],
   };
 
-  /** Liga (ou desliga) o seguro no Barter vigente — o ato do admin. */
-  const ligarSeguro = async (enabled = true) =>
+  /** A política de seguro do Barter vigente da soja — o ato do admin. */
+  const ligarSeguro = async (policy = 'required') =>
     request(app.getHttpServer())
       .put(`/api/v1/barter-versions/${VERSAO}/insurance`)
       .set('Authorization', await asUser(ADMIN))
-      .send({ enabled });
+      .send({ policy });
 
-  const registrar = async () =>
+  const registrar = async (extra: object = {}) =>
     request(app.getHttpServer())
       .post('/api/v1/barters')
       .set('Authorization', await asUser(JOAO))
-      .send(payload);
+      .send({ ...payload, ...extra });
 
   /**
    * ENCAMINHA o rascunho ao gerente — o preâmbulo de todo caso que precisa ler a
@@ -143,11 +144,12 @@ describe('Seguro do produtor (e2e)', () => {
      *
      * Ele precisa saber quanto o seguro vai custar ao cliente ANTES de fechar a
      * permuta — e R$ não atravessa a lente dele (ver `ValueLens`). O que chega é
-     * `sacksPerHa`: 85,00 ÷ 148,50 = 0,5723 sacas por hectare.
+     * `sacksPerHa` na cultura da versão em que ele monta a permuta: 85,00 ÷
+     * 148,50 = 0,5723 sacas de soja por hectare.
      */
     it('o consultor lê a base em sacas, e a retaguarda em R$', async () => {
       const doConsultor = await request(app.getHttpServer())
-        .get('/api/v1/insurance-rates')
+        .get(`/api/v1/insurance-rates?version=${VERSAO}`)
         .set('Authorization', await asUser(JOAO));
 
       expect(doConsultor.status).toBe(200);
@@ -392,7 +394,7 @@ describe('Seguro do produtor (e2e)', () => {
       const comSeguro = await registrar();
       const code = comSeguro.body.data.code as string;
 
-      expect((await ligarSeguro(false)).status).toBe(200);
+      expect((await ligarSeguro('none')).status).toBe(200);
 
       expect((await encaminhar(code)).status).toBe(200);
       const depois = await comoAdmin(code);
@@ -412,8 +414,8 @@ describe('Seguro do produtor (e2e)', () => {
 
   /**
    * O PADRÃO É NÃO TER. O dataset de demonstração tem a base cadastrada e o
-   * Barter vigente SEM seguro — e é assim que a permuta nasce enquanto ninguém
-   * ligar o interruptor.
+   * Barter vigente da soja SEM seguro — e é assim que a permuta nasce enquanto
+   * ninguém mudar a política.
    */
   it('sem o seguro ligado, a permuta não ganha linha nenhuma', async () => {
     const resposta = await registrar();
@@ -426,31 +428,129 @@ describe('Seguro do produtor (e2e)', () => {
     expect(resposta.body.data.insuranceCity).toBe('');
   });
 
-  it('só quem gere o Barter liga o seguro do lançamento', async () => {
+  it('só quem gere o Barter muda o seguro do lançamento', async () => {
     for (const email of [JOAO, GERENTE, COMITE]) {
       const resposta = await request(app.getHttpServer())
         .put(`/api/v1/barter-versions/${VERSAO}/insurance`)
         .set('Authorization', await asUser(email))
-        .send({ enabled: true });
+        .send({ policy: 'required' });
       expect(resposta.status).toBe(403);
     }
   });
 
+  it('política que não existe é recusada', async () => {
+    expect((await ligarSeguro('talvez')).status).toBe(422);
+  });
+
   /**
    * O SEGURO É DA VERSÃO, e ela chega inteira ao app: é por este campo que a
-   * tela do consultor sabe que a prévia dele leva a linha do seguro.
+   * tela do consultor sabe se mostra a linha, o interruptor ou nada.
    */
-  it('a versão vigente diz se leva seguro', async () => {
-    const antes = await request(app.getHttpServer())
-      .get('/api/v1/barter-versions/current')
-      .set('Authorization', await asUser(JOAO));
-    expect(antes.body.data.insuranceRequired).toBe(false);
+  it('a versão vigente diz a política de seguro', async () => {
+    const soja = async () =>
+      (
+        await request(app.getHttpServer())
+          .get('/api/v1/barter-versions/current')
+          .set('Authorization', await asUser(JOAO))
+      ).body.data.find((version: { slug: string }) => version.slug === VERSAO);
 
+    expect((await soja()).insurancePolicy).toBe('none');
     await ligarSeguro();
+    expect((await soja()).insurancePolicy).toBe('required');
+  });
 
-    const depois = await request(app.getHttpServer())
-      .get('/api/v1/barter-versions/current')
-      .set('Authorization', await asUser(JOAO));
-    expect(depois.body.data.insuranceRequired).toBe(true);
+  /* ── O seguro de cada permuta: obrigatório, opcional, sem ─────────── */
+
+  describe('a escolha que fica gravada na permuta', () => {
+    it('obrigatório: a permuta leva, e não dá para recusar', async () => {
+      await ligarSeguro('required');
+
+      const leva = await registrar();
+      expect(leva.status).toBe(201);
+      expect(leva.body.data.insuranceChoice).toBe('required');
+
+      const recusa = await registrar({ insurance: false });
+      expect(recusa.status).toBe(422);
+      expect(recusa.body.message).toContain('obrigatório');
+    });
+
+    /**
+     * OPCIONAL: o consultor decide com o produtor. A RECUSA fica gravada — é
+     * informação de risco que o comitê precisa ler, e "sem seguro" deixou de
+     * ter uma história só.
+     */
+    it('opcional: o produtor aceita ou recusa, e a escolha fica gravada', async () => {
+      await ligarSeguro('optional');
+
+      const aceita = await registrar({ insurance: true });
+      expect(aceita.status).toBe(201);
+      expect(aceita.body.data.insuranceChoice).toBe('accepted');
+      expect(aceita.body.data.items.some((i: { insurance: boolean }) => i.insurance)).toBe(true);
+
+      const recusa = await registrar({ insurance: false });
+      expect(recusa.status).toBe(201);
+      expect(recusa.body.data.insuranceChoice).toBe('declined');
+      expect(recusa.body.data.items.some((i: { insurance: boolean }) => i.insurance)).toBe(false);
+
+      // Calado é recusa: custo não entra numa permuta sem alguém dizer que entra.
+      const calado = await registrar();
+      expect(calado.body.data.insuranceChoice).toBe('declined');
+    });
+
+    it('sem seguro: pedir seguro é recusado', async () => {
+      const resposta = await registrar({ insurance: true });
+      expect(resposta.status).toBe(422);
+      expect(resposta.body.message).toContain('não oferece seguro');
+    });
+
+    /** O seguro é sobre a ÁREA PLANTADA da permuta, e não a fazenda inteira. */
+    it('o seguro cobre a área plantada informada', async () => {
+      await ligarSeguro('required');
+      const resposta = await registrar({ plantedAreaHa: 60 });
+
+      expect(resposta.status).toBe(201);
+      expect(
+        resposta.body.data.items.find((i: { insurance: boolean }) => i.insurance).quantity,
+      ).toBe(60);
+      expect(resposta.body.data.plantedAreaHa).toBe(60);
+    });
+
+    /**
+     * No RASCUNHO, a escolha do opcional se refaz: o produtor muda de ideia na
+     * conversa, e o consultor remonta a permuta com ou sem a linha.
+     */
+    it('no rascunho, o opcional se liga e desliga', async () => {
+      await ligarSeguro('optional');
+      const criada = await registrar({ insurance: false });
+      const code = criada.body.data.code as string;
+
+      const comSeguro = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/inputs`)
+        .set('Authorization', await asUser(JOAO))
+        .send({ inputs: payload.inputs, insurance: true });
+      expect(comSeguro.status).toBe(200);
+      expect(comSeguro.body.data.insuranceChoice).toBe('accepted');
+      expect(comSeguro.body.data.insuranceCity).toBe('Maringá/PR');
+
+      const semSeguro = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/inputs`)
+        .set('Authorization', await asUser(JOAO))
+        .send({ inputs: payload.inputs, insurance: false });
+      expect(semSeguro.body.data.insuranceChoice).toBe('declined');
+      expect(semSeguro.body.data.insuranceCity).toBe('');
+    });
+
+    /**
+     * Cada cultura tem a sua política: mudar a da soja não toca no milho
+     * safrinha, que no dataset oferece o seguro como opcional.
+     */
+    it('a política é de cada versão — a soja não mexe no milho', async () => {
+      await ligarSeguro('required');
+      const atuais = await request(app.getHttpServer())
+        .get('/api/v1/barter-versions/current')
+        .set('Authorization', await asUser(JOAO));
+      const milho = atuais.body.data.find((v: { slug: string }) => v.slug === 'MILHO2027.01');
+      expect(milho.insurancePolicy).toBe('optional');
+    });
   });
 });

@@ -7,6 +7,7 @@ import { CHANGE_REQUEST_ACTION, CHANGE_REQUEST_STATUS } from '../src/barters/cha
 import { PRODUCT_REQUEST_ACTION, PRODUCT_REQUEST_STATUS } from '../src/barters/product-request';
 import { normalizeName } from '../src/seasons/product-name';
 import { cityKeyOf } from '../src/insurance/insurance-rate';
+import { seasonCode, seasonName, slugOf, versionCode } from '../src/seasons/season-code';
 
 /**
  * A senha de todas as contas de demonstração.
@@ -346,12 +347,19 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
   // aqui para o dataset não precisar repetir o documento duas vezes.
-  type ProducerSeed = Omit<Prisma.ProducerUncheckedCreateInput, 'documentDigits'>;
+  // A ÁREA não vai para o cadastro — o produtor não tem mais área (ver
+  // `Barter.plantedAreaHa`). Ela fica no dataset como a área plantada que as
+  // permutas dele informam.
+  type ProducerSeed = Omit<Prisma.ProducerUncheckedCreateInput, 'documentDigits'> & {
+    areaHa: number;
+  };
 
-  const mkProducer = (data: ProducerSeed) =>
-    prisma.producer.create({
+  const mkProducer = async ({ areaHa, ...data }: ProducerSeed) => ({
+    ...(await prisma.producer.create({
       data: { ...data, documentDigits: documentDigitsOf(data.document) },
-    });
+    })),
+    areaHa,
+  });
 
   const antonio = await mkProducer({
     name: 'Antônio Carvalho',
@@ -432,8 +440,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
   /* ── Base de seguros por município ────────────────────────────────── */
   //
-  // O SEGURO é opcional, e quem diz se a safra o leva é o admin, no lançamento
-  // (ver `BarterVersion.insuranceRequired`). O que mora aqui é a outra metade:
+  // Se a permuta leva SEGURO é a política da versão (ver
+  // `BarterVersion.insurancePolicy`). O que mora aqui é a outra metade:
   // QUANTO custa o hectare em cada praça — o risco do lugar, que é o que a
   // seguradora cota.
   //
@@ -444,8 +452,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   //
   // Os valores são de ordem realista para o Paraná (R$ 80 a R$ 95/ha em soja) e
   // sobem para o Mato Grosso, que é onde o frete e o risco climático pesam mais.
-  // O Barter vigente do dataset NÃO leva seguro — as permutas dele contam a
-  // história de antes —, e ligá-lo é um toque na tela do lançamento.
+  // O Barter vigente da soja NÃO leva seguro — as permutas dele contam a
+  // história de antes —; o do milho safrinha o oferece como OPCIONAL.
   const mkRate = (city: string, valuePerHa: number, note?: string) =>
     prisma.insuranceRate.create({
       data: { city, cityKey: cityKeyOf(city), valuePerHa, note: note ?? null },
@@ -623,69 +631,86 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
 
   /* ── Safras e versões do Barter ───────────────────────────────────── */
   //
-  // O dataset conta a história do modelo: duas safras já encerradas (é delas
-  // que vêm as permutas antigas pagas em milho e trigo) e a safra de soja
-  // ABERTA, com duas versões — a primeira encerrada quando os valores foram
-  // reajustados, a segunda vigente. É nela que uma permuta nova cai.
+  // O dataset conta a história do modelo, uma SAFRA POR CULTURA: o trigo e o
+  // milho de 25/26 já encerrados (é deles que vêm as permutas antigas), a soja
+  // 26/27 ABERTA com duas versões — a primeira encerrada quando os valores
+  // foram reajustados, a segunda vigente — e o milho safrinha 2027, anual, com
+  // a primeira versão no ar. Cada cultura tem a sua tabela, a sua meta e o seu
+  // encerramento.
   const inputs = products.filter((product) => product.type === 'input');
 
-  /**
-   * UMA CULTURA do lançamento, do jeito que o admin a publica: o grão, a
-   * cotação da saca, a produtividade estimada e o vencimento da entrega.
-   *
-   * A produtividade é obrigatória no lançamento real (ver `VersionGrainDto`) e
-   * por isso é obrigatória aqui: uma cultura vigente sem ela recusaria toda
-   * permuta, e a demonstração abriria travada.
-   *
-   * O VENCIMENTO usa meio-dia UTC pela mesma razão do `dueDate` da cédula, mais
-   * abaixo — é data de calendário, e sai impressa.
-   */
-  type SeedGrain = {
-    product: (typeof products)[number];
-    price: number;
-    estimatedYield: number;
-    cprDueDate: Date;
-    targetSacks?: number;
+  const mkSeason = (args: {
+    grain: (typeof products)[number];
+    startYear: number;
+    endYear: number;
+    status: 'open' | 'closed';
+    openedAt: Date;
+    closedAt?: Date;
+    insurancePolicy?: string;
+  }) => {
+    const code = seasonCode(args.grain.name, args.startYear, args.endYear);
+    return prisma.season.create({
+      data: {
+        code,
+        slug: slugOf(code),
+        name: seasonName(args.grain.name, args.startYear, args.endYear),
+        grainId: args.grain.id,
+        grainName: args.grain.name,
+        grainUnit: args.grain.unit,
+        startYear: args.startYear,
+        endYear: args.endYear,
+        status: args.status,
+        openedAt: args.openedAt,
+        closedAt: args.closedAt ?? null,
+        closedBy: args.closedAt ? admin.fullName : null,
+        closedById: args.closedAt ? admin.id : null,
+        insurancePolicy: args.insurancePolicy ?? 'none',
+      },
+    });
   };
 
+  /**
+   * UMA VERSÃO de uma safra, do jeito que o admin a publica: a cotação da saca,
+   * a produtividade estimada, o vencimento da entrega e a tabela de insumos.
+   *
+   * A produtividade é obrigatória no lançamento real e por isso é obrigatória
+   * aqui: uma versão vigente sem ela recusaria toda permuta, e a demonstração
+   * abriria travada. O VENCIMENTO usa meio-dia UTC pela mesma razão do `dueDate`
+   * da cédula, mais abaixo — é data de calendário, e sai impressa.
+   */
   const mkVersion = async (args: {
-    seasonId: number;
+    season: { id: number; code: string; insurancePolicy: string };
     number: number;
-    code: string;
     status: 'active' | 'closed';
-    /** As culturas que este lançamento aceita — pelo menos uma. */
-    grains: SeedGrain[];
+    grainPrice: number;
+    estimatedYield: number;
+    cprDueDate: Date;
     priceIndex: number;
     startsAt: Date;
     closedAt?: Date;
     note: string;
-    targets?: { sales?: number; barters?: number };
-  }) =>
-    prisma.barterVersion.create({
+    targets?: { sales?: number; sacks?: number; barters?: number };
+  }) => {
+    const code = versionCode(args.season.code, args.number);
+    return prisma.barterVersion.create({
       data: {
-        seasonId: args.seasonId,
+        seasonId: args.season.id,
         number: args.number,
-        code: args.code,
+        code,
+        slug: slugOf(code),
         status: args.status,
+        grainPrice: args.grainPrice,
+        estimatedYield: args.estimatedYield,
+        cprDueDate: args.cprDueDate,
+        insurancePolicy: args.season.insurancePolicy,
         startsAt: args.startsAt,
         closedAt: args.closedAt ?? null,
         closedBy: args.closedAt ? admin.fullName : null,
         closedById: args.closedAt ? admin.id : null,
         note: args.note,
         targetSales: args.targets?.sales ?? null,
+        targetSacks: args.targets?.sacks ?? null,
         targetBarters: args.targets?.barters ?? null,
-        grains: {
-          create: args.grains.map((grain, index) => ({
-            grainId: grain.product.id,
-            grainName: grain.product.name,
-            grainUnit: grain.product.unit,
-            price: grain.price,
-            estimatedYield: grain.estimatedYield,
-            cprDueDate: grain.cprDueDate,
-            targetSacks: grain.targetSacks ?? null,
-            position: index,
-          })),
-        },
         prices: {
           create: inputs.map((product) => ({
             productId: product.id,
@@ -695,129 +720,116 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
           })),
         },
       },
-      include: { grains: true },
+      include: { season: true },
     });
+  };
 
   // Números de produtividade do Paraná: trigo ~55 sc/ha, milho ~170, soja ~60.
   // Os vencimentos são os da cultura: o trigo entrega em outubro, o milho
-  // safrinha em setembro, a soja em junho — e é por isso que eles moram na
-  // CULTURA, e não na safra: no mesmo lançamento, soja e milho vencem em meses
-  // diferentes.
-  const trigoGrain: SeedGrain = {
-    product: trigo,
-    price: 85.0,
+  // safrinha em setembro, a soja em junho.
+  const trigoSeason = await mkSeason({
+    grain: trigo,
+    startYear: 2025,
+    endYear: 2026,
+    status: 'closed',
+    openedAt: at(2025, 12, 1),
+    closedAt: at(2026, 6, 30),
+  });
+  const trigoVersion = await mkVersion({
+    season: trigoSeason,
+    number: 1,
+    status: 'closed',
+    grainPrice: 85.0,
     estimatedYield: 55,
     cprDueDate: at(2026, 10, 15, 12),
-  };
-  const milhoGrain: SeedGrain = {
-    product: milho,
-    price: 62.3,
-    estimatedYield: 170,
-    cprDueDate: at(2026, 9, 20, 12),
-  };
-
-  // A SAFRA PASSADA — o ciclo 2025/26, já encerrado. A versão dele aceitava
-  // DUAS culturas ao mesmo tempo (trigo no inverno, milho na safrinha), e é dela
-  // que vêm as permutas antigas pagas em cada uma: no dataset antigo isso exigia
-  // duas safras, uma por grão.
-  const pastSeason = await prisma.season.create({
-    data: {
-      code: 'B2025',
-      name: 'Barter 2025/26',
-      year: 2025,
-      status: 'closed',
-      openedAt: at(2025, 12, 1),
-      closedAt: at(2026, 6, 30),
-    },
-  });
-  const pastVersion = await mkVersion({
-    seasonId: pastSeason.id,
-    number: 1,
-    code: 'B2025.01',
-    status: 'closed',
-    grains: [trigoGrain, milhoGrain],
     priceIndex: 6,
     startsAt: at(2025, 12, 1),
     closedAt: at(2026, 6, 30),
-    note: 'Tabela de abertura do ciclo, com trigo e milho.',
+    note: 'Tabela de abertura do trigo.',
   });
 
-  // A SAFRA ABERTA — o ciclo 2026/27, em que uma permuta nova cai.
-  const season = await prisma.season.create({
-    data: {
-      code: 'B2026',
-      name: 'Barter 2026/27',
-      year: 2026,
-      status: 'open',
-      openedAt: at(2026, 1, 5),
-    },
+  const milhoPastSeason = await mkSeason({
+    grain: milho,
+    startYear: 2025,
+    endYear: 2026,
+    status: 'closed',
+    openedAt: at(2025, 12, 1),
+    closedAt: at(2026, 6, 30),
+  });
+  const milhoPastVersion = await mkVersion({
+    season: milhoPastSeason,
+    number: 1,
+    status: 'closed',
+    grainPrice: 62.3,
+    estimatedYield: 170,
+    cprDueDate: at(2026, 9, 20, 12),
+    priceIndex: 6,
+    startsAt: at(2025, 12, 1),
+    closedAt: at(2026, 6, 30),
+    note: 'Tabela de abertura do milho.',
+  });
+
+  // A SOJA ABERTA — a safra 26/27, em que uma permuta nova de soja cai.
+  const sojaSeason = await mkSeason({
+    grain: soja,
+    startYear: 2026,
+    endYear: 2027,
+    status: 'open',
+    openedAt: at(2026, 1, 5),
   });
 
   // A primeira tabela viveu três dias: foi publicada com a cotação antiga e
   // corrigida logo em seguida. É de propósito que ela não tenha nenhuma permuta
-  // — é o caso de quem republica antes de alguém usar. Ela abriu só com soja, e
-  // o milho entrou na versão seguinte: é assim que uma cultura nova chega a um
-  // Barter que já está no ar.
+  // — é o caso de quem republica antes de alguém usar.
   await mkVersion({
-    seasonId: season.id,
+    season: sojaSeason,
     number: 1,
-    code: 'B2026.01',
     status: 'closed',
-    grains: [{ product: soja, price: 145.0, estimatedYield: 60, cprDueDate: at(2026, 6, 30, 12) }],
+    grainPrice: 145.0,
+    estimatedYield: 60,
+    cprDueDate: at(2026, 6, 30, 12),
     priceIndex: 2,
     startsAt: at(2026, 1, 5),
     closedAt: at(2026, 1, 8),
     note: 'Tabela de abertura, corrigida três dias depois.',
   });
 
-  // A VERSÃO VIGENTE, com as DUAS culturas convivendo: o produtor escolhe se
-  // paga em soja (colheita em junho) ou em milho safrinha (setembro), com a
-  // mesma tabela de insumos e cotações e produtividades próprias. As metas de
-  // saca são por cultura, porque sacas de soja e de milho não somam.
   const current = await mkVersion({
-    seasonId: season.id,
+    season: sojaSeason,
     number: 2,
-    code: 'B2026.02',
     status: 'active',
-    grains: [
-      {
-        product: soja,
-        price: soja.price,
-        estimatedYield: 60,
-        cprDueDate: at(2026, 6, 30, 12),
-        targetSacks: 5000,
-      },
-      {
-        product: milho,
-        price: 64.5,
-        estimatedYield: 170,
-        cprDueDate: at(2026, 9, 20, 12),
-        targetSacks: 9000,
-      },
-    ],
+    grainPrice: soja.price,
+    estimatedYield: 60,
+    cprDueDate: at(2026, 6, 30, 12),
     priceIndex: 6,
     startsAt: at(2026, 1, 8),
-    note: 'Tabela vigente, com soja e milho.',
-    targets: { sales: 500000, barters: 40 },
+    note: 'Tabela vigente da soja.',
+    targets: { sales: 500000, sacks: 5000, barters: 40 },
   });
 
-  /**
-   * A PRODUTIVIDADE com que o penhor desta permuta foi dimensionado: a da
-   * CULTURA em que ela é paga, dentro da versão em que ela nasceu.
-   *
-   * A cultura sai da própria linha de pagamento da permuta, que é onde ela mora
-   * (ver `BarterItem` no schema) — o mesmo caminho que o service usa para
-   * responder "em que grão esta permuta é paga?".
-   */
-  const yieldOf = (entry: {
-    version: { grains: { grainId: number | null; estimatedYield: number }[] };
-    items: { kind: string; productId: number }[];
-  }): number => {
-    const paid = entry.items.find((item) => item.kind === 'grain');
-    return (
-      entry.version.grains.find((grain) => grain.grainId === paid?.productId)?.estimatedYield ?? 0
-    );
-  };
+  // O MILHO SAFRINHA 2027 — anual, aberto ao lado da soja, com o seguro
+  // OPCIONAL. É a demonstração de duas culturas vendendo ao mesmo tempo, cada
+  // uma na sua tabela.
+  const milhoSeason = await mkSeason({
+    grain: milho,
+    startYear: 2027,
+    endYear: 2027,
+    status: 'open',
+    openedAt: at(2026, 1, 8),
+    insurancePolicy: 'optional',
+  });
+  await mkVersion({
+    season: milhoSeason,
+    number: 1,
+    status: 'active',
+    grainPrice: 64.5,
+    estimatedYield: 170,
+    cprDueDate: at(2027, 9, 20, 12),
+    priceIndex: 5,
+    startsAt: at(2026, 1, 8),
+    note: 'Tabela de abertura do milho safrinha.',
+    targets: { sacks: 9000 },
+  });
 
   /* ── Permutas históricas (mesmos números do mock) ─────────────────── */
   type Ref = (typeof products)[number];
@@ -906,7 +918,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       code: 'PRM-2026-003',
       consultantNote:
         'Bom pagador, mas o volume que ele pediu depende de a carga chegar antes da janela dele. Registrei como veio para o gerente avaliar o estoque.',
-      version: pastVersion,
+      version: milhoPastVersion,
       consultant: roberto,
       producer: joaquim,
       status: 'denied',
@@ -1006,7 +1018,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       code: 'PRM-2026-007',
       consultantNote:
         'Produtora nova na carteira, área arrendada em três talhões. Sugiro olhar a garantia com cuidado.',
-      version: pastVersion,
+      version: milhoPastVersion,
       consultant: lucas,
       producer: vanessa,
       // Na mesa do Gustavo, esperando o parecer da Filial 18.
@@ -1045,7 +1057,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       code: 'PRM-2026-008',
       consultantNote:
         'Mesmo produtor da PRM-2026-003, agora no trigo. Os dois talhões em pousio explicam o volume de glifosato.',
-      version: pastVersion,
+      version: trigoVersion,
       consultant: roberto,
       producer: joaquim,
       status: 'approved',
@@ -1126,14 +1138,15 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         consultantBranch: homeUnit.name,
         producerId: entry.producer.id,
         producerName: entry.producer.name,
-        // A ÁREA congelada no registro — o denominador do investimento por
-        // hectare. Sai do cadastro do produtor, que é de onde o service a copia.
-        producerAreaHa: entry.producer.areaHa,
+        // A SAFRA DA CULTURA, congelada como o service a congela.
+        seasonId: entry.version.seasonId,
+        seasonName: entry.version.season.name,
+        // A ÁREA PLANTADA da cultura que a permuta cobre — o denominador do
+        // investimento por hectare, a régua dos mínimos e o teto do penhor.
+        plantedAreaHa: entry.producer.areaHa,
         // O PENHOR congelado, como o service o congela: a produtividade da
-        // CULTURA em que a permuta foi paga e a margem da credora no dia. É
-        // deles que sai a área que as lavouras da cédula precisam fechar — e é
-        // por cultura porque 60 sc/ha de soja não é 170 de milho.
-        pledgeYield: yieldOf(entry),
+        // versão em que a permuta foi registrada e a margem da credora no dia.
+        pledgeYield: entry.version.estimatedYield,
         pledgeMarginPercent: 20,
         unitId: unit.id,
         unitName: unit.name,

@@ -2174,7 +2174,14 @@ class _KnownCard extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           _line('Emitente', '${known.emitterName} • ${known.emitterDocument}'),
-          _line('Produto', '${known.grainName} • safra ${known.versionCode}'),
+          // A SAFRA DA CULTURA ("Soja 26/27") e a versão em que a permuta foi
+          // fechada — é a safra que a cédula nomeia.
+          _line(
+            'Produto',
+            known.seasonName.isNotEmpty
+                ? '${known.grainName} • safra ${known.seasonName} (${known.versionCode})'
+                : '${known.grainName} • safra ${known.versionCode}',
+          ),
           _line('Quantidade',
               '${formatSacks(known.sacks)} sacas • ${formatQty(known.quantityKg)} kg'),
           _line('Preço da saca', formatCurrency(known.sackPrice)),

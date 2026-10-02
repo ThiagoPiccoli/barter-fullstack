@@ -24,18 +24,24 @@ class BarterRepository {
   Future<BarterModel> create({
     required String producerId,
     required String unitId,
-    required String grainId,
+    required String seasonId,
+    required double plantedAreaHa,
     required Map<String, double> inputQuantities,
+    bool? insurance,
     String note = '',
   }) async {
     final data = await api.post('/barters', body: {
       'producerId': int.parse(producerId),
-      // A CULTURA em que a permuta será paga — a primeira decisão dela, e do
-      // CONSULTOR: é ele quem sabe o que o cliente vai plantar naquele talhão.
-      // Obrigatória mesmo quando o Barter tem uma cultura só, porque um padrão
-      // silencioso faria a permuta nascer numa cultura que ninguém escolheu no
-      // dia em que o admin lançasse a segunda.
-      'grainId': int.parse(grainId),
+      // A CULTURA em que a permuta será paga — a safra dela, e a versão vigente
+      // dessa safra é a tabela. É a primeira decisão da permuta, e do CONSULTOR:
+      // é ele quem sabe o que o cliente vai plantar naquele talhão.
+      'seasonId': int.parse(seasonId),
+      // A ÁREA PLANTADA daquela cultura que a permuta cobre — a régua do
+      // seguro, dos mínimos e do penhor.
+      'plantedAreaHa': plantedAreaHa,
+      // O SEGURO, só quando a versão o oferece como opcional: nas outras a
+      // política decide sozinha, e mandar o campo seria contradizê-la.
+      'insurance': ?insurance,
       if (note.trim().isNotEmpty) 'note': note.trim(),
       // SEM `taxRegime`: o regime é do produtor e mora no cadastro dele, e é de
       // lá que o servidor o lê. Mandá-lo daqui significaria mandar o que o
@@ -86,24 +92,8 @@ class BarterRepository {
   ///
   /// Vem na moeda da LENTE, como a versão vigente: sacas por unidade para o
   /// consultor, R$ para a retaguarda.
-  /// TROCA A CULTURA de um rascunho — o grão em que a permuta será paga.
-  ///
-  /// `PUT` pelo mesmo motivo dos insumos: é um estado que se declara ("esta
-  /// permuta é de milho"), e reenviar o mesmo grão dá o mesmo resultado. Só o
-  /// rascunho aceita — depois do encaminhamento, o caminho é o pedido de
-  /// alteração.
-  Future<BarterModel> setCulture(String code, String grainId) async {
-    final data = await api.put(
-      '/barters/$code/culture',
-      body: {'grainId': int.parse(grainId)},
-    );
-    return BarterModel.fromJson(data as Map<String, dynamic>);
-  }
-
-  Future<BarterVersionModel> versionOf(String code, {String? grainId}) async {
-    final data = await api.get(
-      '/barters/$code/version${grainId == null ? '' : '?grainId=$grainId'}',
-    );
+  Future<BarterVersionModel> versionOf(String code) async {
+    final data = await api.get('/barters/$code/version');
     return BarterVersionModel.fromJson(data as Map<String, dynamic>);
   }
 
@@ -115,8 +105,18 @@ class BarterRepository {
   /// mínimo como um conjunto, e o servidor a reprecifica pela tabela da versão
   /// em que ela foi fechada. Só vale enquanto ela é rascunho — depois disso o
   /// caminho é o pedido de alteração (ver [requestChange]).
-  Future<BarterModel> replaceInputs(String code, Map<String, double> inputQuantities) async {
+  ///
+  /// A ÁREA PLANTADA e a escolha do SEGURO opcional podem vir junto: as três
+  /// coisas mudam na mesma conversa com o produtor. Ausentes, ficam como estão.
+  Future<BarterModel> replaceInputs(
+    String code,
+    Map<String, double> inputQuantities, {
+    double? plantedAreaHa,
+    bool? insurance,
+  }) async {
     final data = await api.put('/barters/$code/inputs', body: {
+      'plantedAreaHa': ?plantedAreaHa,
+      'insurance': ?insurance,
       'inputs': [
         for (final entry in inputQuantities.entries)
           if (entry.value > 0) {'productId': int.parse(entry.key), 'quantity': entry.value},

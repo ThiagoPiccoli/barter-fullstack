@@ -7,7 +7,6 @@ import 'package:agrobarter_app/screens/consultants_screen.dart';
 import 'package:agrobarter_app/screens/insurance_rate_profile_screen.dart';
 import 'package:agrobarter_app/screens/unit_profile_screen.dart';
 import 'package:agrobarter_app/theme/app_theme.dart';
-import 'package:agrobarter_app/widgets/common_widgets.dart';
 
 /// Os perfis de UNIDADE e de PRAÇA DE SEGURO — a mesma porta dos cadastros de
 /// gente: tocar no cartão abre o que o cadastro é, e a edição fica no lápis.
@@ -25,7 +24,7 @@ void main() {
         mustChangePassword: false,
       );
 
-  ProducerModel produtor(String id, String nome, String cidade, double area) => ProducerModel(
+  ProducerModel produtor(String id, String nome, String cidade) => ProducerModel(
         id: id,
         name: nome,
         consultantId: '2',
@@ -33,7 +32,6 @@ void main() {
         phone: '',
         farmName: 'Fazenda $nome',
         city: cidade,
-        areaHa: area,
         avatarInitials: nome.substring(0, 2).toUpperCase(),
         createdAt: DateTime(2020, 1, 1),
       );
@@ -51,8 +49,8 @@ void main() {
     AppData.managers = [pessoa('10', 'Gustavo Ramires', UserRole.manager, '6')];
     AppData.insuranceRates = [maringa];
     AppData.producers = [
-      produtor('1', 'Antônio Carvalho', 'Maringá/PR', 120),
-      produtor('2', 'Helena Prado', 'Sarandi/PR', 45),
+      produtor('1', 'Antônio Carvalho', 'Maringá/PR'),
+      produtor('2', 'Helena Prado', 'Sarandi/PR'),
     ];
   });
 
@@ -120,15 +118,14 @@ void main() {
       expect(find.byType(InsuranceRateProfileScreen), findsOneWidget);
     });
 
-    testWidgets('o perfil mostra os produtores da praça e quanto o seguro custa a cada um',
-        (tester) async {
+    /// O CUSTO por produtor saiu daqui junto com a área do cadastro: ele é de
+    /// cada permuta, sobre a área plantada dela.
+    testWidgets('o perfil mostra os produtores da praça', (tester) async {
       await abrir(tester, const InsuranceRateProfileScreen(rate: maringa));
 
       expect(find.text('Produtores nesta praça (1)'), findsOneWidget);
       expect(find.text('Antônio Carvalho'), findsOneWidget);
       expect(find.text('Helena Prado'), findsNothing);
-      // 120 ha × R$ 50/ha.
-      expect(find.textContaining(formatCurrency(6000)), findsOneWidget);
     });
 
     testWidgets('excluir avisa que os produtores da praça ficam sem taxa', (tester) async {

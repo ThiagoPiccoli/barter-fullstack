@@ -263,7 +263,7 @@ class _ConsultantProfileScreenState extends State<ConsultantProfileScreen> {
                       ),
                       title: Text(p.name,
                           style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
-                      subtitle: Text('${p.location} • ${p.areaLabel}',
+                      subtitle: Text(p.location,
                           style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                           overflow: TextOverflow.ellipsis),
                       trailing: Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),

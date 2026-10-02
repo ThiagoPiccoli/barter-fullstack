@@ -8,14 +8,13 @@ import 'package:agrobarter_app/screens/barter_screen.dart';
 
 /// A ESCOLHA DA CULTURA, na tela de verdade.
 ///
-/// As culturas coexistem: o mesmo Barter aceita soja e milho, sobre a MESMA
-/// tabela de insumos, e quem decide em qual delas o cliente paga é o consultor
-/// — junto com o produtor, que é quem sabe o que vai plantar naquele talhão.
+/// Cada cultura aberta é um Barter à parte — a Soja 26/27 e o Milho 2027, cada
+/// um com a sua tabela, a sua cotação e o seu seguro —, e quem decide em qual
+/// delas o cliente paga é o consultor, junto com o produtor. A escolha é a
+/// PRIMEIRA etapa da permuta nova: ela decide quais insumos existem na lista.
 ///
-/// O que estes testes guardam é o que a escolha significa na tela: ela existe
-/// quando há o que escolher, ela some quando não há, e o que ela muda é a
-/// CONVERSÃO — o mesmo insumo custa 0,77 saca de soja e 1,78 de milho, porque o
-/// preço em R$ é o mesmo e a cotação não é.
+/// O que estes testes guardam: a escolha existe quando há o que escolher, some
+/// quando não há, e a simulação guardada volta na cultura em que foi montada.
 void main() {
   UserModel consultor() => UserModel(
     id: '2',
@@ -38,73 +37,60 @@ void main() {
     phone: '',
     farmName: 'Fazenda Boa Vista',
     city: 'Mandaguari/PR',
-    areaHa: 120,
     avatarInitials: 'AC',
     createdAt: DateTime(2020, 1, 1),
   );
 
-  BarterSimulation simulacao() => BarterSimulation(
+  BarterSimulation simulacao({String seasonId = '3', String grainId = '1'}) => BarterSimulation(
     id: 'sim-1',
     consultantId: '2',
     producerId: '10',
     producerName: 'Antônio Carvalho',
     unitId: '3',
     unitName: 'Filial 02',
-    versionCode: 'B2026.02',
+    versionCode: 'SOJA26/27.02',
     items: const [
       SimulationItem(productId: '5', productName: 'NPK', unit: 'saco 50kg', quantity: 48),
     ],
     simulatedSacks: 48,
-    grainId: '1',
-    grainName: 'Soja',
+    seasonId: seasonId,
+    grainId: grainId,
+    grainName: grainId == '1' ? 'Soja' : 'Milho',
+    plantedAreaHa: 120,
     createdAt: DateTime(2026, 3, 1),
     updatedAt: DateTime(2026, 3, 2),
   );
 
-  /// A versão vigente como o consultor a recebe: SEM R$, com a tabela já
-  /// convertida em sacas da cultura escolhida (`pricedInGrainId`).
-  ///
-  /// [culturas] é parâmetro porque é a diferença entre os dois casos que
-  /// importam: duas culturas viram escolha, uma só volta a ser informação.
-  BarterVersionModel versao({int culturas = 2}) => BarterVersionModel(
-    id: 'v1',
-    code: 'B2026.02',
-    number: 2,
-    seasonCode: 'B2026',
-    seasonName: 'Barter 2026/27',
-    grains: [
-      const VersionGrainModel(
-        grainId: '1',
-        grainName: 'Soja',
-        grainUnit: 'saca 60kg',
-        estimatedYield: 60,
-        showsCurrency: false,
-      ),
-      if (culturas > 1)
-        const VersionGrainModel(
-          grainId: '2',
-          grainName: 'Milho',
-          grainUnit: 'saca 60kg',
-          estimatedYield: 170,
-          showsCurrency: false,
-        ),
-    ],
-    pricedInGrainId: '1',
+  /// Uma versão vigente como o consultor a recebe: SEM R$, com a tabela já
+  /// convertida em sacas da cultura dela.
+  BarterVersionModel versao({
+    required String id,
+    required String seasonId,
+    required String season,
+    required String grainId,
+    required String grain,
+  }) => BarterVersionModel(
+    id: id,
+    code: '${grain.toUpperCase()}.01',
+    number: 1,
+    seasonId: seasonId,
+    seasonCode: grain.toUpperCase(),
+    seasonName: season,
+    grainId: grainId,
+    grainName: grain,
+    grainUnit: 'saca 60kg',
+    estimatedYield: 60,
     showsCurrency: false,
-    status: 'open',
+    status: 'active',
     isOpen: true,
     startsAt: DateTime(2026, 2, 1),
     prices: const [
-      // 1 saca de soja por saco de NPK — a tabela chega convertida, e é isso
-      // que o consultor lê.
-      VersionPriceModel(
-        productId: '5',
-        productName: 'NPK 04-14-08',
-        unit: 'saco 50kg',
-        perUnit: 1,
-      ),
+      VersionPriceModel(productId: '5', productName: 'NPK 04-14-08', unit: 'saco 50kg', perUnit: 1),
     ],
   );
+
+  final soja = versao(id: 'v1', seasonId: '3', season: 'Soja 26/27', grainId: '1', grain: 'Soja');
+  final milho = versao(id: 'v2', seasonId: '4', season: 'Milho 2027', grainId: '2', grain: 'Milho');
 
   setUp(() {
     AppData.currentUser = consultor();
@@ -122,7 +108,7 @@ void main() {
         priceHistory: [],
       ),
     ];
-    AppData.currentVersion = versao();
+    AppData.currentVersions = [soja, milho];
   });
 
   tearDown(() {
@@ -130,61 +116,64 @@ void main() {
     AppData.producers = [];
     AppData.units = [];
     AppData.inputs = [];
-    AppData.currentVersion = null;
+    AppData.currentVersions = [];
   });
 
-  Future<void> abrir(WidgetTester tester) async {
+  Future<void> abrir(WidgetTester tester, {BarterSimulation? simulation}) async {
     tester.view.physicalSize = const Size(420, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(
-      MaterialApp(
-        home: NewBarterScreen(consultant: consultor(), simulation: simulacao()),
-      ),
+      MaterialApp(home: NewBarterScreen(consultant: consultor(), simulation: simulation)),
     );
     await tester.pumpAndSettle();
   }
 
-  testWidgets('a faixa diz em que cultura a permuta será paga', (tester) async {
+  /// DUAS CULTURAS ABERTAS: a permuta nova começa escolhendo em qual delas.
+  testWidgets('com duas culturas, a primeira etapa é escolher a cultura', (tester) async {
     await abrir(tester);
 
-    expect(find.textContaining('Pagamento em soja'), findsOneWidget);
+    expect(find.textContaining('escolha a cultura'), findsOneWidget);
+    expect(find.text('Soja 26/27'), findsOneWidget);
+    expect(find.text('Milho 2027'), findsOneWidget);
   });
 
-  /// DUAS CULTURAS VIRAM ESCOLHA. O seletor fica na faixa do Barter, no alto:
-  /// a escolha muda a conta inteira, e o lugar de decidir é antes de montar.
-  testWidgets('com duas culturas, a faixa oferece as duas', (tester) async {
+  testWidgets('escolhida a cultura, a faixa diz em que ela será paga', (tester) async {
     await abrir(tester);
 
-    final seletor = find.byType(DropdownButton<String>);
-    expect(seletor, findsOneWidget);
-
-    await tester.tap(seletor);
+    await tester.tap(find.text('Milho 2027'));
     await tester.pumpAndSettle();
 
-    // As duas aparecem no menu aberto — a escolhida some da faixa enquanto o
-    // menu está sobre ela, então o que se conta é a presença das duas.
-    expect(find.text('Milho'), findsWidgets);
-    expect(find.text('Soja'), findsWidgets);
+    expect(find.textContaining('Pagamento em milho'), findsOneWidget);
+    // E dá para voltar atrás: com duas culturas, a escolha continua à mão.
+    expect(find.text('Trocar cultura'), findsOneWidget);
   });
 
-  /// UMA CULTURA SÓ NÃO É ESCOLHA: um menu com uma opção é uma decisão que não
-  /// existe, e a cultura volta a ser a informação que sempre foi.
-  testWidgets('com uma cultura só, não há seletor', (tester) async {
-    AppData.currentVersion = versao(culturas: 1);
+  /// UMA CULTURA SÓ NÃO É ESCOLHA: ela já é a resposta.
+  testWidgets('com uma cultura só, não há etapa de escolha', (tester) async {
+    AppData.currentVersions = [soja];
     await abrir(tester);
 
-    expect(find.byType(DropdownButton<String>), findsNothing);
+    expect(find.textContaining('escolha a cultura'), findsNothing);
     expect(find.textContaining('Pagamento em soja'), findsOneWidget);
+    expect(find.text('Trocar cultura'), findsNothing);
   });
 
-  /// A SIMULAÇÃO GUARDA A CULTURA, e é por isso que ela sobrevive ao aparelho
-  /// ficar no bolso até o envio: enviá-la sem a cultura faria a permuta nascer
-  /// numa que ninguém escolheu.
-  testWidgets('a simulação retomada abre na cultura em que foi montada', (tester) async {
-    await abrir(tester);
+  /// A SIMULAÇÃO GUARDA A CULTURA e a área: ela sobrevive ao aparelho ficar no
+  /// bolso até o envio, e volta na cultura em que foi montada.
+  testWidgets('a simulação retomada abre na cultura e com a área dela', (tester) async {
+    await abrir(tester, simulation: simulacao(seasonId: '4', grainId: '2'));
 
-    final banner = tester.widget<DropdownButton<String>>(find.byType(DropdownButton<String>));
-    expect(banner.value, '1');
+    expect(find.textContaining('Pagamento em milho'), findsOneWidget);
+    expect(find.text('Área plantada de milho (ha)'), findsOneWidget);
+    expect(find.text('120'), findsOneWidget);
+  });
+
+  /// A SIMULAÇÃO DO APP ANTERIOR só guardou o grão: ela abre na versão vigente
+  /// daquele grão.
+  testWidgets('a simulação antiga, só com o grão, abre na cultura dele', (tester) async {
+    await abrir(tester, simulation: simulacao(seasonId: '', grainId: '1'));
+
+    expect(find.textContaining('Pagamento em soja'), findsOneWidget);
   });
 }

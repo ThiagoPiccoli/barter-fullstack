@@ -36,7 +36,7 @@ void main() {
   tearDown(() {
     AppData.currentUser = null;
     AppData.seasons = [];
-    AppData.currentVersion = null;
+    AppData.currentVersions = [];
   });
 
   Future<void> abrir(WidgetTester tester) async {

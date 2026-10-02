@@ -859,8 +859,8 @@ class BarterIdentity extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final area = barter.producerAreaHa;
-    final hasArea = area != null && area > 0;
+    final area = barter.plantedAreaHa;
+    final hasArea = area > 0;
     final code = Text(barter.id,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark));
@@ -902,7 +902,7 @@ class BarterIdentity extends StatelessWidget {
               if (hasArea)
                 _IdentityFact(
                   icon: Icons.landscape_outlined,
-                  tooltip: 'Área cultivável do produtor no registro',
+                  tooltip: 'Área plantada da cultura nesta permuta',
                   value: '${formatQty(area)} ha',
                 ),
               if (barter.sacksPerHa != null)

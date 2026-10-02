@@ -53,13 +53,13 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
     }
   }
 
-  /// O produto pode ser corrigido? Só se houver Barter vigente E ele estiver na
-  /// tabela dessa versão (ou for o grão da safra, cuja cotação é a da versão).
-  bool _editableInVersion(ProductModel product) {
-    final version = AppData.currentVersion;
-    if (version == null || !version.isOpen) return false;
-    return version.grainFor(product.id) != null || version.priceOf(product.id) != null;
-  }
+  /// As versões VIGENTES em que o produto pode ser corrigido: as que o têm na
+  /// tabela (ou cujo grão ele é — a cotação da saca é da versão). Um insumo pode
+  /// estar na tabela de mais de uma cultura, e cada uma tem o seu valor.
+  List<BarterVersionModel> _versionsWith(ProductModel product) => AppData.currentVersions
+      .where((version) =>
+          version.isOpen && (version.grainId == product.id || version.priceOf(product.id) != null))
+      .toList();
 
   /// Troca o CÓDIGO do item — único no catálogo e chave da busca.
   Future<void> _editCode(ProductModel product) => _editField(
@@ -129,16 +129,20 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
     }
   }
 
-  Future<void> _correctInVersion(BuildContext context, ProductModel product) {
-    final version = AppData.currentVersion!;
+  Future<void> _correctInVersion(
+    BuildContext context,
+    ProductModel product,
+    BarterVersionModel version,
+  ) {
     final row = version.priceOf(product.id);
     return showVersionPriceDialog(
       context,
+      version: version,
       productId: product.id,
       productName: product.name,
       // O VALOR do produto nesta gestão: o do insumo na tabela, ou a cotação da
-      // CULTURA quando o produto é um grão que o Barter aceita.
-      price: row?.perUnit ?? version.grainFor(product.id)?.price ?? 0,
+      // saca quando o produto é o grão desta versão.
+      price: row?.perUnit ?? (version.grainId == product.id ? version.grainPrice : 0),
       // Corrigir o valor acrescenta um ponto na linha do tempo: a tela precisa
       // do detalhe de novo, não de um rebuild do que já estava em mãos.
       onUpdated: _loadDetail,
@@ -266,14 +270,17 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
               // Corrigir o valor é ato do LANÇAMENTO, não do cadastro: só aparece
               // enquanto houver Barter vigente, e o que ele muda é a tabela da
               // versão — o `currentPrice` acima é o último valor publicado.
-              if (_editableInVersion(product))
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _correctInVersion(context, product),
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    label: Text('Corrigir no Barter ${AppData.currentVersion!.code}'),
-                    style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+              for (final version in _versionsWith(product))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _correctInVersion(context, product, version),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: Text('Corrigir no Barter ${version.code}'),
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                    ),
                   ),
                 ),
               const SizedBox(height: 20),

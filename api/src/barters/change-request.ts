@@ -212,43 +212,44 @@ export function itemPriceRefusal(item: ItemAtPriceChange): string | null {
     : null;
 }
 
-/** A CULTURA de uma permuta: o grão que a paga, lido da linha de pagamento. */
-export interface BarterCulture {
-  grainId: number | null;
-  grainName: string;
+/** O bastante da safra de uma permuta para saber se ela ainda vende. */
+export interface SeasonAtChange {
+  name: string;
+  status: string;
 }
 
-/** O bastante de uma gestão do Barter para saber quais culturas ela aceita. */
-export interface VersionAtCulture {
-  code: string;
-  grains: BarterCulture[];
-}
-
-/** Esta cultura é uma das que aquela gestão aceita? */
-function offers(version: VersionAtCulture, culture: BarterCulture): boolean {
-  return version.grains.some((grain) => {
-    // Pelo id do grão quando os dois têm: é ele que identifica a cultura. O nome
-    // é a saída para o grão excluído do catálogo (o FK vira null e sobra o nome
-    // congelado) — comparar nomes sempre seria frágil; nunca compará-los
-    // deixaria essas permutas fora de qualquer alteração.
-    if (grain.grainId !== null && culture.grainId !== null) {
-      return grain.grainId === culture.grainId;
-    }
-    return grain.grainName.trim().toLowerCase() === culture.grainName.trim().toLowerCase();
-  });
-}
-
+/**
+ * POR QUE esta permuta não pode mais ser remontada — ou `null`, quando pode.
+ *
+ * A alteração ATRAVESSA VERSÕES: a permuta fechada na primeira versão da soja
+ * continua alterável com a terceira no ar, e é remontada na tabela DELA (o
+ * acordo foi fechado ali). Amarrá-la à versão vigente faria de cada publicação
+ * de tabela um prazo de validade para as permutas em aberto.
+ *
+ * O que ela NÃO atravessa é o fim da venda DAQUELA CULTURA: com a safra
+ * encerrada, ou sem Barter aberto nela, remontar a permuta seria reabrir a
+ * venda de uma cultura que a operação parou de vender — por conta própria e
+ * para um produtor só.
+ *
+ * `openVersion` é a versão que aceita permuta AGORA naquela safra (`null`
+ * quando nenhuma aceita), e é só o código dela que interessa: a frase não muda
+ * conforme a versão, mas quem chama precisa ter perguntado.
+ */
 export function cultureRefusal(
-  culture: BarterCulture,
-  openVersion: VersionAtCulture,
+  season: SeasonAtChange | null,
+  openVersion: { code: string } | null,
 ): string | null {
-  if (offers(openVersion, culture)) return null;
-  const open = openVersion.grains.map((grain) => grain.grainName).join(' e ');
-  return (
-    `Esta permuta é paga em ${culture.grainName}, e o Barter aberto hoje ` +
-    `(${openVersion.code}) aceita ${open || 'outra cultura'}. ` +
-    'A alteração vale enquanto o lançamento aberto aceitar a cultura da permuta'
-  );
+  const tail = 'A alteração vale enquanto a cultura da permuta tiver Barter aberto';
+  if (!season) {
+    return 'Esta permuta é anterior às safras por cultura e não pode ser alterada';
+  }
+  if (season.status !== 'open') {
+    return `A safra ${season.name} desta permuta está encerrada. ${tail}`;
+  }
+  if (!openVersion) {
+    return `Não há Barter aberto para ${season.name} agora. ${tail}`;
+  }
+  return null;
 }
 
 /**

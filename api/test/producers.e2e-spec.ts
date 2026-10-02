@@ -62,7 +62,6 @@ describe('Producers — carteira (e2e)', () => {
         document: 'CPF 999.999.999-99',
         farmName: 'Fazenda Teste',
         city: 'Maringá/PR',
-        areaHa: 55,
       });
     expect(asAdmin.status).toBe(201);
     expect(asAdmin.body.data.consultantId).toBe(CONSULTANT.joao);
@@ -85,7 +84,6 @@ describe('Producers — carteira (e2e)', () => {
       document: 'CPF 999.999.999-99',
       farmName: 'Fazenda Nova Esperança',
       city: 'Maringá/PR',
-      areaHa: 55,
       taxRegime: 'folha',
     };
 
@@ -101,7 +99,6 @@ describe('Producers — carteira (e2e)', () => {
       expect(response.status).toBe(201);
       expect(response.body.data).toMatchObject({
         consultantId: CONSULTANT.joao,
-        areaHa: 55,
         taxRegime: 'folha',
       });
 
@@ -204,7 +201,6 @@ describe('Producers — carteira (e2e)', () => {
           document: 'CPF 888.888.888-88',
           farmName: 'Fazenda da Folha',
           city: 'Maringá/PR',
-          areaHa: 90,
           ...(taxRegime === undefined ? {} : { taxRegime }),
         });
 
@@ -238,7 +234,6 @@ describe('Producers — carteira (e2e)', () => {
           document: 'CPF 123.456.789-00',
           farmName: 'Fazenda Boa Vista',
           city: 'Maringá/PR',
-          areaHa: 120,
           taxRegime: 'folha',
         });
 
@@ -258,7 +253,6 @@ describe('Producers — carteira (e2e)', () => {
           document: 'CPF 111.222.333-44',
           farmName: 'Fazenda X',
           city: 'Cidade/PR',
-          areaHa: 10,
           ...extra,
         });
 
@@ -298,7 +292,6 @@ describe('Producers — carteira (e2e)', () => {
       document: 'CNPJ 12.345.678/0001-90',
       farmName: 'Fazenda Santa Rita',
       city: 'Mandaguari/PR',
-      areaHa: 320,
     };
 
     const transferir = async (consultantId: number) =>
@@ -389,7 +382,6 @@ describe('Producers — carteira (e2e)', () => {
       document: 'CPF 123.456.789-00',
       farmName: 'Fazenda Boa Vista',
       city: 'Maringá/PR',
-      areaHa: 120,
     };
 
     const editar = async (id: number, email: string, body: Record<string, unknown>) =>
@@ -441,39 +433,26 @@ describe('Producers — carteira (e2e)', () => {
     });
 
     /**
-     * A ÁREA DO BARTER muda de uma cultura para outra, e quem sabe qual é a
-     * desta safra é o consultor. O REGIME é a opção que o produtor fez perante o
-     * fisco, e quem a traz da fazenda é ele também.
+     * O REGIME é a opção que o produtor fez perante o fisco, e quem a traz da
+     * fazenda é o consultor.
      */
-    it('o consultor altera a área e o regime de Funrural do cliente dele', async () => {
-      const response = await editar(1, JOAO, { ...antonio, areaHa: 400, taxRegime: 'folha' });
+    it('o consultor altera o regime de Funrural do cliente dele', async () => {
+      const response = await editar(1, JOAO, { ...antonio, taxRegime: 'folha' });
 
       expect(response.status).toBe(200);
-      expect(response.body.data).toMatchObject({ areaHa: 400, taxRegime: 'folha' });
+      expect(response.body.data).toMatchObject({ taxRegime: 'folha' });
     });
 
     /**
-     * A permuta JÁ REGISTRADA não acompanha: ela congelou a área que usou, e é
-     * o denominador do sc/ha que alguém já aprovou.
+     * A ÁREA saiu do cadastro: ela é de cada PERMUTA (a área plantada da cultura
+     * que ela cobre). Mandá-la no cadastro não grava nada, e a resposta não a
+     * devolve — um número ali seria a fazenda inteira medindo uma cultura só.
      */
-    it('a área nova não reescreve a das permutas já registradas', async () => {
-      // Lida pelo admin: `producerAreaHa` vai só para quem vê o sc/ha.
-      const auth = `Bearer ${await loginAs(app, ADMIN)}`;
-      const antes = await request(app.getHttpServer())
-        .get('/api/v1/barters')
-        .set('Authorization', auth);
-      const doAntonio = antes.body.data.find(
-        (b: { producerId: number; producerAreaHa: number }) =>
-          b.producerId === 1 && b.producerAreaHa > 0,
-      );
-      expect(doAntonio).toBeDefined();
+    it('o cadastro não tem mais área', async () => {
+      const response = await editar(1, JOAO, { ...antonio, areaHa: 400 });
 
-      await editar(1, JOAO, { ...antonio, areaHa: 400 }).then((r) => expect(r.status).toBe(200));
-
-      const depois = await request(app.getHttpServer())
-        .get(`/api/v1/barters/${doAntonio.code}`)
-        .set('Authorization', auth);
-      expect(depois.body.data.producerAreaHa).toBe(doAntonio.producerAreaHa);
+      expect(response.status).toBe(200);
+      expect(response.body.data).not.toHaveProperty('areaHa');
     });
 
     /** O CPF/CNPJ também: um dígito trocado no cadastro, quem percebe é ele. */
@@ -518,17 +497,15 @@ describe('Producers — carteira (e2e)', () => {
     });
 
     /** E o admin continua alcançando tudo — inclusive o que o consultor não alcança. */
-    it('o admin continua alterando a área, o documento e a carteira', async () => {
+    it('o admin continua alterando o regime, o documento e a carteira', async () => {
       const response = await editar(1, ADMIN, {
         ...antonio,
-        areaHa: 400,
         taxRegime: 'folha',
         consultantId: CONSULTANT.ana,
       });
 
       expect(response.status).toBe(200);
       expect(response.body.data).toMatchObject({
-        areaHa: 400,
         taxRegime: 'folha',
         consultantId: CONSULTANT.ana,
       });
@@ -546,7 +523,6 @@ describe('Producers — carteira (e2e)', () => {
       consultantId: CONSULTANT.joao,
       farmName: 'Fazenda Nova',
       city: 'Maringá/PR',
-      areaHa: 30,
     };
 
     const create = async (document: string) =>
@@ -586,7 +562,6 @@ describe('Producers — carteira (e2e)', () => {
           document: 'CPF 123.456.789-00',
           farmName: 'Fazenda Boa Vista II',
           city: 'Maringá/PR',
-          areaHa: 130,
         });
       expect(response.status).toBe(200);
       expect(response.body.data.farmName).toBe('Fazenda Boa Vista II');

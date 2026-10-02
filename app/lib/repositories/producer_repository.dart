@@ -35,7 +35,6 @@ class ProducerRepository {
         if (p.phone.isNotEmpty) 'phone': p.phone,
         'farmName': p.farmName,
         'city': p.city,
-        'areaHa': p.areaHa,
         // COMO ele recolhe o Funrural — a opção formal dele, que vale para
         // todas as entregas e de onde cada permuta nova tira a alíquota.
         'taxRegime': p.taxRegime.apiValue,

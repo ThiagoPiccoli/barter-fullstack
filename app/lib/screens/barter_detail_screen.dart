@@ -208,7 +208,7 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
         inputCount: _barter.inputs.length,
         showValue: widget.isAdmin,
         sacksPerHa: _barter.sacksPerHa,
-        areaHa: _barter.producerAreaHa,
+        areaHa: _barter.plantedAreaHa > 0 ? _barter.plantedAreaHa : null,
       ),
     ),
 
@@ -244,14 +244,19 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                   label: 'Investimento',
                   value:
                       '${formatSacksPerHa(_barter.sacksPerHa!)}'
-                      '${_barter.producerAreaHa != null && _barter.producerAreaHa! > 0 ? ' • ${formatQty(_barter.producerAreaHa!)} ha' : ''}',
+                      '${_barter.plantedAreaHa > 0 ? ' • ${formatQty(_barter.plantedAreaHa)} ha' : ''}',
                 ),
               const Divider(height: 16),
               // Em qual gestão do Barter esta permuta foi fechada: é o que
               // explica os valores dela, que não mudam quando a versão
               // seguinte é publicada.
+              // A SAFRA DA CULTURA vem antes: é a cultura da permuta.
+              if (_barter.seasonName.isNotEmpty)
+                _InfoRow(label: 'Safra', value: _barter.seasonName),
               if (_barter.versionCode.isNotEmpty)
                 _InfoRow(label: 'Barter', value: _barter.versionCode),
+              if (_barter.plantedAreaHa > 0)
+                _InfoRow(label: 'Área plantada', value: areaLabelOf(_barter.plantedAreaHa)),
               _InfoRow(label: 'Criada em', value: _formatDate(_barter.createdAt)),
               if (_barter.updatedAt != null)
                 _InfoRow(label: 'Atualizada em', value: _formatDate(_barter.updatedAt!)),
@@ -270,7 +275,11 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               // insumos — aqui a pergunta é "por que ele custa isso?", e a
               // resposta é o município.
               if (_barter.hasInsurance)
-                _InfoRow(label: 'Seguro agrícola', value: _barter.insuranceCity),
+                _InfoRow(label: 'Seguro agrícola', value: _barter.insuranceCity)
+              // A RECUSA do seguro opcional também aparece: é informação de
+              // risco que o gerente e o comitê precisam ler.
+              else if (_barter.insuranceChoice == InsuranceChoice.declined)
+                _InfoRow(label: 'Seguro agrícola', value: 'Recusado pelo produtor'),
               if (_barter.invoicedBy != null) ...[
                 _InfoRow(label: 'Faturada por', value: _barter.invoicedBy!),
                 if (_barter.invoicedAt != null)

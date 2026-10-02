@@ -11,6 +11,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -50,45 +51,54 @@ export class BarterInputDto {
  * produtos e quantidades; quem precifica e calcula as sacas é o servidor
  * (campos extras são descartados pelo whitelist do ValidationPipe).
  *
- * Também não há `grainId`: o grão é o da safra, e a versão vigente do Barter é
- * quem diz por quanto vale a saca. Escolher grão era do tempo em que a permuta
- * carregava a própria cotação.
+ * Também não há preço da saca: a CULTURA é escolhida pela safra (`seasonId`),
+ * e a versão vigente dela é quem diz por quanto vale a saca.
  */
-/**
- * A TROCA DA CULTURA de um rascunho.
- *
- * Um campo só, e uma rota própria em vez de um campo dentro da reescrita dos
- * insumos: são dois atos diferentes. Trocar insumo é refazer o que a permuta
- * carrega; trocar cultura é trocar a moeda com que ela é paga — os insumos
- * continuam os mesmos, e o que muda são as sacas e o penhor.
- */
-export class BarterCultureDto {
-  @IsInt()
-  @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
-  grainId!: number;
-}
-
 export class CreateBarterDto {
   @IsInt()
   @IsPositive()
   producerId!: number;
 
   /**
-   * A CULTURA em que esta permuta será paga — soja, milho, o que o Barter
-   * aceitar (ver `VersionGrain`).
+   * A SAFRA DA CULTURA em que esta permuta será paga — "Soja 26/27". A versão
+   * vigente dela é a tabela da permuta.
    *
-   * Ela é a primeira decisão da permuta e é do CONSULTOR, junto com o produtor:
-   * é ele quem sabe o que aquele cliente vai plantar naquele talhão. Antes não
-   * havia o que escolher — a safra tinha um grão só, e o servidor o impunha.
+   * É a primeira decisão da permuta e é do CONSULTOR, junto com o produtor: é
+   * ele quem sabe o que aquele cliente vai plantar naquele talhão. E é FIXA: a
+   * permuta é de uma cultura só, e uma permuta de soja que vira de trigo é outra
+   * permuta, com outra tabela de insumos.
    *
-   * OBRIGATÓRIA de propósito, mesmo quando o Barter tem uma cultura só. Um
-   * padrão silencioso ("se não disser, é a primeira") faria a permuta nascer
-   * numa cultura que ninguém escolheu no dia em que o admin lançasse a segunda —
-   * e o consultor descobriria isso pelo vencimento da cédula.
+   * OBRIGATÓRIA de propósito, mesmo com uma cultura só aberta: um padrão
+   * silencioso faria a permuta nascer numa cultura que ninguém escolheu no dia
+   * em que a segunda abrisse.
    */
   @IsInt()
   @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
-  grainId!: number;
+  seasonId!: number;
+
+  /**
+   * A ÁREA PLANTADA (ha) daquela cultura que esta permuta cobre.
+   *
+   * Ela era a área do cadastro do produtor, e saiu de lá porque a fazenda
+   * planta mais de uma coisa: dos 120 ha, 60 de soja e 60 de trigo. É a régua
+   * do seguro, dos mínimos por hectare, do investimento (sc/ha) e do teto do
+   * penhor. O teto existe para a área não virar um número absurdo que destrave
+   * a régua de tudo.
+   */
+  @IsNumber({}, { message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @IsPositive({ message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @Max(1_000_000, { message: 'A área plantada não pode passar de 1.000.000 ha' })
+  plantedAreaHa!: number;
+
+  /**
+   * O SEGURO, quando a versão o oferece como OPCIONAL: `true` leva, `false`
+   * (ou ausente) não leva. Nas versões em que ele é obrigatório ou não existe,
+   * o campo pode ficar fora — e, se vier contradizendo a política, é recusado.
+   * Ver `insuranceChoiceFor` em insurance/insurance-policy.ts.
+   */
+  @IsOptional()
+  @IsBoolean({ message: 'insurance deve ser true ou false' })
+  insurance?: boolean;
 
   /**
    * A UNIDADE em que o produtor vai retirar os insumos.
@@ -577,10 +587,14 @@ export class DecideBarterProductDto {
  * regra aceita. É o mesmo formato do registro, e de propósito — a tela que
  * monta a permuta é a mesma.
  *
- * Repare no que NÃO está aqui: produtor, unidade e preços. Trocar o produtor
- * seria outra permuta (a área dele é o denominador de tudo e já está congelada
- * no registro); trocar a unidade é logística e não passa por pedido nenhum; e
- * preço nunca veio do cliente.
+ * Junto com os insumos podem vir a ÁREA PLANTADA e a escolha do SEGURO
+ * opcional: as três coisas mudam juntas na conversa com o produtor ("vou plantar
+ * 80 ha, não 60, e quero o seguro"), e são todas régua da mesma remontagem.
+ * Ausentes, ficam como estavam.
+ *
+ * Repare no que NÃO está aqui: produtor, cultura, unidade e preços. Trocar o
+ * produtor ou a cultura seria outra permuta; trocar a unidade é logística e não
+ * passa por pedido nenhum; e preço nunca veio do cliente.
  */
 export class ReplaceBarterInputsDto {
   @IsArray()
@@ -589,6 +603,16 @@ export class ReplaceBarterInputsDto {
   @ValidateNested({ each: true })
   @Type(() => BarterInputDto)
   inputs!: BarterInputDto[];
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @IsPositive({ message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @Max(1_000_000, { message: 'A área plantada não pode passar de 1.000.000 ha' })
+  plantedAreaHa?: number;
+
+  @IsOptional()
+  @IsBoolean({ message: 'insurance deve ser true ou false' })
+  insurance?: boolean;
 }
 
 /**
@@ -646,4 +670,11 @@ export class ListBartersQuery extends PaginationQuery {
   @IsInt({ message: 'O filtro "managerId" precisa ser um número inteiro' })
   @IsPositive({ message: 'O filtro "managerId" precisa ser um número positivo' })
   managerId?: number;
+
+  /** As permutas de UMA SAFRA DA CULTURA ("Soja 26/27") — o filtro por cultura. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'O filtro "seasonId" precisa ser um número inteiro' })
+  @IsPositive({ message: 'O filtro "seasonId" precisa ser um número positivo' })
+  seasonId?: number;
 }

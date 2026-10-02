@@ -53,20 +53,18 @@ export class InsuranceController {
    * A base inteira.
    *
    * A LENTE precisa da cotação da saca para converter R$/ha em sacas/ha, e a
-   * cotação é a da CULTURA escolhida na versão VIGENTE — a base não pertence a
-   * versão nenhuma (é do município), e a saca de hoje é a do Barter aberto
-   * agora. Com mais de uma cultura aberta, o mesmo seguro custa duas
-   * quantidades de saca diferentes, e quem diz qual interessa é quem chama
-   * (`?grainId=`, a cultura que o consultor selecionou); sem escolha, a
-   * primeira do lançamento.
+   * cotação é a da VERSÃO VIGENTE da cultura escolhida — a base não pertence a
+   * versão nenhuma (é do município), e o mesmo seguro custa quantidades de saca
+   * diferentes em cada cultura. Quem diz qual interessa é quem chama
+   * (`?version=`, o slug da versão em que o consultor está montando a permuta).
    *
-   * Sem Barter aberto a conversão não acontece e quem não vê R$ recebe zero:
-   * não é permissivo — sem Barter aberto ele não registra permuta nenhuma.
+   * Sem versão a conversão não acontece e quem não vê R$ recebe zero: não é
+   * permissivo — sem Barter aberto ele não registra permuta nenhuma.
    */
   @Get()
   @AnyRole()
-  async index(@CurrentUser() viewer: User, @Query('grainId') grainId?: string) {
-    const lens = lensFor(viewer, await this.currentGrainPrice(Number(grainId) || null));
+  async index(@CurrentUser() viewer: User, @Query('version') version?: string) {
+    const lens = lensFor(viewer, await this.grainPriceOf(version));
     return (await this.insurance.list()).map((rate) => toInsuranceRateJson(rate, lens));
   }
 
@@ -132,19 +130,16 @@ export class InsuranceController {
   }
 
   /**
-   * A cotação da saca de uma CULTURA do Barter aberto, ou 0 quando não há
-   * Barter nenhum.
-   *
-   * Zero não trava a listagem de propósito: quem vê R$ (a retaguarda inteira)
-   * não depende dela, e para o consultor a base sem Barter aberto é informação
-   * que ele não vai usar — ele não consegue registrar permuta nenhuma nesse
-   * estado. Cultura pedida que não está no lançamento cai na primeira, pelo
-   * mesmo desenho de `toBarterVersionJson`.
+   * A cotação da saca da versão pedida, ou 0 quando não há versão — ou quando a
+   * pedida não existe. Zero não trava a listagem de propósito: quem vê R$ (a
+   * retaguarda inteira) não depende dela.
    */
-  private async currentGrainPrice(grainId: number | null): Promise<number> {
-    const version = await this.seasons.currentVersion();
-    if (!version) return 0;
-    const grain = version.grains.find((row) => row.grainId === grainId) ?? version.grains[0];
-    return grain?.price ?? 0;
+  private async grainPriceOf(slug: string | undefined): Promise<number> {
+    if (!slug) return 0;
+    try {
+      return (await this.seasons.findVersion(slug)).grainPrice;
+    } catch {
+      return 0;
+    }
   }
 }

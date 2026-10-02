@@ -155,12 +155,10 @@ class _InsuranceRateProfileScreenState extends State<InsuranceRateProfileScreen>
                       title: Text(p.name,
                           style: TextStyle(
                               fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
-                      // Quanto o seguro custa para ELE: a área dele × o valor da
-                      // praça — a mesma conta da permuta.
+                      // A ÁREA não é mais do cadastro — o custo do seguro sai em
+                      // cada permuta, sobre a área plantada dela.
                       subtitle: Text(
-                        rate.showsCurrency
-                            ? '${p.areaLabel} • seguro ${formatCurrency(rate.costFor(p.areaHa))}'
-                            : p.areaLabel,
+                        p.location,
                         style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                         overflow: TextOverflow.ellipsis,
                       ),

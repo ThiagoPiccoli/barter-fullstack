@@ -40,7 +40,6 @@ import {
 import {
   AttachCreditFileDto,
   AttachInvoiceDto,
-  BarterCultureDto,
   BarterOpinionDto,
   ChangeBarterPricesDto,
   CreateBarterDto,
@@ -209,25 +208,11 @@ export class BartersController {
    * `@AnyRole` com escopo no service, como o detalhe da permuta: quem alcança a
    * permuta alcança a tabela dela, e nos valores da própria lente (o consultor
    * recebe sacas por unidade, sem R$).
-   *
-   * A CULTURA em que a tabela é convertida é a DESTA PERMUTA (`?grainId=`, que o
-   * app manda com o grão da linha de pagamento): remontar um rascunho de milho
-   * lendo a tabela em sacas de soja mostraria ao produtor um total que o
-   * servidor não gravaria.
    */
   @Get(':code/version')
   @AnyRole()
-  async version(
-    @CurrentUser() user: User,
-    @Param('code') code: string,
-    @Query('grainId') grainId?: string,
-  ) {
-    return toBarterVersionJson(
-      await this.bartersService.versionOf(user, code),
-      undefined,
-      user,
-      Number(grainId) || null,
-    );
+  async version(@CurrentUser() user: User, @Param('code') code: string) {
+    return toBarterVersionJson(await this.bartersService.versionOf(user, code), undefined, user);
   }
 
   /**
@@ -251,27 +236,6 @@ export class BartersController {
     @Body() dto: ReplaceBarterInputsDto,
   ) {
     return toBarterJson(await this.bartersService.replaceInputs(consultant, code, dto), consultant);
-  }
-
-  /**
-   * A TROCA DA CULTURA do rascunho — a permuta passa a ser paga em outro grão
-   * dos que o Barter aceita.
-   *
-   * `PUT` pelo mesmo motivo dos insumos: é um estado que se declara ("esta
-   * permuta é de milho"), e reenviar o mesmo grão dá o mesmo resultado. Mesma
-   * capacidade e mesma porta — é do CONSULTOR, e só alcança o próprio rascunho.
-   */
-  @Put(':code/culture')
-  @RequireCapability(CAPABILITY.bartersRegister)
-  async setCulture(
-    @CurrentUser() consultant: User,
-    @Param('code') code: string,
-    @Body() dto: BarterCultureDto,
-  ) {
-    return toBarterJson(
-      await this.bartersService.setCulture(consultant, code, dto.grainId),
-      consultant,
-    );
   }
 
   /**

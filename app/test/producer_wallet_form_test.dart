@@ -37,7 +37,6 @@ void main() {
         phone: '',
         farmName: 'Fazenda Santa Rita',
         city: 'Mandaguari/PR',
-        areaHa: 320,
         avatarInitials: 'JT',
         createdAt: DateTime(2020, 11, 3),
       );

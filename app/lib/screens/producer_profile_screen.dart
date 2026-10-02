@@ -102,8 +102,6 @@ class _ProducerProfileScreenState extends State<ProducerProfileScreen> {
                   const Divider(height: 1),
                   InfoTile(icon: Icons.location_on_outlined, label: 'Município', value: producer.city),
                   const Divider(height: 1),
-                  InfoTile(icon: Icons.straighten, label: 'Área cultivável', value: producer.areaLabel),
-                  const Divider(height: 1),
                   // O REGIME dele, com a alíquota que ele produz para este
                   // documento: é o que toda permuta nova deste produtor vai
                   // aplicar, e é aqui que se confere antes de fechar uma.

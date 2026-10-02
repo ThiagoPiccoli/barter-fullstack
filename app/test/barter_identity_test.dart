@@ -26,7 +26,7 @@ void main() {
         'status': 'approved',
         'managerId': 7,
         'createdAt': '2026-01-10T00:00:00.000Z',
-        'producerAreaHa': ?areaHa,
+        'plantedAreaHa': ?areaHa,
         'sacksPerHa': ?sacksPerHa,
         'items': [],
       });

@@ -24,7 +24,7 @@ void main() {
         priceHistory: const [],
       );
 
-  ProducerModel produtor({double areaHa = 100, String city = 'Maringá/PR'}) => ProducerModel(
+  ProducerModel produtor({String city = 'Maringá/PR'}) => ProducerModel(
         id: '10',
         name: 'Antônio Carvalho',
         consultantId: '2',
@@ -32,7 +32,6 @@ void main() {
         phone: '',
         farmName: 'Fazenda Boa Vista',
         city: city,
-        areaHa: areaHa,
         avatarInitials: 'AC',
         createdAt: DateTime(2020, 1, 1),
       );
@@ -41,26 +40,21 @@ void main() {
   /// sacas da cultura escolhida. `perUnit` 1 deixa a conta legível — um saco de
   /// NPK custa uma saca de soja.
   BarterVersionModel versao({
-    bool insuranceRequired = false,
+    InsurancePolicy insurance = InsurancePolicy.none,
     Map<String, double> prices = const {'5': 1, '6': 0.5},
   }) => BarterVersionModel(
         id: 'v1',
-        code: 'B2026.02',
+        code: 'SOJA26/27.02',
         number: 2,
-        seasonCode: 'B2026',
-        seasonName: 'Barter 2026/27',
-        grains: const [
-          VersionGrainModel(
-            grainId: '1',
-            grainName: 'Soja',
-            grainUnit: 'saca 60kg',
-            estimatedYield: 60,
-            showsCurrency: false,
-          ),
-        ],
-        pricedInGrainId: '1',
+        seasonId: '3',
+        seasonCode: 'SOJA26/27',
+        seasonName: 'Soja 26/27',
+        grainId: '1',
+        grainName: 'Soja',
+        grainUnit: 'saca 60kg',
+        estimatedYield: 60,
         showsCurrency: false,
-        insuranceRequired: insuranceRequired,
+        insurancePolicy: insurance,
         status: 'open',
         isOpen: true,
         startsAt: DateTime(2026, 2, 1),
@@ -101,12 +95,16 @@ void main() {
     List<ProductClassModel> classes = const [],
     InsuranceRateModel? insuranceRate,
     double offBarterCost = 0,
+    double area = 100,
+    bool wantsInsurance = false,
   }) => BarterDraft(
         version: version ?? versao(),
         producer: semProdutor ? null : (producer ?? produtor()),
         quantities: quantities,
         allInputs: inputs ?? [insumo('5', 'NPK'), insumo('6', 'Glifosato')],
         classes: classes,
+        plantedAreaHa: area,
+        wantsInsurance: wantsInsurance,
         insuranceRate: insuranceRate,
         offBarterCost: offBarterCost,
       );
@@ -160,9 +158,9 @@ void main() {
   });
 
   group('o mínimo por hectare', () {
-    test('é taxa × área do produtor', () {
+    test('é taxa × área plantada da permuta', () {
       final d = draft(
-        producer: produtor(areaHa: 120),
+        area: 120,
         inputs: [insumo('5', 'NPK', requiredPerHa: 0.4), insumo('6', 'Glifosato')],
       );
 
@@ -175,7 +173,7 @@ void main() {
     /// consultor descobrir a exigência um a um, na recusa do envio.
     test('os obrigatórios entram pré-preenchidos no mínimo', () {
       final d = draft(
-        producer: produtor(areaHa: 120),
+        area: 120,
         inputs: [insumo('5', 'NPK', requiredPerHa: 0.4), insumo('6', 'Glifosato')],
       );
 
@@ -184,7 +182,7 @@ void main() {
 
     test('a quantidade não desce abaixo do mínimo obrigatório', () {
       final d = draft(
-        producer: produtor(areaHa: 120),
+        area: 120,
         inputs: [insumo('5', 'NPK', requiredPerHa: 0.4)],
       );
 
@@ -192,9 +190,9 @@ void main() {
       expect(d.clampToMinimum('5', 60), 60);
     });
 
-    test('sem produtor escolhido não há área, e não há mínimo', () {
+    test('sem área informada não há mínimo', () {
       final d = draft(
-        semProdutor: true,
+        area: 0,
         inputs: [insumo('5', 'NPK', requiredPerHa: 0.4)],
       );
 
@@ -219,9 +217,9 @@ void main() {
       expect(d.unmetClasses, isEmpty);
     });
 
-    test('a régua por hectare multiplica a área do produtor', () {
+    test('a régua por hectare multiplica a área plantada', () {
       final d = draft(
-        producer: produtor(areaHa: 10),
+        area: 10,
         quantities: const {'5': 10},
         inputs: [insumo('5', 'NPK', classId: 'c2')],
         classes: [porHectare],
@@ -232,11 +230,11 @@ void main() {
       expect(d.unmetClasses.single.id, 'c2');
     });
 
-    /// SEM PRODUTOR não há área, e a régua por hectare não tem base de cálculo.
-    /// O servidor sempre tem — a permuta chega com produtor.
-    test('sem produtor, a régua por hectare não exige nada', () {
+    /// SEM ÁREA a régua por hectare não tem base de cálculo. O servidor sempre
+    /// tem — a permuta chega com a área plantada.
+    test('sem área, a régua por hectare não exige nada', () {
       final d = draft(
-        semProdutor: true,
+        area: 0,
         quantities: const {'5': 10},
         inputs: [insumo('5', 'NPK', classId: 'c2')],
         classes: [porHectare],
@@ -271,18 +269,20 @@ void main() {
       updatedAt: DateTime(2026, 1, 1),
     );
 
-    test('não se aplica quando o lançamento não leva seguro', () {
+    test('não se aplica quando a versão não tem seguro', () {
       final d = draft(quantities: const {'5': 10}, insuranceRate: taxa);
 
       expect(d.insuranceApplies, isFalse);
+      expect(d.insuranceOffered, isFalse);
+      expect(d.insuranceChoice, isNull);
       expect(d.insuranceCost, 0);
       expect(d.sacksNeeded, 10);
     });
 
-    test('aplicado, é área × taxa da praça e entra nas sacas', () {
+    test('obrigatório, é área plantada × taxa da praça e entra nas sacas', () {
       final d = draft(
-        version: versao(insuranceRequired: true),
-        producer: produtor(areaHa: 100),
+        version: versao(insurance: InsurancePolicy.required),
+        area: 100,
         quantities: const {'5': 10},
         insuranceRate: taxa,
       );
@@ -290,19 +290,59 @@ void main() {
       expect(d.insuranceCost, 200);
       expect(d.sacksNeeded, 210);
       expect(d.insuranceMissing, isFalse);
+      // Obrigatório não é escolha: o campo não vai no registro.
+      expect(d.insuranceChoice, isNull);
     });
 
     /// A PRAÇA FORA DA BASE é recusa certa no registro. Descobri-la aqui é de
     /// graça; descobri-la no envio é com o produtor do lado.
-    test('praça sem taxa é falta que trava o envio', () {
+    test('obrigatório com praça sem taxa é falta que trava o envio', () {
       final d = draft(
-        version: versao(insuranceRequired: true),
+        version: versao(insurance: InsurancePolicy.required),
         quantities: const {'5': 10},
         insuranceRate: null,
       );
 
       expect(d.insuranceMissing, isTrue);
       expect(d.canSubmit, isFalse);
+    });
+
+    /// OPCIONAL: o produtor decide. Só entra na conta quando ele quis.
+    test('opcional entra na conta só quando o produtor quer', () {
+      final recusa = draft(
+        version: versao(insurance: InsurancePolicy.optional),
+        quantities: const {'5': 10},
+        insuranceRate: taxa,
+      );
+      expect(recusa.insuranceOffered, isTrue);
+      expect(recusa.insuranceApplies, isFalse);
+      expect(recusa.insuranceChoice, isFalse);
+      expect(recusa.sacksNeeded, 10);
+
+      final aceita = draft(
+        version: versao(insurance: InsurancePolicy.optional),
+        quantities: const {'5': 10},
+        insuranceRate: taxa,
+        wantsInsurance: true,
+      );
+      expect(aceita.insuranceApplies, isTrue);
+      expect(aceita.insuranceChoice, isTrue);
+      expect(aceita.sacksNeeded, 210);
+    });
+
+    /// OPCIONAL SEM TAXA na praça: a opção fica bloqueada, e a permuta segue
+    /// sem seguro — não trava o envio.
+    test('opcional com praça sem taxa fica bloqueado, sem travar o envio', () {
+      final d = draft(
+        version: versao(insurance: InsurancePolicy.optional),
+        quantities: const {'5': 10},
+        wantsInsurance: true,
+      );
+
+      expect(d.insuranceBlocked, isTrue);
+      expect(d.insuranceApplies, isFalse);
+      expect(d.insuranceChoice, isFalse);
+      expect(d.canSubmit, isTrue);
     });
   });
 
@@ -311,14 +351,15 @@ void main() {
       expect(draft(quantities: const {'5': 10}).canSubmit, isTrue);
     });
 
-    test('sem produtor ou sem insumo, não', () {
+    test('sem produtor, sem área ou sem insumo, não', () {
       expect(draft(semProdutor: true, quantities: const {'5': 10}).canSubmit, isFalse);
+      expect(draft(area: 0, quantities: const {'5': 10}).canSubmit, isFalse);
       expect(draft(quantities: const {}).canSubmit, isFalse);
     });
 
     test('com régua de pasta em aberto, não', () {
       final d = draft(
-        producer: produtor(areaHa: 10),
+        area: 10,
         quantities: const {'5': 10},
         inputs: [insumo('5', 'NPK', classId: 'c2')],
         classes: [classe('c2', 'Sementes', ruleType: ClassRuleType.valuePerHa, ruleValue: 2)],

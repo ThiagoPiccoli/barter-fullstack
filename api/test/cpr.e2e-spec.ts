@@ -147,7 +147,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     expect(known.sackPrice).toBe(148.5);
     // 358,7879 sacas × 60 kg — o peso padrão, enquanto a cédula não disser outro.
     expect(known.quantityKg).toBe(21_527.27);
-    expect(known.versionCode).toBe('B2026.02');
+    expect(known.versionCode).toBe('SOJA26/27.02');
 
     // E o que ela ainda vai pedir a alguém.
     expect(gaps).toContain('número da CPR');
@@ -224,7 +224,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     const consultor = await asUser(ANA);
 
     const mesa = await readCpr('PRM-2026-004', consultor);
-    expect(mesa.body.data.known.seasonName).toBe('Barter 2026/27');
+    expect(mesa.body.data.known.seasonName).toBe('Soja 26/27');
     expect(mesa.body.data.known.dueDate).toBe('2026-06-30T12:00:00.000Z');
 
     // Mandar um vencimento por cima é DESCARTADO pelo `whitelist` — e o que
@@ -243,13 +243,12 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
    * resolve, porque quem lê a lista é o consultor, e ele não tem campo de
    * vencimento em tela nenhuma.
    *
-   * O acerto é POR CULTURA: a permuta é de soja, e mexer no vencimento do milho
-   * não deveria alcançar a cédula dela — é justamente por isso que a data saiu
-   * da safra.
+   * O acerto é POR VERSÃO: a permuta é da soja, e mexer no vencimento do milho
+   * safrinha não alcança a cédula dela — cada cultura tem a sua versão.
    */
-  it('cultura sem vencimento cobra o admin, e não o consultor', async () => {
+  it('versão sem vencimento cobra o admin, e não o consultor', async () => {
     await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/B2026.02/grains/1')
+      .put('/api/v1/barter-versions/SOJA2627.02/terms')
       .set('Authorization', await asUser(ADMIN))
       .send({ cprDueDate: '2026-07-15T12:00:00.000Z' })
       .expect(200);
@@ -259,7 +258,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
 
     // O vencimento do MILHO é outro, e não toca a cédula da permuta de soja.
     await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/B2026.02/grains/2')
+      .put('/api/v1/barter-versions/MILHO2027.01/terms')
       .set('Authorization', await asUser(ADMIN))
       .send({ cprDueDate: '2027-01-31T12:00:00.000Z' })
       .expect(200);
@@ -267,9 +266,9 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     expect(depois.body.data.known.dueDate).toBe('2026-07-15T12:00:00.000Z');
 
     // E uma data ilegível é recusada antes de virar o vencimento de todas as
-    // cédulas daquela cultura.
+    // cédulas daquela versão.
     const semData = await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/B2026.02/grains/1')
+      .put('/api/v1/barter-versions/SOJA2627.02/terms')
       .set('Authorization', await asUser(ADMIN))
       .send({ cprDueDate: 'nem data é' });
     expect(semData.status).toBe(422);
@@ -583,7 +582,8 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
       .send({
         producerId: 1,
         unitId: UNIT.filial02,
-        grainId: 1,
+        seasonId: 3, // Soja 26/27
+        plantedAreaHa: 120,
         inputs: [
           { productId: 5, quantity: 48 },
           { productId: 6, quantity: 300 },
@@ -1068,7 +1068,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
    * as cédulas que ainda não saíram — e NÃO pode alcançar o título que já está
    * com o produtor: ele diz o que diz, e o papel não se reescreve à distância.
    */
-  it('mudar o vencimento da cultura não reescreve a cédula já emitida', async () => {
+  it('mudar o vencimento da versão não reescreve a cédula já emitida', async () => {
     await prontaParaEmitir();
     await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-001/cpr/issue')
@@ -1077,7 +1077,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
       .expect(200);
 
     await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/B2026.02/grains/1')
+      .put('/api/v1/barter-versions/SOJA2627.02/terms')
       .set('Authorization', await asUser(ADMIN))
       .send({ cprDueDate: '2026-08-31T12:00:00.000Z' })
       .expect(200);
@@ -1085,7 +1085,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     const emitida = await readCpr('PRM-2026-001', await asUser(EMISSOR));
     // A CÉDULA congelou: ela continua com a data que foi conferida e assinada.
     expect(emitida.body.data.cpr.dueDate).toBe('2026-06-30T12:00:00.000Z');
-    // E a CULTURA já responde a data nova para as que ainda não saíram.
+    // E a VERSÃO já responde a data nova para as que ainda não saíram.
     expect(emitida.body.data.known.dueDate).toBe('2026-08-31T12:00:00.000Z');
   });
 
@@ -1202,11 +1202,11 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
    * O VENCIMENTO DA CULTURA na trilha: ele vale para TODAS as cédulas daquele
    * grão, e mudá-lo antecipa ou adia a entrega de cada produtor que ainda não
    * teve o título emitido — num campo que ninguém mais confere depois. A linha
-   * diz de QUAL cultura se trata, que é o que o Barter com soja e milho exige.
+   * diz de QUAL cultura se trata, que é o que várias culturas abertas exigem.
    */
-  it('mexer no vencimento da cultura deixa rastro', async () => {
+  it('mexer no vencimento da versão deixa rastro', async () => {
     await request(app.getHttpServer())
-      .put('/api/v1/barter-versions/B2026.02/grains/1')
+      .put('/api/v1/barter-versions/SOJA2627.02/terms')
       .set('Authorization', await asUser(ADMIN))
       .send({ cprDueDate: '2026-08-31T12:00:00.000Z' })
       .expect(200);
@@ -1214,7 +1214,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     const trilha = await request(app.getHttpServer())
       .get('/api/v1/audit-logs?action=barter.version-grain-changed')
       .set('Authorization', await asUser(ADMIN));
-    expect(trilha.body.data[0].targetLabel).toBe('B2026.02');
+    expect(trilha.body.data[0].targetLabel).toBe('SOJA26/27.02');
     expect(trilha.body.data[0].detail).toContain('Soja');
     expect(trilha.body.data[0].detail).toContain('31/08/2026');
   });
