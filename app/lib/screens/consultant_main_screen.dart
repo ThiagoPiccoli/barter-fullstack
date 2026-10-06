@@ -127,6 +127,9 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
     // OS RASCUNHOS dele: registrados, e ainda esperando o parecer que ele tem de
     // escrever. É a única fila da tela que é DELE.
     final myDrafts = stats.drafts;
+    // AS DEVOLVIDAS PELO COMITÊ, com exigências: a outra fila que é DELE. O
+    // comitê não decide enquanto ele não trouxer o que foi pedido.
+    final myRequirements = myBarters.where((b) => b.awaitsRequirements).toList();
     final sacksDelivered = stats.sacksReceivable;
 
     return Scaffold(
@@ -226,6 +229,40 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
                       child: Text(
                         '${myDrafts.length} permuta(s) em rascunho: escreva o seu parecer '
                         'e encaminhe ao gerente.',
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.draft),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, size: 20, color: AppColors.draft),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+
+          // AS EXIGÊNCIAS DO COMITÊ vêm logo depois do rascunho, e pelo mesmo
+          // motivo: é trabalho parado esperando o consultor. Uma permuta
+          // devolvida que ele não vê é uma decisão que não acontece.
+          if (myRequirements.isNotEmpty) ...[
+            InkWell(
+              onTap: () => onNavigate(1),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.draftBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.draft.withValues(alpha: 0.30)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.assignment_return_outlined, size: 20, color: AppColors.draft),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${myRequirements.length} permuta(s) com exigências do comitê: '
+                        'complete a cédula e devolva ao comitê.',
                         style: TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.draft),
                       ),

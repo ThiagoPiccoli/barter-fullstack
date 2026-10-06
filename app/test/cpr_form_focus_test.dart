@@ -55,6 +55,9 @@ void main() {
         status: BarterStatus.invoiced,
         createdAt: DateTime(2026, 3, 1),
         managerId: '7',
+        // O AVALISTA só aparece no formulário quando o comitê o exigiu — e é
+        // o bloco cujo foco este arquivo também mede.
+        requiresGuarantor: true,
         grains: const [],
         inputs: const [],
       );

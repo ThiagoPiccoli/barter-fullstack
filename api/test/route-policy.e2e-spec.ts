@@ -153,6 +153,25 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /barters/:code/forward', policy: 'capability:barters.register' },
         { route: 'POST /barters/:code/opinion', policy: 'capability:barters.opinion' },
         { route: 'POST /barters/:code/review', policy: 'capability:barters.review' },
+        // AS EXIGÊNCIAS DO COMITÊ: exigir é do comitê, pela porta da decisão (é a
+        // alternativa a decidir); cumprir é do consultor, pela porta do registro
+        // (é quem montou a permuta voltando a ela). O GERENTE não tem porta
+        // nenhuma aqui: a permuta cumprida volta direto ao comitê, e ele só é
+        // avisado.
+        { route: 'POST /barters/:code/requirements', policy: 'capability:barters.review' },
+        {
+          route: 'POST /barters/:code/requirements/fulfill',
+          policy: 'capability:barters.register',
+        },
+        // OS AVISOS — qualquer autenticado, e cada um só os PRÓPRIOS: o recorte é
+        // a pessoa, e quem o confere é o service.
+        { route: 'GET /notices', policy: 'any-authenticated' },
+        { route: 'POST /notices/:id/read', policy: 'any-authenticated' },
+        // A APÓLICE — o ato da SEGURADORA, com o documento e o número numa
+        // requisição só. BAIXAR o arquivo é de quem alcança a permuta, como o
+        // da nota: é assim que o emissor confere a apólice que a cédula cita.
+        { route: 'POST /barters/:code/insure', policy: 'capability:barters.insure' },
+        { route: 'GET /barters/:code/policy-file', policy: 'any-authenticated' },
         { route: 'POST /barters/:code/invoice', policy: 'capability:barters.invoice' },
         // AS NOTAS FISCAIS do faturamento. Anexar e remover são do mesmo posto
         // que fatura — a nota é o que ele produz. BAIXAR o arquivo é de quem
@@ -196,6 +215,26 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         {
           route: 'PUT /barters/:code/cpr/scr',
           policy: 'capability-any:barters.cprFill|barters.cprIssue',
+        },
+        // O SCR DO AVALISTA segue as duas chaves do SCR do emitente, e o
+        // DOCUMENTO DO BEM em hipoteca também se lê pelo dossiê — o comitê exigiu
+        // a garantia e decide contando com ela. Anexar o documento do bem é só de
+        // quem preenche a cédula: o emissor confere, não traz certidão.
+        {
+          route: 'PUT /barters/:code/cpr/guarantors/:id/scr',
+          policy: 'capability-any:barters.cprFill|barters.cprIssue',
+        },
+        {
+          route: 'GET /barters/:code/cpr/guarantors/:id/scr',
+          policy: 'capability-any:barters.cprRead|barters.creditRead',
+        },
+        {
+          route: 'PUT /barters/:code/cpr/mortgages/:id/document',
+          policy: 'capability:barters.cprFill',
+        },
+        {
+          route: 'GET /barters/:code/cpr/mortgages/:id/document',
+          policy: 'capability-any:barters.cprRead|barters.creditRead',
         },
         { route: 'POST /barters/:code/cpr/issue', policy: 'capability:barters.cprIssue' },
         { route: 'POST /barters/:code/cpr/registration', policy: 'capability:barters.cprIssue' },
@@ -383,6 +422,12 @@ describe('Política de acesso de TODAS as rotas (e2e)', () => {
         { route: 'POST /emitters', policy: 'capability:users.manage' },
         { route: 'POST /emitters/:id/reset-password', policy: 'capability:users.manage' },
         { route: 'PUT /emitters/:id', policy: 'capability:users.manage' },
+        // A SEGURADORA é um setor com várias pessoas: rota no plural, com `:id`.
+        { route: 'DELETE /insurers/:id', policy: 'capability:users.manage' },
+        { route: 'GET /insurers', policy: 'capability:users.manage' },
+        { route: 'POST /insurers', policy: 'capability:users.manage' },
+        { route: 'POST /insurers/:id/reset-password', policy: 'capability:users.manage' },
+        { route: 'PUT /insurers/:id', policy: 'capability:users.manage' },
         { route: 'DELETE /consultants/:id', policy: 'capability:users.manage' },
         { route: 'GET /consultants', policy: 'capability:users.manage' },
         { route: 'POST /consultants', policy: 'capability:users.manage' },

@@ -200,7 +200,14 @@ describe('Pedido de alteração da permuta', () => {
       // decidiu.
       requiresGuarantor: false,
       requiresCollateral: false,
-      requiresInsurance: false,
+      // A APÓLICE também: foi contratada sobre a permuta que vai mudar, e a
+      // refeita passa de novo pela seguradora.
+      insurancePolicyNumber: null,
+      insurancePolicyFileId: null,
+      insuredBy: null,
+      insuredById: null,
+      insuredAt: null,
+      insuranceNote: null,
     });
   });
 

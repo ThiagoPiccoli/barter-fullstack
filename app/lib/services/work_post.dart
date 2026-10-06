@@ -13,15 +13,19 @@ library;
 
 import '../models/models.dart';
 
-/// Os quatro postos que a permuta atravessa depois de sair da mão do consultor.
+/// Os postos que a permuta atravessa depois de sair da mão do consultor.
 ///
-/// O ADMIN ocupa os quatro: ele tem todas as capacidades. Ver [workPostsOf].
+/// O ADMIN ocupa todos: ele tem todas as capacidades. Ver [workPostsOf].
 enum WorkPost {
   /// O gerente: escreve o parecer técnico das permutas do time dele.
   manager,
 
   /// O comitê: decide (aprova, aprova com ressalva ou nega).
   committee,
+
+  /// A seguradora: informa a apólice das aprovadas COM SEGURO. A permuta sem
+  /// seguro não passa por ela.
+  insurer,
 
   /// O faturista: fatura o que foi aprovado e anexa as notas.
   biller,
@@ -43,6 +47,7 @@ enum WorkPost {
 WorkPost? workPostOf(UserModel user) {
   if (user.can(Capability.bartersOpinion)) return WorkPost.manager;
   if (user.can(Capability.bartersReview)) return WorkPost.committee;
+  if (user.can(Capability.bartersInsure)) return WorkPost.insurer;
   if (user.can(Capability.bartersInvoice)) return WorkPost.biller;
   if (user.can(Capability.bartersCprIssue)) return WorkPost.emitter;
   return null;
@@ -53,6 +58,7 @@ WorkPost? workPostOf(UserModel user) {
 List<WorkPost> workPostsOf(UserModel user) => [
       if (user.can(Capability.bartersOpinion)) WorkPost.manager,
       if (user.can(Capability.bartersReview)) WorkPost.committee,
+      if (user.can(Capability.bartersInsure)) WorkPost.insurer,
       if (user.can(Capability.bartersInvoice)) WorkPost.biller,
       if (user.can(Capability.bartersCprIssue)) WorkPost.emitter,
     ];
@@ -86,6 +92,8 @@ List<BarterModel> queueOf(
           : (b) => b.awaitsOpinionFrom(managerId);
     case WorkPost.committee:
       waits = (b) => b.awaitsCommittee;
+    case WorkPost.insurer:
+      waits = (b) => b.awaitsPolicy;
     case WorkPost.biller:
       waits = (b) => b.awaitsInvoice;
     case WorkPost.emitter:
@@ -119,6 +127,10 @@ BarterStatus followStatusOf(WorkPost post) {
       return BarterStatus.pending;
     case WorkPost.committee:
       return BarterStatus.sentToManager;
+    // A SEGURADORA olha para a FRENTE, como o gerente: o que ela já liberou ao
+    // faturista e ainda não foi faturado.
+    case WorkPost.insurer:
+      return BarterStatus.approved;
     case WorkPost.biller:
       return BarterStatus.invoiced;
     case WorkPost.emitter:

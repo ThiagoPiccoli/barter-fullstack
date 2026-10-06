@@ -58,6 +58,7 @@ flutter run --dart-define=API_URL=http://10.0.2.2:3333       # emulador Android
 | Admin    | admin@agrobarter.com.br         | demo-2026-agro |
 | Gerente  | gerente@agrobarter.com.br       | demo-2026-agro |
 | Comitê   | comite@agrobarter.com.br        | demo-2026-agro |
+| Seguradora | seguradora@agrobarter.com.br  | demo-2026-agro |
 | Faturista | faturista@agrobarter.com.br    | demo-2026-agro |
 | Emissor  | emissor@agrobarter.com.br       | demo-2026-agro |
 
@@ -154,11 +155,13 @@ servidor recusa o envio por ela estar abaixo do mínimo.
 - **O comitê é um ÓRGÃO, não uma pessoa**: ele é uma reunião, e o cadastro dele é
   um só (`/committee`, no singular, sem exclusão) — quem participa entra com o
   mesmo acesso, e a decisão sai assinada pelo comitê. Consultor, gerente,
-  faturista e emissor continuam sendo pessoas, cada um com a sua conta. Detalhes
+  seguradora, faturista e emissor continuam sendo pessoas, cada um com a sua conta. Detalhes
   em `api/README.md`.
 - **A permuta tem uma linha de produção, e ela mora no servidor**: gerente →
-  comitê → faturista → **emissor**. O gerente escreve o parecer técnico, o
-  **comitê** decide (aprova ou nega), o **faturista** fatura o que foi aprovado e
+  comitê → **seguradora** (só com seguro) → faturista → **emissor**. O gerente
+  escreve o parecer técnico, o **comitê** decide (aprova ou nega), a
+  **seguradora** anexa a apólice e informa o número quando a permuta tem seguro
+  (sem seguro, ela vai direto ao faturista), o **faturista** fatura o que foi aprovado e
   anexa as notas fiscais, e o **emissor** confere a cédula, emite o título, colhe
   as assinaturas e o leva a registro. Faturar não é mais o fim da linha: uma
   permuta faturada ainda deve o título que formaliza a entrega, e enquanto a
@@ -209,9 +212,10 @@ servidor recusa o envio por ela estar abaixo do mínimo.
   sistema (comitê e admin, e mais ninguém: o consultor leva ao produtor a
   decisão, não o dossiê), e a janela de mexer nela fecha na decisão — depois
   dela, o que fundamentou uma aprovação é prova. O comitê também passou a abrir
-  o **SCR** sem receber a cédula junto. E o que a reunião exige — **avalista,
-  garantia real, seguro** — virou três campos ao lado do texto da decisão: as
-  caixas dizem O QUÊ, e o texto continua dizendo QUAL.
+  o **SCR** sem receber a cédula junto. E o que a reunião exige — **avalista e
+  hipoteca** — virou uma etapa antes da decisão: a permuta volta ao
+  consultor com as caixas marcadas e o texto dizendo qual, o gerente é avisado,
+  e ela retorna direto ao comitê quando a cédula tiver o que foi pedido.
 - **A permuta mostra o caminho inteiro, e não só o já andado**: o detalhe traz
   um `steps` com as quatro etapas sempre — a cumprida com quem a assinou e o que
   escreveu, a de agora com o que ela espera ("aguarda o parecer do gerente

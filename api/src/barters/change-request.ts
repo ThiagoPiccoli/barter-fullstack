@@ -289,7 +289,17 @@ export const CLEARED_BY_CHANGE = {
   // deixando na tela uma exigência de que ele nunca soube.
   requiresGuarantor: false,
   requiresCollateral: false,
-  requiresInsurance: false,
+  // A APÓLICE também cai: ela foi contratada sobre a permuta que está prestes a
+  // mudar (a área, os insumos, o custo do seguro dentro das sacas), e a permuta
+  // refeita passa de novo pela seguradora depois da nova aprovação. O número
+  // continua na linha do tempo, no evento `insure`; o ARQUIVO é apagado por
+  // quem aplica o aceite, que é quem sabe qual era.
+  insurancePolicyNumber: null,
+  insurancePolicyFileId: null,
+  insuredBy: null,
+  insuredById: null,
+  insuredAt: null,
+  insuranceNote: null,
 } as const;
 
 /**

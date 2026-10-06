@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../branding/active_brand.dart';
 import '../services/num_input.dart';
 import '../theme/app_theme.dart';
@@ -348,6 +349,20 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
                 hint: 'Como o item é vendido: "20 L", "big-bag", "tonelada".',
               ),
             ),
+            // O MODELO DA CPR é do grão — o padrão com que ele é recebido. Ele
+            // mora na aba de grãos; aqui aparece junto do resto do cadastro.
+            if (!isInput) ...[
+              const Divider(height: 20),
+              _registrationRow(
+                icon: Icons.description_outlined,
+                label: 'Modelo da CPR: ${(product.cprModel ?? const GrainCprModel()).summary}',
+                active: (product.cprModel?.undefinedCount ?? 3) == 0,
+                action: 'Editar',
+                // Recarrega o DETALHE, e não só a tela: é dele que este cartão
+                // lê, e o cache que a edição atualiza é o da listagem.
+                onPressed: () => showGrainCprModelDialog(context, product, _loadDetail),
+              ),
+            ],
             if (isInput) ...[
               const Divider(height: 20),
               _registrationRow(
@@ -886,6 +901,112 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
               if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 content: Text('Exigência por hectare atualizada!'),
+                backgroundColor: AppColors.approved,
+              ));
+            } on ApiException catch (e) {
+              if (ctx.mounted) showErrorSnack(ctx, e);
+            }
+          },
+          child: const Text('Salvar'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// O MODELO DA CPR de um GRÃO — o padrão de recebimento que a cédula nova traz
+/// preenchido: peso da saca, umidade e impurezas máximas, teor de óleo.
+///
+/// Percentual vazio é "não definido", e não zero de tolerância: a cédula nasce
+/// com o campo em branco e quem preenche é cobrado por ele. Mudar o modelo não
+/// mexe nas cédulas já começadas — o texto de ajuda diz isso porque é a
+/// primeira pergunta de quem altera um padrão no meio da safra.
+Future<void> showGrainCprModelDialog(
+  BuildContext context,
+  ProductModel grain,
+  VoidCallback onUpdated,
+) {
+  final model = grain.cprModel ?? const GrainCprModel();
+  // O número EXATO, e não o `formatQty` (que arredonda a uma casa): 0,75% de
+  // impureza reaberto como "0,8" seria salvo errado no primeiro "Salvar".
+  String exact(double value) => value == value.roundToDouble()
+      ? value.toStringAsFixed(0)
+      : value.toString().replaceAll('.', ',');
+  String text(double value) => value == 0 ? '' : exact(value);
+  final sackWeight = TextEditingController(text: exact(model.sackWeightKg));
+  final moisture = TextEditingController(text: text(model.maxMoisture));
+  final impurities = TextEditingController(text: text(model.maxImpurities));
+  final oil = TextEditingController(text: text(model.oilContent));
+  final formKey = GlobalKey<FormState>();
+
+  Widget field(TextEditingController controller, String label, {bool percent = true}) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: TextFormField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
+          decoration: InputDecoration(
+            labelText: label,
+            suffixText: percent ? '%' : 'kg',
+            isDense: true,
+          ),
+          validator: (value) {
+            final raw = (value ?? '').trim();
+            if (raw.isEmpty) return percent ? null : 'Informe o peso da saca';
+            final parsed = parseNumber(raw);
+            if (parsed == null) return 'Número inválido';
+            if (!percent && parsed <= 0) return 'Maior que zero';
+            if (percent && parsed > 100) return 'Entre 0 e 100';
+            return null;
+          },
+        ),
+      );
+
+  return showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Modelo da CPR'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(grain.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+              const SizedBox(height: 16),
+              field(sackWeight, 'Peso da saca', percent: false),
+              field(moisture, 'Umidade máxima'),
+              field(impurities, 'Impurezas máximas'),
+              field(oil, 'Teor de óleo'),
+              Text(
+                'A CPR nova deste grão já vem com estes números, e quem preenche '
+                'pode ajustá-los na cédula. As cédulas já começadas não mudam.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+        ElevatedButton(
+          onPressed: () async {
+            if (!formKey.currentState!.validate()) return;
+            final next = GrainCprModel(
+              sackWeightKg: parseNumberOr(sackWeight.text, fallback: 60),
+              maxMoisture: parseNumberOr(moisture.text),
+              maxImpurities: parseNumberOr(impurities.text),
+              oilContent: parseNumberOr(oil.text),
+            );
+            try {
+              await AppData.updateProductFields(grain, next.toProductFields());
+              if (!ctx.mounted) return;
+              Navigator.pop(ctx);
+              onUpdated();
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Modelo da CPR de ${grain.name} atualizado!'),
                 backgroundColor: AppColors.approved,
               ));
             } on ApiException catch (e) {

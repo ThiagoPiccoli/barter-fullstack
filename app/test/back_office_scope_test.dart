@@ -131,6 +131,7 @@ void main() {
         'Todas (',
         'No gerente (',
         'No comitê (',
+        'Na seguradora (',
         'A faturar (',
         'No emissor (',
         'Concluídas (',
@@ -267,6 +268,58 @@ void main() {
       ]) {
         expect(find.textContaining('$aba ('), findsOneWidget, reason: 'falta a aba "$aba"');
       }
+    });
+  });
+
+  /// A SEGURADORA só enxerga as permutas COM SEGURO, da mesa dela em diante. A
+  /// lista dela abre na fila ("A informar apólice") e recolhe o que já passou
+  /// por ela — sem as abas das etapas de antes.
+  group('a seguradora', () {
+    UserModel seguradora() => staff(UserRole.insurer, [
+          Capability.bartersInsure,
+          Capability.bartersReadInsurance,
+          Capability.pricesRead,
+        ]);
+
+    testWidgets('as abas dela começam na apólice e não mostram as etapas de antes',
+        (tester) async {
+      AppData.currentUser = seguradora();
+      AppData.barters = [
+        barter('PRM-2026-010', 'awaitingPolicy'),
+        barter('PRM-2026-011', 'awaitingPolicyWithConditions'),
+        barter('PRM-2026-012', 'approved'),
+      ];
+
+      await abrir(tester, const BartersScreen(isAdmin: true, consultantId: null));
+
+      // As DUAS aprovações esperando a apólice estão na fila dela.
+      expect(find.textContaining('A informar apólice (2)'), findsOneWidget);
+      for (final aba in ['A faturar (', 'No emissor (', 'Concluídas (']) {
+        expect(find.textContaining(aba), findsOneWidget, reason: aba);
+      }
+      for (final aba in ['Todas (', 'No gerente (', 'No comitê (', 'Negadas (']) {
+        expect(find.textContaining(aba), findsNothing, reason: aba);
+      }
+      // O atalho do posto, direto do cartão.
+      expect(find.text('Anexar apólice'), findsNWidgets(2));
+    });
+
+    testWidgets('o painel dela mostra a fila da apólice e o que já foi ao faturista',
+        (tester) async {
+      final pessoa = seguradora();
+      AppData.currentUser = pessoa;
+      AppData.barters = [
+        barter('PRM-2026-010', 'awaitingPolicy'),
+        barter('PRM-2026-012', 'approved'),
+      ];
+
+      await abrir(tester, BackOfficeMainScreen(user: pessoa));
+
+      expect(find.text('Esperando você'), findsOneWidget);
+      expect(find.text('A faturar'), findsOneWidget);
+      expect(find.textContaining('esperando a apólice'), findsWidgets);
+      expect(find.text('No comitê'), findsNothing);
+      expect(find.text('No gerente'), findsNothing);
     });
   });
 

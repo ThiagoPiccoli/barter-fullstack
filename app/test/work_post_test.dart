@@ -43,6 +43,7 @@ void main() {
     test('o posto sai da capacidade, e não do nome do papel', () {
       expect(workPostOf(pessoa({Capability.bartersOpinion})), WorkPost.manager);
       expect(workPostOf(pessoa({Capability.bartersReview})), WorkPost.committee);
+      expect(workPostOf(pessoa({Capability.bartersInsure})), WorkPost.insurer);
       expect(workPostOf(pessoa({Capability.bartersInvoice})), WorkPost.biller);
       expect(workPostOf(pessoa({Capability.bartersCprIssue})), WorkPost.emitter);
     });
@@ -53,17 +54,20 @@ void main() {
       expect(workPostsOf(pessoa(const {})), isEmpty);
     });
 
-    /// O ADMIN ocupa os quatro postos, na ordem da linha.
-    test('quem tem as quatro capacidades ocupa os quatro postos', () {
+    /// O ADMIN ocupa todos os postos, na ordem da linha — a seguradora entre o
+    /// comitê e o faturista.
+    test('quem tem todas as capacidades ocupa todos os postos', () {
       final todos = pessoa({
         Capability.bartersOpinion,
         Capability.bartersReview,
+        Capability.bartersInsure,
         Capability.bartersInvoice,
         Capability.bartersCprIssue,
       });
       expect(workPostsOf(todos), [
         WorkPost.manager,
         WorkPost.committee,
+        WorkPost.insurer,
         WorkPost.biller,
         WorkPost.emitter,
       ]);
@@ -84,6 +88,8 @@ void main() {
       barter('gerente-meu', BarterStatus.sentToManager),
       barter('gerente-de-outro', BarterStatus.sentToManager, managerId: '99'),
       barter('comite', BarterStatus.pending),
+      barter('na-seguradora', BarterStatus.awaitingPolicy),
+      barter('na-seguradora-com-ressalva', BarterStatus.awaitingPolicyWithConditions),
       barter('a-faturar', BarterStatus.approved),
       barter('faturada', BarterStatus.invoiced),
       barter('emitida', BarterStatus.cprIssued),
@@ -131,6 +137,19 @@ void main() {
       expect(queueOf(WorkPost.biller, barters).map((b) => b.id), ['a-faturar']);
     });
 
+    /// A DA SEGURADORA tem as duas aprovações que esperam a apólice — e o
+    /// faturista não as vê: elas ainda não chegaram nele.
+    test('a da seguradora traz as aprovadas esperando a apólice, com ou sem ressalva', () {
+      expect(
+        queueOf(WorkPost.insurer, barters).map((b) => b.id),
+        unorderedEquals(['na-seguradora', 'na-seguradora-com-ressalva']),
+      );
+      expect(
+        queueOf(WorkPost.biller, barters).map((b) => b.id),
+        isNot(contains('na-seguradora')),
+      );
+    });
+
     /// A DO EMISSOR TEM OS TRÊS DEGRAUS da cédula: emitir, assinar e registrar
     /// acontecem em dias diferentes, e uma fila com só "a emitir" esconderia as
     /// cédulas assinadas paradas esperando cartório.
@@ -149,6 +168,8 @@ void main() {
     test('cada posto acompanha a etapa vizinha dele', () {
       expect(followStatusOf(WorkPost.manager), BarterStatus.pending);
       expect(followStatusOf(WorkPost.committee), BarterStatus.sentToManager);
+      // A seguradora olha para a FRENTE: o que ela já liberou ao faturista.
+      expect(followStatusOf(WorkPost.insurer), BarterStatus.approved);
       expect(followStatusOf(WorkPost.biller), BarterStatus.invoiced);
       expect(followStatusOf(WorkPost.emitter), BarterStatus.cprRegistered);
     });

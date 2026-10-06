@@ -98,12 +98,15 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
  * emitia a nota: o negócio mais consolidado que existe zerava a barra.
  *
  * A lista vem da ESTEIRA, e não escrita à mão: "decidida a favor" é exatamente o
- * trecho da linha que o faturamento alcança (`lineFrom(invoice)`). Escrita à
- * mão, ela ficou para trás quando a decisão do comitê ganhou a terceira saída —
- * a permuta aprovada COM RESSALVA é negócio fechado e sumiria da meta sem que
- * ninguém percebesse. Ver `barters/barter-workflow.ts`.
+ * trecho da linha que começa na apólice (`lineFrom(insure)`) — o primeiro degrau
+ * depois da decisão. Escrita à mão, ela ficou para trás quando a decisão do
+ * comitê ganhou a terceira saída — a permuta aprovada COM RESSALVA é negócio
+ * fechado e sumiria da meta sem que ninguém percebesse. E ficou para trás de
+ * novo quando a seguradora entrou: contada a partir do faturamento, a permuta
+ * aprovada COM SEGURO sumiria da meta enquanto espera a apólice. Ver
+ * `barters/barter-workflow.ts`.
  */
-const COUNTS_AS_REALIZED: readonly string[] = lineFrom(BARTER_ACTION.invoice);
+const COUNTS_AS_REALIZED: readonly string[] = lineFrom(BARTER_ACTION.insure);
 
 /**
  * Este estado soma na meta? É a mesma lista que a conta usa, exposta para quem

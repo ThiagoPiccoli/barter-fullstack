@@ -98,6 +98,13 @@ void main() {
       expect(barter.versionCode, 'B2026.02');
     });
 
+    /// O NÚMERO DA CPR vem desde o registro — a permuta o tem antes da cédula.
+    test('lê o número da CPR reservado no registro', () {
+      final json = barterJson(status: 'draft')..['cprNumber'] = 'CPR-2026-010';
+      expect(BarterModel.fromJson(json).cprNumber, 'CPR-2026-010');
+      expect(BarterModel.fromJson(barterJson(status: 'draft')).cprNumber, '');
+    });
+
     /// O imposto sai da alíquota GRAVADA na permuta, não do cadastro do produtor
     /// na hora de mostrar: a alíquota muda por lei, e o comprovante de uma
     /// permuta fechada não pode passar a mostrar outro número.

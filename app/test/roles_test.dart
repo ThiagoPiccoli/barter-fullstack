@@ -21,7 +21,7 @@ void main() {
       });
 
   group('UserRole', () {
-    test('lê os seis papéis do servidor', () {
+    test('lê os sete papéis do servidor', () {
       expect(UserRole.fromWire('admin'), UserRole.admin);
       expect(UserRole.fromWire('manager'), UserRole.manager);
       expect(UserRole.fromWire('committee'), UserRole.committee);
@@ -29,6 +29,9 @@ void main() {
       // O EMISSOR — o posto da cédula, e o mais novo da esteira.
       expect(UserRole.fromWire('emitter'), UserRole.emitter);
       expect(UserRole.emitter.label, 'Emissor');
+      // A SEGURADORA — o setor que informa a apólice das permutas com seguro.
+      expect(UserRole.fromWire('insurer'), UserRole.insurer);
+      expect(UserRole.insurer.label, 'Seguradora');
       expect(UserRole.fromWire('consultant'), UserRole.consultant);
     });
 
@@ -45,6 +48,7 @@ void main() {
       expect(UserRole.committee.isBackOffice, isTrue);
       expect(UserRole.biller.isBackOffice, isTrue);
       expect(UserRole.emitter.isBackOffice, isTrue);
+      expect(UserRole.insurer.isBackOffice, isTrue);
       expect(UserRole.consultant.isBackOffice, isFalse);
     });
   });
@@ -142,6 +146,7 @@ void main() {
       expect(destinationFor(user('committee')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('biller')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('emitter')), isA<BackOfficeMainScreen>());
+      expect(destinationFor(user('insurer')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('consultant')), isA<ConsultantMainScreen>());
     });
 
@@ -150,7 +155,15 @@ void main() {
     /// faturista, que são os papéis novos e entrariam por um caminho que não
     /// existia quando essa trava foi escrita.
     test('senha provisória segura qualquer papel na troca de senha', () {
-      for (final role in ['admin', 'manager', 'committee', 'biller', 'emitter', 'consultant']) {
+      for (final role in [
+        'admin',
+        'manager',
+        'committee',
+        'insurer',
+        'biller',
+        'emitter',
+        'consultant',
+      ]) {
         expect(
           destinationFor(user(role, mustChangePassword: true)),
           isA<ChangePasswordScreen>(),

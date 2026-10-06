@@ -208,15 +208,22 @@ export class ForwardBarterDto {
 const REVIEW_NOTE_MESSAGE =
   'Escreva o motivo da decisão (mínimo de 10 caracteres): a ressalva exigida, ou a razão da negativa';
 
+/** A frase de quem pede exigência sem dizer qual. */
+const REQUIREMENT_NOTE_MESSAGE =
+  'Escreva o que o comitê espera (mínimo de 10 caracteres): quem como avalista, qual imóvel em hipoteca';
+
+/** A frase de quem informa a apólice sem o número. Ver `InsureBarterDto`. */
+export const POLICY_NUMBER_MESSAGE = 'Informe o número da apólice do seguro (até 60 caracteres)';
+
 /**
  * A DECISÃO DO COMITÊ. TRÊS saídas, e só elas: aprovar, aprovar COM RESSALVA ou
  * negar. Não há "devolver para o gerente" — o parecer já foi dado, e uma permuta
- * que anda para trás perde o dono da etapa.
+ * que anda para trás perde o dono da etapa. Devolver ao CONSULTOR existe, mas é
+ * outro ato e vem antes da decisão: ver `RequireBarterDto`.
  *
  * O TEXTO é obrigatório em duas delas, e a regra é a mesma nas duas: a decisão
  * que cria trabalho para outra pessoa precisa dizer qual. A ressalva é uma
- * exigência a cumprir (garantia real, seguro, aval) e alguém vai ter de
- * providenciá-la; a negativa é uma resposta que o consultor vai levar ao
+ * exigência a cumprir e alguém vai ter de providenciá-la; a negativa é uma resposta que o consultor vai levar ao
  * produtor. Nos dois casos, "porque sim" manda a pessoa perguntar por telefone —
  * e a resposta não fica no registro.
  *
@@ -241,38 +248,89 @@ export class ReviewBarterDto {
   @MaxLength(1000, { message: 'Escreva o motivo da decisão em até 1000 caracteres' })
   note?: string;
 
-  /**
-   * AS EXIGÊNCIAS: avalista, garantia real e seguro — as três coisas que o
-   * comitê define, agora legíveis por máquina.
-   *
-   * Elas viviam dentro de `note`, em prosa ("exigir aval do cônjuge", "com
-   * avalista", "condicionada a aval"), e isso bastava para quem lia a permuta e
-   * não bastava para mais nada: não havia como listar o que estava pendente de
-   * aval, e o emissor descobria a exigência lendo parágrafo na véspera de
-   * emitir o título.
-   *
-   * SÃO OPCIONAIS, e isso é deliberado em dois sentidos. Primeiro, a aprovação
-   * limpa não exige nada — e a negativa também não: exigir avalista de uma
-   * permuta negada seria pedir garantia para um negócio que não vai acontecer.
-   * Segundo, elas NÃO SUBSTITUEM o texto: `note` continua obrigatório na
-   * ressalva porque as caixas dizem O QUÊ e só ele diz QUAL — qual matrícula,
-   * qual valor segurado, quem se espera como avalista.
-   *
-   * Ausente vale `false`, e não "não mexer": esta é a decisão, e ela é tomada
-   * uma vez. Um cliente que não conheça os campos manda a decisão sem exigência
-   * nenhuma, que é exatamente o que ele quis dizer.
-   */
+  // PARA ONDE a aprovação vai — a seguradora ou o faturista — também não está
+  // aqui: é consequência do seguro da permuta, e quem a resolve é a máquina de
+  // estados (ver `reviewOutcomeFor`). O comitê escolhe o desfecho, não a fila.
+  //
+  // AS EXIGÊNCIAS (avalista, hipoteca) NÃO ESTÃO AQUI, e estiveram:
+  // elas eram caixas marcadas JUNTO com a aprovação, e a permuta seguia para o
+  // faturamento com elas anotadas. Agora elas vêm ANTES da decisão e devolvem a
+  // permuta ao consultor — são outro ato, com outra rota (ver
+  // `RequireBarterDto`). Uma aprovação que as trouxesse seria uma aprovação
+  // condicionada a algo que ninguém foi buscar.
+}
+
+/** A mensagem de quem pede exigência sem marcar nenhuma — ver `RequireBarterDto`. */
+export const NO_REQUIREMENT_MESSAGE =
+  'Marque o que o comitê exige — avalista e/ou hipoteca — para devolver a permuta ao consultor';
+
+/**
+ * AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos ANTES de decidir.
+ * A permuta volta ao consultor, e o gerente dela é avisado.
+ *
+ * As caixas se ACUMULAM, porque a reunião pede duas com frequência, e AO MENOS
+ * UMA é obrigatória — quem confere é o service, que é quem sabe dizer a frase
+ * inteira. Devolver a permuta sem pedir nada seria mandá-la ao consultor para
+ * ele adivinhar o que trazer.
+ *
+ * O TEXTO É OBRIGATÓRIO, pela regra de sempre: a decisão que cria trabalho para
+ * outra pessoa precisa dizer qual. As caixas dizem O QUÊ; só ele diz QUAL —
+ * quem se espera como avalista, qual imóvel vai em hipoteca.
+ *
+ * O SEGURO não é mais uma caixa daqui: a apólice é da seguradora, e o seguro da
+ * permuta é o da versão (ver `REVIEW_REQUIREMENT_LABELS`).
+ */
+export class RequireBarterDto {
   @IsOptional()
   @IsBoolean()
   requiresGuarantor?: boolean;
 
+  /** A HIPOTECA. O nome da coluna ficou de quando a tela dizia "garantia real". */
   @IsOptional()
   @IsBoolean()
   requiresCollateral?: boolean;
 
+  @IsString({ message: REQUIREMENT_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: REQUIREMENT_NOTE_MESSAGE })
+  @MaxLength(1000, { message: 'Escreva as exigências em até 1000 caracteres' })
+  note!: string;
+}
+
+/**
+ * O CUMPRIMENTO das exigências — o consultor devolve a permuta ao comitê.
+ *
+ * Quase não tem corpo, e é o certo: o que prova o cumprimento é a CÉDULA (o
+ * avalista qualificado, a hipoteca descrita), e não uma declaração
+ * aqui. O texto é opcional e existe para o que foge — "o avalista é o irmão, e
+ * não o pai como a reunião esperava".
+ */
+export class FulfillRequirementsDto {
   @IsOptional()
-  @IsBoolean()
-  requiresInsurance?: boolean;
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/**
+ * A APÓLICE, informada pela seguradora — o NÚMERO e uma observação. O ARQUIVO
+ * vem no mesmo `multipart` (campo `file`), e quem confere que ele veio é o
+ * controller: nenhum decorator daqui alcança o anexo.
+ *
+ * O número é OBRIGATÓRIO, como o do registro da cédula: é ele que a CPR cita
+ * (cláusula XVIII, "j"), e uma apólice anexada sem número seria um documento que
+ * o título não tem como nomear. As três conferências levam a mesma frase pelo
+ * motivo de sempre — com o campo ausente elas falham juntas.
+ */
+export class InsureBarterDto {
+  @IsString({ message: POLICY_NUMBER_MESSAGE })
+  @MinLength(1, { message: POLICY_NUMBER_MESSAGE })
+  @MaxLength(60, { message: POLICY_NUMBER_MESSAGE })
+  policyNumber!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
 
 /**

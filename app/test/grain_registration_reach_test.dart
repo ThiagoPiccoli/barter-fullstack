@@ -37,6 +37,8 @@ void main() {
     AppData.currentUser = null;
     AppData.seasons = [];
     AppData.currentVersions = [];
+    AppData.grains = [];
+    AppData.inputs = [];
   });
 
   Future<void> abrir(WidgetTester tester) async {
@@ -47,13 +49,13 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  /// O "+" do cabeçalho vale para as QUATRO abas. Ele é um só — o cabeçalho é
+  /// O "+" do cabeçalho vale para as CINCO abas. Ele é um só — o cabeçalho é
   /// compartilhado —, e o que mudou foi ele deixar de sumir nas três em que o
   /// admin passa o tempo.
   testWidgets('o cadastro de grão é alcançável de qualquer aba', (tester) async {
     await abrir(tester);
 
-    for (final aba in ['Lançamento', 'Valores', 'Histórico', 'Classes']) {
+    for (final aba in ['Lançamento', 'Valores', 'Grãos', 'Histórico', 'Classes']) {
       await tester.tap(find.text(aba));
       await tester.pumpAndSettle();
 
@@ -73,5 +75,54 @@ void main() {
 
     expect(find.text('Novo grão'), findsOneWidget);
     expect(find.text('Novo insumo'), findsOneWidget);
+  });
+
+  /// OS GRÃOS SAÍRAM DO HISTÓRICO para uma aba própria, onde mora o MODELO DA
+  /// CPR de cada um. O que falta definir aparece marcado no cartão — é a
+  /// pergunta desta aba.
+  testWidgets('a aba de grãos mostra o modelo da CPR, e o histórico só os insumos', (tester) async {
+    AppData.grains = [
+      const ProductModel(
+        id: '1',
+        name: 'Soja',
+        unit: 'saca 60kg',
+        currentPrice: 148.5,
+        type: ProductType.grain,
+        priceHistory: [],
+        cprModel: GrainCprModel(maxMoisture: 14, maxImpurities: 1, oilContent: 18),
+      ),
+      const ProductModel(
+        id: '2',
+        name: 'Milho',
+        unit: 'saca 60kg',
+        currentPrice: 62.3,
+        type: ProductType.grain,
+        priceHistory: [],
+        cprModel: GrainCprModel(maxMoisture: 14, maxImpurities: 1),
+      ),
+    ];
+    AppData.inputs = [
+      const ProductModel(
+        id: '5',
+        name: 'Fertilizante NPK 04-14-08',
+        unit: 'saco 50kg',
+        currentPrice: 115,
+        type: ProductType.input,
+        priceHistory: [],
+      ),
+    ];
+    await abrir(tester);
+
+    await tester.tap(find.text('Grãos'));
+    await tester.pumpAndSettle();
+    expect(find.text('Saca de 60 kg · umidade 14% · impurezas 1% · óleo 18%'), findsOneWidget);
+    expect(find.text('Saca de 60 kg · umidade 14% · impurezas 1% · óleo a definir'), findsOneWidget);
+    expect(find.text('1 número a definir'), findsOneWidget);
+    expect(find.text('Fertilizante NPK 04-14-08'), findsNothing);
+
+    await tester.tap(find.text('Histórico'));
+    await tester.pumpAndSettle();
+    expect(find.text('Fertilizante NPK 04-14-08'), findsOneWidget);
+    expect(find.text('Soja'), findsNothing);
   });
 }

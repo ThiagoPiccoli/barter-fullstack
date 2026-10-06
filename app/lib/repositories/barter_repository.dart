@@ -242,25 +242,46 @@ class BarterRepository {
   /// Quem decide é o comitê — o admin administra o sistema e não passa por aqui.
   /// A rota continua sendo `/review`: o que mudou foi o papel, não a etapa.
   ///
-  /// AS EXIGÊNCIAS (avalista, garantia real, seguro) vão junto com a decisão, e
-  /// não substituem o texto: as caixas dizem O QUÊ, e só o texto diz QUAL —
-  /// qual matrícula, qual valor segurado, quem se espera como avalista. Só
-  /// viajam quando marcadas: o padrão do servidor é não exigir nada, e mandar
-  /// três `false` seria dizer a mesma coisa com três campos a mais.
-  Future<BarterModel> review(
-    String code,
-    BarterStatus status,
-    String note, {
-    bool requiresGuarantor = false,
-    bool requiresCollateral = false,
-    bool requiresInsurance = false,
-  }) async {
+  /// AS EXIGÊNCIAS (avalista, hipoteca, seguro) NÃO vão mais junto com a
+  /// decisão: elas vêm ANTES dela e devolvem a permuta ao consultor — ver
+  /// [require].
+  Future<BarterModel> review(String code, BarterStatus status, String note) async {
     final data = await api.post('/barters/$code/review', body: {
       'status': status.name,
       if (note.trim().isNotEmpty) 'note': note.trim(),
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos antes de
+  /// decidir. A permuta volta ao consultor, e o gerente dela é avisado.
+  ///
+  /// Ao menos uma caixa e o texto são obrigatórios, e o servidor recusa (422)
+  /// sem eles: as caixas dizem O QUÊ, e só o texto diz QUAL. Só viajam as
+  /// marcadas — as que já tinham sido exigidas continuam, porque elas se
+  /// acumulam no servidor.
+  Future<BarterModel> require(
+    String code,
+    String note, {
+    bool requiresGuarantor = false,
+    bool requiresCollateral = false,
+  }) async {
+    final data = await api.post('/barters/$code/requirements', body: {
+      'note': note.trim(),
       if (requiresGuarantor) 'requiresGuarantor': true,
       if (requiresCollateral) 'requiresCollateral': true,
-      if (requiresInsurance) 'requiresInsurance': true,
+    });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// O CUMPRIMENTO das exigências — o consultor devolve a permuta ao comitê,
+  /// direto, sem passar de novo pelo gerente.
+  ///
+  /// Quem confere que o pedido foi cumprido é a CÉDULA: o servidor recusa (422)
+  /// enquanto o avalista ou a hipoteca exigidos não estiverem nela.
+  Future<BarterModel> fulfill(String code, {String note = ''}) async {
+    final data = await api.post('/barters/$code/requirements/fulfill', body: {
+      if (note.trim().isNotEmpty) 'note': note.trim(),
     });
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
@@ -313,6 +334,31 @@ class BarterRepository {
     final data = await api.post('/barters/$code/invoice', body: {
       if (note.trim().isNotEmpty) 'note': note.trim(),
     });
+    return BarterModel.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// A APÓLICE — o ato da SEGURADORA: o documento e o número, numa requisição
+  /// só (`multipart`, como a cédula assinada).
+  ///
+  /// O servidor recusa (422) sem o arquivo, sem o número, e na permuta sem
+  /// seguro ou fora da mesa da seguradora. A resposta é a permuta já devolvida
+  /// ao seu par de aprovação, a caminho do faturista.
+  Future<BarterModel> insure(
+    String code, {
+    required String policyNumber,
+    required String filename,
+    required List<int> bytes,
+    String note = '',
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/insure',
+      filename: filename,
+      bytes: bytes,
+      fields: {
+        'policyNumber': policyNumber.trim(),
+        if (note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
     return BarterModel.fromJson(data as Map<String, dynamic>);
   }
 
@@ -383,8 +429,18 @@ class BarterRepository {
   /// O corpo vai completo (é o formulário que a tela devolve); quem decide que
   /// campo ausente preserva o gravado é o servidor. `areas` SUBSTITUI as
   /// lavouras, porque é uma lista editada como um todo na tela.
-  Future<CprDesk> saveCpr(String code, CprDraft draft) async {
-    final data = await api.put('/barters/$code/cpr', body: draft.toJson());
+  ///
+  /// AVALISTAS E HIPOTECA só viajam quando o comitê os exigiu
+  /// ([withGuarantors], [withMortgages]): fora disso o servidor os recusa, e a
+  /// ausência deixa como está o que já estiver gravado.
+  Future<CprDesk> saveCpr(
+    String code,
+    CprDraft draft, {
+    bool withGuarantors = true,
+    bool withMortgages = true,
+  }) async {
+    final data = await api.put('/barters/$code/cpr',
+        body: draft.toJson(withGuarantors: withGuarantors, withMortgages: withMortgages));
     return CprDesk.fromJson(data as Map<String, dynamic>);
   }
 
@@ -410,6 +466,41 @@ class BarterRepository {
     return CprDesk.fromJson(data as Map<String, dynamic>);
   }
 
+  /// ANEXA O SCR DE UM AVALISTA — exigido junto com o aval. O avalista precisa
+  /// estar SALVO: é o [guarantorId] que o servidor devolveu que endereça o
+  /// anexo.
+  Future<CprDesk> saveGuarantorScr(
+    String code,
+    int guarantorId, {
+    required String filename,
+    required List<int> bytes,
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/cpr/guarantors/$guarantorId/scr',
+      filename: filename,
+      bytes: bytes,
+      method: 'PUT',
+    );
+    return CprDesk.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// ANEXA O DOCUMENTO DE UM BEM EM HIPOTECA — a matrícula atualizada, a
+  /// certidão de ônus. Mesma regra do SCR do avalista: o bem precisa estar salvo.
+  Future<CprDesk> saveMortgageDocument(
+    String code,
+    int mortgageId, {
+    required String filename,
+    required List<int> bytes,
+  }) async {
+    final data = await api.upload(
+      '/barters/$code/cpr/mortgages/$mortgageId/document',
+      filename: filename,
+      bytes: bytes,
+      method: 'PUT',
+    );
+    return CprDesk.fromJson(data as Map<String, dynamic>);
+  }
+
   /* ── A EMISSÃO: os três atos do emissor ────────────────────────────── */
 
   /// EMITE a cédula — o ato que CONFERE.
@@ -418,14 +509,10 @@ class BarterRepository {
   /// (isso é do consultor) e não decide o negócio (isso é do comitê). O que ele
   /// faz é ler contra o modelo o que os outros postos produziram, e o que tem
   /// lacuna não sai — o servidor recusa (422) com a lista do que falta e com
-  /// quem cada coisa se resolve.
-  /// [number] é o NÚMERO DA CÉDULA, informado no ato. É a única coisa dela que o
-  /// emissor escreve, e escreve porque é a única que ele tem: a numeração vem de
-  /// fora do sistema (cartório, B3, controle da credora). Vazio quando a cédula
-  /// já o tem.
-  Future<BarterModel> issueCpr(String code, {String number = '', String note = ''}) async {
+  /// quem cada coisa se resolve. Nem o número da cédula vai: ele nasceu com a
+  /// permuta, no registro.
+  Future<BarterModel> issueCpr(String code, {String note = ''}) async {
     final data = await api.post('/barters/$code/cpr/issue', body: {
-      if (number.trim().isNotEmpty) 'number': number.trim(),
       if (note.trim().isNotEmpty) 'note': note.trim(),
     });
     return BarterModel.fromJson(data as Map<String, dynamic>);
@@ -524,12 +611,22 @@ class BarterRepository {
   String invoiceFilePath(String code, String invoiceId) =>
       '/barters/$code/invoices/$invoiceId/file';
 
+  /// O ENDEREÇO da APÓLICE do seguro. Ver [invoiceFilePath].
+  String policyFilePath(String code) => '/barters/$code/policy-file';
+
   /// O ENDEREÇO do arquivo do SCR. Ver [invoiceFilePath].
   ///
   /// O COMITÊ chega a ele sem ter a cédula: o SCR é o retrato do endividamento
   /// do produtor no Banco Central, e é uma das peças que a reunião lê para
   /// decidir. Ver `barters.creditRead` na API.
   String scrFilePath(String code) => '/barters/$code/cpr/scr';
+
+  /// Os endereços dos anexos das GARANTIAS exigidas pelo comitê — o SCR de um
+  /// avalista e o documento de um bem em hipoteca.
+  String guarantorScrPath(String code, int guarantorId) =>
+      '/barters/$code/cpr/guarantors/$guarantorId/scr';
+  String mortgageDocumentPath(String code, int mortgageId) =>
+      '/barters/$code/cpr/mortgages/$mortgageId/document';
 
   /// O ENDEREÇO de uma peça do dossiê do comitê. Ver [invoiceFilePath].
   String creditFilePath(String code, String creditFileId) =>

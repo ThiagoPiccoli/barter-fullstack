@@ -66,6 +66,11 @@ const Brand agroBarterBrand = Brand(
     // distinguível dele à primeira vista na mesma lista.
     approvedWithConditions: Color(0xFF4D7C0F),
     approvedWithConditionsBg: Color(0xFFF4FBE6),
+    // Violeta para a MESA DA SEGURADORA: decidida, mas com outra pessoa — ver
+    // `atInsurer` em BrandPalette. Distinguível do índigo do gerente e do verde
+    // da aprovação na mesma lista.
+    atInsurer: Color(0xFF7E22CE),
+    atInsurerBg: Color(0xFFF5EEFF),
     approved: Color(0xFF15803D),
     // Âmbar mais claro que `grain` de propósito: os dois aparecem lado a lado
     // no painel, e com o mesmo tom um selo de revisão se confundia com um

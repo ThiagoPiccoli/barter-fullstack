@@ -12,6 +12,7 @@ void main() {
   final desk = CprDesk(
     known: CprKnown(
       barterCode: 'PRM-2026-014',
+      cprNumber: 'CPR-2026-014',
       emitterName: 'João da Silva',
       emitterDocument: 'CPF 123.456.789-00',
       grainName: 'Soja',
@@ -40,7 +41,6 @@ void main() {
       effectiveForum: 'Maringá/PR',
     ),
     cpr: CprDraft(
-      number: 'CPR-2026-014',
       issuedAt: DateTime(2026, 5, 12),
       emitterNationality: 'brasileiro',
       emitterMaritalStatus: 'casado',
@@ -270,19 +270,42 @@ void main() {
   });
 
   /// A apólice só aparece quando há seguro: uma cláusula que afirma um seguro
-  /// inexistente é pior do que uma cláusula a menos.
+  /// inexistente é pior do que uma cláusula a menos. E o número é o que a
+  /// SEGURADORA informou — ele chega em `known`, e não no rascunho do consultor.
   group('a alínea do seguro', () {
     test('some quando não há apólice', () {
       expect(textoDe(desk), isNot(contains('valor do seguro contratado')));
     });
 
-    test('aparece com o número quando há', () {
+    test('aparece com o número que a seguradora informou', () {
+      final k = desk.known;
       final comSeguro = CprDesk(
-        known: desk.known,
+        known: CprKnown(
+          barterCode: k.barterCode,
+          cprNumber: k.cprNumber,
+          emitterName: k.emitterName,
+          emitterDocument: k.emitterDocument,
+          grainName: k.grainName,
+          sacks: k.sacks,
+          quantityKg: k.quantityKg,
+          sackPrice: k.sackPrice,
+          totalValue: k.totalValue,
+          versionCode: k.versionCode,
+          dueDate: k.dueDate,
+          seasonName: k.seasonName,
+          invoices: k.invoices,
+          insurancePolicy: 'AP-99887',
+        ),
         creditor: desk.creditor,
-        cpr: desk.cpr!.copyWith(insurancePolicy: 'AP-99887'),
+        cpr: desk.cpr,
       );
       expect(textoDe(comSeguro), contains('conforme apólice nº AP-99887'));
+    });
+
+    test('o número vem do servidor, em known', () {
+      final known = CprKnown.fromJson({'insurancePolicy': 'AP-2026-778.412'});
+      expect(known.insurancePolicy, 'AP-2026-778.412');
+      expect(CprKnown.fromJson(const {}).insurancePolicy, '');
     });
   });
 
@@ -351,6 +374,81 @@ void main() {
         cpr: desk.cpr!.copyWith(emitterMaritalStatus: 'solteiro', spouseName: ''),
       );
       expect(CprText.signatures(solteiro).length, 2);
+    });
+
+    /// O AVALISTA ASSINA a cédula — é a assinatura no título que faz dele
+    /// avalista. Um bloco por avalista, depois dos do devedor, e a anuência do
+    /// cônjuge do avalista logo abaixo dele quando ele é casado.
+    test('cada avalista assina, e o cônjuge casado dá a anuência', () {
+      final comAval = CprDesk(
+        known: desk.known,
+        creditor: desk.creditor,
+        cpr: desk.cpr!.copyWith(guarantors: const [
+          CprGuarantor(
+            name: 'Carlos Avalista',
+            document: 'CPF 222.333.444-55',
+            nationality: 'brasileiro',
+            maritalStatus: 'casado',
+            profession: 'comerciante',
+            address: 'Rua das Palmeiras',
+            addressNumber: '12',
+            city: 'Sarandi/PR',
+            spouseName: 'Rita Avalista',
+            spouseDocument: '666.777.888-99',
+            spouseNationality: 'brasileira',
+            spouseProfession: 'professora',
+          ),
+          CprGuarantor(
+            name: 'Pedro Avalista',
+            document: '333.444.555-66',
+            nationality: 'brasileiro',
+            maritalStatus: 'solteiro',
+            profession: 'produtor rural',
+            address: 'Rua das Flores',
+            addressNumber: '7',
+            city: 'Maringá/PR',
+          ),
+        ]),
+      );
+
+      final blocos = CprText.signatures(comAval);
+      expect(blocos.map((b) => b.role), [
+        'EMITENTE DEVEDOR:',
+        'FIEL DEPOSITÁRIO:',
+        'ANUÊNCIA DO CÔNJUGE DO DEVEDOR:',
+        'AVALISTA:',
+        'ANUÊNCIA DO CÔNJUGE DO AVALISTA:',
+        'AVALISTA:',
+      ]);
+
+      final carlos = blocos[3];
+      expect(carlos.name, 'Carlos Avalista');
+      expect(carlos.qualification, 'brasileiro, casado, comerciante');
+      expect(carlos.address, 'Rua das Palmeiras, nº 12 – Sarandi/PR');
+      // O rótulo "CPF" que o cadastro possa trazer não sai duas vezes.
+      expect(carlos.document, 'CPF/MF: 222.333.444-55');
+
+      // O cônjuge do avalista herda o estado civil e o domicílio dele.
+      final rita = blocos[4];
+      expect(rita.name, 'Rita Avalista');
+      expect(rita.qualification, 'brasileira, casado, professora');
+      expect(rita.address, carlos.address);
+
+      expect(blocos[5].name, 'Pedro Avalista');
+    });
+
+    /// Sem avalista — o caso comum, sem exigência do comitê —, nenhum bloco a
+    /// mais. E o avalista sem nome (a linha acrescentada e não preenchida) não
+    /// vira uma assinatura em branco.
+    test('sem avalista, nenhum bloco de aval', () {
+      expect(CprText.signatures(desk).map((b) => b.role), isNot(contains('AVALISTA:')));
+
+      final emBranco = CprDesk(
+        known: desk.known,
+        creditor: desk.creditor,
+        cpr: desk.cpr!.copyWith(guarantors: const [CprGuarantor()]),
+      );
+      expect(CprText.signatures(emBranco).map((b) => b.role), isNot(contains('AVALISTA:')));
     });
   });
 

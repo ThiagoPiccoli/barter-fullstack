@@ -8,13 +8,15 @@ import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/policy_dialog.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
 import 'invoicing_screen.dart';
 import 'barters_screen.dart';
 import 'creditor_screen.dart';
 
-/// Casa dos papéis de RETAGUARDA — gerente, comitê, faturista e EMISSOR.
+/// Casa dos papéis de RETAGUARDA — gerente, comitê, SEGURADORA, faturista e
+/// EMISSOR.
 ///
 /// Os três são POSTOS da mesma linha de produção, e é por isso que continuam
 /// numa tela só: o que muda entre eles é a fila que pede ação e a palavra da
@@ -290,6 +292,30 @@ class _Post {
         emptyText: 'A fila do comitê está vazia. Puxe para atualizar.',
       );
 
+      // A SEGURADORA — entre a decisão e o faturista, só para as permutas com
+      // seguro.
+      case WorkPost.insurer:
+      return _Post(
+        post: post,
+        queue: queueOf(post, AppData.barters),
+        color: AppColors.atInsurer,
+        surface: AppColors.atInsurerBg,
+        icon: Icons.shield_outlined,
+        headline: (count) => count == 1
+            ? '1 permuta aprovada esperando a apólice'
+            : '$count permutas aprovadas esperando a apólice',
+        // Adiante: o que ela já liberou ao faturista e ainda não foi faturado.
+        followLabel: 'A faturar',
+        followIcon: Icons.receipt_long_outlined,
+        followColor: AppColors.approved,
+        actionLabel: 'Apólice',
+        actionIcon: Icons.upload_file_outlined,
+        onAction: (context, barter, onChanged) =>
+            informBarterPolicy(context, barter, onInsured: (_) => onChanged()),
+        emptyTitle: 'Nenhuma apólice pendente',
+        emptyText: 'Nenhuma permuta com seguro esperando a apólice. Puxe para atualizar.',
+      );
+
       case WorkPost.biller:
       return _Post(
         post: post,
@@ -370,13 +396,17 @@ class _BackOfficeHomeTab extends StatefulWidget {
 class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
   UserModel get user => widget.user;
 
+  /// Sobe a cada "puxar para atualizar" — é o que faz o cartão de avisos
+  /// buscar de novo, junto com o resto da tela.
+  int _refreshes = 0;
+
   Future<void> _refresh() async {
     try {
       await AppData.refreshAll();
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
-    if (mounted) setState(() {});
+    if (mounted) setState(() => _refreshes++);
     widget.onQueueChanged();
   }
 
@@ -397,6 +427,7 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
     final total = AppData.barters.length;
     final plural = total == 1 ? 'permuta' : 'permutas';
     if (user.can(Capability.bartersReadTeam)) return '$total $plural do seu time';
+    if (user.can(Capability.bartersReadInsurance)) return '$total $plural com seguro';
     if (user.can(Capability.bartersReadInvoicing)) return '$total $plural no faturamento';
     return '$total $plural na operação';
   }
@@ -435,6 +466,11 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
             const SizedBox(height: 16),
             _SummaryStrip(post: post, sacks: sacksReceivable),
             const SizedBox(height: 20),
+            // OS AVISOS vêm antes da fila: são poucos, são novidade, e somem
+            // quando dispensados. É por aqui que o gerente fica sabendo que o
+            // comitê devolveu uma permuta do time dele ao consultor — e que ela
+            // voltou ao comitê sem passar pela mesa dele.
+            _NoticesCard(refreshes: _refreshes, onChanged: _onQueueChanged),
             // A fila vem ANTES de tudo o mais: é a única coisa desta tela que
             // pede ação de quem está olhando, e o resto é acompanhamento.
             //
@@ -472,6 +508,8 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
               // chegou ao faturamento tem `barters.readInvoicing`.
               user.can(Capability.bartersReadTeam)
                   ? '${brand.copy.barterPluralTitle} do Time'
+                  : user.can(Capability.bartersReadInsurance)
+                  ? '${brand.copy.barterPluralTitle} com Seguro'
                   : user.can(Capability.bartersReadInvoicing)
                       ? '${brand.copy.barterPluralTitle} no Faturamento'
                       : '${brand.copy.barterPluralTitle} Recentes',
@@ -508,6 +546,129 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
     );
   }
 }
+
+/// OS AVISOS de quem está olhando — o que aconteceu numa permuta que ele
+/// acompanha e não pede ação dele. Ver `Notice` na API.
+///
+/// Some quando não há aviso: é novidade, e um cartão vazio todo dia ensinaria
+/// a pessoa a não olhar para ele. Também some quando a busca falha — é apoio,
+/// não o assunto da tela, e o erro não pode encher de vermelho o painel.
+class _NoticesCard extends StatefulWidget {
+  /// Muda a cada atualização da tela, e aí os avisos são buscados de novo.
+  final int refreshes;
+  final VoidCallback onChanged;
+
+  const _NoticesCard({required this.refreshes, required this.onChanged});
+
+  @override
+  State<_NoticesCard> createState() => _NoticesCardState();
+}
+
+class _NoticesCardState extends State<_NoticesCard> {
+  List<NoticeModel> _notices = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_NoticesCard old) {
+    super.didUpdateWidget(old);
+    if (old.refreshes != widget.refreshes) _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final notices = await AppData.notices();
+      if (mounted) setState(() => _notices = notices);
+    } on ApiException {
+      // Silêncio de propósito — ver a documentação da classe.
+    }
+  }
+
+  Future<void> _dismiss(NoticeModel notice) async {
+    setState(() => _notices = _notices.where((n) => n.id != notice.id).toList());
+    try {
+      await AppData.dismissNotice(notice.id);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      showErrorSnack(context, e);
+      await _load();
+    }
+  }
+
+  /// Abre a permuta do aviso, quando ela está no que esta pessoa enxerga.
+  Future<void> _open(NoticeModel notice) async {
+    BarterModel? barter;
+    for (final b in AppData.barters) {
+      if (b.id == notice.barterCode) barter = b;
+    }
+    if (barter == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BarterDetailScreen(barter: barter!, isAdmin: true)),
+    );
+    widget.onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_notices.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.notifications_active_outlined,
+                        size: 18, color: AppColors.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      _notices.length == 1 ? '1 aviso' : '${_notices.length} avisos',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              for (final notice in _notices)
+                ListTile(
+                  dense: true,
+                  onTap: () => _open(notice),
+                  title: Text(notice.message, style: const TextStyle(fontSize: 13)),
+                  subtitle: Text(
+                    _formatNoticeDate(notice.createdAt),
+                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Dispensar',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => _dismiss(notice),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _formatNoticeDate(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')} '
+    '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
 
 String _todayDate() {
   final now = DateTime.now();

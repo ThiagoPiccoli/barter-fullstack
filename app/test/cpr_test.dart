@@ -13,6 +13,7 @@ void main() {
   Map<String, dynamic> deskJson({
     Map<String, dynamic>? cpr,
     Map<String, dynamic>? suggestion,
+    Map<String, dynamic> known = const {},
     List<String> gaps = const [],
     List<String> creditorGaps = const [],
     List<String> consultantGaps = const [],
@@ -22,6 +23,7 @@ void main() {
         'cpr': cpr,
         'known': {
           'barterCode': 'PRM-2026-014',
+          'cprNumber': 'CPR-2026-014',
           'emitterName': 'João da Silva',
           'emitterDocument': 'CPF 123.456.789-00',
           'grainName': 'Soja',
@@ -39,6 +41,7 @@ void main() {
           'invoices': [
             {'number': '55.318', 'series': '1', 'duplicateNumber': '55.318-A'},
           ],
+          ...known,
         },
         'creditor': {
           'name': 'Cooperativa Exemplo Ltda.',
@@ -72,11 +75,10 @@ void main() {
   group('o ponto de partida da tela', () {
     test('rascunho gravado vence tudo', () {
       final desk = CprDesk.fromJson(deskJson(
-        cpr: {'number': 'CPR-2026-014', 'emitterRg': '10.234.567-8', 'filledBy': 'Patrícia Lemos'},
+        cpr: {'emitterRg': '10.234.567-8', 'filledBy': 'Patrícia Lemos'},
         suggestion: {'emitterRg': '99.999.999-9'},
       ));
 
-      expect(desk.startingPoint.number, 'CPR-2026-014');
       expect(desk.startingPoint.emitterRg, '10.234.567-8');
       expect(desk.startingPoint.filledBy, 'Patrícia Lemos');
     });
@@ -108,12 +110,61 @@ void main() {
       final desk = CprDesk.fromJson(deskJson());
 
       expect(desk.suggestion, isNull);
-      expect(desk.startingPoint.number, '');
+      expect(desk.startingPoint.emitterRg, '');
       expect(desk.startingPoint.areas, isEmpty);
       // 60 kg é o padrão do mercado. Zero aqui viraria uma cédula prometendo
       // zero quilo de grão.
       expect(desk.startingPoint.sackWeightKg, 60);
     });
+
+    /// O PADRÃO DO GRÃO chega pela sugestão — o servidor a monta com o modelo
+    /// da CPR do grão — e a cédula nova abre com ele escrito.
+    test('sem rascunho, o modelo do grão preenche o padrão', () {
+      final desk = CprDesk.fromJson(deskJson(suggestion: {
+        'sackWeightKg': 50,
+        'maxMoisture': 14,
+        'maxImpurities': 1,
+        'oilContent': 18,
+      }));
+
+      expect(desk.startingPoint.sackWeightKg, 50);
+      expect(desk.startingPoint.maxMoisture, 14);
+      expect(desk.startingPoint.oilContent, 18);
+    });
+
+    /// O LOCAL DA ENTREGA nasce com a unidade de retirada pré-selecionada na
+    /// lista de filiais — pelo id, que é o que a lista conhece.
+    test('sem rascunho, a unidade de retirada vem escolhida como local da entrega', () {
+      final desk = CprDesk.fromJson(deskJson(
+        known: {'pickupUnit': 'Filial 02', 'pickupUnitId': 2},
+      ));
+
+      expect(desk.startingPoint.deliveryUnitId, '2');
+      expect(desk.startingPoint.deliveryPlace, 'Filial 02');
+      expect(desk.startingPoint.toJson()['deliveryUnitId'], 2);
+    });
+
+    test('o rascunho com filial escolhida não é trocado pela unidade de retirada', () {
+      final desk = CprDesk.fromJson(deskJson(
+        cpr: {'deliveryUnitId': 4, 'deliveryPlace': 'Filial 04'},
+        known: {'pickupUnit': 'Filial 02', 'pickupUnitId': 2},
+      ));
+
+      expect(desk.startingPoint.deliveryUnitId, '4');
+    });
+  });
+
+  /// A CÉDULA DO TEXTO LIVRE: tem o local escrito e não tem filial. Salvar sem
+  /// escolher uma não pode apagar o texto — e é por isso que o corpo não leva
+  /// `deliveryUnitId` nenhum (um `null` seria "desfaça a escolha"). O texto
+  /// também não vai: quem o escreve é o servidor, com o nome da filial.
+  test('sem filial escolhida, o corpo não mexe no local da entrega', () {
+    const antiga = CprDraft(deliveryPlace: 'Armazém do Zé');
+
+    final json = antiga.toJson();
+
+    expect(json.containsKey('deliveryUnitId'), isFalse);
+    expect(json.containsKey('deliveryPlace'), isFalse);
   });
 
   /// O corpo do `PUT` vai INTEIRO — a tela devolve o formulário todo, e é o
@@ -132,7 +183,6 @@ void main() {
   /// depender de ninguém lembrar de acrescentar a linha da asserção.
   test('a ida e a volta não perdem campo nenhum', () {
     const draft = CprDraft(
-      number: 'CPR-2026-014',
       emitterNationality: 'brasileiro',
       emitterMaritalStatus: 'casado',
       emitterProfession: 'produtor rural',
@@ -145,8 +195,20 @@ void main() {
       emitterFatherName: 'José da Silva',
       emitterMotherName: 'Ana da Silva',
       emitterEmail: 'joao@exemplo.com.br',
+      deliveryUnitId: '2',
       deliveryPlace: 'Filial 02 — Gran. Santa Tecla',
-      mortgages: 'Hipoteca de 1º grau junto ao Banco X.',
+      mortgages: [
+        CprMortgage(
+          id: 8,
+          description: 'Imóvel rural — Fazenda Boa Vista, 120 ha',
+          registryNumber: '9.876',
+          registryDistrict: 'Maringá/PR',
+          city: 'Maringá/PR',
+          ownerName: 'João da Silva',
+          ownerDocument: '123.456.789-00',
+          appraisedValue: 1500000,
+        ),
+      ],
       spouseName: 'Maria da Silva',
       spouseNationality: 'brasileira',
       spouseProfession: 'do lar',
@@ -157,9 +219,9 @@ void main() {
       maxMoisture: 14,
       maxImpurities: 1,
       oilContent: 18,
-      insurancePolicy: 'AP-99887',
       guarantors: [
         CprGuarantor(
+          id: 5,
           name: 'Carlos Avalista',
           document: '222.333.444-55',
           rg: '5.555.555-5',
@@ -191,15 +253,84 @@ void main() {
     // e por isso a gravação seguinte não o apaga.
     expect(round.spouseRg, '9.876.543-2');
     expect(round.guarantors.single.spouseRg, '6.666.666-6');
+    // O ID volta no corpo — é ele que mantém o SCR no avalista, e o documento no
+    // bem, de uma gravação para a outra.
+    expect(round.guarantors.single.id, 5);
+    expect(round.mortgages.single.id, 8);
+    expect(round.mortgages.single.appraisedValue, 1500000);
     expect(round.areas.single.owners.single.document, '111.222.333-44');
   });
 
+  /// AVALISTAS E HIPOTECA só viajam quando o comitê os exigiu: fora disso o
+  /// servidor os recusa, e a AUSÊNCIA (e não a lista vazia) é o que deixa como
+  /// está o que já estiver gravado.
+  test('sem exigência do comitê, avalistas e hipoteca ficam fora do corpo', () {
+    const draft = CprDraft(
+      mortgages: [CprMortgage(description: 'Fazenda Boa Vista')],
+      guarantors: [CprGuarantor(name: 'Carlos Avalista')],
+    );
+
+    final semExigencia = draft.toJson(withGuarantors: false, withMortgages: false);
+    expect(semExigencia.containsKey('guarantors'), isFalse);
+    expect(semExigencia.containsKey('mortgages'), isFalse);
+
+    final comExigencia = draft.toJson();
+    expect(comExigencia['mortgages'], hasLength(1));
+    expect(comExigencia['guarantors'], hasLength(1));
+  });
+
+  /// O AVALISTA E O BEM AINDA NÃO SALVOS vão SEM id: é a ausência dele que diz
+  /// ao servidor que são novos. E o anexo de cada um é lido da resposta, mas
+  /// nunca enviado — ele sobe por rota própria.
+  test('o id só vai quando existe, e o anexo nunca vai no corpo', () {
+    final avalista = CprGuarantor.fromJson({
+      'id': 5,
+      'name': 'Carlos Avalista',
+      'scrFile': {
+        'id': 31,
+        'fileName': 'scr-carlos.pdf',
+        'contentType': 'application/pdf',
+        'size': 1024,
+        'uploadedBy': 'Ana Ferreira',
+        'uploadedAt': '2026-04-24T10:00:00.000Z',
+      },
+    });
+    expect(avalista.scrFile?.fileName, 'scr-carlos.pdf');
+    expect(avalista.toJson()['id'], 5);
+    expect(avalista.toJson().containsKey('scrFile'), isFalse);
+    // Editar o nome não troca o avalista nem perde o anexo dele.
+    expect(avalista.copyWith(name: 'Carlos A.').id, 5);
+    expect(avalista.copyWith(name: 'Carlos A.').scrFile?.fileName, 'scr-carlos.pdf');
+
+    expect(const CprGuarantor(name: 'Novo').toJson().containsKey('id'), isFalse);
+    expect(const CprMortgage(description: 'Novo').toJson().containsKey('id'), isFalse);
+
+    final bem = CprMortgage.fromJson({
+      'id': 8,
+      'description': 'Fazenda Boa Vista',
+      'appraisedValue': 1500000,
+      'documentFile': {
+        'id': 32,
+        'fileName': 'matricula.pdf',
+        'contentType': 'application/pdf',
+        'size': 2048,
+        'uploadedBy': 'Ana Ferreira',
+        'uploadedAt': '2026-04-24T10:00:00.000Z',
+      },
+    });
+    expect(bem.documentFile?.fileName, 'matricula.pdf');
+    expect(bem.copyWith(city: 'Maringá/PR').documentFile?.fileName, 'matricula.pdf');
+    expect(bem.toJson().containsKey('documentFile'), isFalse);
+  });
+
   test('o texto vai aparado — espaço sobrando não entra em título de crédito', () {
-    const draft = CprDraft(number: '  CPR-2026-014  ', emitterRg: ' 10.234.567-8 ');
+    const draft = CprDraft(emitterRg: ' 10.234.567-8 ', cultivar: '  BMX Ativa RR ');
     final json = draft.toJson();
 
-    expect(json['number'], 'CPR-2026-014');
     expect(json['emitterRg'], '10.234.567-8');
+    expect(json['cultivar'], 'BMX Ativa RR');
+    // O NÚMERO não vai: ele é do registro da permuta, e não se digita.
+    expect(json.containsKey('number'), isFalse);
   });
 
   /// ESPELHO de `requiresSpouse`, em `api/src/barters/cpr.ts`. Aqui ele só
@@ -235,13 +366,13 @@ void main() {
   /// servidor.
   ///
   /// A separação é o que faz o aviso do detalhe não mandar o consultor procurar
-  /// o número da CPR (do emissor) e a nota fiscal (do faturista) num formulário
+  /// o vencimento (da safra) e a nota fiscal (do faturista) num formulário
   /// onde nenhum dos dois existe — e o `readyToForward` do app é a mesma
   /// pergunta que o portão do `forward` responde na API.
   group('o que trava o encaminhamento', () {
     test('vem separado da lista inteira', () {
       final desk = CprDesk.fromJson(deskJson(
-        gaps: ['RG do emitente', 'número da CPR', 'nota fiscal do faturamento'],
+        gaps: ['RG do emitente', 'vencimento da CPR', 'nota fiscal do faturamento'],
         consultantGaps: ['RG do emitente'],
       ));
 
@@ -250,11 +381,11 @@ void main() {
     });
 
     test('cédula sem pendência do consultor libera a permuta, mesmo incompleta', () {
-      // O caso REAL do rascunho pronto: falta o número da CPR e a nota, que são
-      // de outros postos e só existem semanas depois. A permuta anda assim
-      // mesmo — esperar por elas para encaminhar travaria a esteira inteira.
+      // O caso REAL do rascunho pronto: falta a nota, que é de outro posto e só
+      // existe semanas depois. A permuta anda assim mesmo — esperar por ela para
+      // encaminhar travaria a esteira inteira.
       final desk = CprDesk.fromJson(deskJson(
-        gaps: ['número da CPR', 'nota fiscal do faturamento'],
+        gaps: ['nota fiscal do faturamento'],
       ));
 
       expect(desk.readyToForward, isTrue);
@@ -289,7 +420,6 @@ void main() {
 
     test('a cédula assinada e a via registrada chegam com o rascunho', () {
       final desk = CprDesk.fromJson(deskJson(cpr: {
-        'number': 'CPR-2026-014',
         'signedFile': file('cpr-assinada.pdf'),
         'registryFile': file('via-registrada.pdf'),
       }));
@@ -300,7 +430,7 @@ void main() {
     });
 
     test('cédula sem os anexos não inventa nenhum', () {
-      final desk = CprDesk.fromJson(deskJson(cpr: {'number': 'CPR-2026-014'}));
+      final desk = CprDesk.fromJson(deskJson(cpr: {'emitterRg': '10.234.567-8'}));
 
       expect(desk.cpr!.signedFile, isNull);
       expect(desk.cpr!.registryFile, isNull);
@@ -311,7 +441,6 @@ void main() {
     /// regra do SCR, e ela já esteve errada uma vez.
     test('digitar no formulário não apaga os anexos', () {
       final desk = CprDesk.fromJson(deskJson(cpr: {
-        'number': 'CPR-2026-014',
         'signedFile': file('cpr-assinada.pdf'),
       }));
 

@@ -48,6 +48,9 @@ describe('Usuários — uma rota por papel (e2e)', () => {
     // ROTA, ignorar `role` no corpo, não alcançar papel alheio, entrar com a
     // provisória, trocá-la e ter as sessões derrubadas no reset.
     { path: 'emitters', role: 'emitter', seedId: 11 }, // Renata
+    // A SEGURADORA pelo mesmo caminho do emissor: o papel novo entra na
+    // varredura inteira com uma linha.
+    { path: 'insurers', role: 'insurer', seedId: 12 }, // Sílvia
   ];
 
   /** O id da conta do comitê no seed — o alvo "de papel alheio" das outras rotas. */

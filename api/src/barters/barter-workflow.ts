@@ -1,5 +1,10 @@
 import { CAPABILITY, rolesWith, type Capability } from '../common/policy';
 import { ROLE, type Role } from '../common/roles';
+import {
+  INSURANCE_CHOICE,
+  choiceInsures,
+  type InsuranceChoice,
+} from '../insurance/insurance-policy';
 
 /**
  * A LINHA DE PRODUÇÃO da permuta: por quais estados ela passa, quem a empurra
@@ -14,19 +19,63 @@ import { ROLE, type Role } from '../common/roles';
  *
  * Aqui ela tem. A tabela abaixo é a única definição do caminho:
  *
- *     (registro)                             ┌──────────────────────────┐
- *         │                                  │ approvedWithConditions   │
- *         ▼                                  └───────────┬──────────────┘
- *      draft ──encaminha──▶ sentToManager ──parecer──▶ pending
- *   (consultor)              (gerente)                (comitê)
- *                                                        │  ├─aprova──▶ approved ──┐
- *                                                        │  └─ressalva─▶ approv…s ─┤
- *                                                        └──nega──▶ denied         │
+ *     (registro)
+ *         │
+ *         ▼
+ *      draft ──encaminha──▶ sentToManager ──parecer──▶ pending ◀──cumpre──┐
+ *   (consultor)              (gerente)                (comitê)            │
+ *                                                        │  └─exige──▶ awaitingRequirements
+ *                                                        │                (consultor)
+ *                                                        │
+ *                                     COM SEGURO         │  ├─aprova──▶ awaitingPolicy ──────────────┐
+ *                                                        │  └─ressalva─▶ awaitingPolicyWith… ───────┤ apólice
+ *                                                        │                (seguradora)               │
+ *                                     SEM SEGURO         │  ├─aprova──▶ approved ◀───────────────────┤
+ *                                                        │  └─ressalva─▶ approvedWithConditions ◀────┘
+ *                                                        └──nega──▶ denied   (faturista)
  *                                                            (fim da linha)        │
  *                     ┌───────────────────────────────────────────────────────────-┘
  *                     ▼
  *                  invoiced ──emite──▶ cprIssued ──assinaturas──▶ cprSigned ──registra──▶ cprRegistered
  *                 (faturista)             (emissor)                (emissor)              (emissor, fim)
+ *
+ * A TABELA DE ESTADOS — quem está com a permuta em cada um, e o que a tira dali:
+ *
+ *     estado                        com quem    ato que a move           para onde
+ *     ────────────────────────────  ──────────  ───────────────────────  ──────────────────────────
+ *     draft                         consultor   forward  (encaminha)     sentToManager
+ *     sentToManager                 gerente     opinion  (parecer)       pending
+ *     pending                       comitê      review   (decide)        awaitingPolicy… (com seguro)
+ *                                                                        | approved… (sem seguro)
+ *                                                                        | denied
+ *                                               require  (exige)         awaitingRequirements
+ *     awaitingRequirements          consultor   fulfill  (cumpre)        pending  (sem o gerente)
+ *     awaitingPolicy                seguradora  insure   (apólice)       approved
+ *     awaitingPolicyWithConditions  seguradora  insure   (apólice)       approvedWithConditions
+ *     approved                      faturista   invoice  (fatura)        invoiced
+ *     approvedWithConditions        faturista   invoice  (fatura)        invoiced
+ *     invoiced                      emissor     cprIssue (emite)         cprIssued
+ *     cprIssued                     emissor     cprSign  (assinaturas)   cprSigned
+ *     cprSigned                     emissor     cprRegister (registra)   cprRegistered
+ *     cprRegistered                 —           —                        (fim da linha)
+ *     denied                        —           —                        (fim da linha)
+ *
+ * A ETAPA DA SEGURADORA é a única que NEM TODA PERMUTA atravessa. Quem decide
+ * se ela acontece é o SEGURO da permuta (`insuranceChoice`, congelado no
+ * registro): obrigatório na versão, ou opcional e aceito pelo produtor, a
+ * aprovação cai na mesa da seguradora; sem seguro — a versão não oferecia ou o
+ * produtor recusou —, ela cai direto na do faturista. É o COMITÊ quem faz a
+ * permuta tomar um caminho ou o outro, mas não por escolha: o caminho é a
+ * consequência do seguro, e a decisão dele continua sendo só aprovar, aprovar
+ * com ressalva ou negar (ver `reviewOutcomeFor`).
+ *
+ * O DESVIO DAS EXIGÊNCIAS (`require` → `fulfill`) é a única volta da linha, e
+ * ela é curta de propósito: o comitê pede avalista e/ou hipoteca, a
+ * permuta volta ao CONSULTOR, e quando ele cumpre ela vai DIRETO ao comitê. O
+ * gerente já deu o parecer sobre a negociação, e a negociação não mudou — o que
+ * mudou é a garantia. Mandá-la de volta à mesa dele seria pedir um segundo
+ * parecer sobre a mesma coisa; ele é AVISADO nas duas pontas (ver `Notice`), e
+ * não chamado a agir.
  *
  * Cada posto tem UM dono e UMA pergunta:
  *
@@ -36,9 +85,14 @@ import { ROLE, type Role } from '../common/roles';
  * - **gerente**: conhece o produtor e a negociação — escreve o parecer técnico.
  *   Não decide;
  * - **comitê**: lê o pedido do consultor, o parecer dele e o parecer do gerente,
- *   e DECIDE. É a única instância que aprova, aprova COM RESSALVA ou nega. O
- *   admin não decide — ele administra o sistema, e um administrador que também
- *   aprova é a mesma pessoa concedendo o acesso e usando-o;
+ *   e DECIDE. É a única instância que aprova, aprova COM RESSALVA ou nega — e,
+ *   antes de decidir, pode EXIGIR garantias (avalista, hipoteca), o que
+ *   devolve a permuta ao consultor. O admin não decide — ele administra o
+ *   sistema, e um administrador que também aprova é a mesma pessoa concedendo o
+ *   acesso e usando-o;
+ * - **seguradora**: o setor que cuida dos seguros. Só recebe a permuta aprovada
+ *   QUE TEM SEGURO: cria a apólice, ANEXA o documento e informa o NÚMERO dele —
+ *   o número que a cédula cita. Não avalia e não devolve;
  * - **faturista**: recebe o que as etapas anteriores produziram, FATURA e anexa
  *   as notas fiscais que saíram da permuta. Não avalia e não devolve;
  * - **emissor**: pega a permuta faturada, CONFERE a cédula que o consultor
@@ -83,6 +137,40 @@ export const BARTER_STATUS = {
    * `atCommittee` renomearia dado histórico para dizer a mesma coisa.
    */
   pending: 'pending',
+  /**
+   * DEVOLVIDA AO CONSULTOR com EXIGÊNCIAS do comitê — avalista, hipoteca e/ou
+   * seguro —, esperando que ele as cumpra.
+   *
+   * É estado próprio, e não um campo ao lado de `pending`, porque a permuta
+   * MUDA DE MÃOS: enquanto o consultor não traz o aval, ela não está na mesa do
+   * comitê, e uma fila do comitê que a mostrasse pediria decisão sobre um
+   * negócio que ainda não tem a garantia que o próprio comitê exigiu.
+   *
+   * Ocupa o MESMO DEGRAU de `pending` na esteira (ver `BARTER_LINE`): a permuta
+   * não andou nem recuou — o parecer do gerente continua valendo, e a decisão
+   * continua por vir. Cumpridas as exigências, ela volta a `pending` DIRETO, sem
+   * passar de novo pelo gerente.
+   */
+  awaitingRequirements: 'awaitingRequirements',
+  /**
+   * APROVADA pelo comitê, COM SEGURO — na mesa da SEGURADORA, esperando a
+   * apólice.
+   *
+   * É estado próprio, e não um `approved` com uma pendência ao lado, porque a
+   * permuta MUDA DE MÃOS: enquanto a apólice não existe, ela não está na fila
+   * do faturista, e uma fila que a mostrasse pediria a nota de uma operação
+   * cujo seguro — custo que já está dentro das sacas — ainda não foi
+   * contratado.
+   *
+   * São DOIS estados, este e o da ressalva logo abaixo, pelo mesmo motivo de
+   * `approvedWithConditions` ser estado e não campo: a ressalva é condição do
+   * negócio, e a lista, o filtro e o cartão precisam continuar dizendo isso
+   * enquanto a permuta está com a seguradora. A apólice devolve cada um ao seu
+   * par — este a `approved`, o outro a `approvedWithConditions`.
+   */
+  awaitingPolicy: 'awaitingPolicy',
+  /** O mesmo ponto da linha de `awaitingPolicy`, para a aprovação COM RESSALVA. */
+  awaitingPolicyWithConditions: 'awaitingPolicyWithConditions',
   /** Aprovada pelo comitê — a fila do faturista. */
   approved: 'approved',
   /**
@@ -90,17 +178,23 @@ export const BARTER_STATUS = {
    * exigência escrita junto.
    *
    * É estado próprio, e não um `approved` com um campo ao lado, porque a
-   * ressalva é uma CONDIÇÃO do negócio (garantia real, seguro obrigatório,
-   * aval) e quem a cumpre não é quem a escreveu. Enquanto ela fosse uma
-   * observação dentro da aprovação, a lista, o filtro e o cartão diriam
-   * "Aprovada — a faturar" sobre uma permuta que só pode ser faturada depois de
-   * alguém providenciar um aval — e a única maneira de descobrir isso seria
-   * abrir a permuta e ler até o fim.
+   * ressalva é uma CONDIÇÃO do negócio e quem a cumpre não é quem a escreveu.
+   * Enquanto ela fosse uma observação dentro da aprovação, a lista, o filtro e
+   * o cartão diriam "Aprovada — a faturar" sobre uma permuta condicionada — e a
+   * única maneira de descobrir isso seria abrir a permuta e ler até o fim.
    *
    * O que ela NÃO é: um estado de espera. A permuta está decidida e liberada; o
    * comitê exigiu algo junto, e o texto da decisão (`reviewNote`, obrigatório
-   * aqui) diz o quê. Cobrar o cumprimento é da operação, não deste fluxo — o
-   * dia em que for do fluxo, isto vira uma etapa com dono, e não um campo.
+   * aqui) diz o quê. Cobrar o cumprimento é da operação, não deste fluxo.
+   *
+   * AVALISTA E HIPOTECA SAÍRAM DAQUI. Eles eram os exemplos clássicos de
+   * ressalva, e foram justamente os que viraram etapa com dono, como este
+   * comentário previa: o comitê os EXIGE antes de decidir (`require`), a
+   * permuta volta ao consultor (`awaitingRequirements`) e só retorna ao comitê
+   * com eles na cédula. O SEGURO saiu por outro caminho: ele é da versão do
+   * Barter, e a permuta que o tem passa pela seguradora (`awaitingPolicy…`). A
+   * ressalva continua existindo para o resto — a condição que a operação cobra
+   * por fora.
    */
   approvedWithConditions: 'approvedWithConditions',
   /** Negada pelo comitê. Fim da linha: não fatura e não volta. */
@@ -163,7 +257,17 @@ export type BarterStatus = (typeof BARTER_STATUS)[keyof typeof BARTER_STATUS];
 export const BARTER_LINE = [
   [BARTER_STATUS.draft],
   [BARTER_STATUS.sentToManager],
-  [BARTER_STATUS.pending],
+  // A PERMUTA DEVOLVIDA COM EXIGÊNCIAS divide o degrau com a da mesa do comitê:
+  // as duas ainda esperam a decisão, e o parecer do gerente vale para as duas.
+  // Um degrau próprio, antes ou depois de `pending`, diria que a volta ao
+  // consultor fez a permuta andar ou recuar na esteira — e ela não fez nenhum
+  // dos dois.
+  [BARTER_STATUS.pending, BARTER_STATUS.awaitingRequirements],
+  // A MESA DA SEGURADORA: um degrau antes do faturamento, que a permuta SEM
+  // seguro pula — a decisão a leva direto ao degrau seguinte. Ser degrau, e não
+  // um estado lateral, é o que faz o faturista que chega cedo ouvir "aguarda a
+  // apólice da seguradora", e não um "não pode" genérico.
+  [BARTER_STATUS.awaitingPolicy, BARTER_STATUS.awaitingPolicyWithConditions],
   [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions],
   [BARTER_STATUS.invoiced],
   // O TRECHO DA CÉDULA — três degraus, um por ato do emissor. Eles são degraus
@@ -188,6 +292,9 @@ export const BARTER_STATUS_LABELS: Record<BarterStatus, string> = {
   [BARTER_STATUS.draft]: 'Rascunho',
   [BARTER_STATUS.sentToManager]: 'No gerente',
   [BARTER_STATUS.pending]: 'No comitê',
+  [BARTER_STATUS.awaitingRequirements]: 'Exigências do comitê, com o consultor',
+  [BARTER_STATUS.awaitingPolicy]: 'Aprovada, aguardando a apólice',
+  [BARTER_STATUS.awaitingPolicyWithConditions]: 'Aprovada com ressalva, aguardando a apólice',
   [BARTER_STATUS.approved]: 'Aprovada, a faturar',
   [BARTER_STATUS.approvedWithConditions]: 'Aprovada com ressalva, a faturar',
   [BARTER_STATUS.denied]: 'Negada',
@@ -213,6 +320,12 @@ export const BARTER_HOLDER: Record<BarterStatus, Role | null> = {
   [BARTER_STATUS.draft]: ROLE.consultant,
   [BARTER_STATUS.sentToManager]: ROLE.manager,
   [BARTER_STATUS.pending]: ROLE.committee,
+  // DEVOLVIDA, ela está com o CONSULTOR — é ele quem vai buscar o aval ou a
+  // matrícula da hipoteca. Dizer "no comitê" aqui faria o
+  // consultor esperar uma decisão que está esperando por ele.
+  [BARTER_STATUS.awaitingRequirements]: ROLE.consultant,
+  [BARTER_STATUS.awaitingPolicy]: ROLE.insurer,
+  [BARTER_STATUS.awaitingPolicyWithConditions]: ROLE.insurer,
   [BARTER_STATUS.approved]: ROLE.biller,
   [BARTER_STATUS.approvedWithConditions]: ROLE.biller,
   [BARTER_STATUS.denied]: null,
@@ -230,6 +343,12 @@ export const BARTER_ACTION = {
   forward: 'forward',
   opinion: 'opinion',
   review: 'review',
+  /** O comitê EXIGE garantias (avalista, hipoteca) e devolve ao consultor. */
+  require: 'require',
+  /** O consultor CUMPRE as exigências e devolve ao comitê — sem passar pelo gerente. */
+  fulfill: 'fulfill',
+  /** A SEGURADORA informa a apólice — o documento e o número — da permuta com seguro. */
+  insure: 'insure',
   invoice: 'invoice',
   /** A EMISSÃO da cédula — a conferência do emissor, e o documento gerado. */
   cprIssue: 'cprIssue',
@@ -242,9 +361,28 @@ export const BARTER_ACTION = {
 export type BarterAction = (typeof BARTER_ACTION)[keyof typeof BARTER_ACTION];
 
 /** O bastante de uma permuta para decidir se ela pode andar, e para explicar por quê. */
-export interface BarterAtStep {
+export interface BarterAtStep extends Partial<Record<ReviewRequirement, boolean>> {
   status: string;
   managerName?: string | null;
+  /**
+   * COMO o seguro chegou a esta permuta — é o que decide se ela passa pela
+   * seguradora (ver `insuredOf`). Opcional para quem só pergunta pelos estados;
+   * ausente, a permuta é lida como sem seguro, que é o caso que não acrescenta
+   * etapa nenhuma.
+   */
+  insuranceChoice?: string;
+}
+
+/**
+ * Esta permuta TEM SEGURO? — a pergunta que decide se a etapa da seguradora
+ * existe para ela.
+ *
+ * Quem responde é a escolha congelada no registro, e não a política da versão
+ * hoje: o admin pode mudar a política do Barter depois, e uma permuta já
+ * fechada não pode ganhar nem perder uma etapa por isso.
+ */
+export function insuredOf(barter: Pick<BarterAtStep, 'insuranceChoice'>): boolean {
+  return choiceInsures((barter.insuranceChoice ?? INSURANCE_CHOICE.none) as InsuranceChoice);
 }
 
 export interface WorkflowStep {
@@ -288,6 +426,28 @@ export interface WorkflowStep {
   readonly waiting: (barter: BarterAtStep) => string;
   /** O que dizer a quem chega TARDE: esta etapa já foi cumprida. */
   readonly done: string;
+  /**
+   * É um DESVIO: uma volta que só acontece quando alguém a pede, e não um posto
+   * por onde toda permuta passa.
+   *
+   * O andamento (`progressOf`) não a mostra como etapa "a vir" — prometer a
+   * toda permuta uma rodada de exigências que a maioria nunca terá seria a
+   * checklist mentindo para o lado oposto do de sempre. Ela aparece só
+   * enquanto a permuta está NELA; antes e depois, quem conta que ela houve é a
+   * linha do tempo dos eventos.
+   */
+  readonly detour?: true;
+  /**
+   * A etapa só existe para ALGUMAS permutas — e esta função diz para quais.
+   *
+   * Diferente do desvio, que acontece quando alguém o pede, esta é uma etapa da
+   * linha que certas permutas simplesmente NÃO TÊM: a da seguradora, para quem
+   * não tem seguro. O andamento não a mostra para elas (ela não está "a vir" nem
+   * "cumprida" — ela não existe ali), e o ato é recusado com `skipped`.
+   */
+  readonly appliesTo?: (barter: BarterAtStep) => boolean;
+  /** O que dizer a quem pede a etapa numa permuta que não a tem. */
+  readonly skipped?: string;
 }
 
 /**
@@ -342,19 +502,106 @@ export const BARTER_STEPS: Record<BarterAction, WorkflowStep> = {
   [BARTER_ACTION.review]: {
     action: BARTER_ACTION.review,
     from: [BARTER_STATUS.pending],
-    // TRÊS saídas. `approved` é a primeira porque é ela que representa o degrau
-    // na esteira (ver `from` em WorkflowStep) — as outras duas são desfechos do
-    // mesmo ato, não pontos diferentes da linha.
-    to: [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions, BARTER_STATUS.denied],
+    // TRÊS desfechos, em CINCO estados: aprovar e aprovar com ressalva caem na
+    // seguradora quando a permuta tem seguro, e no faturista quando não tem (ver
+    // `reviewOutcomeFor`). `awaitingPolicy` é o primeiro porque é ele que
+    // representa o degrau na esteira (ver `from` em WorkflowStep): é o mais
+    // próximo que a decisão alcança, e é a partir dele que o andamento conta a
+    // decisão como cumprida — inclusive na permuta sem seguro, que pula o degrau.
+    to: [
+      BARTER_STATUS.awaitingPolicy,
+      BARTER_STATUS.awaitingPolicyWithConditions,
+      BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
+      BARTER_STATUS.denied,
+    ],
     capability: CAPABILITY.bartersReview,
     label: 'Decisão do comitê',
     outcomes: {
+      [BARTER_STATUS.awaitingPolicy]: 'Aprovada',
+      [BARTER_STATUS.awaitingPolicyWithConditions]: 'Aprovada com ressalva',
       [BARTER_STATUS.approved]: 'Aprovada',
       [BARTER_STATUS.approvedWithConditions]: 'Aprovada com ressalva',
       [BARTER_STATUS.denied]: 'Negada',
     },
     waiting: () => 'Esta permuta aguarda a decisão do comitê',
     done: 'Esta permuta já foi decidida pelo comitê',
+  },
+  /**
+   * AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos ANTES da
+   * decisão. A permuta volta ao consultor.
+   *
+   * É um ato do comitê, e não um quarto desfecho de `review`, por dois motivos.
+   * Ele não DECIDE nada: a permuta volta para a mesma mesa depois, e quem a
+   * aprova ou nega é uma decisão que ainda vem. E ele pode se REPETIR — o
+   * comitê pede avalista, recebe, e pede também a hipoteca —, enquanto a decisão
+   * acontece uma vez. Misturados no mesmo ato, a linha do tempo assinaria a
+   * "Decisão do comitê" com a primeira devolução.
+   *
+   * Vem DEPOIS de `review` na tabela de propósito: os dois partem de `pending`,
+   * e `stepAt(pending)` precisa responder com o ato que a permuta ESPERA — a
+   * decisão. Exigir é a alternativa a decidir, não o próximo passo dela.
+   */
+  [BARTER_ACTION.require]: {
+    action: BARTER_ACTION.require,
+    from: [BARTER_STATUS.pending],
+    to: [BARTER_STATUS.awaitingRequirements],
+    capability: CAPABILITY.bartersReview,
+    label: 'Exigências do comitê',
+    detour: true,
+    waiting: () => 'Esta permuta aguarda a decisão do comitê',
+    done: 'O comitê já fez exigências nesta permuta, e ela está com o consultor',
+  },
+  /**
+   * O CUMPRIMENTO das exigências — o consultor devolve a permuta ao comitê.
+   *
+   * Ela volta a `pending` DIRETO, sem passar pelo gerente: o parecer dele foi
+   * sobre a negociação, e a negociação não mudou. O que mudou foi a garantia, e
+   * quem a pediu foi o comitê. O gerente é AVISADO, não chamado a agir.
+   *
+   * Quem confere que o pedido foi mesmo cumprido é a cédula (ver
+   * `consultantCprGaps`): avalista e hipoteca passam a ser pendências DO
+   * CONSULTOR assim que o comitê as exige, e este ato não anda com elas em
+   * aberto.
+   */
+  [BARTER_ACTION.fulfill]: {
+    action: BARTER_ACTION.fulfill,
+    from: [BARTER_STATUS.awaitingRequirements],
+    to: [BARTER_STATUS.pending],
+    capability: CAPABILITY.bartersRegister,
+    label: 'Exigências do comitê',
+    detour: true,
+    waiting: (barter) => {
+      const required = requirementsOf(barter);
+      return required.length > 0
+        ? `Esta permuta aguarda o consultor providenciar o que o comitê exigiu: ${required.join(', ').toLowerCase()}`
+        : 'Esta permuta aguarda o consultor cumprir as exigências do comitê';
+    },
+    done: 'As exigências do comitê já foram cumpridas, e a permuta voltou ao comitê',
+  },
+  /**
+   * A APÓLICE — o ato da seguradora: anexar o documento e informar o número.
+   *
+   * Só existe para a permuta COM SEGURO (`appliesTo`). A sem seguro nunca passa
+   * por aqui: a decisão do comitê a manda direto ao faturamento, e pedir a
+   * apólice dela recebe `skipped`, e não "já foi informada" — que é o que a
+   * posição na esteira diria, e seria mentira.
+   *
+   * Ela devolve cada aprovação ao SEU par (ver `policyOutcomeFor`): a aprovada
+   * vira `approved`, a aprovada com ressalva vira `approvedWithConditions`. A
+   * seguradora não decide nada, e a ressalva que o comitê escreveu continua
+   * sendo a ressalva quando a permuta chega ao faturista.
+   */
+  [BARTER_ACTION.insure]: {
+    action: BARTER_ACTION.insure,
+    from: [BARTER_STATUS.awaitingPolicy, BARTER_STATUS.awaitingPolicyWithConditions],
+    to: [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions],
+    capability: CAPABILITY.bartersInsure,
+    label: 'Apólice do seguro',
+    appliesTo: insuredOf,
+    skipped: 'Esta permuta não tem seguro — ela não passa pela seguradora',
+    waiting: () => 'Esta permuta aguarda a apólice da seguradora',
+    done: 'A apólice desta permuta já foi informada',
   },
   [BARTER_ACTION.invoice]: {
     action: BARTER_ACTION.invoice,
@@ -406,14 +653,23 @@ export const BARTER_STEPS: Record<BarterAction, WorkflowStep> = {
 };
 
 /**
- * AS EXIGÊNCIAS QUE O COMITÊ PODE IMPOR junto com a aprovação — avalista,
- * garantia real e seguro.
+ * AS EXIGÊNCIAS QUE O COMITÊ PODE IMPOR antes de decidir — avalista e hipoteca.
  *
- * Elas moram aqui, ao lado da etapa que as produz, e não numa tabela do banco:
- * são três, são fixas, e cada uma é uma condição de negócio que a operação
- * inteira já nomeia assim. A lista fechada é o que permite à tela desenhar três
- * caixas e ao emissor ler "esta cédula espera um avalista" sem interpretar
- * prosa.
+ * Elas moram aqui, ao lado da etapa que as produz (`require`), e não numa
+ * tabela do banco: são poucas, são fixas, e cada uma é uma condição de negócio
+ * que a operação inteira já nomeia assim. A lista fechada é o que permite à
+ * tela desenhar uma caixa para cada e à cédula transformar cada uma num campo
+ * obrigatório (ver `cprGapsOf`) sem interpretar prosa.
+ *
+ * O SEGURO FOI UMA DELAS, e saiu. Exigi-lo fazia o consultor digitar na cédula
+ * o número de uma apólice, e a apólice passou a ser da SEGURADORA, que a cria e
+ * a anexa. O seguro de uma permuta é decidido na versão do Barter (obrigatório
+ * ou opcional) e com o produtor, no registro — não pela mesa do comitê.
+ *
+ * `requiresCollateral` é a HIPOTECA. A coluna nasceu como "garantia real", que
+ * é o gênero; o que o comitê pede e o consultor traz é a espécie — a hipoteca
+ * do imóvel, o campo `mortgages` da cédula. O nome da coluna ficou para não
+ * reescrever dado gravado; o rótulo diz o que ela é.
  *
  * O rótulo vem daqui pelo mesmo motivo de `BARTER_STATUS_LABELS`: o app não
  * deveria ter uma segunda cópia do vocabulário do fluxo para sair de sincronia
@@ -421,8 +677,7 @@ export const BARTER_STEPS: Record<BarterAction, WorkflowStep> = {
  */
 export const REVIEW_REQUIREMENT_LABELS = {
   requiresGuarantor: 'Avalista',
-  requiresCollateral: 'Garantia real',
-  requiresInsurance: 'Seguro',
+  requiresCollateral: 'Hipoteca',
 } as const;
 
 export type ReviewRequirement = keyof typeof REVIEW_REQUIREMENT_LABELS;
@@ -437,6 +692,38 @@ export function requirementsOf(source: Partial<Record<ReviewRequirement, boolean
   return REVIEW_REQUIREMENTS.filter((key) => source[key] === true).map(
     (key) => REVIEW_REQUIREMENT_LABELS[key],
   );
+}
+
+/** Os desfechos que o comitê ESCOLHE — o que a tela dele oferece e o DTO aceita. */
+export type ReviewDecision = 'approved' | 'approvedWithConditions' | 'denied';
+
+/**
+ * PARA ONDE a decisão do comitê leva ESTA permuta.
+ *
+ * O comitê escolhe entre três desfechos, e não entre cinco estados: aprovar,
+ * aprovar com ressalva ou negar. Se a aprovação cai na seguradora ou direto no
+ * faturista é CONSEQUÊNCIA do seguro da permuta, e não uma segunda escolha —
+ * pedir ao comitê que marcasse "aprovada, para a seguradora" seria pedir que ele
+ * lembrasse de um detalhe do registro que o sistema já sabe.
+ */
+export function reviewOutcomeFor(decision: ReviewDecision, barter: BarterAtStep): BarterStatus {
+  if (decision === BARTER_STATUS.denied || !insuredOf(barter)) return decision;
+  return decision === BARTER_STATUS.approvedWithConditions
+    ? BARTER_STATUS.awaitingPolicyWithConditions
+    : BARTER_STATUS.awaitingPolicy;
+}
+
+/**
+ * PARA ONDE a apólice devolve a permuta: cada aprovação ao seu par.
+ *
+ * A seguradora não decide nada — ela só tira a permuta da própria mesa —, e a
+ * ressalva que o comitê escreveu precisa continuar sendo ressalva quando a
+ * permuta chega ao faturista.
+ */
+export function policyOutcomeFor(status: string): BarterStatus {
+  return status === BARTER_STATUS.awaitingPolicyWithConditions
+    ? BARTER_STATUS.approvedWithConditions
+    : BARTER_STATUS.approved;
 }
 
 /** A etapa que age sobre uma permuta parada neste estado, se houver. */
@@ -489,6 +776,15 @@ export function nextActionOf(status: string): BarterAction | undefined {
  */
 export function refusalFor(action: BarterAction, barter: BarterAtStep): string | null {
   const step = BARTER_STEPS[action];
+
+  // A ETAPA QUE ESTA PERMUTA NÃO TEM vem antes de tudo: a apólice de uma
+  // permuta sem seguro não é "cedo" nem "tarde" — ela não vai acontecer, e
+  // dizer "já foi informada" mandaria alguém procurar um documento que nunca
+  // existiu.
+  if (step.appliesTo && !step.appliesTo(barter)) {
+    return step.skipped ?? 'Esta etapa não se aplica a esta permuta';
+  }
+
   if (step.from === null || (step.from as readonly string[]).includes(barter.status)) return null;
 
   if (barter.status === BARTER_STATUS.denied) {
@@ -502,7 +798,12 @@ export function refusalFor(action: BarterAction, barter: BarterAtStep): string |
   // escrito à mão no banco. Recusa sem inventar uma explicação.
   if (here < 0) return 'Esta permuta está em uma etapa que não permite esta ação';
 
-  return here < there ? (stepAt(barter.status)?.waiting(barter) ?? step.done) : step.done;
+  // NO MESMO DEGRAU vale a mesma resposta de quem chega cedo: a permuta está
+  // parada no ponto da linha em que o ato acontece, só que com outra pessoa. É
+  // o caso do desvio das exigências — o comitê que tenta decidir uma permuta
+  // devolvida precisa ouvir que ela aguarda o consultor, e não que "já foi
+  // decidida", que é justamente o que ela não foi.
+  return here <= there ? (stepAt(barter.status)?.waiting(barter) ?? step.done) : step.done;
 }
 
 /* ── O ANDAMENTO: a linha inteira, e não só o trecho já andado ─────────── */
@@ -601,7 +902,24 @@ function ownerOf(step: WorkflowStep): Role | null {
  * fato gravado, em vez de desenhar um caminho inventado.
  */
 export function progressOf(barter: BarterAtStep): BarterProgressStep[] {
-  const steps = Object.values(BARTER_STEPS);
+  const now = stepAt(barter.status);
+
+  // OS DESVIOS ficam fora da checklist, menos o que a permuta está fazendo
+  // AGORA (ver `WorkflowStep.detour`). Ele entra logo antes da etapa para a
+  // qual devolve a permuta: "exigências do comitê" e depois "decisão do
+  // comitê", que é a ordem em que as duas vão acontecer.
+  //
+  // AS ETAPAS QUE A PERMUTA NÃO TEM saem também, e por outro motivo: elas não
+  // são uma volta que pode acontecer — são uma parada que ela pula. A permuta
+  // sem seguro não mostra "Apólice do seguro" nem como cumprida nem como a vir.
+  const line = Object.values(BARTER_STEPS).filter(
+    (step) => !step.detour && (!step.appliesTo || step.appliesTo(barter)),
+  );
+  const detour = now?.detour ? now : undefined;
+  const resumes = detour ? stepAt(detour.to[0]) : undefined;
+  const steps =
+    detour && resumes ? line.flatMap((step) => (step === resumes ? [detour, step] : [step])) : line;
+
   const here = stageOf(barter.status);
 
   // SAÍDA LATERAL (hoje só a negativa): fora da esteira, mas produzida por
@@ -614,7 +932,6 @@ export function progressOf(barter: BarterAtStep): BarterProgressStep[] {
   if (here < 0 && !exit) return [];
 
   const lastDone = exit ? orderOf(exit) : here;
-  const now = stepAt(barter.status);
 
   // POR QUE a linha parou, quando ela parou — dito a partir do estado em que a
   // permuta saiu, e não de uma frase escrita para a negativa: uma saída lateral
@@ -626,13 +943,15 @@ export function progressOf(barter: BarterAtStep): BarterProgressStep[] {
     : null;
 
   return steps.map((step) => {
+    // A ETAPA DE AGORA é perguntada primeiro: o desvio devolve a permuta ao
+    // mesmo degrau em que ela está, e pela posição ele contaria como cumprido.
     const state =
-      orderOf(step) <= lastDone
-        ? BARTER_STEP_STATE.done
-        : exit
-          ? BARTER_STEP_STATE.halted
-          : step === now
-            ? BARTER_STEP_STATE.current
+      step === now
+        ? BARTER_STEP_STATE.current
+        : orderOf(step) <= lastDone
+          ? BARTER_STEP_STATE.done
+          : exit
+            ? BARTER_STEP_STATE.halted
             : BARTER_STEP_STATE.ahead;
 
     return {

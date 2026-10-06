@@ -13,6 +13,7 @@ import '../repositories/producer_repository.dart';
 import '../repositories/committee_repository.dart';
 import '../repositories/creditor_repository.dart';
 import '../repositories/insurance_repository.dart';
+import '../repositories/notice_repository.dart';
 import '../repositories/staff_repository.dart';
 import '../repositories/unit_repository.dart';
 
@@ -43,6 +44,11 @@ class AppData {
   /// admin, como as outras de pessoas.
   static const StaffRepository _billers = StaffRepository('/billers');
 
+  /// SEGURADORA — o setor que informa a apólice das permutas aprovadas COM
+  /// SEGURO, antes de elas chegarem ao faturista. Várias pessoas, como o
+  /// faturista.
+  static const StaffRepository _insurers = StaffRepository('/insurers');
+
   /// EMISSORES — o posto da CÉDULA: conferem o que o consultor preencheu,
   /// emitem o título, colhem as assinaturas e o levam a registro.
   static const StaffRepository _emitters = StaffRepository('/emitters');
@@ -53,6 +59,7 @@ class AppData {
   /// O COMITÊ — cadastro único, e por isso um repositório de outra forma: sem
   /// lista, sem id e sem exclusão.
   static final CommitteeRepository _committee = CommitteeRepository();
+  static final NoticeRepository _notices = NoticeRepository();
 
   /// A CREDORA — a empresa nos documentos que ela emite. Cadastro único, como o
   /// comitê, e mantido pelo admin OU pelo faturista.
@@ -80,6 +87,10 @@ class AppData {
 
   /// FATURISTAS cadastrados (só o admin enxerga — a API restringe a rota).
   static List<UserModel> billers = [];
+
+  /// Pessoas da SEGURADORA (idem). Sem ao menos uma, toda permuta aprovada com
+  /// seguro para em "aguardando a apólice".
+  static List<UserModel> insurers = [];
 
   /// EMISSORES cadastrados (idem). Sem pelo menos um, toda permuta faturada
   /// para em "a emitir a CPR" — é a primeira coisa que falta numa instalação
@@ -319,6 +330,7 @@ class AppData {
     consultants = [];
     managers = [];
     billers = [];
+    insurers = [];
     emitters = [];
     admins = [];
     committee = null;
@@ -352,6 +364,7 @@ class AppData {
       if (isAdmin) refreshConsultants(),
       if (isAdmin) refreshManagers(),
       if (isAdmin) refreshBillers(),
+      if (isAdmin) refreshInsurers(),
       if (isAdmin) refreshEmitters(),
       if (isAdmin) refreshAdmins(),
       if (isAdmin) refreshCommittee(),
@@ -572,6 +585,10 @@ class AppData {
     billers = await _billers.list();
   }
 
+  static Future<void> refreshInsurers() async {
+    insurers = await _insurers.list();
+  }
+
   static Future<void> refreshEmitters() async {
     emitters = await _emitters.list();
   }
@@ -682,6 +699,9 @@ class AppData {
   /// Diferente da do gerente, ela não tem destinatário — o comitê é um só, e a
   /// fila dele é o ESTADO da permuta. É a mesma regra do servidor.
   static List<BarterModel> get committeeQueue => queueOf(WorkPost.committee, barters);
+
+  /// A fila da SEGURADORA: as aprovadas com seguro esperando a apólice.
+  static List<BarterModel> get policyQueue => queueOf(WorkPost.insurer, barters);
 
   /// A fila do FATURISTA: o que o comitê aprovou e ainda não foi faturado.
   static List<BarterModel> get invoiceQueue => queueOf(WorkPost.biller, barters);
@@ -1177,29 +1197,39 @@ class AppData {
 
   /// A DECISÃO DO COMITÊ: aprovar, aprovar com RESSALVA ou negar. O cache
   /// guarda a resposta do servidor, nunca uma versão montada aqui.
-  ///
-  /// AS EXIGÊNCIAS (avalista, garantia real, seguro) andam junto com a decisão:
-  /// elas dizem O QUÊ o comitê exigiu, e o texto continua dizendo QUAL — qual
-  /// matrícula, qual valor segurado, quem se espera como avalista.
-  static Future<BarterModel> reviewBarter(
-    String code,
-    BarterStatus status,
-    String note, {
-    bool requiresGuarantor = false,
-    bool requiresCollateral = false,
-    bool requiresInsurance = false,
-  }) async {
-    final updated = await _barters.review(
-      code,
-      status,
-      note,
-      requiresGuarantor: requiresGuarantor,
-      requiresCollateral: requiresCollateral,
-      requiresInsurance: requiresInsurance,
-    );
+  static Future<BarterModel> reviewBarter(String code, BarterStatus status, String note) async {
+    final updated = await _barters.review(code, status, note);
     _replaceBarter(updated);
     return updated;
   }
+
+  /// AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca. A permuta volta ao
+  /// consultor; o gerente é avisado pelo servidor.
+  static Future<BarterModel> requireBarter(
+    String code,
+    String note, {
+    bool requiresGuarantor = false,
+    bool requiresCollateral = false,
+  }) async {
+    final updated = await _barters.require(code, note,
+        requiresGuarantor: requiresGuarantor,
+        requiresCollateral: requiresCollateral);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// O consultor devolve a permuta ao comitê, sem passar de novo pelo gerente.
+  static Future<BarterModel> fulfillRequirements(String code, {String note = ''}) async {
+    final updated = await _barters.fulfill(code, note: note);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// Os avisos ainda não vistos de quem está logado.
+  static Future<List<NoticeModel>> notices() => _notices.unread();
+
+  /// Dispensa o aviso.
+  static Future<void> dismissNotice(int id) => _notices.markRead(id);
 
   /* ── O DOSSIÊ DO COMITÊ ─────────────────────────────────────────────── */
 
@@ -1229,6 +1259,26 @@ class AppData {
   /// REMOVE uma peça do dossiê. A janela é a mesma de anexar: até a decisão.
   static Future<BarterModel> removeCreditFile(String code, String creditFileId) async {
     final updated = await _barters.removeCreditFile(code, creditFileId);
+    _replaceBarter(updated);
+    return updated;
+  }
+
+  /// A APÓLICE da permuta aprovada com seguro — o ato da SEGURADORA. A
+  /// resposta (a permuta, agora na fila do faturista) entra no cache.
+  static Future<BarterModel> insureBarter(
+    String code, {
+    required String policyNumber,
+    required String filename,
+    required List<int> bytes,
+    String note = '',
+  }) async {
+    final updated = await _barters.insure(
+      code,
+      policyNumber: policyNumber,
+      filename: filename,
+      bytes: bytes,
+      note: note,
+    );
     _replaceBarter(updated);
     return updated;
   }
@@ -1289,12 +1339,8 @@ class AppData {
   /// O servidor recusa (422) com a lista do que falta, e cada item dela diz com
   /// quem a pendência se resolve: o RG é com o consultor, a nota é com o
   /// faturista, o vencimento é com quem cadastra a safra.
-  static Future<BarterModel> issueBarterCpr(
-    String code, {
-    String number = '',
-    String note = '',
-  }) async {
-    final updated = await _barters.issueCpr(code, number: number, note: note);
+  static Future<BarterModel> issueBarterCpr(String code, {String note = ''}) async {
+    final updated = await _barters.issueCpr(code, note: note);
     _replaceBarter(updated);
     return updated;
   }
@@ -1465,8 +1511,14 @@ class AppData {
   /// gravação devolve a mesa recalculada — inclusive o que falta.
   static Future<CprDesk> barterCpr(String code) => _barters.cpr(code);
 
-  static Future<CprDesk> saveBarterCpr(String code, CprDraft draft) =>
-      _barters.saveCpr(code, draft);
+  static Future<CprDesk> saveBarterCpr(
+    String code,
+    CprDraft draft, {
+    bool withGuarantors = true,
+    bool withMortgages = true,
+  }) =>
+      _barters.saveCpr(code, draft,
+          withGuarantors: withGuarantors, withMortgages: withMortgages);
 
   /// ANEXA O SCR DO PRODUTOR à cédula — anexo OBRIGATÓRIO para ela ser emitida.
   static Future<CprDesk> saveBarterScr(
@@ -1475,6 +1527,40 @@ class AppData {
     required List<int> bytes,
   }) =>
       _barters.saveScr(code, filename: filename, bytes: bytes);
+
+  /// ANEXA O SCR DE UM AVALISTA — exigido junto com o aval.
+  static Future<CprDesk> saveGuarantorScr(
+    String code,
+    int guarantorId, {
+    required String filename,
+    required List<int> bytes,
+  }) =>
+      _barters.saveGuarantorScr(code, guarantorId, filename: filename, bytes: bytes);
+
+  /// ANEXA O DOCUMENTO DE UM BEM EM HIPOTECA.
+  static Future<CprDesk> saveMortgageDocument(
+    String code,
+    int mortgageId, {
+    required String filename,
+    required List<int> bytes,
+  }) =>
+      _barters.saveMortgageDocument(code, mortgageId, filename: filename, bytes: bytes);
+
+  /// BAIXA o SCR de um avalista.
+  static Future<({List<int> bytes, String filename, String contentType})> downloadGuarantorScr(
+    String code,
+    int guarantorId,
+  ) =>
+      _barters.download(_barters.guarantorScrPath(code, guarantorId));
+
+  /// BAIXA o documento de um bem em hipoteca.
+  static Future<({List<int> bytes, String filename, String contentType})>
+      downloadMortgageDocument(String code, int mortgageId) =>
+          _barters.download(_barters.mortgageDocumentPath(code, mortgageId));
+
+  /// BAIXA a APÓLICE do seguro que a seguradora anexou.
+  static Future<({List<int> bytes, String filename, String contentType})>
+      downloadBarterPolicy(String code) => _barters.download(_barters.policyFilePath(code));
 
   /// BAIXA o arquivo de uma NOTA FISCAL anexada ao faturamento.
   static Future<({List<int> bytes, String filename, String contentType})>
@@ -1643,6 +1729,46 @@ class AppData {
       billers.add(saved);
     } else {
       billers[index] = saved;
+    }
+  }
+
+  /* ── Seguradora (pessoas, várias) ───────────────────────────────────── */
+  //
+  // Cadastrada como o faturista e o emissor — pessoa, unidade, sem gerente —,
+  // porque o formulário é o mesmo: o que ela faz está na tabela de capacidades
+  // do servidor, não aqui.
+
+  static Future<ProvisionedConsultant> createInsurer(UserModel insurer) async {
+    final provisioned = await _insurers.create(insurer);
+    _cacheInsurer(provisioned.consultant);
+    return provisioned;
+  }
+
+  static Future<UserModel> updateInsurer(UserModel insurer) async {
+    final saved = await _insurers.update(insurer);
+    _cacheInsurer(saved);
+    return saved;
+  }
+
+  static Future<ProvisionedConsultant> resetInsurerPassword(String id) async {
+    final provisioned = await _insurers.resetPassword(id);
+    _cacheInsurer(provisioned.consultant);
+    return provisioned;
+  }
+
+  /// Excluir não trava em nada: a apólice guarda na permuta o nome de quem a
+  /// informou (snapshot), e a fila é o ESTADO da permuta.
+  static Future<void> deleteInsurer(String id) async {
+    await _insurers.delete(id);
+    insurers.removeWhere((i) => i.id == id);
+  }
+
+  static void _cacheInsurer(UserModel saved) {
+    final index = insurers.indexWhere((i) => i.id == saved.id);
+    if (index == -1) {
+      insurers.add(saved);
+    } else {
+      insurers[index] = saved;
     }
   }
 

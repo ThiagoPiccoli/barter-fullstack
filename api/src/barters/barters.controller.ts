@@ -46,11 +46,14 @@ import {
   DecideBarterChangeDto,
   DecideBarterProductDto,
   ForwardBarterDto,
+  FulfillRequirementsDto,
+  InsureBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
   ReplaceBarterInputsDto,
   RequestBarterChangeDto,
   RequestBarterProductDto,
+  RequireBarterDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
@@ -378,6 +381,82 @@ export class BartersController {
   }
 
   /**
+   * AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos antes de
+   * decidir. A permuta volta ao consultor, e o gerente é avisado.
+   *
+   * Mesma capacidade da decisão: exigir é a alternativa a decidir, na mesma
+   * mesa, pela mesma pessoa.
+   */
+  @Post(':code/requirements')
+  @RequireCapability(CAPABILITY.bartersReview)
+  @HttpCode(200)
+  async require(
+    @CurrentUser() committee: User,
+    @Param('code') code: string,
+    @Body() dto: RequireBarterDto,
+  ) {
+    return toBarterJson(await this.bartersService.require(committee, code, dto), committee);
+  }
+
+  /**
+   * O CUMPRIMENTO das exigências — o consultor devolve a permuta ao comitê,
+   * sem passar de novo pelo gerente.
+   *
+   * Capacidade do REGISTRO, como o encaminhamento: é quem montou a permuta
+   * voltando a ela. Que seja a DELE é o escopo, no service.
+   */
+  @Post(':code/requirements/fulfill')
+  @RequireCapability(CAPABILITY.bartersRegister)
+  @HttpCode(200)
+  async fulfill(
+    @CurrentUser() consultant: User,
+    @Param('code') code: string,
+    @Body() dto: FulfillRequirementsDto,
+  ) {
+    return toBarterJson(await this.bartersService.fulfill(consultant, code, dto), consultant);
+  }
+
+  /**
+   * A APÓLICE — o ato da seguradora, com o documento e o número numa requisição
+   * só.
+   *
+   * `multipart/form-data` como a cédula assinada, e pelo mesmo motivo: as duas
+   * metades não fazem sentido separadas. Quem confere que a permuta TEM seguro e
+   * está no ponto é a máquina de estados, no service.
+   */
+  @Post(':code/insure')
+  @RequireCapability(CAPABILITY.bartersInsure)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  @HttpCode(200)
+  async insure(
+    @CurrentUser() insurer: User,
+    @Param('code') code: string,
+    @Body() dto: InsureBarterDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    // Conferido AQUI, e não no DTO: o arquivo não vem no corpo. Ver
+    // `attachInvoice`.
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe a apólice do seguro (campo "file")');
+    }
+    return toBarterJson(await this.bartersService.insure(insurer, code, dto, file), insurer);
+  }
+
+  /**
+   * O ARQUIVO DA APÓLICE. `@AnyRole` com escopo no service, como o da nota:
+   * quem alcança a permuta alcança os documentos dela.
+   */
+  @Get(':code/policy-file')
+  @AnyRole()
+  async policyFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.policyFile(viewer, code));
+  }
+
+  /**
    * O FATURAMENTO da permuta aprovada — o último posto da linha.
    *
    * A capacidade abre a porta para o faturista; quem confere que só o APROVADO
@@ -607,6 +686,68 @@ export class BartersController {
     @Res() response: Response,
   ) {
     sendFile(response, await this.bartersService.scrFile(viewer, code));
+  }
+
+  /**
+   * O SCR DE UM AVALISTA — exigido junto com o aval. Mesmas portas do SCR do
+   * emitente, nos dois sentidos: anexam o consultor e o emissor; leem quem lê a
+   * cédula e o comitê, que decide contando com o aval.
+   */
+  @Put(':code/cpr/guarantors/:id/scr')
+  @RequireAnyCapability(CAPABILITY.bartersCprFill, CAPABILITY.bartersCprIssue)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  async saveGuarantorScr(
+    @CurrentUser() actor: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o arquivo do SCR do avalista (campo "file")');
+    }
+    return toCprJson(await this.bartersService.saveGuarantorScr(actor, code, id, file));
+  }
+
+  @Get(':code/cpr/guarantors/:id/scr')
+  @RequireAnyCapability(CAPABILITY.bartersCprRead, CAPABILITY.bartersCreditRead)
+  async guarantorScrFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.guarantorScrFile(viewer, code, id));
+  }
+
+  /**
+   * O DOCUMENTO DE UM BEM EM HIPOTECA — a matrícula atualizada, a certidão de
+   * ônus. Quem anexa é quem preenche a cédula; quem lê, como o SCR, inclui o
+   * comitê, que exigiu a hipoteca e decide contando com ela.
+   */
+  @Put(':code/cpr/mortgages/:id/document')
+  @RequireCapability(CAPABILITY.bartersCprFill)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  async saveMortgageDocument(
+    @CurrentUser() actor: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o documento do bem (campo "file")');
+    }
+    return toCprJson(await this.bartersService.saveMortgageDocument(actor, code, id, file));
+  }
+
+  @Get(':code/cpr/mortgages/:id/document')
+  @RequireAnyCapability(CAPABILITY.bartersCprRead, CAPABILITY.bartersCreditRead)
+  async mortgageDocumentFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.mortgageDocumentFile(viewer, code, id));
   }
 
   /* ── A EMISSÃO: os três atos do emissor ──────────────────────────────── */

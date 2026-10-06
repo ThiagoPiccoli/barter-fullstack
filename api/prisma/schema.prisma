@@ -100,6 +100,9 @@ model User {
   /// As permutas endereçadas a este gerente, esperando ou já com parecer.
   opinions Barter[] @relation("ManagerOpinions")
 
+  /// Os AVISOS desta pessoa — ver `Notice`.
+  notices Notice[]
+
   @@index([managerId])
 }
 
@@ -163,6 +166,9 @@ model Unit {
 
   staff   User[]   @relation("UserUnit")
   barters Barter[]
+
+  /// As cédulas que nomeiam esta unidade como LOCAL DA ENTREGA do grão.
+  cprDeliveries BarterCpr[] @relation("CprDeliveryUnit")
 }
 
 /// Produtor (cliente) designado nas permutas; está na CARTEIRA de um consultor
@@ -353,6 +359,22 @@ model Product {
   /// consegue lê-la).
   unitPending Boolean @default(false)
 
+  /// O MODELO DA CPR deste grão — o padrão com que ele é recebido (cláusula V,
+  /// "c") e o peso da saca que converte sacas em quilos (cláusula III). Só
+  /// produtos `type: "grain"` o usam.
+  ///
+  /// É o PONTO DE PARTIDA da cédula, e não a regra: a CPR nova nasce com estes
+  /// números (ver `suggestFrom`), e a cédula continua guardando os dela
+  /// (`BarterCpr.sackWeightKg` e companhia) — o padrão muda de um ano para o
+  /// outro, e mudar o modelo não pode reescrever cédula já preenchida.
+  ///
+  /// Zero nos percentuais é "não definido", como na cédula: a CPR nasce com o
+  /// campo vazio e `cprGaps()` cobra o número de quem preenche.
+  cprSackWeightKg  Float @default(60)
+  cprMaxMoisture   Float @default(0)
+  cprMaxImpurities Float @default(0)
+  cprOilContent    Float @default(0)
+
   priceHistory  PriceHistoryEntry[]
   items         BarterItem[]
   versionPrices VersionPrice[]
@@ -401,9 +423,9 @@ model Season {
   startYear Int
   endYear   Int
 
-  status   String    @default("open")
-  openedAt DateTime  @default(now())
-  closedAt DateTime?
+  status     String    @default("open")
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
   closedBy   String?
   closedById Int?
 
@@ -585,7 +607,9 @@ model PriceHistoryEntry {
 ///
 ///     draft → sentToManager → pending → approved              → invoiced →
 ///  (consultor)  (gerente)    (comitê)   approvedWithConditions  (faturista)
-///                                ↘ denied
+///                              ↑  ↓  ↘ denied
+///                    awaitingRequirements
+///                         (consultor)
 ///
 ///     → cprIssued → cprSigned → cprRegistered
 ///        (emissor)   (emissor)    (emissor)
@@ -595,7 +619,10 @@ model PriceHistoryEntry {
 /// do consultor, ele a encaminha ao GERENTE (`sentToManager`), que dá o parecer
 /// técnico. Daí ela vai ao COMITÊ (`pending`), que lê o pedido e os dois
 /// pareceres e decide — é a única instância que aprova, aprova com ressalva ou
-/// nega. Aprovada (com ou sem ressalva), ela cai na fila do FATURISTA, que
+/// nega. Antes de decidir, o comitê pode EXIGIR avalista, hipoteca e/ou seguro:
+/// a permuta volta ao consultor (`awaitingRequirements`) e, cumpridas as
+/// exigências, retorna DIRETO ao comitê, sem passar de novo pelo gerente — que
+/// é só avisado (ver `Notice`). Aprovada (com ou sem ressalva), ela cai na fila do FATURISTA, que
 /// fatura e anexa as notas (`invoiced`). Aí começa o trecho do EMISSOR: ele
 /// confere a cédula que o consultor preencheu e a emite (`cprIssued`), colhe as
 /// assinaturas (`cprSigned`) e a leva a registro (`cprRegistered`), que é o fim
@@ -610,8 +637,27 @@ model PriceHistoryEntry {
 /// O gerente também analisa — chamar as duas coisas de análise deixava as etapas
 /// indistinguíveis no vocabulário.
 model Barter {
-  id               Int            @id @default(autoincrement())
-  code             String         @unique
+  id   Int    @id @default(autoincrement())
+  code String @unique
+
+  /// O NÚMERO DA CPR desta permuta — `CPR-<ano>-NNN`, sequencial dentro do ano
+  /// e único, reservado no REGISTRO junto com `code` (ver `createWithCode`).
+  ///
+  /// Mora na PERMUTA, e não em `BarterCpr`, porque nasce antes da cédula: a
+  /// permuta existe sem rascunho de CPR até o consultor começar a preenchê-la,
+  /// e o número precisa existir desde o primeiro dia — é por ele que a cédula é
+  /// citada na conversa com o produtor, no comprovante e na fila do emissor.
+  ///
+  /// Era texto livre, informado pelo EMISSOR no ato da emissão, pelo argumento
+  /// de que a numeração vinha de fora do sistema. Na prática ele era digitado
+  /// à mão, sem conferência de repetição, e a cédula passava semanas sem nome.
+  /// Agora o sistema numera, e ninguém digita.
+  ///
+  /// SEQUÊNCIA PRÓPRIA, e não o número do `code` trocado de prefixo: as
+  /// permutas anteriores a esta coluna herdaram o número que o emissor tinha
+  /// informado, e as duas sequências já não andam juntas.
+  cprNumber String @unique
+
   versionId        Int?
   version          BarterVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
   versionCode      String         @default("")
@@ -800,9 +846,28 @@ model Barter {
   reviewedById Int?
   reviewedAt   DateTime?
 
-  /// AS EXIGÊNCIAS DO COMITÊ: avalista, garantia real e seguro.
+  /// AS EXIGÊNCIAS DO COMITÊ: avalista e hipoteca (`requiresCollateral`).
   ///
-  /// Quem define as três é o comitê, e elas viviam DENTRO de `reviewNote` — num
+  /// HOJE ELAS SÃO UMA ETAPA. O comitê as marca ANTES de decidir, e marcar
+  /// devolve a permuta ao consultor (`awaitingRequirements`). Cada uma liga, na
+  /// cédula, um campo que até então nem aparece no formulário dele — os
+  /// avalistas, os bens em hipoteca — e que passa a ser pendência que trava a
+  /// volta ao comitê e a emissão (ver `cprGapsOf`). Elas se ACUMULAM: o comitê
+  /// que recebe o avalista e pede também a hipoteca soma, não substitui. A
+  /// decisão não as apaga; a negativa, sim.
+  ///
+  /// O SEGURO JÁ FOI A TERCEIRA, e saiu (ver a migration
+  /// `seguradora_na_esteira`): exigi-lo fazia o consultor digitar o número de
+  /// uma apólice na cédula, e a apólice passou a ser da SEGURADORA. O seguro de
+  /// uma permuta é o da versão (`insuranceChoice`), e é ele que a manda à mesa da
+  /// seguradora depois da aprovação.
+  ///
+  /// `requiresCollateral` se chamava "garantia real" na tela; o que o comitê
+  /// pede e o consultor traz é a hipoteca, e o rótulo mudou. A coluna ficou.
+  ///
+  /// O que segue é a história de por que elas saíram do texto:
+  ///
+  /// Quem as define é o comitê, e elas viviam DENTRO de `reviewNote` — num
   /// parágrafo em português, escrito de um jeito diferente a cada reunião
   /// ("exigir aval do cônjuge", "com avalista", "condicionada a aval"). Isso
   /// bastava para quem lia a permuta e não bastava para mais nada: não havia
@@ -810,30 +875,44 @@ model Barter {
   /// lendo prosa na véspera de emitir o título, e a que fosse esquecida no meio
   /// do texto não era esquecida por ninguém em particular.
   ///
-  /// São TRÊS CAMPOS, e não um tipo de ressalva: elas se acumulam. A mesma
+  /// São CAMPOS SEPARADOS, e não um tipo de ressalva: elas se acumulam. A mesma
   /// decisão pede avalista E garantia real com frequência, e um campo único
   /// obrigaria a eleger a principal — que é uma pergunta que o comitê não faz.
   ///
   /// O TEXTO CONTINUA OBRIGATÓRIO na ressalva, e não foi substituído por elas:
-  /// as caixas dizem O QUÊ, e só o texto diz QUAL — qual matrícula, qual valor
-  /// segurado, quem se espera como avalista. Uma ressalva que fosse só três
-  /// booleanos mandaria o consultor de volta ao telefone, que é de onde este
-  /// campo veio.
+  /// as caixas dizem O QUÊ, e só o texto diz QUAL — qual matrícula, quem se
+  /// espera como avalista. Uma ressalva que fosse só booleanos mandaria o
+  /// consultor de volta ao telefone, que é de onde este campo veio.
   ///
-  /// `false` nas permutas anteriores a estes campos e em toda decisão que não
-  /// exigiu nada. Repare que elas NÃO travam o faturamento: a ressalva é
-  /// condição do negócio e quem cobra o cumprimento é a operação, como já
-  /// dizia `approvedWithConditions`. O que mudou é que agora ela é legível por
-  /// máquina.
-  ///
-  /// O SEGURO exigido aqui é outra coisa do seguro da versão
-  /// (`BarterVersion.insurancePolicy`), e vale distinguir: aquele é o seguro
-  /// DO LANÇAMENTO, já precificado e cobrado dentro da permuta; este é uma
-  /// exigência da DECISÃO, feita quando a permuta veio sem seguro e o comitê
-  /// entende que este negócio, com este cliente, não anda sem ele.
+  /// `false` nas permutas anteriores a estes campos e em toda permuta de que o
+  /// comitê não exigiu nada.
   requiresGuarantor  Boolean @default(false)
   requiresCollateral Boolean @default(false)
-  requiresInsurance  Boolean @default(false)
+
+  /// A APÓLICE — o ato da SEGURADORA, só nas permutas com seguro.
+  ///
+  /// O NÚMERO mora aqui, e não mais na cédula, onde o consultor o digitava. Ele
+  /// é o produto do posto que cria a apólice — como a nota é o do faturamento —,
+  /// e a cédula o LÊ daqui (cláusula XVIII, "j"). Enquanto foi um campo do
+  /// formulário do consultor, o título afirmava um seguro que ninguém tinha
+  /// conferido contra documento nenhum, e só aparecia porque alguém lembrou de
+  /// digitá-lo.
+  ///
+  /// O ARQUIVO é a apólice em si, e entra no MESMO ato do número: o número sem a
+  /// apólice é afirmação sem prova; a apólice sem o número é um PDF que a cédula
+  /// não tem como citar. `SetNull` pelo mesmo motivo do SCR — apagar o anexo não
+  /// pode apagar a permuta.
+  ///
+  /// Os outros quatro campos são a ASSINATURA da etapa, como `invoicedBy` e
+  /// `reviewedBy`: quem informou, quando e o que anotou. Null em toda permuta sem
+  /// seguro — ela pula esta etapa — e nas aprovadas antes de ela existir.
+  insurancePolicyNumber String?
+  insurancePolicyFileId Int?        @unique
+  insurancePolicyFile   BarterFile? @relation("BarterPolicy", fields: [insurancePolicyFileId], references: [id], onDelete: SetNull)
+  insuredBy             String?
+  insuredById           Int?
+  insuredAt             DateTime?
+  insuranceNote         String?
 
   /// O FATURAMENTO — o posto que mexe com dinheiro para fora.
   ///
@@ -948,6 +1027,9 @@ model Barter {
   /// BarterCreditFile, inclusive para quem as enxerga.
   creditFiles BarterCreditFile[]
 
+  /// Os AVISOS que esta permuta gerou — ver `Notice`.
+  notices Notice[]
+
   /// A CÉDULA DE PRODUTO RURAL desta permuta, quando o consultor já começou a
   /// preenchê-la. Uma só, e opcional: a permuta existe e anda sem CPR até o
   /// faturamento — é a EMISSÃO que a exige, não o registro.
@@ -1010,6 +1092,41 @@ model BarterEvent {
   at DateTime @default(now())
 
   @@index([barterId, at])
+}
+
+/// UM AVISO para uma pessoa — algo aconteceu numa permuta que ela acompanha, e
+/// não há nada para ela fazer a respeito.
+///
+/// Existe para o GERENTE no desvio das exigências: o comitê devolve a permuta
+/// ao consultor e ela volta direto ao comitê, sem passar pela mesa dele. Sem o
+/// aviso, o gerente que deu o parecer descobriria pela lista que a permuta do
+/// time dele andou para trás e voltou — ou não descobriria. Ele não é chamado a
+/// agir (o parecer dele continua valendo); ele é avisado.
+///
+/// É IN-APP, e só: aparece no painel de quem o recebe e some quando a pessoa o
+/// dispensa (`readAt`). Push e e-mail ficam para quando o uso real mostrar que
+/// precisa chegar com o app fechado — ver docs/notificacoes-a-adicionar.md.
+///
+/// O TEXTO é snapshot, como o do evento: a frase diz o que aconteceu no dia, e
+/// continua dizendo depois que a permuta andar. `barterCode` também, para o
+/// aviso continuar legível se a permuta for excluída.
+model Notice {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  barterId   Int?
+  barter     Barter? @relation(fields: [barterId], references: [id], onDelete: Cascade)
+  barterCode String  @default("")
+
+  message String
+
+  createdAt DateTime  @default(now())
+  /// Quando a pessoa o dispensou. Null é "ainda não visto".
+  readAt    DateTime?
+
+  // O painel pergunta "quais avisos desta pessoa ainda não foram vistos?".
+  @@index([userId, readAt])
 }
 
 /// Item da permuta com snapshots imutáveis de nome/unidade/preço. O preço é
@@ -1231,12 +1348,18 @@ model BarterFile {
   ///
   /// As relações da cédula são NOMEADAS porque são três para o mesmo modelo, e
   /// sem nome o Prisma não teria como saber qual coluna é qual.
-  invoice     BarterInvoice?
-  cprScr      BarterCpr?        @relation("CprScr")
-  cprSigned   BarterCpr?        @relation("CprSigned")
-  cprRegistry BarterCpr?        @relation("CprRegistry")
+  invoice          BarterInvoice?
+  cprScr           BarterCpr?        @relation("CprScr")
+  cprSigned        BarterCpr?        @relation("CprSigned")
+  cprRegistry      BarterCpr?        @relation("CprRegistry")
+  /// …ou o SCR de um AVALISTA, ou o documento de um BEM dado em hipoteca —
+  /// os anexos que o comitê passa a exigir junto com o aval e a hipoteca.
+  guarantorScr     CprGuarantor?     @relation("GuarantorScr")
+  mortgageDocument CprMortgage?      @relation("MortgageDocument")
   /// …ou uma das peças da ANÁLISE DE CRÉDITO que o comitê juntou à permuta.
-  credit      BarterCreditFile?
+  credit           BarterCreditFile?
+  /// …ou a APÓLICE do seguro, que a seguradora anexa à permuta.
+  policyOf         Barter?           @relation("BarterPolicy")
 }
 
 /// UMA PEÇA DA ANÁLISE DE CRÉDITO — o que o comitê junta à permuta para decidir:
@@ -1480,10 +1603,8 @@ model BarterCpr {
   barterId Int    @unique
   barter   Barter @relation(fields: [barterId], references: [id], onDelete: Cascade)
 
-  /// O número da cédula, como a empresa a numera. É texto, e não sequência
-  /// gerada: a numeração da CPR é da emissão em papel/registro e costuma vir de
-  /// fora deste sistema (cartório, B3, controle interno da credora).
-  number String @default("")
+  /// O NÚMERO da cédula não está aqui: ele é da PERMUTA (`Barter.cprNumber`),
+  /// gerado no registro — antes de existir rascunho para guardá-lo.
 
   /// A data da EMISSÃO ("Aos [DIA] dias do mês de [MÊS] de [ANO]") e o
   /// VENCIMENTO da entrega. São diferentes da data da permuta de propósito: a
@@ -1541,20 +1662,26 @@ model BarterCpr {
   emitterMotherName String @default("")
   emitterEmail      String @default("")
 
-  /// O LOCAL DA ENTREGA do grão (cláusula V, "d").
+  /// O LOCAL DA ENTREGA do grão (cláusula V, "d") — uma das FILIAIS
+  /// cadastradas (`Unit`).
   ///
   /// É campo, e não a unidade de retirada da permuta, porque as duas coisas não
   /// são a mesma: retirar insumo na Filial 02 não obriga ninguém a entregar o
-  /// grão lá. A unidade entra como SUGESTÃO no formulário (é o caso comum), e
-  /// quem confirma é quem assina embaixo.
-  deliveryPlace String @default("")
-
-  /// HIPOTECAS oferecidas em garantia, como texto livre.
+  /// grão lá. A unidade de retirada entra como SUGESTÃO no formulário (é o caso
+  /// comum), e quem confirma é quem assina embaixo.
   ///
-  /// A planilha de proposta as pede num campo só, e é assim que elas chegam.
-  /// Não saem na cédula por enquanto: o modelo não tem cláusula para elas, e
-  /// inventar uma seria escrever garantia nova em título executável.
-  mortgages String @default("")
+  /// Já foi texto livre, e a mesma filial saía escrita de três jeitos em três
+  /// cédulas. Agora é a lista suspensa das unidades: `deliveryUnitId` é a
+  /// escolha, e `deliveryPlace` é o NOME dela congelado na gravação — pelo
+  /// motivo de `Barter.unitName`: excluir ou renomear a unidade não pode mudar
+  /// o que a cédula diz. As cédulas do tempo do texto livre ficam com o texto e
+  /// sem unidade.
+  deliveryUnitId Int?
+  deliveryUnit   Unit?  @relation("CprDeliveryUnit", fields: [deliveryUnitId], references: [id], onDelete: SetNull)
+  deliveryPlace  String @default("")
+
+  /// AS HIPOTECAS deixaram de ser um texto livre aqui: cada bem dado em
+  /// hipoteca é um cadastro, com o documento anexado — ver `CprMortgage`.
 
   /// A ANUÊNCIA DO CÔNJUGE. Nulo quando não há — e "não há" é o caso comum, não
   /// uma pendência: só o emitente casado assina acompanhado.
@@ -1635,9 +1762,9 @@ model BarterCpr {
   /// o resto.
   scrConsultedAt DateTime?
 
-  /// A apólice do seguro agrícola embutido (cláusula XVIII, "j"). Opcional: nem
-  /// toda permuta leva seguro contratado.
-  insurancePolicy String?
+  /// A APÓLICE do seguro (cláusula XVIII, "j") NÃO ESTÁ MAIS AQUI: o número é da
+  /// SEGURADORA, informado junto com o documento, e mora na permuta
+  /// (`Barter.insurancePolicyNumber`). A cédula o lê de lá, como lê as notas.
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1650,15 +1777,23 @@ model BarterCpr {
 
   areas      CprArea[]
   guarantors CprGuarantor[]
+  mortgages  CprMortgage[]
 }
 
 /// O AVALISTA — quem garante a obrigação do emitente com o próprio patrimônio.
 ///
-/// Ele vem da PLANILHA DE PROPOSTA, e não do modelo de cédula: o texto que a
-/// operação usa hoje não tem bloco de assinatura de avalista nem cláusula de
-/// aval. Por isso ele é COLETADO e não IMPRESSO — o dado fica guardado, o
-/// documento continua sendo exatamente o modelo aprovado, e o dia em que a
-/// cláusula existir ela vai encontrar o cadastro pronto.
+/// Ele só existe quando o COMITÊ exige aval (`Barter.requiresGuarantor`), e aí
+/// ele ASSINA a cédula: o bloco dele (e o da anuência do cônjuge, quando
+/// casado) sai junto com os do emitente. O aval numa cédula é dado pela
+/// assinatura no título — é o bloco que faz dele avalista.
+///
+/// Ele tem SCR PRÓPRIO, pelo mesmo motivo do emitente: quem garante a dívida
+/// com o próprio patrimônio é avaliado pelo endividamento dele. Sem o anexo, a
+/// cédula não volta ao comitê nem é emitida (ver `cprGapsOf`).
+///
+/// TEM IDENTIDADE (`id`) que sobrevive às gravações do formulário, ao contrário
+/// das lavouras: o SCR mora nele, e apagar e recriar a lista a cada "Salvar"
+/// levaria o anexo junto. Ver `saveCpr`.
 ///
 /// É LISTA, e não um bloco fixo, pelo mesmo motivo das lavouras: a proposta traz
 /// um avalista porque o exemplo tinha um. Aval de casal são dois, e uma operação
@@ -1697,6 +1832,56 @@ model CprGuarantor {
   spouseRg          String @default("")
   spouseNationality String @default("")
   spouseProfession  String @default("")
+
+  /// O SCR DO AVALISTA — `SetNull` como o do emitente: apagar o arquivo volta
+  /// a pendência, não apaga o avalista.
+  scrFileId Int?        @unique
+  scrFile   BarterFile? @relation("GuarantorScr", fields: [scrFileId], references: [id], onDelete: SetNull)
+
+  @@index([cprId, position])
+}
+
+/// UM BEM DADO EM HIPOTECA — o que o comitê exige quando pede hipoteca
+/// (`Barter.requiresCollateral`).
+///
+/// Era um texto livre na cédula ("Hipoteca de 1º grau sobre a matrícula…"), e
+/// texto livre não se confere: ninguém sabia se a matrícula estava lá, de quem
+/// era o imóvel, quanto valia, nem havia onde guardar a certidão. Agora é um
+/// CADASTRO, campo por campo, com o DOCUMENTO do bem anexado (a matrícula
+/// atualizada, a certidão de ônus) — e cada campo vazio é uma pendência dita.
+///
+/// É LISTA pelo mesmo motivo das lavouras: a hipoteca pode recair sobre mais de
+/// um imóvel. E tem IDENTIDADE estável, como o avalista, porque o anexo mora
+/// nele.
+///
+/// NÃO SAI NA CÉDULA: o modelo em uso não tem cláusula de hipoteca, e inventar
+/// uma seria escrever garantia nova num título executável. A hipoteca se
+/// constitui na escritura e no registro do imóvel; aqui ela é conferida.
+model CprMortgage {
+  id    Int       @id @default(autoincrement())
+  cprId Int
+  cpr   BarterCpr @relation(fields: [cprId], references: [id], onDelete: Cascade)
+
+  /// A ordem em que ele foi acrescentado — a mesma razão de `CprArea.position`.
+  position Int @default(0)
+
+  /// O BEM por extenso: "Imóvel rural — Fazenda Boa Vista, 120 ha".
+  description      String @default("")
+  /// A MATRÍCULA do imóvel e a COMARCA do registro — o que o individualiza no
+  /// cartório, como nas lavouras do penhor.
+  registryNumber   String @default("")
+  registryDistrict String @default("")
+  /// Município/UF onde o bem está.
+  city             String @default("")
+  /// O PROPRIETÁRIO — nem sempre o emitente: o imóvel do pai, o do sócio.
+  ownerName        String @default("")
+  ownerDocument    String @default("")
+  /// O VALOR DE AVALIAÇÃO (R$). Zero é "não informado" — nenhum bem vale zero.
+  appraisedValue   Float  @default(0)
+
+  /// O DOCUMENTO do bem — a matrícula atualizada, a certidão de ônus reais.
+  documentFileId Int?        @unique
+  documentFile   BarterFile? @relation("MortgageDocument", fields: [documentFileId], references: [id], onDelete: SetNull)
 
   @@index([cprId, position])
 }

@@ -38,6 +38,39 @@ describe('Tabela de capacidades', () => {
     expect(can({ role: ROLE.admin }, CAPABILITY.bartersReview)).toBe(true);
   });
 
+  /**
+   * A APÓLICE é da seguradora (e do admin), e é a ÚNICA coisa que ela escreve.
+   * Ela enxerga só o trecho dela da linha — e só o que tem seguro, recorte que
+   * mora no service (ver `bartersReadInsurance`).
+   */
+  it('a seguradora informa a apólice, e só isso', () => {
+    expect(rolesWith(CAPABILITY.bartersInsure).sort()).toEqual([ROLE.admin, ROLE.insurer].sort());
+    expect(rolesWith(CAPABILITY.bartersReadInsurance).sort()).toEqual(
+      [ROLE.admin, ROLE.insurer].sort(),
+    );
+    expect([...ROLE_CAPABILITIES[ROLE.insurer]].sort()).toEqual(
+      [
+        CAPABILITY.producersReadAll,
+        CAPABILITY.bartersReadInsurance,
+        CAPABILITY.bartersInsure,
+        CAPABILITY.pricesRead,
+      ].sort(),
+    );
+    // Não decide, não fatura, não mexe na cédula e não enxerga a operação inteira.
+    for (const capability of [
+      CAPABILITY.bartersReview,
+      CAPABILITY.bartersInvoice,
+      CAPABILITY.bartersCprRead,
+      CAPABILITY.bartersCprFill,
+      CAPABILITY.bartersCprIssue,
+      CAPABILITY.bartersReadAll,
+      CAPABILITY.bartersReadInvoicing,
+      CAPABILITY.insuranceManage,
+    ]) {
+      expect(can({ role: ROLE.insurer }, capability)).toBe(false);
+    }
+  });
+
   /** Faturar é do faturista (e do admin), e é a única coisa que o faturista escreve. */
   it('faturar é do faturista, e o admin também fatura', () => {
     expect(rolesWith(CAPABILITY.bartersInvoice).sort()).toEqual([ROLE.admin, ROLE.biller].sort());
@@ -252,7 +285,7 @@ describe('Tabela de capacidades', () => {
    */
   it('o consultor é o único papel sem acesso a valores', () => {
     expect(rolesWith(CAPABILITY.pricesRead).sort()).toEqual(
-      [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.biller, ROLE.emitter].sort(),
+      [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.insurer, ROLE.biller, ROLE.emitter].sort(),
     );
     expect(can({ role: ROLE.consultant }, CAPABILITY.pricesRead)).toBe(false);
   });

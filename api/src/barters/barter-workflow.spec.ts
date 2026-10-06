@@ -12,8 +12,10 @@ import {
   lineFrom,
   nextActionOf,
   outcomeLabelOf,
+  policyOutcomeFor,
   progressOf,
   refusalFor,
+  reviewOutcomeFor,
   stageOf,
   stepAt,
   type BarterAction,
@@ -34,13 +36,22 @@ describe('Máquina de estados da permuta', () => {
     managerName,
   });
 
+  /** A mesma permuta, COM SEGURO — a que passa pela seguradora. */
+  const seguradaEm = (status: string) => ({ ...barterIn(status), insuranceChoice: 'required' });
+
   /* ── O desenho da linha ─────────────────────────────────────────────── */
 
   it('a linha vai do rascunho ao registro da cédula, com a negativa como saída lateral', () => {
     expect(BARTER_LINE.map((degrau) => [...degrau])).toEqual([
       [BARTER_STATUS.draft],
       [BARTER_STATUS.sentToManager],
-      [BARTER_STATUS.pending],
+      // A DEVOLVIDA COM EXIGÊNCIAS divide o degrau com a da mesa do comitê: as
+      // duas ainda esperam a decisão, e a volta ao consultor não faz a permuta
+      // andar nem recuar na esteira.
+      [BARTER_STATUS.pending, BARTER_STATUS.awaitingRequirements],
+      // A MESA DA SEGURADORA: um degrau antes do faturamento, que a permuta sem
+      // seguro pula. As duas aprovações dividem o degrau, como na mesa seguinte.
+      [BARTER_STATUS.awaitingPolicy, BARTER_STATUS.awaitingPolicyWithConditions],
       // O MESMO DEGRAU: as duas aprovações são a mesa do faturista, e a ressalva
       // é o desfecho, não um ponto adiante na esteira. Pô-la um degrau à frente
       // faria a permuta aprovada com ressalva ser "tarde demais para faturar".
@@ -61,6 +72,13 @@ describe('Máquina de estados da permuta', () => {
   /** O degrau é a POSIÇÃO na esteira, e é ele que responde cedo/tarde. */
   it('as duas aprovações ocupam o mesmo degrau, e a negativa nenhum', () => {
     expect(stageOf(BARTER_STATUS.approvedWithConditions)).toBe(stageOf(BARTER_STATUS.approved));
+    expect(stageOf(BARTER_STATUS.awaitingRequirements)).toBe(stageOf(BARTER_STATUS.pending));
+    expect(stageOf(BARTER_STATUS.awaitingPolicyWithConditions)).toBe(
+      stageOf(BARTER_STATUS.awaitingPolicy),
+    );
+    // A apólice vem DEPOIS da decisão e ANTES do faturamento.
+    expect(stageOf(BARTER_STATUS.awaitingPolicy)).toBe(stageOf(BARTER_STATUS.pending) + 1);
+    expect(stageOf(BARTER_STATUS.approved)).toBe(stageOf(BARTER_STATUS.awaitingPolicy) + 1);
     expect(stageOf(BARTER_STATUS.draft)).toBe(0);
     expect(stageOf(BARTER_STATUS.denied)).toBe(-1);
   });
@@ -80,6 +98,13 @@ describe('Máquina de estados da permuta', () => {
     expect(BARTER_HOLDER[BARTER_STATUS.draft]).toBe(ROLE.consultant);
     expect(BARTER_HOLDER[BARTER_STATUS.sentToManager]).toBe(ROLE.manager);
     expect(BARTER_HOLDER[BARTER_STATUS.pending]).toBe(ROLE.committee);
+    // DEVOLVIDA COM EXIGÊNCIAS, ela está com o CONSULTOR — é ele quem vai
+    // buscar o aval ou a hipoteca. O comitê só volta a tê-la quando ele
+    // cumprir.
+    expect(BARTER_HOLDER[BARTER_STATUS.awaitingRequirements]).toBe(ROLE.consultant);
+    // APROVADA COM SEGURO, ela está com a SEGURADORA — com ou sem ressalva.
+    expect(BARTER_HOLDER[BARTER_STATUS.awaitingPolicy]).toBe(ROLE.insurer);
+    expect(BARTER_HOLDER[BARTER_STATUS.awaitingPolicyWithConditions]).toBe(ROLE.insurer);
     expect(BARTER_HOLDER[BARTER_STATUS.approved]).toBe(ROLE.biller);
     expect(BARTER_HOLDER[BARTER_STATUS.approvedWithConditions]).toBe(ROLE.biller);
 
@@ -140,8 +165,25 @@ describe('Máquina de estados da permuta', () => {
     ]);
     expect(lineFrom(BARTER_ACTION.cprIssue)).not.toContain(BARTER_STATUS.approved);
 
+    // O ALCANCE DA SEGURADORA começa na mesa dela — e o faturista, acima, NÃO a
+    // enxerga: a permuta esperando apólice ainda não chegou ao faturamento.
+    expect(lineFrom(BARTER_ACTION.insure)).toEqual([
+      BARTER_STATUS.awaitingPolicy,
+      BARTER_STATUS.awaitingPolicyWithConditions,
+      BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
+      BARTER_STATUS.invoiced,
+      BARTER_STATUS.cprIssued,
+      BARTER_STATUS.cprSigned,
+      BARTER_STATUS.cprRegistered,
+    ]);
+    expect(lineFrom(BARTER_ACTION.invoice)).not.toContain(BARTER_STATUS.awaitingPolicy);
+
     expect(lineFrom(BARTER_ACTION.review)).toEqual([
       BARTER_STATUS.pending,
+      BARTER_STATUS.awaitingRequirements,
+      BARTER_STATUS.awaitingPolicy,
+      BARTER_STATUS.awaitingPolicyWithConditions,
       BARTER_STATUS.approved,
       BARTER_STATUS.approvedWithConditions,
       BARTER_STATUS.invoiced,
@@ -175,11 +217,17 @@ describe('Máquina de estados da permuta', () => {
     // colher assinaturas e registrar são o mesmo ofício, sobre o mesmo
     // documento, em dias diferentes. O que os separa é o tempo, não o dono — e é
     // por isso que eles são etapas e não um campo.
+    //
+    // O DESVIO DAS EXIGÊNCIAS é a única volta: o comitê exige, o consultor
+    // cumpre — e o GERENTE não aparece nele. O parecer dele já foi dado.
     expect(donos.flat()).toEqual([
       ROLE.consultant,
       ROLE.consultant,
       ROLE.manager,
       ROLE.committee,
+      ROLE.committee,
+      ROLE.consultant,
+      ROLE.insurer,
       ROLE.biller,
       ROLE.emitter,
       ROLE.emitter,
@@ -192,6 +240,12 @@ describe('Máquina de estados da permuta', () => {
     expect(BARTER_STEPS[BARTER_ACTION.forward].capability).toBe(CAPABILITY.bartersRegister);
     expect(BARTER_STEPS[BARTER_ACTION.opinion].capability).toBe(CAPABILITY.bartersOpinion);
     expect(BARTER_STEPS[BARTER_ACTION.review].capability).toBe(CAPABILITY.bartersReview);
+    // EXIGIR é do comitê, pela mesma porta da decisão: é a alternativa a
+    // decidir. CUMPRIR é do consultor, pela porta do registro — é a mesma pessoa
+    // que montou a permuta voltando a ela.
+    expect(BARTER_STEPS[BARTER_ACTION.require].capability).toBe(CAPABILITY.bartersReview);
+    expect(BARTER_STEPS[BARTER_ACTION.fulfill].capability).toBe(CAPABILITY.bartersRegister);
+    expect(BARTER_STEPS[BARTER_ACTION.insure].capability).toBe(CAPABILITY.bartersInsure);
     expect(BARTER_STEPS[BARTER_ACTION.invoice].capability).toBe(CAPABILITY.bartersInvoice);
     // Os três atos da cédula sob a MESMA capacidade: eles são um ofício só.
     expect(BARTER_STEPS[BARTER_ACTION.cprIssue].capability).toBe(CAPABILITY.bartersCprIssue);
@@ -199,17 +253,29 @@ describe('Máquina de estados da permuta', () => {
     expect(BARTER_STEPS[BARTER_ACTION.cprRegister].capability).toBe(CAPABILITY.bartersCprIssue);
   });
 
-  /** A decisão é a única bifurcação: as outras etapas só empurram adiante. */
-  it('só a decisão do comitê tem mais de uma saída — e são três', () => {
+  /**
+   * A decisão é a única bifurcação de verdade: três desfechos, que caem na
+   * seguradora ou no faturista conforme o seguro da permuta. A apólice tem duas
+   * saídas, mas não escolhe — devolve cada aprovação ao seu par.
+   */
+  it('só a decisão do comitê escolhe a saída — e a apólice só devolve ao par', () => {
     expect(BARTER_STEPS[BARTER_ACTION.review].to).toEqual([
+      BARTER_STATUS.awaitingPolicy,
+      BARTER_STATUS.awaitingPolicyWithConditions,
       BARTER_STATUS.approved,
       BARTER_STATUS.approvedWithConditions,
       BARTER_STATUS.denied,
+    ]);
+    expect(BARTER_STEPS[BARTER_ACTION.insure].to).toEqual([
+      BARTER_STATUS.approved,
+      BARTER_STATUS.approvedWithConditions,
     ]);
     for (const action of [
       BARTER_ACTION.register,
       BARTER_ACTION.forward,
       BARTER_ACTION.opinion,
+      BARTER_ACTION.require,
+      BARTER_ACTION.fulfill,
       BARTER_ACTION.invoice,
       BARTER_ACTION.cprIssue,
       BARTER_ACTION.cprSign,
@@ -226,8 +292,13 @@ describe('Máquina de estados da permuta', () => {
       [BARTER_ACTION.forward, [BARTER_STATUS.draft]],
       [BARTER_ACTION.opinion, [BARTER_STATUS.sentToManager]],
       [BARTER_ACTION.review, [BARTER_STATUS.pending]],
-      // O FATURAMENTO é o único ato com dois estados de partida: a ressalva é
-      // condição do negócio, e não um portão deste fluxo.
+      // EXIGIR parte do mesmo ponto da decisão, e só dele: a permuta já
+      // devolvida não recebe uma segunda devolução por cima da primeira.
+      [BARTER_ACTION.require, [BARTER_STATUS.pending]],
+      // CUMPRIR só existe na permuta devolvida.
+      [BARTER_ACTION.fulfill, [BARTER_STATUS.awaitingRequirements]],
+      // O FATURAMENTO parte das duas aprovações: a ressalva é condição do
+      // negócio, e não um portão deste fluxo.
       [BARTER_ACTION.invoice, [BARTER_STATUS.approved, BARTER_STATUS.approvedWithConditions]],
       // O TRECHO DO EMISSOR: cada ato parte de um estado só, porque eles
       // acontecem em dias diferentes e a ordem entre eles é a do mundo — não se
@@ -246,6 +317,91 @@ describe('Máquina de estados da permuta', () => {
         expect(refusalFor(action, barterIn(outro))).toBeTruthy();
       }
     }
+  });
+
+  /**
+   * A APÓLICE passa nas duas mesas da seguradora, e SÓ na permuta com seguro.
+   * Na sem seguro ela não é cedo nem tarde: ela não existe.
+   */
+  it('a apólice passa nas mesas da seguradora, e só na permuta com seguro', () => {
+    const permitidos: string[] = [
+      BARTER_STATUS.awaitingPolicy,
+      BARTER_STATUS.awaitingPolicyWithConditions,
+    ];
+    for (const status of BARTER_STATUSES) {
+      const recusa = refusalFor(BARTER_ACTION.insure, seguradaEm(status));
+      if (permitidos.includes(status)) expect(recusa).toBeNull();
+      else expect(recusa).toBeTruthy();
+
+      expect(refusalFor(BARTER_ACTION.insure, barterIn(status))).toBe(
+        'Esta permuta não tem seguro — ela não passa pela seguradora',
+      );
+    }
+    // O produtor que RECUSOU o seguro opcional também não passa por ela.
+    expect(
+      refusalFor(BARTER_ACTION.insure, {
+        ...barterIn(BARTER_STATUS.awaitingPolicy),
+        insuranceChoice: 'declined',
+      }),
+    ).toBe('Esta permuta não tem seguro — ela não passa pela seguradora');
+    // E o aceito no opcional passa.
+    expect(
+      refusalFor(BARTER_ACTION.insure, {
+        ...barterIn(BARTER_STATUS.awaitingPolicy),
+        insuranceChoice: 'accepted',
+      }),
+    ).toBeNull();
+  });
+
+  it('quem chega à seguradora fora de hora ouve onde a permuta está', () => {
+    expect(refusalFor(BARTER_ACTION.insure, seguradaEm(BARTER_STATUS.pending))).toBe(
+      'Esta permuta aguarda a decisão do comitê',
+    );
+    expect(refusalFor(BARTER_ACTION.insure, seguradaEm(BARTER_STATUS.approved))).toBe(
+      'A apólice desta permuta já foi informada',
+    );
+    // O FATURISTA que chega cedo é mandado à seguradora, e não a um "não pode".
+    expect(refusalFor(BARTER_ACTION.invoice, seguradaEm(BARTER_STATUS.awaitingPolicy))).toBe(
+      'Esta permuta aguarda a apólice da seguradora',
+    );
+    expect(
+      refusalFor(BARTER_ACTION.invoice, seguradaEm(BARTER_STATUS.awaitingPolicyWithConditions)),
+    ).toBe('Esta permuta aguarda a apólice da seguradora');
+    expect(refusalFor(BARTER_ACTION.insure, seguradaEm(BARTER_STATUS.denied))).toBe(
+      'Esta permuta foi negada pelo comitê',
+    );
+  });
+
+  /**
+   * O COMITÊ escolhe o desfecho; o SEGURO escolhe a mesa. Com seguro, a
+   * aprovação vai à seguradora; sem, direto ao faturista. A negativa é a mesma
+   * nos dois casos.
+   */
+  it('a decisão cai na seguradora com seguro, e no faturista sem', () => {
+    const comSeguro = seguradaEm(BARTER_STATUS.pending);
+    const semSeguro = barterIn(BARTER_STATUS.pending);
+
+    expect(reviewOutcomeFor('approved', comSeguro)).toBe(BARTER_STATUS.awaitingPolicy);
+    expect(reviewOutcomeFor('approvedWithConditions', comSeguro)).toBe(
+      BARTER_STATUS.awaitingPolicyWithConditions,
+    );
+    expect(reviewOutcomeFor('denied', comSeguro)).toBe(BARTER_STATUS.denied);
+
+    expect(reviewOutcomeFor('approved', semSeguro)).toBe(BARTER_STATUS.approved);
+    expect(reviewOutcomeFor('approvedWithConditions', semSeguro)).toBe(
+      BARTER_STATUS.approvedWithConditions,
+    );
+    expect(reviewOutcomeFor('denied', semSeguro)).toBe(BARTER_STATUS.denied);
+    // Recusado no opcional é "sem seguro".
+    expect(reviewOutcomeFor('approved', { ...semSeguro, insuranceChoice: 'declined' })).toBe(
+      BARTER_STATUS.approved,
+    );
+
+    // A apólice devolve cada aprovação ao SEU par: a ressalva continua ressalva.
+    expect(policyOutcomeFor(BARTER_STATUS.awaitingPolicy)).toBe(BARTER_STATUS.approved);
+    expect(policyOutcomeFor(BARTER_STATUS.awaitingPolicyWithConditions)).toBe(
+      BARTER_STATUS.approvedWithConditions,
+    );
   });
 
   /**
@@ -334,6 +490,55 @@ describe('Máquina de estados da permuta', () => {
   });
 
   /**
+   * O DESVIO DAS EXIGÊNCIAS: a permuta devolvida está no MESMO degrau da mesa do
+   * comitê, só que com o consultor. Quem chega nesse degrau precisa ouvir com
+   * quem ela está — e "já foi decidida" seria a frase errada para o comitê, que
+   * ainda não decidiu nada.
+   */
+  it('a permuta devolvida com exigências diz que está com o consultor, e o quê falta', () => {
+    const devolvida = {
+      ...barterIn(BARTER_STATUS.awaitingRequirements),
+      requiresGuarantor: true,
+      requiresCollateral: true,
+    };
+    const espera =
+      'Esta permuta aguarda o consultor providenciar o que o comitê exigiu: avalista, hipoteca';
+
+    expect(refusalFor(BARTER_ACTION.review, devolvida)).toBe(espera);
+    expect(refusalFor(BARTER_ACTION.require, devolvida)).toBe(espera);
+    expect(refusalFor(BARTER_ACTION.invoice, devolvida)).toBe(espera);
+
+    // Sem as exigências gravadas (permuta lida pela metade), a frase se sustenta.
+    expect(refusalFor(BARTER_ACTION.review, barterIn(BARTER_STATUS.awaitingRequirements))).toBe(
+      'Esta permuta aguarda o consultor cumprir as exigências do comitê',
+    );
+
+    // O GERENTE chega tarde, e a frase diz isso: o parecer dele continua valendo.
+    expect(refusalFor(BARTER_ACTION.opinion, devolvida)).toBe(
+      'Esta permuta já recebeu o parecer do gerente',
+    );
+  });
+
+  it('o consultor que cumpre de novo ouve que a permuta já está com o comitê', () => {
+    expect(refusalFor(BARTER_ACTION.fulfill, barterIn(BARTER_STATUS.pending))).toBe(
+      'Esta permuta aguarda a decisão do comitê',
+    );
+    expect(refusalFor(BARTER_ACTION.fulfill, barterIn(BARTER_STATUS.approved))).toBe(
+      'As exigências do comitê já foram cumpridas, e a permuta voltou ao comitê',
+    );
+    // E antes do comitê não há o que cumprir.
+    expect(refusalFor(BARTER_ACTION.fulfill, barterIn(BARTER_STATUS.sentToManager))).toBe(
+      'Esta permuta aguarda o parecer do gerente Beatriz Nogueira',
+    );
+  });
+
+  /** A decisão continua sendo o próximo ato da mesa do comitê — exigir é a alternativa. */
+  it('a mesa do comitê espera a decisão, e a permuta devolvida espera o consultor', () => {
+    expect(nextActionOf(BARTER_STATUS.pending)).toBe(BARTER_ACTION.review);
+    expect(nextActionOf(BARTER_STATUS.awaitingRequirements)).toBe(BARTER_ACTION.fulfill);
+  });
+
+  /**
    * NEGADA é fim de linha, e a mensagem não finge que ela está esperando algo.
    * Em especial: negada não fatura, que é a única forma de dinheiro sair daqui.
    */
@@ -342,6 +547,8 @@ describe('Máquina de estados da permuta', () => {
       BARTER_ACTION.forward,
       BARTER_ACTION.opinion,
       BARTER_ACTION.review,
+      BARTER_ACTION.require,
+      BARTER_ACTION.fulfill,
       BARTER_ACTION.invoice,
       BARTER_ACTION.cprIssue,
       BARTER_ACTION.cprSign,
@@ -456,10 +663,108 @@ describe('Máquina de estados da permuta', () => {
     });
 
     /**
+     * O DESVIO não é etapa de toda permuta, e a checklist não o promete: a
+     * maioria nunca terá exigência nenhuma. Ele aparece só enquanto a permuta
+     * está nele — logo antes da decisão, que é para onde ele a devolve.
+     */
+    it('as exigências do comitê só aparecem no andamento enquanto a permuta está nelas', () => {
+      const devolvida = progressOf({
+        ...barterIn(BARTER_STATUS.awaitingRequirements),
+        requiresCollateral: true,
+      });
+
+      expect(devolvida.map((step) => step.action)).toEqual([
+        BARTER_ACTION.register,
+        BARTER_ACTION.forward,
+        BARTER_ACTION.opinion,
+        BARTER_ACTION.fulfill,
+        BARTER_ACTION.review,
+        BARTER_ACTION.invoice,
+        BARTER_ACTION.cprIssue,
+        BARTER_ACTION.cprSign,
+        BARTER_ACTION.cprRegister,
+      ]);
+      // O parecer do gerente continua cumprido; a decisão continua por vir.
+      expect(devolvida.map((step) => step.state)).toEqual([
+        done,
+        done,
+        done,
+        current,
+        ahead,
+        ahead,
+        ahead,
+        ahead,
+        ahead,
+      ]);
+      const agora = devolvida[3];
+      expect(agora.label).toBe('Exigências do comitê');
+      expect(agora.role).toBe(ROLE.consultant);
+      expect(agora.stateNote).toBe(
+        'Esta permuta aguarda o consultor providenciar o que o comitê exigiu: hipoteca',
+      );
+
+      // CUMPRIDAS, a permuta está de novo na mesa do comitê — e a checklist volta
+      // a ser a de sempre. Que houve uma volta, quem conta é a linha do tempo.
+      // prettier-ignore
+      expect(estadosEm(BARTER_STATUS.pending))
+        .toEqual([done, done, done, current, ahead, ahead, ahead, ahead]);
+      expect(progressOf(barterIn(BARTER_STATUS.pending)).map((s) => s.action)).not.toContain(
+        BARTER_ACTION.fulfill,
+      );
+    });
+
+    /**
      * A NEGATIVA é o caso que justifica `halted` existir. Uma permuta negada
      * nunca fatura — mostrar o faturamento dela como etapa pendente prometeria
      * um passo que ninguém vai dar, e quem lesse ficaria esperando.
      */
+    /**
+     * A PERMUTA COM SEGURO ganha uma etapa na checklist, entre a decisão e o
+     * faturamento — e a sem seguro não a mostra nem como cumprida nem como a
+     * vir: ela não existe ali.
+     */
+    it('a permuta com seguro mostra a apólice da seguradora, e a sem seguro não', () => {
+      const segurada = progressOf(seguradaEm(BARTER_STATUS.sentToManager));
+      expect(segurada.map((step) => step.action)).toEqual([
+        BARTER_ACTION.register,
+        BARTER_ACTION.forward,
+        BARTER_ACTION.opinion,
+        BARTER_ACTION.review,
+        BARTER_ACTION.insure,
+        BARTER_ACTION.invoice,
+        BARTER_ACTION.cprIssue,
+        BARTER_ACTION.cprSign,
+        BARTER_ACTION.cprRegister,
+      ]);
+      expect(segurada[4].label).toBe('Apólice do seguro');
+      expect(segurada[4].role).toBe(ROLE.insurer);
+
+      const estados = (status: string) => progressOf(seguradaEm(status)).map((step) => step.state);
+      // prettier-ignore
+      expect(estados(BARTER_STATUS.pending))
+        .toEqual([done, done, done, current, ahead, ahead, ahead, ahead, ahead]);
+      // prettier-ignore
+      expect(estados(BARTER_STATUS.awaitingPolicy))
+        .toEqual([done, done, done, done, current, ahead, ahead, ahead, ahead]);
+      // prettier-ignore
+      expect(estados(BARTER_STATUS.awaitingPolicyWithConditions))
+        .toEqual([done, done, done, done, current, ahead, ahead, ahead, ahead]);
+      // prettier-ignore
+      expect(estados(BARTER_STATUS.approved))
+        .toEqual([done, done, done, done, done, current, ahead, ahead, ahead]);
+      // prettier-ignore
+      expect(estados(BARTER_STATUS.denied))
+        .toEqual([done, done, done, done, halted, halted, halted, halted, halted]);
+
+      expect(progressOf(seguradaEm(BARTER_STATUS.awaitingPolicy))[4].stateNote).toBe(
+        'Esta permuta aguarda a apólice da seguradora',
+      );
+
+      expect(progressOf(barterIn(BARTER_STATUS.approved)).map((step) => step.action)).not.toContain(
+        BARTER_ACTION.insure,
+      );
+    });
+
     it('a permuta negada não fica devendo um faturamento que não vem', () => {
       // prettier-ignore
       expect(estadosEm(BARTER_STATUS.denied))
@@ -519,6 +824,11 @@ describe('Máquina de estados da permuta', () => {
         'Aprovada com ressalva',
       );
       expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.denied)).toBe('Negada');
+      // A aprovação que foi para a seguradora continua tendo sido uma aprovação.
+      expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.awaitingPolicy)).toBe('Aprovada');
+      expect(outcomeLabelOf(BARTER_ACTION.review, BARTER_STATUS.awaitingPolicyWithConditions)).toBe(
+        'Aprovada com ressalva',
+      );
 
       // As outras etapas não têm saída para escolher — "Faturamento: faturada"
       // seria o nome da etapa dito duas vezes.
@@ -526,6 +836,9 @@ describe('Máquina de estados da permuta', () => {
         BARTER_ACTION.register,
         BARTER_ACTION.forward,
         BARTER_ACTION.opinion,
+        BARTER_ACTION.require,
+        BARTER_ACTION.fulfill,
+        BARTER_ACTION.insure,
         BARTER_ACTION.invoice,
         BARTER_ACTION.cprIssue,
         BARTER_ACTION.cprSign,

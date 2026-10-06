@@ -4,7 +4,8 @@
  * seed, serializador e app conferem por aqui.
  *
  * Eles estão na ORDEM DA ESTEIRA depois do admin: o consultor monta, o gerente
- * opina, o comitê decide, o faturista fatura e o emissor emite a cédula. Ver
+ * opina, o comitê decide, a seguradora emite a apólice (quando a permuta tem
+ * seguro), o faturista fatura e o emissor emite a cédula. Ver
  * `barters/barter-workflow.ts`, que é onde o caminho mora.
  *
  * Os identificadores são em inglês para acompanhar os dois que já existiam
@@ -18,6 +19,21 @@ export const ROLE = {
   manager: 'manager',
   /** Comitê: instância de análise das permutas (visão de retaguarda). */
   committee: 'committee',
+  /**
+   * SEGURADORA: o setor da empresa que cuida dos seguros — cria a apólice da
+   * permuta aprovada, anexa o documento e informa o número dela.
+   *
+   * Não é a companhia de seguros: é um posto INTERNO, com várias pessoas, que
+   * gerencia as apólices que a empresa contrata para o produtor. Ele só entra
+   * na esteira quando a permuta TEM seguro (obrigatório na versão, ou opcional
+   * e aceito pelo produtor); sem seguro, a aprovada vai direto ao faturista.
+   *
+   * Nasceu pelo mesmo motivo do emissor: a apólice era um número que o
+   * consultor digitava na cédula, e quem a emitia não tinha etapa, prazo nem
+   * lugar para pôr o documento. Agora o número só existe se foi a seguradora que
+   * o informou — junto com a apólice anexada.
+   */
+  insurer: 'insurer',
   /** Faturista: fatura a permuta aprovada e anexa as notas (retaguarda). */
   biller: 'biller',
   /**
@@ -50,6 +66,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   [ROLE.admin]: 'Administrador',
   [ROLE.manager]: 'Gerente',
   [ROLE.committee]: 'Comitê',
+  [ROLE.insurer]: 'Seguradora',
   [ROLE.biller]: 'Faturista',
   [ROLE.emitter]: 'Emissor',
   [ROLE.consultant]: 'Consultor',
@@ -75,7 +92,8 @@ export const ROLE_LABELS: Record<Role, string> = {
  * O FATURISTA não está aqui de propósito: faturar é ofício de gente, várias
  * pessoas fazem, e cada uma responde pelo que emitiu. O EMISSOR pelo mesmo
  * motivo — quem assina a conferência de um título responde por ela com o
- * próprio nome.
+ * próprio nome. E a SEGURADORA também: apesar do nome de empresa, ela é um
+ * setor com vários logins, e cada pessoa responde pela apólice que anexou.
  */
 export const SINGLE_ACCOUNT_ROLES: readonly Role[] = [ROLE.committee];
 

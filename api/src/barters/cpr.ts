@@ -57,10 +57,10 @@
  *   esta conta diz se elas bastam. Ver `pledgeReadingOf`.
  */
 import { AREA_EPSILON, pledgeAreaFor } from './barter-math';
+import type { ReviewRequirement } from './barter-workflow';
 
 /** O que o consultor preencheu — o rascunho, com o vazio significando "falta". */
 export interface CprDraft {
-  number: string;
   issuedAt: Date;
   dueDate: Date | null;
   emitterNationality: string;
@@ -75,8 +75,14 @@ export interface CprDraft {
   emitterFatherName: string;
   emitterMotherName: string;
   emitterEmail: string;
+  /**
+   * O LOCAL DA ENTREGA: a filial escolhida e o nome dela congelado na gravação
+   * (ver `BarterCpr.deliveryUnitId`). É o TEXTO que esta leitura cobra — é ele
+   * que sai na cláusula —, e por isso a cédula do tempo do texto livre, sem
+   * unidade, não fica devendo nada.
+   */
+  deliveryUnitId: number | null;
   deliveryPlace: string;
-  mortgages: string;
   spouseName: string | null;
   spouseNationality: string | null;
   spouseProfession: string | null;
@@ -96,7 +102,17 @@ export interface CprDraft {
    */
   scrFileId: number | null;
   scrConsultedAt: Date | null;
-  insurancePolicy: string | null;
+  /**
+   * Os AVALISTAS. Opcional porque só interessam a esta leitura quando o comitê
+   * EXIGE aval (ver `CprContext.requirements`) — e a cédula sem rascunho não
+   * tem nenhum, que é o que a ausência diz.
+   */
+  guarantors?: CprGuarantorDraft[];
+  /**
+   * Os BENS DADOS EM HIPOTECA. Opcional pelo mesmo motivo dos avalistas: só
+   * interessam quando o comitê exige hipoteca.
+   */
+  mortgages?: CprMortgageDraft[];
 }
 
 /**
@@ -109,7 +125,6 @@ export interface CprDraft {
  * não haver.
  */
 export const EMPTY_CPR: CprDraft = {
-  number: '',
   issuedAt: new Date(0),
   dueDate: null,
   emitterNationality: '',
@@ -124,8 +139,8 @@ export const EMPTY_CPR: CprDraft = {
   emitterFatherName: '',
   emitterMotherName: '',
   emitterEmail: '',
+  deliveryUnitId: null,
   deliveryPlace: '',
-  mortgages: '',
   spouseName: null,
   spouseNationality: null,
   spouseProfession: null,
@@ -140,15 +155,15 @@ export const EMPTY_CPR: CprDraft = {
   oilContent: 0,
   scrFileId: null,
   scrConsultedAt: null,
-  insurancePolicy: null,
 };
 
 /**
- * Um AVALISTA — coletado pela proposta, ainda não impresso na cédula.
+ * Um AVALISTA — exigido pelo comitê, e que ASSINA a cédula.
  *
  * A forma é a mesma da qualificação do emitente, campo por campo: para o
  * direito os dois são a mesma coisa (pessoas que se obrigam), e o que os separa
- * é o papel.
+ * é o papel. O SCR também: quem garante a dívida é avaliado pelo endividamento
+ * dele, como quem a deve.
  */
 export interface CprGuarantorDraft {
   name: string;
@@ -169,6 +184,60 @@ export interface CprGuarantorDraft {
   spouseRg: string;
   spouseNationality: string;
   spouseProfession: string;
+  /** O id do SCR anexado — só a existência importa à regra (ver `CprDraft.scrFileId`). */
+  scrFileId?: number | null;
+}
+
+/**
+ * OS CAMPOS DE QUALIFICAÇÃO do avalista — o que se SUGERE de uma cédula para
+ * a outra. O id e o SCR ficam de fora: o id é da linha da outra cédula, e o
+ * SCR é uma fotografia com data, que não se reaproveita (ver `suggestFrom`).
+ */
+export const GUARANTOR_FIELDS = [
+  'name',
+  'document',
+  'rg',
+  'cnh',
+  'nationality',
+  'profession',
+  'maritalStatus',
+  'fatherName',
+  'motherName',
+  'email',
+  'address',
+  'addressNumber',
+  'city',
+  'spouseName',
+  'spouseDocument',
+  'spouseRg',
+  'spouseNationality',
+  'spouseProfession',
+] as const satisfies readonly (keyof CprGuarantorDraft)[];
+
+/** Só a qualificação de um avalista — ver `GUARANTOR_FIELDS`. */
+export function guarantorQualificationOf(
+  guarantor: CprGuarantorDraft,
+): Omit<CprGuarantorDraft, 'scrFileId'> {
+  return Object.fromEntries(GUARANTOR_FIELDS.map((key) => [key, guarantor[key]])) as Omit<
+    CprGuarantorDraft,
+    'scrFileId'
+  >;
+}
+
+/**
+ * UM BEM DADO EM HIPOTECA — exigido pelo comitê, conferido e não impresso.
+ * Ver `CprMortgage` no schema.
+ */
+export interface CprMortgageDraft {
+  description: string;
+  registryNumber: string;
+  registryDistrict: string;
+  city: string;
+  ownerName: string;
+  ownerDocument: string;
+  appraisedValue: number;
+  /** O id do documento do bem anexado (matrícula atualizada, certidão de ônus). */
+  documentFileId?: number | null;
 }
 
 /**
@@ -252,9 +321,10 @@ export function requiresSpouse(maritalStatus: string): boolean {
  * DE QUEM É cada pendência da cédula.
  *
  * A lista é lida por quatro pessoas diferentes, e nenhuma delas resolve tudo: o
- * consultor traz o que vem da visita, o faturista anexa a nota, o admin acerta o
- * vencimento na safra e o emissor informa o número na hora de emitir. Sem o
- * dono, "falta o vencimento" manda o consultor procurar um campo que não existe
+ * consultor traz o que vem da visita, o faturista anexa a nota e o admin acerta
+ * o vencimento na safra. O emissor não deve nada à lista: ele a LÊ antes de
+ * emitir (o número da cédula, que era dele, passou a nascer com a permuta). Sem
+ * o dono, "falta o vencimento" manda o consultor procurar um campo que não existe
  * na tela dele.
  *
  * E o dono não serve só à frase: é ele que permite a MESMA regra responder a
@@ -265,7 +335,6 @@ export const CPR_GAP_OWNER = {
   consultant: 'consultant',
   biller: 'biller',
   admin: 'admin',
-  emitter: 'emitter',
 } as const;
 
 export type CprGapOwner = (typeof CPR_GAP_OWNER)[keyof typeof CPR_GAP_OWNER];
@@ -275,6 +344,18 @@ export interface CprGap {
   label: string;
   owner: CprGapOwner;
 }
+
+/**
+ * AS EXIGÊNCIAS DO COMITÊ, como a cédula as lê: cada uma liga um campo que, sem
+ * ela, a cédula não cobra. Ver `REVIEW_REQUIREMENT_LABELS`.
+ */
+export type CprRequirements = Record<ReviewRequirement, boolean>;
+
+/** A permuta de que o comitê não exigiu nada — o caso comum. */
+export const NO_REQUIREMENTS: CprRequirements = {
+  requiresGuarantor: false,
+  requiresCollateral: false,
+};
 
 export interface CprContext {
   /** As notas fiscais anexadas ao faturamento — a origem da dívida (cláusula VII). */
@@ -297,6 +378,19 @@ export interface CprContext {
    * consultor dependia de nada fora do rascunho.
    */
   pledge: CprPledge;
+  /**
+   * O QUE O COMITÊ EXIGIU — avalista, hipoteca.
+   *
+   * São pendências DO CONSULTOR, como o penhor, e pelo mesmo motivo chegam como
+   * contexto: quem decide que a cédula precisa de um avalista não é o rascunho,
+   * é a mesa do comitê. Sem exigência, os três campos não são cobrados — e nem
+   * aparecem no formulário dele.
+   *
+   * SEM PADRÃO, pelo mesmo raciocínio de `pledge`: um parâmetro opcional aqui
+   * seria a porta pela qual a próxima chamada esquece o aval que o comitê pediu,
+   * e a cédula sairia "completa" sem ele.
+   */
+  requirements: CprRequirements;
 }
 
 /**
@@ -399,14 +493,8 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
   const text = of(CPR_GAP_OWNER.consultant);
   const number = numberOf(CPR_GAP_OWNER.consultant);
 
-  // O NÚMERO DA CÉDULA é do EMISSOR, e não de quem a preenche.
-  //
-  // A numeração da CPR é da emissão em papel e costuma vir de fora deste
-  // sistema — cartório, B3, controle interno da credora. O consultor não a tem
-  // quando visita a fazenda, e cobrá-la dele no encaminhamento travaria a
-  // esteira num número que só existe semanas depois. Quem o informa é o emissor,
-  // no ato de emitir (ver `IssueCprDto`).
-  of(CPR_GAP_OWNER.emitter)(cpr.number, 'número da CPR');
+  // O NÚMERO DA CÉDULA não é cobrado: ele nasce com a permuta
+  // (`Barter.cprNumber`), e uma cédula sem número não existe mais.
   // O VENCIMENTO é da VERSÃO do Barter, e a frase diz qual: quem lê esta lista
   // não tem campo de vencimento em tela nenhuma, e precisa saber em qual
   // lançamento a data se acerta.
@@ -438,10 +526,14 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
   }
 
   // O LOCAL DA ENTREGA é cláusula (V, "d"), então é cobrado. Repare no que NÃO
-  // é cobrado logo abaixo: CNH, filiação, e-mail, RG do cônjuge, avalista e
-  // hipotecas são coletados pela proposta e não aparecem em cláusula nenhuma do
-  // modelo. Cobrá-los travaria a geração de um documento que não os usa — a
-  // pergunta desta função é "dá para emitir?", e não "o cadastro está cheio?".
+  // é cobrado logo abaixo: CNH, filiação, e-mail e RG do cônjuge são coletados
+  // pela proposta e não aparecem em cláusula nenhuma do modelo. Cobrá-los
+  // travaria a geração de um documento que não os usa — a pergunta desta função
+  // é "dá para emitir?", e não "o cadastro está cheio?". Avalista e hipoteca
+  // são cobrados só quando o COMITÊ os exige (ver o fim da função). A APÓLICE
+  // não é cobrada aqui: ela é da seguradora, e quem garante que a permuta com
+  // seguro chega à emissão com ela é a etapa da seguradora, que não anda sem o
+  // número e o documento.
   text(cpr.deliveryPlace, 'local da entrega');
 
   number(cpr.sackWeightKg, 'peso da saca (kg)');
@@ -539,6 +631,86 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
     });
   });
 
+  // AS EXIGÊNCIAS DO COMITÊ — a outra exceção, ao lado do SCR, à regra de que
+  // quem decide o que falta é o modelo do documento.
+  //
+  // Avalista e hipoteca não são cobrados de toda cédula: a maioria das
+  // permutas não tem nenhum dos dois, e o consultor nem vê esses campos no
+  // preenchimento inicial. Quando o comitê os EXIGE, eles passam a ser
+  // pendência dele — é o que trava o retorno da permuta ao comitê (`fulfill`)
+  // e, depois, a emissão. A decisão de crédito foi tomada contando com eles, e
+  // um título emitido sem o aval que a justificou não é o título que foi
+  // aprovado.
+  const required = context.requirements;
+  if (required.requiresGuarantor) {
+    const guarantors = cpr.guarantors ?? [];
+    if (guarantors.length === 0) {
+      gaps.push({
+        owner: CPR_GAP_OWNER.consultant,
+        label: 'ao menos um avalista (exigido pelo comitê)',
+      });
+    }
+    // A QUALIFICAÇÃO do avalista é a mesma que se cobra do emitente, campo por
+    // campo: para o direito os dois são pessoas que se obrigam, e o aval de
+    // alguém sem RG ou endereço não se executa contra ninguém.
+    guarantors.forEach((guarantor, index) => {
+      const who = `${index + 1}º avalista`;
+      text(guarantor.name, `nome do ${who}`);
+      text(guarantor.document, `CPF do ${who}`);
+      text(guarantor.rg, `RG do ${who}`);
+      text(guarantor.nationality, `nacionalidade do ${who}`);
+      text(guarantor.maritalStatus, `estado civil do ${who}`);
+      text(guarantor.profession, `profissão do ${who}`);
+      text(guarantor.address, `logradouro do ${who}`);
+      text(guarantor.addressNumber, `número do endereço do ${who}`);
+      text(guarantor.city, `município/UF do ${who}`);
+      if (requiresSpouse(guarantor.maritalStatus)) {
+        // O cônjuge do avalista ASSINA a anuência, como o do emitente — e por
+        // isso deve a mesma qualificação que sai no bloco de assinatura.
+        text(guarantor.spouseName, `nome do cônjuge do ${who} (o avalista é casado)`);
+        text(guarantor.spouseDocument, `CPF do cônjuge do ${who}`);
+        text(guarantor.spouseNationality, `nacionalidade do cônjuge do ${who}`);
+        text(guarantor.spouseProfession, `profissão do cônjuge do ${who}`);
+      }
+      // O SCR DO AVALISTA, pelo mesmo motivo do SCR do emitente: quem garante
+      // a dívida com o próprio patrimônio é avaliado pelo que já deve.
+      if (!guarantor.scrFileId) {
+        gaps.push({
+          owner: CPR_GAP_OWNER.consultant,
+          label: `o SCR do ${who} (anexo obrigatório, com o consultor)`,
+        });
+      }
+    });
+  }
+  // A HIPOTECA É UM CADASTRO, e cada campo dele é conferido: o texto livre de
+  // antes não dizia se a matrícula estava lá, de quem era o imóvel nem quanto
+  // ele valia — e não havia onde guardar a certidão.
+  if (required.requiresCollateral) {
+    const mortgages = cpr.mortgages ?? [];
+    if (mortgages.length === 0) {
+      gaps.push({
+        owner: CPR_GAP_OWNER.consultant,
+        label: 'ao menos um bem em hipoteca (exigido pelo comitê)',
+      });
+    }
+    mortgages.forEach((mortgage, index) => {
+      const which = `${index + 1}º bem em hipoteca`;
+      text(mortgage.description, `descrição do ${which}`);
+      text(mortgage.registryNumber, `matrícula do ${which}`);
+      text(mortgage.registryDistrict, `comarca do registro do ${which}`);
+      text(mortgage.city, `município/UF do ${which}`);
+      text(mortgage.ownerName, `proprietário do ${which}`);
+      text(mortgage.ownerDocument, `CPF/CNPJ do proprietário do ${which}`);
+      number(mortgage.appraisedValue, `valor de avaliação do ${which}`);
+      if (!mortgage.documentFileId) {
+        gaps.push({
+          owner: CPR_GAP_OWNER.consultant,
+          label: `o documento do ${which} (matrícula atualizada, anexo obrigatório)`,
+        });
+      }
+    });
+  }
+
   return gaps;
 }
 
@@ -568,6 +740,11 @@ export function cprGapsOf(cpr: CprDraft, areas: CprAreaDraft[], context: CprCont
  * as pendências que dependem delas são de OUTROS postos, e este recorte as
  * descarta de qualquer jeito.
  *
+ * AS EXIGÊNCIAS DO COMITÊ entraram pelo mesmo caminho do penhor, e pelo mesmo
+ * motivo: são do consultor (é ele quem traz o avalista) e não saem do rascunho
+ * (saem da mesa do comitê). É esta lista que trava o retorno da permuta ao
+ * comitê enquanto o que ele pediu não está na cédula.
+ *
  * O PENHOR NÃO TEM PADRÃO, e isso é deliberado: `NO_PLEDGE` existe e seria um
  * default cômodo, mas um parâmetro opcional aqui é a porta pela qual a próxima
  * chamada desliga a exigência sem que ninguém perceba — o portão continuaria
@@ -578,8 +755,9 @@ export function consultantCprGaps(
   cpr: CprDraft,
   areas: CprAreaDraft[],
   pledge: CprPledge,
+  requirements: CprRequirements,
 ): string[] {
-  return cprGapsOf(cpr, areas, { invoices: [], seasonName: '', pledge })
+  return cprGapsOf(cpr, areas, { invoices: [], seasonName: '', pledge, requirements })
     .filter((gap) => gap.owner === CPR_GAP_OWNER.consultant)
     .map((gap) => gap.label);
 }
@@ -587,6 +765,11 @@ export function consultantCprGaps(
 /** A parte da permuta que entra na cédula sem passar por formulário nenhum. */
 export interface CprKnown {
   barterCode: string;
+  /**
+   * O NÚMERO DA CPR, reservado no registro da permuta. Está aqui, entre o que
+   * ninguém digita, porque deixou de ser digitado: quem numera é o sistema.
+   */
+  cprNumber: string;
   emitterName: string;
   emitterDocument: string;
   grainName: string;
@@ -608,6 +791,17 @@ export interface CprKnown {
    * deste arquivo.
    */
   invoices: CprInvoiceRef[];
+  /**
+   * O NÚMERO DA APÓLICE do seguro (cláusula XVIII, "j") — informado pela
+   * SEGURADORA, junto com o documento, na etapa dela.
+   *
+   * Leitura, pelo mesmo motivo das notas: quem o escreve é outro posto, e
+   * enquanto ele foi digitado aqui o título citava uma apólice que ninguém
+   * tinha anexado. VAZIO quando não há — a permuta sem seguro, ou a com seguro
+   * que ainda não passou pela seguradora —, e aí a alínea simplesmente não
+   * sai no documento.
+   */
+  insurancePolicy: string;
   /** Sacas do grão de pagamento — a quantidade da cláusula III e a do penhor. */
   sacks: number;
   /** `sacas × peso da saca`: o "[QUANTIDADE] kg" da cláusula III. */
@@ -626,6 +820,12 @@ export interface CprKnown {
    * quem confirma é quem assina.
    */
   pickupUnit: string;
+  /**
+   * A mesma unidade pelo id — é ele que pré-seleciona a filial na lista
+   * suspensa do local da entrega. Nulo quando a permuta não tem unidade, ou
+   * quando ela foi excluída depois.
+   */
+  pickupUnitId: number | null;
 }
 
 /** UMA NOTA do faturamento, como a cédula a cita: número, série e duplicata. */
@@ -649,7 +849,15 @@ export interface CprInvoiceRef {
  * faturamento produziu.
  */
 export function knownFrom(
-  barter: { code: string; producerName: string; versionCode: string; unitName: string },
+  barter: {
+    code: string;
+    cprNumber: string;
+    producerName: string;
+    versionCode: string;
+    unitId: number | null;
+    unitName: string;
+    insurancePolicyNumber: string | null;
+  },
   grainItem: { productName: string; quantity: number; unitValue: number } | undefined,
   producerDocument: string,
   sackWeightKg: number,
@@ -660,18 +868,47 @@ export function knownFrom(
   const sackPrice = grainItem?.unitValue ?? 0;
   return {
     barterCode: barter.code,
+    cprNumber: barter.cprNumber,
     emitterName: barter.producerName,
     emitterDocument: producerDocument,
     grainName: grainItem?.productName ?? '',
     dueDate: season.cprDueDate,
     seasonName: season.name,
     invoices,
+    insurancePolicy: barter.insurancePolicyNumber ?? '',
     sacks,
     quantityKg: Math.round(sacks * sackWeightKg * 100) / 100,
     sackPrice,
     totalValue: Math.round(sacks * sackPrice * 100) / 100,
     versionCode: barter.versionCode,
     pickupUnit: barter.unitName,
+    pickupUnitId: barter.unitId,
+  };
+}
+
+/**
+ * O MODELO DA CPR de um grão — o padrão de recebimento que a cédula nova traz
+ * preenchido (ver `Product.cprSackWeightKg`).
+ */
+export interface GrainCprModel {
+  sackWeightKg: number;
+  maxMoisture: number;
+  maxImpurities: number;
+  oilContent: number;
+}
+
+/** O modelo como o cadastro do grão o guarda. */
+export function grainCprModelOf(grain: {
+  cprSackWeightKg: number;
+  cprMaxMoisture: number;
+  cprMaxImpurities: number;
+  cprOilContent: number;
+}): GrainCprModel {
+  return {
+    sackWeightKg: grain.cprSackWeightKg,
+    maxMoisture: grain.cprMaxMoisture,
+    maxImpurities: grain.cprMaxImpurities,
+    oilContent: grain.cprOilContent,
   };
 }
 
@@ -700,13 +937,34 @@ export function knownFrom(
  * fotografia com data, e a da safra passada não diz nada sobre o endividamento
  * de hoje — que é a única coisa que ele existe para dizer. Reaproveitá-lo faria
  * a pendência sumir da tela com um documento vencido no lugar dela.
+ *
+ * O PADRÃO DO GRÃO vem do MODELO DO GRÃO, e não da cédula anterior: ele é da
+ * cultura, e não da pessoa. A última cédula do produtor pode ser de outro grão
+ * — a canola do inverno passado —, e herdar dela o teor de óleo levaria o
+ * número de uma cultura para a cédula da outra. A cédula anterior só responde
+ * pelo padrão quando a permuta não tem grão com modelo (a de antes das safras
+ * por cultura). A CULTIVAR continua vindo dela: é o que o produtor planta.
  */
 export function suggestFrom(
   producer: { city: string } | null,
   previous: (CprDraft & { areas: CprAreaDraft[]; guarantors: CprGuarantorDraft[] }) | null,
-): Partial<CprDraft> & { areas?: CprAreaDraft[]; guarantors?: CprGuarantorDraft[] } {
+  grainModel: GrainCprModel | null = null,
+): Omit<Partial<CprDraft>, 'guarantors' | 'mortgages'> & {
+  areas?: CprAreaDraft[];
+  guarantors?: Omit<CprGuarantorDraft, 'scrFileId'>[];
+} {
+  const grainStandard: Partial<GrainCprModel> = grainModel
+    ? { ...grainModel }
+    : previous
+      ? {
+          sackWeightKg: previous.sackWeightKg,
+          maxMoisture: previous.maxMoisture,
+          maxImpurities: previous.maxImpurities,
+          oilContent: previous.oilContent,
+        }
+      : {};
   if (!previous) {
-    return producer?.city ? { emitterCity: producer.city } : {};
+    return { ...(producer?.city ? { emitterCity: producer.city } : {}), ...grainStandard };
   }
   return {
     emitterNationality: previous.emitterNationality,
@@ -728,20 +986,20 @@ export function suggestFrom(
     spouseProfession: previous.spouseProfession,
     spouseDocument: previous.spouseDocument,
     spouseRg: previous.spouseRg,
-    sackWeightKg: previous.sackWeightKg,
+    ...grainStandard,
     cultivar: previous.cultivar,
-    maxMoisture: previous.maxMoisture,
-    maxImpurities: previous.maxImpurities,
-    oilContent: previous.oilContent,
     // As lavouras vêm junto: matrícula, livro e comarca não mudam de uma safra
     // para a outra, e são a parte mais cara de digitar da cédula inteira. O
     // que muda é a área plantada, e é por isso que ela continua editável.
     areas: previous.areas,
     // Os AVALISTAS também: quem avaliza um produtor costuma ser o mesmo de uma
     // safra para a outra, e o bloco de qualificação deles é o mais longo do
-    // formulário inteiro.
-    guarantors: previous.guarantors,
-    // O que NÃO vem: `deliveryPlace`. Ele é da NEGOCIAÇÃO, não da pessoa —
+    // formulário inteiro. SÓ A QUALIFICAÇÃO: o id é da linha da outra cédula, e
+    // o SCR dele é uma fotografia com data, como o do emitente.
+    guarantors: previous.guarantors.map(guarantorQualificationOf),
+    // As HIPOTECAS não vêm: o bem dado em garantia é desta negociação, e o
+    // documento dele (a matrícula atualizada) envelhece como o SCR.
+    // O que NÃO vem: o local da entrega. Ele é da NEGOCIAÇÃO, não da pessoa —
     // repeti-lo faria a entrega desta safra herdar em silêncio a praça da
     // anterior, que é exatamente o tipo de campo que ninguém reconfere.
   };

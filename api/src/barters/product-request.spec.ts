@@ -63,6 +63,9 @@ describe('Pedido de produto de fora do Barter', () => {
       BARTER_STATUS.draft,
       BARTER_STATUS.sentToManager,
       BARTER_STATUS.pending,
+      // A DEVOLVIDA COM EXIGÊNCIAS ainda não foi decidida: o comitê vai lê-la
+      // inteira de novo quando ela voltar.
+      BARTER_STATUS.awaitingRequirements,
     ]) {
       expect(productRequestRefusal(barterIn(status))).toBeNull();
     }
@@ -70,6 +73,7 @@ describe('Pedido de produto de fora do Barter', () => {
       BARTER_STATUS.draft,
       BARTER_STATUS.sentToManager,
       BARTER_STATUS.pending,
+      BARTER_STATUS.awaitingRequirements,
     ]);
   });
 

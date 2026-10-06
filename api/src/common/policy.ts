@@ -101,6 +101,20 @@ export const CAPABILITY = {
    */
   bartersReadTeam: 'barters.readTeam',
   /**
+   * Enxergar as permutas COM SEGURO que chegaram à apólice — as aprovadas que
+   * esperam a seguradora e as que já passaram por ela.
+   *
+   * É o escopo da SEGURADORA, e tem um recorte que os outros não têm: além do
+   * trecho da linha (`lineFrom(insure)`), ele exige que a permuta TENHA seguro.
+   * A aprovada sem seguro pula a etapa e vai direto ao faturista — ela nunca foi
+   * trabalho deste posto, e mostrá-la aqui encheria a tela de quem cria apólice
+   * com permutas sobre as quais não há apólice nenhuma a criar.
+   *
+   * Pelo mesmo motivo do faturista, o que está no gerente ou no comitê fica de
+   * fora: negociação em aberto não é assunto de quem segura a lavoura.
+   */
+  bartersReadInsurance: 'barters.readInsurance',
+  /**
    * Enxergar as permutas QUE CHEGARAM AO FATURAMENTO — as aprovadas e as já
    * faturadas.
    *
@@ -206,6 +220,21 @@ export const CAPABILITY = {
    * (`barters/barter-workflow.ts`).
    */
   bartersReview: 'barters.review',
+  /**
+   * INFORMAR A APÓLICE da permuta aprovada com seguro: anexar o documento e
+   * escrever o número dela.
+   *
+   * É da SEGURADORA, e só dela (e do admin, que tem tudo). O número saiu da
+   * cédula, onde o consultor o digitava: ele é o produto do posto que cria a
+   * apólice, como a nota é o produto do faturamento, e enquanto foi um campo do
+   * formulário de outra pessoa a cédula afirmava um seguro que ninguém tinha
+   * conferido contra documento nenhum.
+   *
+   * Arquivo e número andam JUNTOS no mesmo ato, pela mesma razão da nota
+   * fiscal: o número sem a apólice é afirmação sem prova, e a apólice sem o
+   * número é um PDF que a cédula não tem como citar.
+   */
+  bartersInsure: 'barters.insure',
   /**
    * FATURAR a permuta aprovada e ANEXAR as notas fiscais que saíram dela.
    *
@@ -414,15 +443,16 @@ export const CAPABILITIES = Object.values(CAPABILITY) as Capability[];
  * compila até alguém escrever, aqui, o que ele pode — que é exatamente a
  * decisão que não pode passar batida.
  *
- * Os QUATRO POSTOS da linha de produção estão escritos abaixo, um por papel: o
- * gerente dá o parecer técnico, o comitê decide, o faturista fatura e o emissor
- * emite a cédula. Cada um escreve UMA coisa, e nenhum escreve a do outro — é o
- * que faz a etapa ter dono. A ordem em que elas acontecem não está aqui: quem
+ * Os CINCO POSTOS da linha de produção estão escritos abaixo, um por papel: o
+ * gerente dá o parecer técnico, o comitê decide, a seguradora informa a apólice
+ * (só das permutas com seguro), o faturista fatura e o emissor emite a cédula.
+ * Cada um escreve UMA coisa, e nenhum escreve a do outro — é o que faz a etapa
+ * ter dono. A ordem em que elas acontecem não está aqui: quem
  * guarda o caminho é `barters/barter-workflow.ts`, e esta tabela só responde
  * quem pode agir.
  *
  * O ADMIN tem TODAS as capacidades do sistema — é o responsável final, e
- * acumula também as quatro etapas da esteira (parecer, decisão, faturamento,
+ * acumula também as etapas da esteira (parecer, decisão, apólice, faturamento,
  * emissão) além da administração. `CAPABILITIES` é `Object.values(CAPABILITY)`
  * logo acima: uma capacidade nova nasce automaticamente concedida ao admin.
  */
@@ -458,6 +488,19 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     // e-mail entre os integrantes da reunião.
     CAPABILITY.bartersCreditRead,
     CAPABILITY.bartersCreditAttach,
+  ],
+  // A SEGURADORA cria a apólice da permuta aprovada COM SEGURO e a informa —
+  // documento e número. Ela enxerga só o próprio trecho, e só o que tem seguro:
+  // ver `bartersReadInsurance`.
+  //
+  // Ela VÊ R$ (`pricesRead`): a apólice é contratada sobre o valor segurado, e
+  // a taxa por hectare congelada na permuta é o número que ela confere contra a
+  // cotação.
+  [ROLE.insurer]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadInsurance,
+    CAPABILITY.bartersInsure,
+    CAPABILITY.pricesRead,
   ],
   // O FATURISTA fatura, e é só isso — inclusive no que enxerga. Ele alcança o
   // que CHEGOU ao faturamento e nada antes disso: o parecer que o gerente ainda

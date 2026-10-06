@@ -1,6 +1,8 @@
 import {
   BARTER_HOLDER,
   BARTER_STATUS_LABELS,
+  BARTER_STEP_STATE,
+  insuredOf,
   nextActionOf,
   outcomeLabelOf,
   progressOf,
@@ -12,6 +14,7 @@ import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
 import { creditorGaps, forumOf } from './creditor';
 import { pledgeAreaFor } from '../barters/barter-math';
+import { grainCprModelOf } from '../barters/cpr';
 import type {
   AuditLog,
   Barter,
@@ -25,8 +28,10 @@ import type {
   CprArea,
   CprAreaOwner,
   CprGuarantor,
+  CprMortgage,
   Creditor,
   InsuranceRate,
+  Notice,
   ProductClass,
   PriceHistoryEntry,
   Producer,
@@ -279,6 +284,10 @@ function productFields(product: Product, lens: ValueLens) {
     unitPending: product.unitPending,
     requiredPerHa: product.requiredPerHa,
     classId: product.classId,
+    // O MODELO DA CPR só existe no grão: é o padrão com que ELE é recebido. No
+    // insumo as colunas têm o default e não querem dizer nada — mandá-las
+    // sugeriria ao app que insumo tem padrão de recebimento.
+    ...(product.type === 'grain' ? { cprModel: grainCprModelOf(product) } : {}),
   };
 }
 
@@ -626,7 +635,16 @@ function toBarterProgressJson(
     if (!kept || isEarlier(event, kept)) byAction.set(event.action, event);
   }
 
-  return progressOf(barter).map((step) => progressStepJson(step, byAction.get(step.action)));
+  // SÓ A ETAPA CUMPRIDA leva assinatura. Um ato pode ter evento de uma rodada
+  // anterior — o desvio das exigências se repete, e o pedido de alteração
+  // devolve a permuta a rascunho com o encaminhamento antigo gravado —, e
+  // assinar a etapa de AGORA com ele diria que ela já aconteceu.
+  return progressOf(barter).map((step) =>
+    progressStepJson(
+      step,
+      step.state === BARTER_STEP_STATE.done ? byAction.get(step.action) : undefined,
+    ),
+  );
 }
 
 /** A ordem cronológica dos eventos, com o `id` desempatando o mesmo instante. */
@@ -818,6 +836,7 @@ export function toBarterJson(
     productRequests?: BarterProductRequest[];
     invoices?: (BarterInvoice & { file?: BarterFileMeta | null })[];
     creditFiles?: (BarterCreditFile & { file?: BarterFileMeta | null })[];
+    insurancePolicyFile?: BarterFileMeta | null;
   },
   viewer?: Pick<User, 'role'>,
 ) {
@@ -825,6 +844,8 @@ export function toBarterJson(
   return {
     id: barter.id,
     code: barter.code,
+    // O número da CPR, reservado no registro — a permuta o tem antes da cédula.
+    cprNumber: barter.cprNumber,
     // Em qual gestão esta permuta foi fechada — vai no detalhe e no comprovante.
     versionCode: barter.versionCode,
     // A SAFRA DA CULTURA ("Soja 26/27"): a cultura da permuta, fixa desde o
@@ -888,20 +909,19 @@ export function toBarterJson(
     reviewNote: barter.reviewNote,
     reviewedBy: barter.reviewedBy,
     reviewedAt: barter.reviewedAt,
-    // AS EXIGÊNCIAS DO COMITÊ — avalista, garantia real, seguro.
+    // AS EXIGÊNCIAS DO COMITÊ — avalista e hipoteca (`requiresCollateral`),
+    // pedidos antes da decisão (ver `require` no service).
     //
-    // Vão para TODO MUNDO que enxerga a permuta, e não só para quem decidiu:
+    // Vão para TODO MUNDO que enxerga a permuta, e não só para quem as pediu:
     // elas são trabalho para OUTRA pessoa. O consultor precisa levá-las ao
-    // produtor, o faturista precisa saber que a retirada foi condicionada, e o
-    // emissor precisa saber que aquele título espera um avalista antes de ser
-    // assinado. Enquanto isso viveu dentro do texto da decisão, a única maneira
-    // de descobrir era ler o parágrafo até o fim.
+    // produtor — e é por elas que o formulário da cédula dele abre os campos de
+    // avalista e hipoteca —, e o emissor precisa saber que aquele título espera
+    // um avalista antes de ser assinado.
     //
-    // Elas não substituem `reviewNote`: as caixas dizem O QUÊ, e só o texto diz
-    // QUAL — qual matrícula, qual valor segurado, quem se espera como avalista.
+    // O QUAL — quem como avalista, qual imóvel — está no texto do evento
+    // `require`, na linha do tempo.
     requiresGuarantor: barter.requiresGuarantor,
     requiresCollateral: barter.requiresCollateral,
-    requiresInsurance: barter.requiresInsurance,
     // O SEGURO AGRÍCOLA desta permuta: COMO ele chegou (obrigatório, aceito,
     // recusado ou não oferecido), a praça que o precificou e a taxa congelada no
     // registro. `insuranceChoice` vai para todo mundo: "o produtor recusou o
@@ -913,6 +933,22 @@ export function toBarterJson(
     insuranceChoice: barter.insuranceChoice,
     insuranceCity: barter.insuranceCity,
     ...(lens.showsCurrency ? { insuranceRatePerHa: barter.insuranceRatePerHa } : {}),
+    // ELA PASSA PELA SEGURADORA? — resolvido pela máquina de estados
+    // (`insuredOf`), pelo mesmo motivo de `waitingFor`: o app não deveria ter
+    // uma segunda cópia de "quais escolhas levam seguro" para sair de sincronia.
+    insured: insuredOf(barter),
+    // A APÓLICE, informada pela seguradora: o número (o que a cédula cita), o
+    // documento (sem os bytes — o conteúdo se baixa em
+    // `GET /barters/:code/policy-file`) e a assinatura da etapa. Tudo null
+    // enquanto ela não passou pela seguradora, e para sempre na permuta sem
+    // seguro.
+    insurancePolicyNumber: barter.insurancePolicyNumber,
+    insurancePolicyFile: barter.insurancePolicyFile
+      ? toBarterFileJson(barter.insurancePolicyFile)
+      : null,
+    insuredBy: barter.insuredBy,
+    insuredAt: barter.insuredAt,
+    insuranceNote: barter.insuranceNote,
     // AS PEÇAS DA ANÁLISE DE CRÉDITO — a consulta ao Serasa, o endividamento do
     // produtor dentro da cooperativa.
     //
@@ -1041,7 +1077,8 @@ export function toCprJson(desk: {
   cpr:
     | (BarterCpr & {
         areas: (CprArea & { owners: CprAreaOwner[] })[];
-        guarantors: CprGuarantor[];
+        guarantors: (CprGuarantor & { scrFile?: BarterFileMeta | null })[];
+        mortgages: (CprMortgage & { documentFile?: BarterFileMeta | null })[];
         scrFile?: BarterFileMeta | null;
         signedFile?: BarterFileMeta | null;
         registryFile?: BarterFileMeta | null;
@@ -1065,8 +1102,8 @@ export function toCprJson(desk: {
     // O QUE TRAVA O ENCAMINHAMENTO, separado do resto pelo mesmo motivo de
     // `creditorGaps`: é o recorte de um posto só. A tela do detalhe avisa o
     // consultor com esta lista antes de ele tentar encaminhar — mostrar `gaps`
-    // ali mandaria ele procurar o número da CPR, que é do emissor, e a nota
-    // fiscal, que é do faturista, num formulário onde nenhum dos dois existe.
+    // ali mandaria ele procurar a nota fiscal, que é do faturista, e o
+    // vencimento, que é da safra, num formulário onde nenhum dos dois existe.
     consultantGaps: desk.consultantGaps,
     // O PLACAR DO PENHOR — exigido, penhorado, faltando. Ele acompanha a lista de
     // pendências sem se confundir com ela: a lacuna some quando a área fecha, e
@@ -1090,14 +1127,14 @@ export function toCprJson(desk: {
 function toCprDraftJson(
   cpr: BarterCpr & {
     areas: (CprArea & { owners: CprAreaOwner[] })[];
-    guarantors: CprGuarantor[];
+    guarantors: (CprGuarantor & { scrFile?: BarterFileMeta | null })[];
+    mortgages: (CprMortgage & { documentFile?: BarterFileMeta | null })[];
     scrFile?: BarterFileMeta | null;
     signedFile?: BarterFileMeta | null;
     registryFile?: BarterFileMeta | null;
   },
 ) {
   return {
-    number: cpr.number,
     issuedAt: cpr.issuedAt,
     dueDate: cpr.dueDate,
     emitterNationality: cpr.emitterNationality,
@@ -1114,8 +1151,8 @@ function toCprDraftJson(
     emitterMotherName: cpr.emitterMotherName,
     emitterEmail: cpr.emitterEmail,
     // O local da entrega SAI (cláusula V, "d"), e por isso é cobrado em `gaps`.
+    deliveryUnitId: cpr.deliveryUnitId,
     deliveryPlace: cpr.deliveryPlace,
-    mortgages: cpr.mortgages,
     spouseName: cpr.spouseName,
     spouseNationality: cpr.spouseNationality,
     spouseProfession: cpr.spouseProfession,
@@ -1137,7 +1174,8 @@ function toCprDraftJson(
     // `cprRegisteredAt`), que é onde o andamento mora.
     signedFile: cpr.signedFile ? toBarterFileJson(cpr.signedFile) : null,
     registryFile: cpr.registryFile ? toBarterFileJson(cpr.registryFile) : null,
-    insurancePolicy: cpr.insurancePolicy,
+    // A APÓLICE não está mais aqui: o número é da seguradora e sai em
+    // `known.insurancePolicy`, ao lado das notas — leitura, como elas.
     // Quem mexeu por último e quando. É o par que uma cédula editável precisa
     // mostrar: dois faturistas dividem a fila, e "isto aqui está como eu deixei?"
     // é a primeira pergunta de quem reabre um rascunho.
@@ -1153,10 +1191,11 @@ function toCprDraftJson(
       registryDistrict: area.registryDistrict,
       owners: area.owners.map((owner) => ({ name: owner.name, document: owner.document })),
     })),
-    // Os AVALISTAS vão inteiros. Eles não saem no documento por enquanto (o
-    // modelo não tem cláusula de aval), mas a tela os edita, e o que ela edita
-    // ela precisa receber de volta.
+    // Os AVALISTAS vão inteiros, com o ID — é ele que a tela devolve para o
+    // SCR anexado continuar no mesmo avalista (ver `syncGuarantors`) — e o SCR
+    // de cada um, sem os bytes.
     guarantors: cpr.guarantors.map((guarantor) => ({
+      id: guarantor.id,
       name: guarantor.name,
       document: guarantor.document,
       rg: guarantor.rg,
@@ -1175,7 +1214,36 @@ function toCprDraftJson(
       spouseRg: guarantor.spouseRg,
       spouseNationality: guarantor.spouseNationality,
       spouseProfession: guarantor.spouseProfession,
+      scrFile: guarantor.scrFile ? toBarterFileJson(guarantor.scrFile) : null,
     })),
+    // OS BENS EM HIPOTECA, com o id pelo mesmo motivo e o documento de cada um.
+    mortgages: cpr.mortgages.map((mortgage) => ({
+      id: mortgage.id,
+      description: mortgage.description,
+      registryNumber: mortgage.registryNumber,
+      registryDistrict: mortgage.registryDistrict,
+      city: mortgage.city,
+      ownerName: mortgage.ownerName,
+      ownerDocument: mortgage.ownerDocument,
+      appraisedValue: mortgage.appraisedValue,
+      documentFile: mortgage.documentFile ? toBarterFileJson(mortgage.documentFile) : null,
+    })),
+  };
+}
+
+/**
+ * UM AVISO — o que aconteceu, em que permuta, e quando.
+ *
+ * `barterCode` vai junto, e não só o id: é por ele que a tela abre a permuta, e
+ * é ele que continua legível se a permuta for excluída.
+ */
+export function toNoticeJson(notice: Notice) {
+  return {
+    id: notice.id,
+    barterCode: notice.barterCode,
+    message: notice.message,
+    createdAt: notice.createdAt,
+    readAt: notice.readAt,
   };
 }
 

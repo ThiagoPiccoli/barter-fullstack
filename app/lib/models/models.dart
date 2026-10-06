@@ -15,6 +15,13 @@ enum UserRole {
   admin('admin', 'Administrador'),
   manager('manager', 'Gerente'),
   committee('committee', 'Comitê'),
+
+  /// SEGURADORA — o setor da empresa que cuida dos seguros: cria a apólice da
+  /// permuta aprovada COM SEGURO, anexa o documento e informa o número, antes de
+  /// ela chegar ao faturista. A permuta sem seguro não passa por ela.
+  ///
+  /// Não é a companhia de seguros: é um posto interno, com várias pessoas.
+  insurer('insurer', 'Seguradora'),
   biller('biller', 'Faturista'),
 
   /// EMISSOR — o posto que vem depois do faturamento: ele confere a cédula que
@@ -66,6 +73,13 @@ class Capability {
 
   /// DECIDIR a permuta: aprovar ou negar (comitê).
   static const bartersReview = 'barters.review';
+
+  /// INFORMAR A APÓLICE da permuta aprovada com seguro — o documento e o
+  /// número, no mesmo ato (seguradora).
+  ///
+  /// O número saiu da cédula, onde o consultor o digitava: ele é o produto de
+  /// quem cria a apólice, e a cédula o lê da permuta.
+  static const bartersInsure = 'barters.insure';
 
   /// FATURAR a permuta aprovada e ANEXAR as notas fiscais dela (faturista).
   ///
@@ -165,6 +179,10 @@ class Capability {
   /// Enxergar as permutas do PRÓPRIO TIME — o escopo do gerente, entre "só as
   /// minhas" e "todas". É por ela que as telas dizem "do seu time".
   static const bartersReadTeam = 'barters.readTeam';
+
+  /// Enxergar só as permutas COM SEGURO que chegaram à apólice — o escopo da
+  /// seguradora. A aprovada sem seguro pula a mesa dela e nunca aparece aqui.
+  static const bartersReadInsurance = 'barters.readInsurance';
 
   /// Enxergar só o que CHEGOU AO FATURAMENTO — o escopo do faturista.
   ///
@@ -485,7 +503,9 @@ enum ProductType { grain, input }
 ///
 ///     draft → sentToManager → pending → approved             → invoiced
 ///  (consultor) (gerente)     (comitê)   approvedWithConditions (faturista)
-///                                ↘ denied
+///                              ↑  ↓  ↘ denied
+///                    awaitingRequirements
+///                         (consultor)
 ///
 /// Espelham `api/src/barters/barter-workflow.ts`, que é quem decide o caminho.
 /// `draft` é o RASCUNHO do consultor: ela existe, os valores já estão
@@ -494,10 +514,20 @@ enum ProductType { grain, input }
 /// era do admin, e ficou porque descreve o estado, não o cargo de quem decide.
 /// `approvedWithConditions` é a aprovação COM RESSALVA: mesma fila do faturista,
 /// e uma exigência escrita junto (ver [BarterModel.reviewNote]).
+/// `awaitingRequirements` é a permuta DEVOLVIDA AO CONSULTOR com exigências do
+/// comitê (avalista, hipoteca): cumpridas, ela volta direto ao comitê, sem
+/// passar de novo pelo gerente.
+/// `awaitingPolicy` e `awaitingPolicyWithConditions` são as aprovadas COM
+/// SEGURO na mesa da SEGURADORA, esperando a apólice. A apólice devolve cada
+/// uma ao seu par — `approved` e `approvedWithConditions` —, e só então ela
+/// chega ao faturista. A permuta sem seguro pula este degrau.
 enum BarterStatus {
   draft,
   sentToManager,
   pending,
+  awaitingRequirements,
+  awaitingPolicy,
+  awaitingPolicyWithConditions,
   approved,
   approvedWithConditions,
   denied,
@@ -629,6 +659,12 @@ class BarterEventModel {
         if (toStatus == BarterStatus.approved) return 'Aprovada pelo comitê';
         if (toStatus == BarterStatus.denied) return 'Negada pelo comitê';
         return 'Decisão do comitê';
+      // O DESVIO DAS EXIGÊNCIAS: o comitê pede avalista, hipoteca ou seguro, e
+      // o consultor devolve quando cumpriu. O texto do evento diz o quê.
+      case 'require':
+        return 'Exigências do comitê: voltou ao consultor';
+      case 'fulfill':
+        return 'Exigências cumpridas: voltou ao comitê';
       case 'invoice':
         return 'Faturada';
       // O DESVIO: o pedido de alteração e a decisão do admin sobre ele. Três
@@ -989,6 +1025,10 @@ class BarterProductRequest {
 class BarterModel {
   final String id;
 
+  /// O NÚMERO DA CPR (ex.: CPR-2026-001) — reservado pelo servidor no registro,
+  /// antes de existir rascunho da cédula. Vazio só em respostas antigas.
+  final String cprNumber;
+
   /// Versão do Barter em que esta permuta foi fechada (ex.: "S2026.02").
   /// Vazio nas permutas anteriores ao lançamento por versões.
   final String versionCode;
@@ -1099,7 +1139,10 @@ class BarterModel {
   final String? reviewNote;
   final String? reviewedBy;
 
-  /// AS EXIGÊNCIAS DO COMITÊ: avalista, garantia real e seguro.
+  /// AS EXIGÊNCIAS DO COMITÊ: avalista e hipoteca ([requiresCollateral]),
+  /// pedidas ANTES da decisão — marcá-las devolve a permuta ao
+  /// consultor ([BarterStatus.awaitingRequirements]). Cada uma abre, no
+  /// formulário da cédula, o bloco que ela exige.
   ///
   /// Elas viviam DENTRO de [reviewNote], em prosa — "com aval", "exigir aval do
   /// cônjuge", "condicionada a garantia real" —, e isso bastava para quem lia a
@@ -1107,8 +1150,8 @@ class BarterModel {
   /// pendente de aval, e a exigência perdida no meio do parágrafo não era
   /// esquecida por ninguém em particular.
   ///
-  /// Elas NÃO substituem o texto: as caixas dizem O QUÊ, e só [reviewNote] diz
-  /// QUAL — qual matrícula, qual valor segurado, quem se espera como avalista.
+  /// Elas NÃO substituem o texto: as caixas dizem O QUÊ, e só o texto do
+  /// pedido diz QUAL — ver [requirementsNote].
   ///
   /// Chegam a todo mundo que enxerga a permuta, e não só a quem decidiu: são
   /// trabalho para OUTRA pessoa — o consultor as leva ao produtor, o faturista
@@ -1116,7 +1159,6 @@ class BarterModel {
   /// espera um avalista.
   final bool requiresGuarantor;
   final bool requiresCollateral;
-  final bool requiresInsurance;
 
   /// O SEGURO AGRÍCOLA desta permuta: COMO ele chegou (ver [InsuranceChoice]),
   /// a praça que o precificou e a taxa (R$/ha) congeladas no registro.
@@ -1128,6 +1170,20 @@ class BarterModel {
   final InsuranceChoice insuranceChoice;
   final String insuranceCity;
   final double? insuranceRatePerHa;
+
+  /// Esta permuta PASSA PELA SEGURADORA? — resolvido pelo servidor, a partir
+  /// de [insuranceChoice]. É o que diz se a checklist dela tem a etapa da
+  /// apólice, e se a aprovação cai na seguradora ou direto no faturista.
+  final bool insured;
+
+  /// A APÓLICE, informada pela SEGURADORA: o número (o que a cédula cita), o
+  /// documento anexado e quem os informou. Tudo null antes da etapa dela — e
+  /// para sempre na permuta sem seguro.
+  final String? insurancePolicyNumber;
+  final BarterFileModel? insurancePolicyFile;
+  final String? insuredBy;
+  final DateTime? insuredAt;
+  final String? insuranceNote;
 
   /// AS PEÇAS DA ANÁLISE DE CRÉDITO que o comitê juntou — a consulta ao Serasa,
   /// o endividamento do produtor dentro da cooperativa.
@@ -1229,6 +1285,7 @@ class BarterModel {
 
   const BarterModel({
     required this.id,
+    this.cprNumber = '',
     this.versionCode = '',
     required this.consultantId,
     required this.consultantName,
@@ -1261,10 +1318,15 @@ class BarterModel {
     this.reviewedBy,
     this.requiresGuarantor = false,
     this.requiresCollateral = false,
-    this.requiresInsurance = false,
     this.insuranceChoice = InsuranceChoice.none,
     this.insuranceCity = '',
     this.insuranceRatePerHa,
+    this.insured = false,
+    this.insurancePolicyNumber,
+    this.insurancePolicyFile,
+    this.insuredBy,
+    this.insuredAt,
+    this.insuranceNote,
     this.creditFiles,
     this.invoicedBy,
     this.invoicedAt,
@@ -1298,6 +1360,7 @@ class BarterModel {
         .cast<Map<String, dynamic>>();
     return BarterModel(
       id: json['code'] as String,
+      cprNumber: (json['cprNumber'] ?? '') as String,
       versionCode: (json['versionCode'] ?? '') as String,
       consultantId: _asId(json['consultantId']),
       consultantName: json['consultantName'] as String,
@@ -1336,10 +1399,18 @@ class BarterModel {
       reviewedBy: json['reviewedBy'] as String?,
       requiresGuarantor: json['requiresGuarantor'] == true,
       requiresCollateral: json['requiresCollateral'] == true,
-      requiresInsurance: json['requiresInsurance'] == true,
       insuranceChoice: InsuranceChoice.fromApi(json['insuranceChoice']),
       insuranceCity: (json['insuranceCity'] ?? '') as String,
       insuranceRatePerHa: _asDoubleOrNull(json['insuranceRatePerHa']),
+      insured: json['insured'] == true,
+      insurancePolicyNumber: json['insurancePolicyNumber'] as String?,
+      insurancePolicyFile: json['insurancePolicyFile'] == null
+          ? null
+          : BarterFileModel.fromJson(
+              (json['insurancePolicyFile'] as Map).cast<String, dynamic>()),
+      insuredBy: json['insuredBy'] as String?,
+      insuredAt: _asDateOrNull(json['insuredAt']),
+      insuranceNote: json['insuranceNote'] as String?,
       // `null` quando o campo NÃO VEIO (quem não pode ler o dossiê), e lista
       // quando veio — inclusive vazia, que aí significa "não há peça nenhuma".
       creditFiles: json['creditFiles'] == null
@@ -1546,17 +1617,53 @@ class BarterModel {
   /// Está na mesa do COMITÊ, esperando ser aprovada ou negada.
   bool get awaitsCommittee => status == BarterStatus.pending;
 
+  /// Foi DEVOLVIDA ao consultor com exigências do comitê, e espera que ele as
+  /// cumpra — o avalista, a hipoteca, a apólice, na cédula.
+  bool get awaitsRequirements => status == BarterStatus.awaitingRequirements;
+
+  /// Espera ESTE consultor cumprir as exigências? Mesma conferência do servidor
+  /// (o escopo dele são as próprias permutas) — aqui só para a tela não
+  /// oferecer um botão que levaria 403.
+  bool awaitsRequirementsFrom(String? userId) =>
+      userId != null && consultantId == userId && awaitsRequirements;
+
+  /// O TEXTO do último pedido do comitê — quem como avalista, qual imóvel. Ele
+  /// vive na linha do tempo (o pedido não é decisão, e não escreve
+  /// nos campos dela), e por isso só vem no detalhe. Null na listagem e na
+  /// permuta de que nada foi pedido.
+  String? get requirementsNote {
+    BarterEventModel? last;
+    for (final event in events) {
+      if (event.action != 'require') continue;
+      if (last == null || event.at.isAfter(last.at)) last = event;
+    }
+    return last?.note;
+  }
+
+  /// Foi aprovada COM SEGURO e espera a APÓLICE — a fila da seguradora.
+  ///
+  /// As DUAS aprovações contam, como na fila do faturista: a ressalva continua
+  /// sendo ressalva enquanto a permuta está com a seguradora.
+  bool get awaitsPolicy =>
+      status == BarterStatus.awaitingPolicy ||
+      status == BarterStatus.awaitingPolicyWithConditions;
+
+  /// A apólice já foi informada pela seguradora.
+  bool get hasPolicy => insurancePolicyNumber != null && insurancePolicyNumber!.isNotEmpty;
+
   /// Foi aprovada e espera o FATURAMENTO — a fila do faturista.
   ///
-  /// As DUAS aprovações contam: a ressalva é uma condição do negócio (garantia,
-  /// seguro, aval), não um portão do fluxo, e a permuta com ressalva está na
-  /// mesma fila. Ler só `approved` faria ela sumir da tela de quem tem de
+  /// As DUAS aprovações contam: a ressalva é uma condição do negócio, não um
+  /// portão do fluxo, e a permuta com ressalva está na mesma fila. Ler só `approved` faria ela sumir da tela de quem tem de
   /// faturá-la.
   bool get awaitsInvoice =>
       status == BarterStatus.approved || status == BarterStatus.approvedWithConditions;
 
-  /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote].
-  bool get hasConditions => status == BarterStatus.approvedWithConditions;
+  /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote]. Vale
+  /// também enquanto ela espera a apólice.
+  bool get hasConditions =>
+      status == BarterStatus.approvedWithConditions ||
+      status == BarterStatus.awaitingPolicyWithConditions;
 
   /// AS EXIGÊNCIAS DO COMITÊ, por extenso e na ordem em que a reunião as pensa:
   /// quem se obriga junto, o que garante, e o que protege a lavoura.
@@ -1565,8 +1672,7 @@ class BarterModel {
   /// limpa quanto para a permuta que ainda não foi decidida.
   List<String> get requirements => [
         if (requiresGuarantor) 'Avalista',
-        if (requiresCollateral) 'Garantia real',
-        if (requiresInsurance) 'Seguro',
+        if (requiresCollateral) 'Hipoteca',
       ];
 
   /// Esta permuta CARREGA SEGURO — a linha que a empresa adiantou e as sacas
@@ -1620,7 +1726,7 @@ class BarterModel {
   /// `status == approved`: faturar não desfaz a aprovação. Enquanto os totais
   /// olhavam um estado só, a permuta sumia da conta no dia em que a nota saía —
   /// o negócio mais consolidado que existe fazia a barra andar para trás.
-  bool get wasApproved => awaitsInvoice || wasInvoiced;
+  bool get wasApproved => awaitsPolicy || awaitsInvoice || wasInvoiced;
 
   /// A decisão do comitê já foi tomada? (aprovada, negada ou já faturada).
   bool get hasDecision => reviewedBy != null && reviewedBy!.isNotEmpty;
@@ -1700,7 +1806,10 @@ class BarterModel {
   bool canRequestProductBy(String? userId) =>
       userId != null &&
       consultantId == userId &&
-      (isDraft || status == BarterStatus.sentToManager || status == BarterStatus.pending);
+      (isDraft ||
+          status == BarterStatus.sentToManager ||
+          status == BarterStatus.pending ||
+          status == BarterStatus.awaitingRequirements);
 
   /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
   /// — repetida aqui só para a tela não oferecer um botão que levaria 403.
@@ -1964,6 +2073,12 @@ String barterStatusLabel(BarterStatus status) {
       return 'No gerente';
     case BarterStatus.pending:
       return 'No comitê';
+    case BarterStatus.awaitingRequirements:
+      return 'Exigências do comitê, com o consultor';
+    case BarterStatus.awaitingPolicy:
+      return 'Aprovada, aguardando a apólice';
+    case BarterStatus.awaitingPolicyWithConditions:
+      return 'Aprovada com ressalva, aguardando a apólice';
     case BarterStatus.approved:
       return 'Aprovada, a faturar';
     case BarterStatus.approvedWithConditions:
@@ -2035,6 +2150,9 @@ class ProductModel {
   /// de itens pedindo revisão do que uma unidade inventada no comprovante.
   final bool unitPending;
 
+  /// O MODELO DA CPR — só o grão tem. Null no insumo.
+  final GrainCprModel? cprModel;
+
   const ProductModel({
     required this.id,
     required this.name,
@@ -2048,6 +2166,7 @@ class ProductModel {
     this.classId,
     this.sku,
     this.unitPending = false,
+    this.cprModel,
   });
 
   /// O item atende a uma busca por nome OU por código.
@@ -2095,7 +2214,66 @@ class ProductModel {
       requiredPerHa: _asDouble(json['requiredPerHa']),
       classId: json['classId'] == null ? null : _asId(json['classId']),
       sku: json['sku'] as String?,
+      cprModel: json['cprModel'] == null
+          ? null
+          : GrainCprModel.fromJson((json['cprModel'] as Map).cast<String, dynamic>()),
     );
+  }
+}
+
+/// O MODELO DA CPR de um grão — o padrão com que ele é recebido (cláusula V,
+/// "c") e o peso da saca que converte sacas em quilos.
+///
+/// É o PONTO DE PARTIDA da cédula: a CPR nova nasce com estes números, e a
+/// cédula guarda os dela. Mudar o modelo não reescreve cédula já preenchida.
+///
+/// Zero nos percentuais é "não definido", como na cédula — uma umidade máxima
+/// de 0% recusaria a colheita inteira.
+class GrainCprModel {
+  final double sackWeightKg;
+  final double maxMoisture;
+  final double maxImpurities;
+  final double oilContent;
+
+  const GrainCprModel({
+    this.sackWeightKg = 60,
+    this.maxMoisture = 0,
+    this.maxImpurities = 0,
+    this.oilContent = 0,
+  });
+
+  factory GrainCprModel.fromJson(Map<String, dynamic> json) => GrainCprModel(
+        sackWeightKg: _asDouble(json['sackWeightKg']) > 0 ? _asDouble(json['sackWeightKg']) : 60,
+        maxMoisture: _asDouble(json['maxMoisture']),
+        maxImpurities: _asDouble(json['maxImpurities']),
+        oilContent: _asDouble(json['oilContent']),
+      );
+
+  /// Os campos do `PUT /products/:id` — o modelo mora no cadastro do grão.
+  Map<String, dynamic> toProductFields() => {
+        'cprSackWeightKg': sackWeightKg,
+        'cprMaxMoisture': maxMoisture,
+        'cprMaxImpurities': maxImpurities,
+        'cprOilContent': oilContent,
+      };
+
+  /// Quantos números do padrão ainda estão por definir — o que a aba de grãos
+  /// mostra pedindo revisão. O peso da saca não conta: ele tem padrão de
+  /// mercado e nunca é zero.
+  int get undefinedCount => [maxMoisture, maxImpurities, oilContent].where((v) => v == 0).length;
+
+  /// "Saca de 60 kg · umidade 14% · impurezas 1% · óleo a definir" — o modelo
+  /// numa linha, como a aba de grãos o lista.
+  String get summary {
+    String number(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString().replaceAll('.', ',');
+    String percent(String label, double v) => v == 0 ? '$label a definir' : '$label ${number(v)}%';
+    return [
+      'Saca de ${number(sackWeightKg)} kg',
+      percent('umidade', maxMoisture),
+      percent('impurezas', maxImpurities),
+      percent('óleo', oilContent),
+    ].join(' · ');
   }
 }
 
@@ -2637,5 +2815,38 @@ class PriceHistoryEntry {
         price: _asDouble(json['price']),
         changedAt: _asDate(json['changedAt']),
         changedBy: json['changedBy'] as String,
+      );
+}
+
+/// UM AVISO — algo que aconteceu numa permuta que esta pessoa acompanha, e que
+/// não pede ação dela. Ver `Notice` na API.
+///
+/// Nasceu para o GERENTE no desvio das exigências: a permuta do time dele volta
+/// ao consultor e depois direto ao comitê, sem passar pela mesa dele — e ele
+/// precisa saber disso sem ter de procurar.
+///
+/// O texto vem pronto do servidor, como o rótulo do estado: a frase é do
+/// domínio, e um aviso novo chega escrito certo no app já instalado.
+class NoticeModel {
+  final int id;
+
+  /// A permuta de que ele fala — é por ela que a tela abre o detalhe. Vazio
+  /// quando a permuta já não existe.
+  final String barterCode;
+  final String message;
+  final DateTime createdAt;
+
+  const NoticeModel({
+    required this.id,
+    required this.barterCode,
+    required this.message,
+    required this.createdAt,
+  });
+
+  factory NoticeModel.fromJson(Map<String, dynamic> json) => NoticeModel(
+        id: (json['id'] as num).toInt(),
+        barterCode: (json['barterCode'] ?? '') as String,
+        message: (json['message'] ?? '') as String,
+        createdAt: _asDate(json['createdAt']),
       );
 }

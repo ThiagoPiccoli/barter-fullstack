@@ -262,7 +262,13 @@ class BarterPdf {
       case BarterStatus.approvedWithConditions:
         color = _c(AppColors.approvedWithConditionsBg);
         break;
+      case BarterStatus.awaitingPolicy:
+      case BarterStatus.awaitingPolicyWithConditions:
+        color = _c(AppColors.atInsurerBg);
+        break;
+      // A devolvida com exigências está com o consultor, como o rascunho.
       case BarterStatus.draft:
+      case BarterStatus.awaitingRequirements:
         color = _c(AppColors.draftBg);
         break;
       // O trecho da CÉDULA divide a cor do faturamento — ver [StatusBadge].

@@ -89,10 +89,10 @@ class CprDocx {
     });
   }
 
-  /// O nome do arquivo, a partir do número da cédula — ou do código da permuta
-  /// enquanto ela ainda não tem número.
+  /// O nome do arquivo, a partir do número da cédula — ou do código da permuta,
+  /// se o servidor não o mandar.
   static String filename(CprDesk desk) {
-    final numero = desk.cpr?.number.trim() ?? '';
+    final numero = desk.known.cprNumber.trim();
     final base = numero.isEmpty ? desk.known.barterCode : numero;
     return base.toLowerCase().replaceAll(RegExp(r'[^a-z0-9\-]+'), '-');
   }

@@ -548,6 +548,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
   Future<ProvisionedConsultant> _create(UserModel draft) => switch (widget.role) {
         UserRole.consultant => AppData.createConsultant(draft),
         UserRole.manager => AppData.createManager(draft),
+        UserRole.insurer => AppData.createInsurer(draft),
         UserRole.biller => AppData.createBiller(draft),
         UserRole.emitter => AppData.createEmitter(draft),
         UserRole.committee => AppData.createCommittee(draft),
@@ -557,6 +558,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
   Future<UserModel> _update(UserModel draft) => switch (widget.role) {
         UserRole.consultant => AppData.updateConsultant(draft),
         UserRole.manager => AppData.updateManager(draft),
+        UserRole.insurer => AppData.updateInsurer(draft),
         UserRole.biller => AppData.updateBiller(draft),
         UserRole.emitter => AppData.updateEmitter(draft),
         UserRole.committee => AppData.updateCommittee(draft),
@@ -580,6 +582,12 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               'por quem participa. É por ele que se aprova ou nega a permuta depois do '
               'parecer do gerente, e a decisão sai assinada pelo comitê. A ata (quem '
               'estava, o que foi acordado) vai na observação da decisão.',
+        UserRole.insurer =>
+          'A seguradora é o setor que cuida dos seguros: quando uma permuta aprovada pelo '
+              'comitê tem seguro (obrigatório, ou opcional aceito pelo produtor), ela cai '
+              'aqui antes do faturista, e a pessoa anexa a apólice e informa o número — o '
+              'que a cédula vai citar. Sem seguro, a permuta vai direto ao faturista. Cada '
+              'pessoa tem o seu acesso, e quem informou cada apólice fica registrado.',
         UserRole.biller =>
           'O faturista fatura o que o comitê aprovou e anexa as notas fiscais da permuta '
               '— são várias, porque a retirada sai em mais de um carregamento. A fila dele '
@@ -592,7 +600,7 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               'pé a CPR está. Sem um emissor cadastrado, toda permuta faturada para aí.',
         UserRole.admin =>
           'O administrador é responsável pelo sistema e pode tudo: cadastros, preços, '
-              'e todas as etapas da permuta (parecer, decisão, faturamento e emissão). '
+              'e todas as etapas da permuta (parecer, decisão, apólice, faturamento e emissão). '
               'Ninguém exclui a própria conta, e o último administrador não pode ser excluído.',
       };
 

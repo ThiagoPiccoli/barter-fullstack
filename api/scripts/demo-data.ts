@@ -36,6 +36,7 @@ const EMAIL = {
   beatriz: 'gerente@agrobarter.com.br',
   gustavo: 'gerente.sul@agrobarter.com.br',
   comite: 'comite@agrobarter.com.br',
+  seguradora: 'seguradora@agrobarter.com.br',
   faturista: 'faturista@agrobarter.com.br',
   emissor: 'emissor@agrobarter.com.br',
 } as const;
@@ -133,6 +134,8 @@ interface Season {
 interface Barter {
   code: string;
   status: string;
+  /** Passa pela seguradora? — resolvido pelo servidor (`insuredOf`). */
+  insured: boolean;
 }
 
 const iso = (date: string) => new Date(`${date}T12:00:00.000Z`).toISOString();
@@ -268,6 +271,8 @@ async function main() {
     | 'draft'
     | 'sentToManager'
     | 'pending'
+    | 'awaitingRequirements'
+    | 'awaitingPolicy'
     | 'approved'
     | 'approvedWithConditions'
     | 'invoiced'
@@ -278,16 +283,24 @@ async function main() {
     'draft',
     'sentToManager',
     'pending',
+    // A MESA DA SEGURADORA: só as permutas COM seguro param aqui. As sem seguro
+    // passam por este degrau sem ato nenhum — a decisão as leva ao faturista.
+    'awaitingPolicy',
     'approved',
     'invoiced',
     'cprIssued',
     'cprSigned',
     'cprRegistered',
   ];
+  // Os dois DESFECHOS que dividem degrau com outro estado contam como ele: a
+  // ressalva é uma aprovação, e a devolvida com exigências ainda está no comitê.
+  const SAME_STAGE: Partial<Record<Stop, Stop>> = {
+    approvedWithConditions: 'approved',
+    awaitingRequirements: 'pending',
+  };
   const reaches = (stop: Stop, step: Stop) =>
-    ORDER.indexOf(stop === 'approvedWithConditions' ? 'approved' : stop) >= ORDER.indexOf(step);
+    ORDER.indexOf(SAME_STAGE[stop] ?? stop) >= ORDER.indexOf(step);
 
-  let cprNumber = 30;
   let registry = 21000;
 
   /** A CÉDULA preenchida pelo consultor — o que o encaminhamento exige. */
@@ -304,7 +317,8 @@ async function main() {
       emitterAddress: 'Estrada Rural',
       emitterAddressNumber: `km ${registry % 40}`,
       emitterCity: p.city,
-      deliveryPlace: 'Unidade de recebimento da cooperativa',
+      // O local da entrega é uma FILIAL cadastrada — a primeira da lista.
+      deliveryUnitId: units[0].id,
       cultivar: 'Cultivar recomendada da região',
       maxMoisture: 14,
       maxImpurities: 1,
@@ -326,6 +340,73 @@ async function main() {
     await upload(who, 'PUT', `/barters/${code}/cpr/scr`, 'scr.pdf');
   };
 
+  /** O que o comitê pode exigir antes de decidir — ver `RequireBarterDto`. */
+  interface Requirements {
+    requiresGuarantor?: boolean;
+    requiresCollateral?: boolean;
+    note: string;
+  }
+
+  /**
+   * O consultor traz para a cédula o que o comitê exigiu — e os ANEXOS: o SCR
+   * de cada avalista e o documento de cada bem em hipoteca, que sobem pelos ids
+   * que a gravação devolve.
+   */
+  const fillRequirements = async (who: Who, code: string, asked: Requirements) => {
+    const desk = await call<{
+      cpr: { guarantors: { id: number }[]; mortgages: { id: number }[] };
+    }>(who, 'PUT', `/barters/${code}/cpr`, {
+      ...(asked.requiresGuarantor
+        ? {
+            guarantors: [
+              {
+                name: 'Rogério Tavares',
+                document: '333.444.555-66',
+                rg: '7.654.321-0',
+                nationality: 'brasileiro',
+                profession: 'empresário',
+                maritalStatus: 'solteiro',
+                address: 'Avenida Brasil',
+                addressNumber: '1500',
+                city: 'Maringá/PR',
+              },
+            ],
+          }
+        : {}),
+      ...(asked.requiresCollateral
+        ? {
+            mortgages: [
+              {
+                description: 'Imóvel rural — sede da fazenda, 40 ha',
+                registryNumber: String(registry++),
+                registryDistrict: 'Maringá/PR',
+                city: 'Maringá/PR',
+                ownerName: 'Joaquim Tavares',
+                ownerDocument: '111.222.333-44',
+                appraisedValue: 2400000,
+              },
+            ],
+          }
+        : {}),
+    });
+    for (const guarantor of desk.cpr.guarantors) {
+      await upload(
+        who,
+        'PUT',
+        `/barters/${code}/cpr/guarantors/${guarantor.id}/scr`,
+        'scr-aval.pdf',
+      );
+    }
+    for (const mortgage of desk.cpr.mortgages) {
+      await upload(
+        who,
+        'PUT',
+        `/barters/${code}/cpr/mortgages/${mortgage.id}/document`,
+        'matricula.pdf',
+      );
+    }
+  };
+
   interface Spec {
     who: Who;
     producer: string;
@@ -338,6 +419,8 @@ async function main() {
     note: string;
     managerNote?: string;
     reviewNote?: string;
+    /** O comitê exige isto antes de decidir — e a permuta volta ao consultor. */
+    requirements?: Requirements;
   }
 
   const created: { code: string; label: string }[] = [];
@@ -374,14 +457,30 @@ async function main() {
         note: spec.managerNote ?? 'Área conferida, estoque disponível na unidade de retirada.',
       });
     }
-    if (reaches(spec.stop, 'approved')) {
+    // O DESVIO DAS EXIGÊNCIAS: o comitê pede, o consultor traz e devolve — e a
+    // permuta volta direto ao comitê, sem passar de novo pelo gerente.
+    if (spec.requirements && reaches(spec.stop, 'pending')) {
+      await call('comite', 'POST', `/barters/${code}/requirements`, spec.requirements);
+      if (spec.stop !== 'awaitingRequirements') {
+        await fillRequirements(spec.who, code, spec.requirements);
+        await call(spec.who, 'POST', `/barters/${code}/requirements/fulfill`, {});
+      }
+    }
+    if (reaches(spec.stop, 'awaitingPolicy')) {
       const withConditions = spec.stop === 'approvedWithConditions';
       await call('comite', 'POST', `/barters/${code}/review`, {
         status: withConditions ? 'approvedWithConditions' : 'approved',
         ...(spec.reviewNote || withConditions
-          ? { note: spec.reviewNote ?? 'Aprovada com aval do cônjuge antes da retirada.' }
+          ? { note: spec.reviewNote ?? 'Retirada só depois da confirmação do plantio.' }
           : {}),
-        ...(withConditions ? { requiresGuarantor: true } : {}),
+      });
+    }
+    // A APÓLICE: a seguradora anexa o documento e informa o número — só nas
+    // permutas com seguro, e só quando a demonstração quer passar da mesa dela.
+    if (barter.insured && reaches(spec.stop, 'approved')) {
+      await upload('seguradora', 'POST', `/barters/${code}/insure`, 'apolice.pdf', {
+        policyNumber: `AP-2027-${registry++}`,
+        note: 'Cobertura de granizo, seca e geada.',
       });
     }
     if (reaches(spec.stop, 'invoiced')) {
@@ -396,7 +495,6 @@ async function main() {
     }
     if (reaches(spec.stop, 'cprIssued')) {
       await call('emissor', 'POST', `/barters/${code}/cpr/issue`, {
-        number: `CPR-2026-0${cprNumber++}`,
         note: 'Duas vias impressas.',
       });
     }
@@ -449,6 +547,17 @@ async function main() {
     stop: 'pending',
     note: 'Cliente grande da praça, rotação soja-canola há três safras.',
   });
+  // Aprovada e NA MESA DA SEGURADORA: o seguro da canola é obrigatório, e sem
+  // ela a fila da Sílvia abriria vazia na demonstração.
+  await run({
+    who: 'ana',
+    producer: 'Helena Prado',
+    season: 'CANOLA2027',
+    area: 70,
+    unit: 'Filial 04',
+    stop: 'awaitingPolicy',
+    note: 'Helena entra na canola pela primeira vez; área própria, sem arrendamento.',
+  });
   await run({
     who: 'maria',
     producer: 'Osmar Dutra',
@@ -477,9 +586,15 @@ async function main() {
     season: 'MILHO2027',
     area: 90,
     unit: 'Filial 34',
-    stop: 'pending',
+    // A recusa do seguro pesou na mesa do comitê: sem a lavoura segurada, ele
+    // EXIGIU um avalista, e a permuta está de volta com o consultor.
+    stop: 'awaitingRequirements',
     insurance: false,
     note: 'A produtora recusou o seguro: já tem apólice própria da área arrendada.',
+    requirements: {
+      requiresGuarantor: true,
+      note: 'Sem o seguro da casa, trazer o aval do proprietário da área arrendada.',
+    },
   });
   await run({
     who: 'ana',
@@ -539,7 +654,9 @@ async function main() {
   await upload('emissor', 'PUT', '/barters/PRM-2026-001/cpr/registry-file', 'via-registrada.pdf');
   console.log('  ok  PRM-2026-001  SOJA26/27 • Antônio Carvalho • cprRegistered');
 
-  // Uma permuta de soja a mais, aprovada com ressalva — a mesa do faturista.
+  // Uma permuta de soja a mais, aprovada com ressalva — a mesa do faturista. Ela
+  // passou pelo desvio: o comitê exigiu avalista e hipoteca, o consultor trouxe,
+  // e só então ela foi decidida.
   await run({
     who: 'roberto',
     producer: 'Joaquim Tavares',
@@ -549,7 +666,12 @@ async function main() {
     stop: 'approvedWithConditions',
     withFungicide: true,
     note: 'Ampliação da área arrendada na soja.',
-    reviewNote: 'Aprovada com aval do cônjuge e matrícula da área arrendada antes da retirada.',
+    requirements: {
+      requiresGuarantor: true,
+      requiresCollateral: true,
+      note: 'Aval do irmão, sócio na área arrendada, e hipoteca da sede da fazenda.',
+    },
+    reviewNote: 'Aprovada com a matrícula da área arrendada conferida antes da retirada.',
   });
 
   const trigo01 = await call<{ status: string; closedBy: string }>(

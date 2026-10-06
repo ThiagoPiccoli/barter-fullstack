@@ -1,6 +1,7 @@
 import {
   EMPTY_CPR,
   NO_PLEDGE,
+  NO_REQUIREMENTS,
   consultantCprGaps,
   cprGaps,
   cprGapsOf,
@@ -32,7 +33,6 @@ describe('CPR — o que falta para a cédula sair', () => {
 
   const filled = (): CprDraft => ({
     ...EMPTY_CPR,
-    number: 'CPR-2026-014',
     dueDate: new Date('2026-06-30'),
     emitterNationality: 'brasileiro',
     emitterMaritalStatus: 'solteiro',
@@ -68,6 +68,146 @@ describe('CPR — o que falta para a cédula sair', () => {
     // 18 ha, e a lavoura de `area()` tem 45,5. Os testes que são SOBRE o penhor
     // mexem nestes números na chamada, como fazem com as notas e a safra.
     pledge: { sacks: 900, yieldPerHa: 60, marginPercent: 20 },
+    requirements: NO_REQUIREMENTS,
+  });
+
+  /**
+   * AS EXIGÊNCIAS DO COMITÊ. Avalista, hipoteca e apólice não são cobrados de
+   * toda cédula — o consultor nem vê esses campos no preenchimento inicial. Quando
+   * o comitê os exige, eles viram pendência DELE, e é isso que trava a volta da
+   * permuta ao comitê e, depois, a emissão.
+   */
+  describe('exigências do comitê', () => {
+    const avalista = {
+      name: 'Carlos Pereira',
+      document: '222.333.444-55',
+      rg: '9.876.543-2',
+      cnh: '',
+      nationality: 'brasileiro',
+      profession: 'produtor rural',
+      maritalStatus: 'solteiro',
+      fatherName: '',
+      motherName: '',
+      email: '',
+      address: 'Rua das Palmeiras',
+      addressNumber: '12',
+      city: 'Maringá/PR',
+      spouseName: '',
+      spouseDocument: '',
+      spouseRg: '',
+      spouseNationality: '',
+      spouseProfession: '',
+      // O SCR do avalista anexado — a regra só pergunta se ele existe.
+      scrFileId: 91,
+    };
+    /** Um bem em hipoteca cadastrado por inteiro, com o documento anexado. */
+    const bem = {
+      description: 'Imóvel rural — Fazenda Boa Vista, 120 ha',
+      registryNumber: '9.876',
+      registryDistrict: 'Maringá/PR',
+      city: 'Maringá/PR',
+      ownerName: 'Antônio Pereira',
+      ownerDocument: '111.222.333-44',
+      appraisedValue: 1500000,
+      documentFileId: 92,
+    };
+    const exigindo = (requirements: Partial<CprContext['requirements']>): CprContext => ({
+      ...contexto(),
+      requirements: { ...NO_REQUIREMENTS, ...requirements },
+    });
+
+    it('sem exigência, avalista, hipoteca e apólice não são cobrados', () => {
+      expect(cprGaps(filled(), [area()], contexto())).toEqual([]);
+    });
+
+    it('avalista exigido e não informado vira pendência do consultor', () => {
+      const gaps = cprGapsOf(filled(), [area()], exigindo({ requiresGuarantor: true }));
+      expect(gaps).toEqual([
+        { label: 'ao menos um avalista (exigido pelo comitê)', owner: 'consultant' },
+      ]);
+    });
+
+    it('o avalista exigido precisa estar qualificado como o emitente', () => {
+      const semRg = { ...filled(), guarantors: [{ ...avalista, rg: '', city: '' }] };
+      expect(cprGaps(semRg, [area()], exigindo({ requiresGuarantor: true }))).toEqual([
+        'RG do 1º avalista',
+        'município/UF do 1º avalista',
+      ]);
+
+      const completo = { ...filled(), guarantors: [avalista] };
+      expect(cprGaps(completo, [area()], exigindo({ requiresGuarantor: true }))).toEqual([]);
+    });
+
+    /**
+     * O aval de quem é casado vem com a anuência do cônjuge, como a do emitente
+     * — e o cônjuge ASSINA, então deve a qualificação que sai no bloco dele.
+     */
+    it('o avalista casado deve o cônjuge', () => {
+      const casado = { ...filled(), guarantors: [{ ...avalista, maritalStatus: 'Casado' }] };
+      expect(cprGaps(casado, [area()], exigindo({ requiresGuarantor: true }))).toEqual([
+        'nome do cônjuge do 1º avalista (o avalista é casado)',
+        'CPF do cônjuge do 1º avalista',
+        'nacionalidade do cônjuge do 1º avalista',
+        'profissão do cônjuge do 1º avalista',
+      ]);
+    });
+
+    /** Quem garante a dívida é avaliado pelo que já deve, como quem a deve. */
+    it('o avalista exigido deve o SCR dele', () => {
+      const semScr = { ...filled(), guarantors: [{ ...avalista, scrFileId: null }] };
+      expect(cprGapsOf(semScr, [area()], exigindo({ requiresGuarantor: true }))).toEqual([
+        {
+          label: 'o SCR do 1º avalista (anexo obrigatório, com o consultor)',
+          owner: 'consultant',
+        },
+      ]);
+    });
+
+    /**
+     * A HIPOTECA É UM CADASTRO: cada campo do bem é conferido, e o documento
+     * dele (a matrícula atualizada) é anexo obrigatório.
+     */
+    it('a hipoteca exigida cobra ao menos um bem, inteiro e com o documento', () => {
+      const contexto = exigindo({ requiresCollateral: true });
+      expect(cprGaps(filled(), [area()], contexto)).toEqual([
+        'ao menos um bem em hipoteca (exigido pelo comitê)',
+      ]);
+
+      const pelaMetade = {
+        ...filled(),
+        mortgages: [{ ...bem, registryNumber: '', appraisedValue: 0, documentFileId: null }],
+      };
+      expect(cprGaps(pelaMetade, [area()], contexto)).toEqual([
+        'matrícula do 1º bem em hipoteca',
+        'valor de avaliação do 1º bem em hipoteca',
+        'o documento do 1º bem em hipoteca (matrícula atualizada, anexo obrigatório)',
+      ]);
+
+      expect(cprGaps({ ...filled(), mortgages: [bem] }, [area()], contexto)).toEqual([]);
+    });
+
+    /**
+     * A APÓLICE NÃO É PENDÊNCIA DA CÉDULA. O número é da seguradora, informado
+     * na etapa dela com o documento — e a etapa não anda sem os dois. Cobrá-lo
+     * aqui mandaria o consultor procurar um campo que ele não tem mais.
+     */
+    it('a apólice não é cobrada da cédula, nem do consultor', () => {
+      expect(cprGaps(filled(), [area()], contexto())).toEqual([]);
+      expect(consultantCprGaps(filled(), [area()], contexto().pledge, NO_REQUIREMENTS)).toEqual([]);
+    });
+
+    /** É o consultor quem traz o que o comitê pediu — é a lista dele que trava. */
+    it('as exigências entram na lista do consultor', () => {
+      const dele = consultantCprGaps(filled(), [area()], contexto().pledge, {
+        ...NO_REQUIREMENTS,
+        requiresGuarantor: true,
+        requiresCollateral: true,
+      });
+      expect(dele).toEqual([
+        'ao menos um avalista (exigido pelo comitê)',
+        'ao menos um bem em hipoteca (exigido pelo comitê)',
+      ]);
+    });
   });
 
   it('cédula preenchida com uma lavoura não tem pendência', () => {
@@ -76,7 +216,8 @@ describe('CPR — o que falta para a cédula sair', () => {
 
   it('a permuta sem cédula nenhuma lista TUDO o que falta', () => {
     const gaps = cprGaps(EMPTY_CPR, [], contexto());
-    expect(gaps).toContain('número da CPR');
+    // O NÚMERO não está entre as pendências: ele nasce com a permuta.
+    expect(gaps.join(' ')).not.toContain('número da CPR');
     expect(gaps).toContain('RG do emitente');
     expect(gaps).toContain('local da entrega');
     // A frase da lavoura JÁ TRAZ O TAMANHO quando a permuta é dimensionada: sem
@@ -230,9 +371,12 @@ describe('CPR — o que falta para a cédula sair', () => {
 describe('CPR — o que a permuta já responde', () => {
   const barter = {
     code: 'PRM-2026-014',
+    cprNumber: 'CPR-2026-014',
     producerName: 'João da Silva',
     versionCode: 'S2026.02',
+    unitId: 2,
     unitName: 'Filial 02',
+    insurancePolicyNumber: null,
   };
   const grain = { productName: 'Soja', quantity: 440, unitValue: 128.5 };
   // A SAFRA carrega o vencimento (ele muda conforme a cultura) e o FATURAMENTO
@@ -246,6 +390,21 @@ describe('CPR — o que a permuta já responde', () => {
     expect(known.quantityKg).toBe(26_400);
     expect(known.totalValue).toBe(56_540);
     expect(known.sackPrice).toBe(128.5);
+  });
+
+  /**
+   * A UNIDADE DE RETIRADA vai nas duas formas: o nome, que a tela lê, e o id,
+   * que pré-seleciona a filial na lista do local da entrega.
+   */
+  it('a unidade de retirada vem com nome e id, para sugerir o local da entrega', () => {
+    const known = knownFrom(barter, grain, '123.456.789-00', 60, safra, notas);
+    expect(known.pickupUnit).toBe('Filial 02');
+    expect(known.pickupUnitId).toBe(2);
+  });
+
+  it('o número da CPR vem do registro da permuta', () => {
+    const known = knownFrom(barter, grain, '123.456.789-00', 60, safra, notas);
+    expect(known.cprNumber).toBe('CPR-2026-014');
   });
 
   /**
@@ -278,6 +437,25 @@ describe('CPR — o que a permuta já responde', () => {
     );
     expect(known.dueDate).toBeNull();
     expect(known.invoices).toEqual([]);
+  });
+
+  /**
+   * A APÓLICE é leitura, como as notas: quem a informa é a seguradora, na
+   * permuta. Sem seguro (ou antes da etapa dela), a cédula a recebe vazia — e a
+   * alínea "j" não sai.
+   */
+  it('a apólice vem da permuta, e vazia quando ela não tem', () => {
+    expect(knownFrom(barter, grain, '', 60, safra, notas).insurancePolicy).toBe('');
+    expect(
+      knownFrom(
+        { ...barter, insurancePolicyNumber: 'AP-2026-778.412' },
+        grain,
+        '',
+        60,
+        safra,
+        notas,
+      ).insurancePolicy,
+    ).toBe('AP-2026-778.412');
   });
 
   it('peso de saca diferente muda os quilos, e nada mais', () => {
@@ -341,13 +519,136 @@ describe('CPR — a sugestão de preenchimento', () => {
     expect(suggestion.emitterRg).toBe('10.234.567-8');
     expect(suggestion.spouseName).toBe('Maria da Silva');
     expect(suggestion.areas?.[0].registryNumber).toBe('12.345');
-    // O NÚMERO da cédula anterior não vem junto: cada cédula tem o seu, e
-    // sugerir o passado faria duas cédulas nascerem com a mesma numeração.
-    expect(suggestion).not.toHaveProperty('number');
     // O SCR também não: ele é uma fotografia com data, e a da safra passada não
     // diz nada sobre o endividamento de hoje — que é a única coisa que ele
     // existe para dizer.
     expect(suggestion).not.toHaveProperty('scrFileId');
+  });
+
+  /**
+   * O AVALISTA vem pela QUALIFICAÇÃO, e só por ela: o id é da linha da outra
+   * cédula (devolvê-lo faria a gravação mexer no avalista de outra permuta), e
+   * o SCR dele envelhece como o do emitente. Os bens em hipoteca não vêm.
+   */
+  it('o avalista sugerido vem sem id e sem SCR, e a hipoteca não vem', () => {
+    const previous = {
+      ...EMPTY_CPR,
+      areas: [],
+      guarantors: [
+        {
+          id: 17,
+          cprId: 4,
+          position: 0,
+          name: 'Carlos Pereira',
+          document: '222.333.444-55',
+          rg: '',
+          cnh: '',
+          nationality: 'brasileiro',
+          profession: '',
+          maritalStatus: 'solteiro',
+          fatherName: '',
+          motherName: '',
+          email: '',
+          address: '',
+          addressNumber: '',
+          city: '',
+          spouseName: '',
+          spouseDocument: '',
+          spouseRg: '',
+          spouseNationality: '',
+          spouseProfession: '',
+          scrFileId: 91,
+        },
+      ],
+      mortgages: [
+        {
+          description: 'Fazenda Boa Vista',
+          registryNumber: '9.876',
+          registryDistrict: '',
+          city: '',
+          ownerName: '',
+          ownerDocument: '',
+          appraisedValue: 0,
+          documentFileId: 92,
+        },
+      ],
+    };
+
+    const suggestion = suggestFrom(null, previous);
+
+    expect(suggestion.guarantors).toHaveLength(1);
+    expect(suggestion.guarantors?.[0].name).toBe('Carlos Pereira');
+    expect(suggestion.guarantors?.[0]).not.toHaveProperty('id');
+    expect(suggestion.guarantors?.[0]).not.toHaveProperty('scrFileId');
+    expect(suggestion).not.toHaveProperty('mortgages');
+  });
+
+  const soja = { sackWeightKg: 60, maxMoisture: 14, maxImpurities: 1, oilContent: 18 };
+
+  /** A primeira cédula do produtor já nasce com o padrão do grão. */
+  it('sem cédula anterior, o padrão do grão vem do modelo dele', () => {
+    expect(suggestFrom({ city: 'Sarandi/PR' }, null, soja)).toEqual({
+      emitterCity: 'Sarandi/PR',
+      ...soja,
+    });
+  });
+
+  /**
+   * O PADRÃO É DA CULTURA, não da pessoa: a cédula anterior do produtor pode
+   * ser de outro grão, e o teor de óleo dela não serve a esta. A cultivar
+   * continua vindo da cédula anterior — é o que o produtor planta.
+   */
+  it('com modelo do grão, o padrão vem dele e não da cédula anterior', () => {
+    const canola = {
+      ...EMPTY_CPR,
+      sackWeightKg: 50,
+      maxMoisture: 9,
+      maxImpurities: 2,
+      oilContent: 38,
+      cultivar: 'Hyola 433',
+      areas: [],
+      guarantors: [],
+    };
+
+    const suggestion = suggestFrom(null, canola, soja);
+
+    expect(suggestion).toMatchObject(soja);
+    expect(suggestion.cultivar).toBe('Hyola 433');
+  });
+
+  /** A permuta sem grão com modelo (anterior às safras) segue como era. */
+  it('sem modelo do grão, o padrão continua vindo da cédula anterior', () => {
+    const previous = {
+      ...EMPTY_CPR,
+      maxMoisture: 13,
+      maxImpurities: 1,
+      oilContent: 19,
+      areas: [],
+      guarantors: [],
+    };
+
+    expect(suggestFrom(null, previous, null)).toMatchObject({
+      sackWeightKg: 60,
+      maxMoisture: 13,
+      maxImpurities: 1,
+      oilContent: 19,
+    });
+  });
+
+  /** O local da entrega é da negociação: a cédula anterior não o traz. */
+  it('o local da entrega da cédula anterior não é sugerido', () => {
+    const previous = {
+      ...EMPTY_CPR,
+      deliveryUnitId: 4,
+      deliveryPlace: 'Filial 04',
+      areas: [],
+      guarantors: [],
+    };
+
+    const suggestion = suggestFrom(null, previous, soja);
+
+    expect(suggestion).not.toHaveProperty('deliveryUnitId');
+    expect(suggestion).not.toHaveProperty('deliveryPlace');
   });
 });
 /**
@@ -372,28 +673,25 @@ describe('CPR — de quem é cada pendência', () => {
 
   it('a cédula em branco cobra o consultor, e não só ele', () => {
     const donos = new Set(
-      cprGapsOf(vazia, [], { invoices: [], seasonName: 'Soja 2026', pledge: SEM_PENHOR }).map(
-        (g) => g.owner,
-      ),
+      cprGapsOf(vazia, [], {
+        invoices: [],
+        seasonName: 'Soja 2026',
+        pledge: SEM_PENHOR,
+        requirements: NO_REQUIREMENTS,
+      }).map((g) => g.owner),
     );
-    expect(donos).toEqual(new Set(['consultant', 'biller', 'admin', 'emitter']));
+    expect(donos).toEqual(new Set(['consultant', 'biller', 'admin']));
   });
 
-  /**
-   * O NÚMERO DA CÉDULA é do EMISSOR, e essa é a correção que destrava o
-   * encaminhamento: a numeração da CPR vem de fora do sistema (cartório, B3,
-   * controle da credora) e o consultor não a tem quando visita a fazenda.
-   * Cobrá-la dele pararia toda permuta num número que só existe semanas depois.
-   */
-  it('o número da cédula é do emissor, e o vencimento é do admin', () => {
+  it('o vencimento é do admin, e a nota é do faturista', () => {
     const gaps = cprGapsOf(vazia, [], {
       invoices: [],
       seasonName: 'Soja 2026',
       pledge: SEM_PENHOR,
+      requirements: NO_REQUIREMENTS,
     });
     const donoDe = (trecho: string) => gaps.find((g) => g.label.includes(trecho))?.owner;
 
-    expect(donoDe('número da CPR')).toBe('emitter');
     expect(donoDe('vencimento da CPR')).toBe('admin');
     expect(donoDe('nota fiscal')).toBe('biller');
     expect(donoDe('RG do emitente')).toBe('consultant');
@@ -406,12 +704,11 @@ describe('CPR — de quem é cada pendência', () => {
    * pronta ainda está INCOMPLETA para emitir — e encaminha do mesmo jeito.
    */
   it('a lista do consultor não inclui o de ninguém mais', () => {
-    const dele = consultantCprGaps(vazia, [], SEM_PENHOR);
+    const dele = consultantCprGaps(vazia, [], SEM_PENHOR, NO_REQUIREMENTS);
     expect(dele.join(' ')).toContain('RG do emitente');
     expect(dele.join(' ')).toContain('SCR do produtor');
     expect(dele.join(' ')).not.toContain('nota fiscal');
     expect(dele.join(' ')).not.toContain('vencimento');
-    expect(dele.join(' ')).not.toContain('número da CPR');
   });
 
   it('com a parte do consultor pronta, a lista dele fica vazia', () => {
@@ -442,13 +739,14 @@ describe('CPR — de quem é cada pendência', () => {
       owners: [{ name: 'Antônio Pereira', document: '111.222.333-44' }],
     };
 
-    expect(consultantCprGaps(preenchida, [lavoura], SEM_PENHOR)).toEqual([]);
+    expect(consultantCprGaps(preenchida, [lavoura], SEM_PENHOR, NO_REQUIREMENTS)).toEqual([]);
     // E a cédula continua SEM PODER SER EMITIDA — o que falta é dos outros.
     expect(
       cprGaps(preenchida, [lavoura], {
         invoices: [],
         seasonName: 'Soja 2026',
         pledge: SEM_PENHOR,
+        requirements: NO_REQUIREMENTS,
       }).length,
     ).toBeGreaterThan(0);
   });
@@ -516,7 +814,9 @@ describe('CPR — a área do penhor', () => {
   const penhor = { sacks: 1200, yieldPerHa: 60, marginPercent: 20 };
 
   const faltaDe = (areas: CprAreaDraft[]): string | undefined =>
-    consultantCprGaps(EMPTY_CPR, areas, penhor).find((gap) => gap.includes('área de penhor'));
+    consultantCprGaps(EMPTY_CPR, areas, penhor, NO_REQUIREMENTS).find((gap) =>
+      gap.includes('área de penhor'),
+    );
 
   it('a lavoura menor que o exigido vira pendência, com os três números', () => {
     expect(faltaDe([lavoura(10)])).toBe(
@@ -553,6 +853,7 @@ describe('CPR — a área do penhor', () => {
       invoices: [],
       seasonName: 'Soja 2026',
       pledge: penhor,
+      requirements: NO_REQUIREMENTS,
     });
     expect(gaps.find((g) => g.label.includes('área de penhor'))?.owner).toBe('consultant');
   });
@@ -566,10 +867,12 @@ describe('CPR — a área do penhor', () => {
    * continua valendo para todo mundo.
    */
   it('permuta anterior ao dimensionamento não é cobrada de área — mas continua devendo lavoura', () => {
-    expect(consultantCprGaps(EMPTY_CPR, [lavoura(1)], NO_PLEDGE).join(' ')).not.toContain(
-      'área de penhor',
+    expect(
+      consultantCprGaps(EMPTY_CPR, [lavoura(1)], NO_PLEDGE, NO_REQUIREMENTS).join(' '),
+    ).not.toContain('área de penhor');
+    expect(consultantCprGaps(EMPTY_CPR, [], NO_PLEDGE, NO_REQUIREMENTS).join(' ')).toContain(
+      'ao menos uma lavoura',
     );
-    expect(consultantCprGaps(EMPTY_CPR, [], NO_PLEDGE).join(' ')).toContain('ao menos uma lavoura');
   });
 
   /**
@@ -580,10 +883,12 @@ describe('CPR — a área do penhor', () => {
    */
   it('mais sacas exigem mais área, com as mesmas lavouras', () => {
     const areas = [lavoura(24)];
-    expect(consultantCprGaps(EMPTY_CPR, areas, penhor).join(' ')).not.toContain('área de penhor');
-    expect(consultantCprGaps(EMPTY_CPR, areas, { ...penhor, sacks: 1500 }).join(' ')).toContain(
-      'faltam 6,00 ha',
+    expect(consultantCprGaps(EMPTY_CPR, areas, penhor, NO_REQUIREMENTS).join(' ')).not.toContain(
+      'área de penhor',
     );
+    expect(
+      consultantCprGaps(EMPTY_CPR, areas, { ...penhor, sacks: 1500 }, NO_REQUIREMENTS).join(' '),
+    ).toContain('faltam 6,00 ha');
   });
 
   /** O placar que a tela desenha, com a exigência já cumprida. */

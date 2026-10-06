@@ -172,6 +172,15 @@ class StatusBadge extends StatelessWidget {
         icon = Icons.hourglass_empty_rounded;
         label = 'No comitê';
         break;
+      // DEVOLVIDA COM EXIGÊNCIAS: a cor do RASCUNHO, porque é a mesma pergunta —
+      // a permuta está com o consultor, esperando ele agir. O ícone é outro: a
+      // permuta não é dele para montar, é dele para completar.
+      case BarterStatus.awaitingRequirements:
+        bg = AppColors.draftBg;
+        fg = AppColors.draft;
+        icon = Icons.assignment_return_outlined;
+        label = 'Exigências';
+        break;
       case BarterStatus.sentToManager:
         bg = AppColors.atManagerBg;
         fg = AppColors.atManager;
@@ -192,6 +201,15 @@ class StatusBadge extends StatelessWidget {
         fg = AppColors.draft;
         icon = Icons.edit_note_rounded;
         label = 'Rascunho';
+        break;
+      // NA SEGURADORA: decidida, esperando a apólice. As duas aprovações
+      // dividem o selo — a ressalva aparece no detalhe e no rótulo do servidor.
+      case BarterStatus.awaitingPolicy:
+      case BarterStatus.awaitingPolicyWithConditions:
+        bg = AppColors.atInsurerBg;
+        fg = AppColors.atInsurer;
+        icon = Icons.shield_outlined;
+        label = 'Na seguradora';
         break;
       case BarterStatus.invoiced:
         bg = AppColors.invoicedBg;
@@ -750,10 +768,16 @@ Color statusColor(BarterStatus s) {
       return AppColors.denied;
     case BarterStatus.pending:
       return AppColors.pending;
+    // Com o consultor, como o rascunho — ver o selo em [StatusBadge].
+    case BarterStatus.awaitingRequirements:
+      return AppColors.draft;
     case BarterStatus.sentToManager:
       return AppColors.atManager;
     case BarterStatus.approvedWithConditions:
       return AppColors.approvedWithConditions;
+    case BarterStatus.awaitingPolicy:
+    case BarterStatus.awaitingPolicyWithConditions:
+      return AppColors.atInsurer;
     case BarterStatus.draft:
       return AppColors.draft;
     case BarterStatus.invoiced:
@@ -1157,7 +1181,10 @@ _ReviewCopy _copyFor(BarterStatus status) {
         // exigência virar um comentário, e é ela que alguém vai ter de cumprir
         // antes de a entrega ser cobrada.
         noteLabel: 'Ressalva exigida',
-        noteHint: 'Garantia real, seguro obrigatório, aval…',
+        // AVALISTA E HIPOTECA não são ressalva: eles se pedem ANTES de
+        // decidir, e devolvem a permuta ao consultor (ver
+        // [requireBarterGuarantees]). A ressalva é o resto.
+        noteHint: 'A condição a cumprir antes da retirada…',
         button: 'Confirmar com Ressalva',
         done: 'Permuta aprovada com ressalva.',
         color: AppColors.approvedWithConditions,
@@ -1213,14 +1240,6 @@ void reviewBarter(
     builder: (ctx) {
       final noteCtrl = TextEditingController();
       var submitting = false;
-      // AS EXIGÊNCIAS do comitê: avalista, garantia real e seguro. Elas se
-      // acumulam — a mesma decisão pede duas delas com frequência —, e por isso
-      // são três caixas e não uma escolha.
-      final required = <String, bool>{
-        'guarantor': false,
-        'collateral': false,
-        'insurance': false,
-      };
       return StatefulBuilder(
         builder: (ctx, setLocal) {
           final enough =
@@ -1257,43 +1276,6 @@ void reviewBarter(
                     ),
                     textCapitalization: TextCapitalization.sentences,
                   ),
-                  // AS EXIGÊNCIAS não aparecem na NEGATIVA: pedir avalista de
-                  // uma permuta negada é pedir garantia para um negócio que não
-                  // vai acontecer — e a exigência ficaria pendurada na tela de
-                  // quem levou a negativa ao produtor.
-                  if (newStatus != BarterStatus.denied) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      'Exigências (aparecem na permuta para quem vai cumpri-las)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    // O TEXTO continua sendo o que diz QUAL: qual matrícula,
-                    // qual valor segurado, quem se espera como avalista. As
-                    // caixas dizem só O QUÊ.
-                    Text(
-                      'Marque o que a reunião exigiu. O texto acima é o que diz qual.',
-                      style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                    ),
-                    for (final entry in const {
-                      'guarantor': 'Avalista',
-                      'collateral': 'Garantia real',
-                      'insurance': 'Seguro',
-                    }.entries)
-                      CheckboxListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        value: required[entry.key],
-                        onChanged: submitting
-                            ? null
-                            : (v) => setLocal(() => required[entry.key] = v ?? false),
-                        title: Text(entry.value, style: const TextStyle(fontSize: 13)),
-                      ),
-                  ],
                 ],
               ),
             ),
@@ -1312,9 +1294,6 @@ void reviewBarter(
                             barter.id,
                             newStatus,
                             noteCtrl.text,
-                            requiresGuarantor: required['guarantor'] ?? false,
-                            requiresCollateral: required['collateral'] ?? false,
-                            requiresInsurance: required['insurance'] ?? false,
                           );
                           if (!ctx.mounted) return;
                           Navigator.pop(ctx);
@@ -1338,6 +1317,134 @@ void reviewBarter(
                         child: CircularProgressIndicator(
                             strokeWidth: 2, color: AppColors.onPrimary))
                     : Text(copy.button),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
+/// As exigências que o comitê pode fazer, na ordem em que a reunião as pensa:
+/// quem se obriga junto, e o que garante. Os rótulos são os da API
+/// (`REVIEW_REQUIREMENT_LABELS`).
+///
+/// O SEGURO saiu daqui: a apólice é da seguradora, e o seguro da permuta é o da
+/// versão do Barter — a aprovada com seguro passa pela mesa da seguradora.
+const _requirementLabels = {
+  'guarantor': 'Avalista',
+  'collateral': 'Hipoteca',
+};
+
+/// Diálogo das EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos ANTES de
+/// decidir.
+///
+/// É irmão de [reviewBarter] e deliberadamente separado dele: exigir não é
+/// decidir. A permuta volta ao CONSULTOR, o gerente é avisado, e quando a
+/// cédula tiver o que foi pedido ela volta direto ao comitê — que então decide.
+///
+/// O botão só liga com ao menos uma caixa marcada E o texto escrito: as caixas
+/// dizem O QUÊ, e só o texto diz QUAL (quem como avalista, qual imóvel em
+/// hipoteca). É a regra do servidor, repetida aqui para a recusa
+/// não ser a primeira notícia dela.
+void requireBarterGuarantees(
+  BuildContext context,
+  BarterModel barter, {
+  required ValueChanged<BarterModel> onRequired,
+}) {
+  showDialog(
+    context: context,
+    builder: (ctx) {
+      final noteCtrl = TextEditingController();
+      var submitting = false;
+      final asked = {for (final key in _requirementLabels.keys) key: false};
+      return StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final enough = asked.values.any((v) => v) &&
+              noteCtrl.text.trim().length >= minOpinionLength;
+          return AlertDialog(
+            title: const Text('Exigir Garantias'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  BarterIdentity(barter: barter),
+                  const SizedBox(height: 8),
+                  Text(
+                    'A permuta volta ao consultor e o gerente é avisado. Quando a '
+                    'cédula tiver o que foi pedido, ela volta direto ao comitê.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final entry in _requirementLabels.entries)
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: asked[entry.key],
+                      onChanged: submitting
+                          ? null
+                          : (v) => setLocal(() => asked[entry.key] = v ?? false),
+                      title: Text(entry.value, style: const TextStyle(fontSize: 13)),
+                    ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: noteCtrl,
+                    minLines: 3,
+                    maxLines: 6,
+                    maxLength: 1000,
+                    onChanged: (_) => setLocal(() {}),
+                    decoration: const InputDecoration(
+                      labelText: 'O que o comitê espera',
+                      hintText: 'Quem como avalista, qual imóvel em hipoteca…',
+                      alignLabelWithHint: true,
+                    ),
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: submitting ? null : () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                onPressed: submitting || !enough
+                    ? null
+                    : () async {
+                        setLocal(() => submitting = true);
+                        try {
+                          final updated = await AppData.requireBarter(
+                            barter.id,
+                            noteCtrl.text,
+                            requiresGuarantor: asked['guarantor'] ?? false,
+                            requiresCollateral: asked['collateral'] ?? false,
+                          );
+                          if (!ctx.mounted) return;
+                          Navigator.pop(ctx);
+                          onRequired(updated);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: const Text('Permuta devolvida ao consultor com as exigências.'),
+                            backgroundColor: AppColors.draft,
+                          ));
+                        } on ApiException catch (e) {
+                          if (!ctx.mounted) return;
+                          setLocal(() => submitting = false);
+                          showErrorSnack(ctx, e);
+                        }
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: AppColors.draft),
+                child: submitting
+                    ? SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppColors.onPrimary))
+                    : const Text('Devolver ao Consultor'),
               ),
             ],
           );

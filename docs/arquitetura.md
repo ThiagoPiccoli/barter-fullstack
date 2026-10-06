@@ -65,14 +65,17 @@ Consequências que aparecem no código inteiro:
 - sem Barter aberto, `POST /barters` responde 422 e o app mostra "Barter
   fechado". Não é erro, é estado.
 
-E, uma vez montada, a permuta entra numa **linha de produção de cinco postos**:
+E, uma vez montada, a permuta entra numa **linha de produção de seis postos** —
+o da seguradora só para quem tem seguro:
 
 ```
-Rascunho ──▶ No gerente ──▶ No comitê ──▶ A faturar ──────────▶ Faturada ──▶
-(consultor)  (parecer)      (decide)      (faturista)                      │
-                                ├──▶ Aprovada com ressalva ────┘           │
-                                └──▶ Negada                                │
-     ┌─────────────────────────────────────────────────────────────────────┘
+Rascunho ──▶ No gerente ──▶ No comitê ──┬─(com seguro)─▶ Na seguradora ──┐
+(consultor)  (parecer)      (decide)    │                 (apólice)       ▼
+                                        ├─(sem seguro)──────────────▶ A faturar ──▶ Faturada ──▶
+                                        │                             (faturista)               │
+                                        │   (a ressalva segue o mesmo caminho, como ressalva)   │
+                                        └──▶ Negada                                             │
+     ┌──────────────────────────────────────────────────────────────────────────────────────────┘
      ▼
 CPR emitida ──▶ CPR assinada ──▶ CPR registrada
   (emissor)       (emissor)        (emissor)
@@ -83,7 +86,10 @@ o parecer DELE sobre o próprio cliente e **preenche a cédula** — enquanto n�
 encaminhar, ela é `draft` e não está na mesa de ninguém; o **gerente** conhece o
 produtor e a negociação e escreve o parecer técnico (não decide); o **comitê** lê
 o pedido e os dois pareceres e **decide** — é a única instância que aprova,
-aprova COM RESSALVA ou nega; o **faturista** recebe o que as etapas anteriores
+aprova COM RESSALVA ou nega; a **seguradora** (um setor interno, com várias
+pessoas) recebe a aprovada **com seguro**, cria a apólice, **anexa** o documento
+e **informa o número** — o que a cédula cita na alínea "j" da cláusula XVIII; o
+**faturista** recebe o que as etapas anteriores
 produziram, **fatura** o que foi aprovado e **anexa as notas fiscais**; o
 **emissor** confere a cédula que o consultor preencheu, **emite** o título,
 **colhe as assinaturas** (anexando o papel assinado) e o **leva a registro**.
@@ -130,9 +136,60 @@ saber. No app, o fluxo de criação **emenda na cédula** logo depois de registr
 permuta (em [send_simulation.dart](../app/lib/screens/send_simulation.dart)), e o
 encaminhamento que a cédula barrou é retomado ali mesmo quando ela fecha.
 
+**As exigências do comitê são uma etapa, e a única volta da linha.** Antes de
+decidir, o comitê pode exigir **avalista e/ou hipoteca**
+(`POST /barters/:code/requirements`). A permuta vai para `awaitingRequirements`,
+no MESMO degrau de `pending`, com o CONSULTOR, e o gerente recebe um aviso
+(`Notice`, in-app, em `GET /notices`). Cada exigência abre na cédula o campo
+correspondente: os avalistas (cada um com o **SCR dele** anexado), os **bens em
+hipoteca** (`CprMortgage`: descrição, matrícula, comarca, município, proprietário,
+valor de avaliação e o **documento** do bem anexado). Os
+avalistas **assinam a cédula** — um bloco por avalista, e a anuência do cônjuge
+dele quando casado, no texto e no docx (`CprText.signatures`); os bens são
+conferidos e não impressos, porque o modelo não tem cláusula de hipoteca. Avalista
+e bem têm `id` estável: a gravação os casa pelo id em vez de apagar e recriar,
+porque o anexo mora neles. Fora disso
+avalista e hipoteca nem aparecem no preenchimento inicial, e o servidor recusa
+gravá-los. Exigidos, os campos viram pendência do consultor (`cprGapsOf`): travam
+a devolução (`POST /barters/:code/requirements/fulfill`) e, depois, a emissão.
+Cumpridas, a permuta volta **direto ao comitê, sem segundo parecer do gerente**:
+a negociação não mudou, só a garantia. O gerente é avisado de novo. As
+exigências se acumulam entre rodadas, sobrevivem à aprovação e são apagadas pela
+negativa. A tabela completa dos estados está no topo de
+[barter-workflow.ts](../api/src/barters/barter-workflow.ts).
+
+| estado | com quem | ato que a move | para onde |
+| --- | --- | --- | --- |
+| `draft` | consultor | `forward` | `sentToManager` |
+| `sentToManager` | gerente | `opinion` | `pending` |
+| `pending` | comitê | `review` / `require` | `awaitingPolicy` · `awaitingPolicyWithConditions` (com seguro) · `approved` · `approvedWithConditions` (sem seguro) · `denied` / `awaitingRequirements` |
+| `awaitingRequirements` | consultor | `fulfill` | `pending` (sem passar pelo gerente) |
+| `awaitingPolicy`, `awaitingPolicyWithConditions` | seguradora | `insure` | `approved`, `approvedWithConditions` (cada uma ao seu par) |
+| `approved`, `approvedWithConditions` | faturista | `invoice` | `invoiced` |
+| `invoiced` | emissor | `cprIssue` | `cprIssued` |
+| `cprIssued` | emissor | `cprSign` | `cprSigned` |
+| `cprSigned` | emissor | `cprRegister` | `cprRegistered` (fim) |
+| `denied` | — | — | (fim) |
+
+**A seguradora é a única etapa que nem toda permuta atravessa.** Quem decide é o
+seguro congelado no registro (`insuranceChoice`): obrigatório na versão, ou
+opcional e aceito pelo produtor, a aprovação cai em `awaitingPolicy` (ou
+`awaitingPolicyWithConditions`, que preserva a ressalva); sem seguro — a versão
+não oferecia, ou o produtor recusou —, ela vai direto ao faturista. O comitê
+continua escolhendo só o desfecho; o destino é consequência do seguro
+(`reviewOutcomeFor`). A seguradora informa a apólice em `POST
+/barters/:code/insure` (multipart: o arquivo e o `policyNumber`, juntos), e a
+permuta volta ao seu par de aprovação (`policyOutcomeFor`). O NÚMERO mora na
+permuta (`Barter.insurancePolicyNumber`), e não mais na cédula: o consultor não
+o digita, e a cédula o lê em `known.insurancePolicy` — a alínea "j" só sai
+quando ele existe. O escopo dela (`barters.readInsurance`) é o trecho da linha a
+partir da mesa dela, e só das permutas com seguro. O SEGURO deixou de ser
+exigência do comitê pelo mesmo motivo: quem cria a apólice é a seguradora.
+
 **A ressalva é um estado, e não uma observação.** `approvedWithConditions` está no
 MESMO degrau de `approved` (a mesa do faturista) e leva uma exigência escrita
-junto — garantia real, seguro obrigatório, aval —, obrigatória na decisão. Fosse
+junto, obrigatória na decisão. Avalista e hipoteca deixaram de ser
+ressalva: hoje são a etapa acima. Fosse
 um campo dentro da aprovação, a lista e o cartão diriam "Aprovada — a faturar"
 sobre uma permuta que só anda depois de alguém providenciar um aval, e a única
 maneira de descobrir isso seria abrir a permuta e ler até o fim. Pelo mesmo
@@ -964,7 +1021,8 @@ A regra que organiza o código inteiro é **de onde vem cada lacuna do modelo**:
 | A CULTURA do lançamento | o **vencimento** da entrega — ele muda de um grão para o outro | `VersionGrain.cprDueDate`, escrito pelo admin ao publicar (ou depois) |
 | O FATURAMENTO | os números das **notas fiscais** e das duplicatas (cláusula VII) | `BarterInvoice`, com o arquivo anexado — **leitura** na cédula |
 | A CREDORA | razão social, CNPJ, endereço, foro | CADASTRO ([creditor/](../api/src/creditor/)), do admin **ou do emissor** |
-| A PROPOSTA | CNH, filiação, e-mail, RG do cônjuge, avalistas, hipotecas | coletado e **não impresso** — ver abaixo |
+| A PROPOSTA | CNH, filiação, e-mail, RG do cônjuge | coletado e **não impresso** — ver abaixo |
+| O COMITÊ (quando exige) | avalistas com SCR, bens em hipoteca com documento, nº da apólice | `CprGuarantor` + `CprMortgage` + `BarterFile`; o avalista **assina** a cédula |
 | O CONSULTOR | qualificação civil do emitente, lavouras em penhor, padrão do grão, **SCR do produtor** | `BarterCpr` + `CprArea` + `CprAreaOwner` + `BarterFile` |
 
 **Duas linhas trocaram de lado nesta tabela, e as duas pelo mesmo motivo: pedir a
@@ -1101,19 +1159,33 @@ Três consequências que aparecem no código:
 
 **Coletado e não impresso.** A planilha de proposta que a operação usa
 (*Proposta para CPR Barter*) pede coisas que o modelo de cédula não tem cláusula
-para dizer: CNH, filiação do pai e da mãe, e-mail, RG do cônjuge, um bloco
-completo de **avalista** (com o cônjuge dele) e as **hipotecas** oferecidas. Elas
-são gravadas — o cartório individualiza homônimo pela filiação, a assinatura
-eletrônica chega pelo e-mail, o aval existe no negócio — e **não entram em
-`cprGaps()`**: cobrá-las travaria a geração de um documento que não as usa. A
-pergunta daquela função é "dá para emitir?", e não "o cadastro está cheio?". O dia
-em que a cláusula de aval existir, ela vai encontrar o dado pronto.
+para dizer: CNH, filiação do pai e da mãe, e-mail, RG do cônjuge. Eles são
+gravados — o cartório individualiza homônimo pela filiação, a assinatura
+eletrônica chega pelo e-mail — e **não entram em `cprGaps()`**: cobrá-los
+travaria a geração de um documento que não os usa. A pergunta daquela função é
+"dá para emitir?", e não "o cadastro está cheio?". Avalista e hipoteca saíram
+deste grupo: só existem quando o comitê os exige, e aí são cobrados — ver as
+exigências do comitê, acima.
 
 O **local da entrega** é o contraexemplo, e por isso é cobrado: ele É cláusula
 (V, "d"). Ele é campo próprio, e não a unidade de retirada da permuta, porque as
 duas coisas não são a mesma — retirar insumo na Filial 02 não obriga ninguém a
 entregar o grão lá. A unidade entra como sugestão no formulário, que é o caso
 comum, e quem confirma é quem assina embaixo.
+
+Ele é uma **lista suspensa das filiais** (`Unit`), e não mais texto livre — a
+mesma filial saía escrita de três jeitos em três cédulas. O corpo do `PUT` leva
+`deliveryUnitId`; o servidor congela o nome da unidade em `deliveryPlace`, que é
+o que a cláusula imprime (pelo motivo de `Barter.unitName`: renomear ou excluir a
+filial não muda o documento). As cédulas do tempo do texto livre ficam com o
+texto e sem unidade, e o formulário mostra o texto para quem for escolher.
+
+**O padrão do grão vem do modelo do grão.** Peso da saca, umidade, impurezas e
+teor de óleo têm um **modelo por grão** (`Product.cprSackWeightKg` e
+companhia), editado pelo admin na aba **Grãos**. A cédula nova nasce com ele,
+pela sugestão (`suggestFrom`) — e não mais pela última cédula do produtor, que
+pode ser de outra cultura. A cédula guarda os números dela: mudar o modelo não
+reescreve cédula já começada.
 
 **O que NÃO é campo, por ser derivado:** os quilos (`sacas × peso da saca`), o
 valor total (`sacas × preço da saca`), a quantidade dada em penhor (a mesma da
@@ -1772,13 +1844,14 @@ BootstrapScreen ──▶ LoginScreen ──▶ ChangePasswordScreen(forced) ─
 ```
 
 A aba **Barter** do admin é [prices_screen.dart](../app/lib/screens/prices_screen.dart)
-(nome herdado), com quatro abas na ordem da operação:
+(nome herdado), com cinco abas na ordem da operação:
 
 | Aba | O que é |
 |---|---|
 | Lançamento | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) — safra, **vencimento da CPR** da safra, versão vigente, metas, publicar nova versão pela planilha, encerrar |
 | Valores | a tabela da versão vigente: valor da saca + preço/custo/margem de cada insumo, com correção pontual. Filtra por pasta e ordena por preço ou margem (inclusive **menor margem**, que é a pergunta real ao revisar um lançamento) |
-| Histórico | como o valor de cada item andou entre as versões: último valor publicado, variação e quantos pontos tem a linha do tempo. Filtra por grão/insumo e ordena por maior alta, maior queda ou maior valor. Marca quem está **fora do Barter** vigente |
+| Grãos | as culturas, cada uma com o seu **modelo da CPR** (peso da saca, umidade, impurezas, teor de óleo) — o padrão com que a cédula nova daquele grão nasce preenchida. Marca o que falta definir. Saiu de dentro do Histórico quando o grão ganhou configuração |
+| Histórico | como o valor de cada insumo andou entre as versões: último valor publicado, variação e quantos pontos tem a linha do tempo. Ordena por maior alta, maior queda ou maior valor. Marca quem está **fora do Barter** vigente |
 | Classes | as nove classes do negócio, só leitura, com a regra de mínimo de cada uma |
 
 **Histórico é leitura.** O cadastro do item (pasta, exigência/ha, exclusão) mora
@@ -1799,7 +1872,7 @@ safra ser aberta.
 | [barter_screen.dart](../app/lib/screens/barter_screen.dart) | **o construtor de permuta** (a tela mais complexa) |
 | [barters_screen.dart](../app/lib/screens/barters_screen.dart) | listagem com abas por status + busca |
 | [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe (com a versão do Barter), a ação da etapa de quem abre (parecer, decisão ou faturamento), a **linha do tempo** da permuta e o PDF |
-| [prices_screen.dart](../app/lib/screens/prices_screen.dart) | ⚠️ é a aba **Barter** inteira (lançamento, valores, histórico, pastas) |
+| [prices_screen.dart](../app/lib/screens/prices_screen.dart) | ⚠️ é a aba **Barter** inteira (lançamento, valores, grãos, histórico, pastas) |
 | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) | o lançamento: versão vigente, metas, publicação por planilha, encerramento |
 | [product_report_screen.dart](../app/lib/screens/product_report_screen.dart) | relatório de um produto + diálogos de preço/categoria/exigência |
 | [consultants_screen.dart](../app/lib/screens/consultants_screen.dart) | ⚠️ é a aba **Cadastros** (Produtores · Consultores · Gerentes · Unidades) |

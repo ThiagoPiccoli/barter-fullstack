@@ -68,6 +68,16 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
         contentType: 'application/pdf',
       });
 
+  /** Anexa um PDF numa rota `PUT /barters/<caminho>` da cédula. */
+  const anexar = async (caminho: string, auth: string) =>
+    request(app.getHttpServer())
+      .put(`/api/v1/barters/${caminho}`)
+      .set('Authorization', auth)
+      .attach('file', Buffer.from('%PDF-1.4\nANEXO\n%%EOF\n'), {
+        filename: 'scr.pdf',
+        contentType: 'application/pdf',
+      });
+
   /**
    * LANÇA AS ASSINATURAS com a cédula assinada anexada.
    *
@@ -95,7 +105,6 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
    * exatamente o que o teste "o vencimento vem da safra" prova.
    */
   const qualificacao = {
-    number: 'CPR-2026-014',
     emitterNationality: 'brasileiro',
     emitterMaritalStatus: 'solteiro',
     emitterProfession: 'produtor rural',
@@ -103,7 +112,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     emitterAddress: 'Rua das Acácias',
     emitterAddressNumber: '340',
     emitterCity: 'Maringá/PR',
-    deliveryPlace: 'Filial 02 — Granel Santa Tecla',
+    deliveryUnitId: UNIT.filial02,
   };
 
   const lavoura = {
@@ -148,9 +157,11 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     // 358,7879 sacas × 60 kg — o peso padrão, enquanto a cédula não disser outro.
     expect(known.quantityKg).toBe(21_527.27);
     expect(known.versionCode).toBe('SOJA26/27.02');
+    // O NÚMERO já existe: ele nasceu com a permuta, antes de qualquer rascunho.
+    expect(known.cprNumber).toBe('CPR-2026-004');
 
     // E o que ela ainda vai pedir a alguém.
-    expect(gaps).toContain('número da CPR');
+    expect(gaps.join(' ')).not.toContain('número da CPR');
     expect(gaps).toContain('RG do emitente');
     expect(gaps).toContain('local da entrega');
     // A LAVOURA é cobrada COM O TAMANHO dela: 358,7879 sacas ÷ 60 sc/ha dão
@@ -370,17 +381,19 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
    * cédula de voltar para a mesa dele sem alguém escrever a linha em policy.ts.
    */
   it('o consultor preenche a cédula — nem o faturista, nem o emissor (o admin, sim)', async () => {
-    const dele = await saveCpr('PRM-2026-004', await asUser(ANA), { number: 'CPR-2026-014' });
+    const dele = await saveCpr('PRM-2026-004', await asUser(ANA), { emitterRg: '10.234.567-8' });
     expect(dele.status).toBe(200);
     expect(dele.body.data.cpr.filledBy).toBe('Ana Paula Ferreira');
 
     for (const email of [COMITE, GERENTE, FATURISTA, EMISSOR]) {
-      const escrita = await saveCpr('PRM-2026-004', await asUser(email), { number: 'X' });
+      const escrita = await saveCpr('PRM-2026-004', await asUser(email), { emitterRg: 'X' });
       expect([email, escrita.status]).toEqual([email, 403]);
     }
 
     // O ADMIN tem todas as capacidades, e preencher a cédula é uma delas.
-    const doAdmin = await saveCpr('PRM-2026-004', await asUser(ADMIN), { number: 'CPR-2026-015' });
+    const doAdmin = await saveCpr('PRM-2026-004', await asUser(ADMIN), {
+      emitterRg: '10.234.567-9',
+    });
     expect(doAdmin.status).toBe(200);
   });
 
@@ -461,13 +474,12 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     expect(depois.body.data.cpr.cultivar).toBe('BMX Ativa RR');
     // O RG veio da gravação anterior, e continua lá.
     expect(depois.body.data.cpr.emitterRg).toBe('10.234.567-8');
-    expect(depois.body.data.cpr.number).toBe('CPR-2026-014');
   });
 
   /**
-   * O QUE A PROPOSTA PEDE E A CÉDULA NÃO IMPRIME: CNH, filiação, e-mail, RG do
-   * cônjuge, avalistas e hipotecas são gravados e NÃO entram em `gaps`.
-   * Cobrá-los travaria a geração de um documento que não os usa.
+   * O QUE A PROPOSTA PEDE E A CÉDULA NÃO IMPRIME: CNH, filiação, e-mail e RG do
+   * cônjuge são gravados e NÃO entram em `gaps`. Cobrá-los travaria a geração
+   * de um documento que não os usa.
    */
   it('os campos da proposta são gravados sem travar a geração', async () => {
     const salvo = await saveCpr('PRM-2026-004', await asUser(ANA), {
@@ -476,7 +488,80 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
       emitterMotherName: 'Rita Nunes',
       emitterEmail: 'claudia@fazenda.com.br',
       spouseRg: '20.111.222-3',
-      mortgages: 'Hipoteca de 1º grau sobre a matrícula 9.876',
+    });
+
+    expect(salvo.status).toBe(200);
+    expect(salvo.body.data.cpr.emitterCnh).toBe('01234567890');
+    expect(salvo.body.data.cpr.emitterFatherName).toBe('José Nunes');
+
+    // Nada disso virou pendência — e sem exigência do comitê, avalista e
+    // hipoteca também não são cobrados.
+    const pendencias = salvo.body.data.gaps.join(' ');
+    expect(pendencias).not.toContain('CNH');
+    expect(pendencias).not.toContain('avalista');
+    expect(pendencias).not.toContain('hipoteca');
+  });
+
+  /** O comitê exige — direto no banco: o ato em si é provado em committee.e2e. */
+  const exigir = (code: string, data: Record<string, boolean>) =>
+    app.get(PrismaService).barter.update({ where: { code }, data });
+
+  /**
+   * AVALISTA E HIPOTECA SÓ ENTRAM QUANDO O COMITÊ PEDE. Eles saíram do
+   * preenchimento inicial: coletá-los de todo mundo era pedir ao produtor um
+   * aval que ninguém ia exigir.
+   */
+  it('avalista e hipoteca são recusados enquanto o comitê não os pede', async () => {
+    const consultor = await asUser(ANA);
+
+    const avalista = await saveCpr('PRM-2026-004', consultor, {
+      guarantors: [{ name: 'Pedro Avalista' }],
+    });
+    expect(avalista.status).toBe(422);
+    expect(avalista.body.message).toContain('O comitê não exigiu avalista');
+
+    const hipoteca = await saveCpr('PRM-2026-004', consultor, {
+      mortgages: [{ description: 'Fazenda Boa Vista', registryNumber: '9.876' }],
+    });
+    expect(hipoteca.status).toBe(422);
+    expect(hipoteca.body.message).toContain('O comitê não exigiu hipoteca');
+
+    // LIMPAR continua valendo: listas vazias não ferem regra.
+    const limpo = await saveCpr('PRM-2026-004', consultor, { guarantors: [], mortgages: [] });
+    expect(limpo.status).toBe(200);
+  });
+
+  /**
+   * EXIGIDOS, eles entram — e passam a ser COBRADOS: a cédula não sai sem o aval
+   * com que a decisão foi tomada.
+   */
+  it('exigidos pelo comitê, avalista e hipoteca viram pendência do consultor', async () => {
+    await exigir('PRM-2026-004', {
+      requiresGuarantor: true,
+      requiresCollateral: true,
+    });
+    const consultor = await asUser(ANA);
+
+    const vazia = await readCpr('PRM-2026-004', consultor);
+    expect(vazia.body.data.consultantGaps).toEqual(
+      expect.arrayContaining([
+        'ao menos um avalista (exigido pelo comitê)',
+        'ao menos um bem em hipoteca (exigido pelo comitê)',
+      ]),
+    );
+
+    const salvo = await saveCpr('PRM-2026-004', consultor, {
+      mortgages: [
+        {
+          description: 'Imóvel rural — Fazenda Boa Vista, 120 ha',
+          registryNumber: '9.876',
+          registryDistrict: 'Maringá/PR',
+          city: 'Maringá/PR',
+          ownerName: 'Cláudia Nunes',
+          ownerDocument: '111.222.333-44',
+          appraisedValue: 1500000,
+        },
+      ],
       guarantors: [
         {
           name: 'Pedro Avalista',
@@ -502,32 +587,88 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     });
 
     expect(salvo.status).toBe(200);
-    expect(salvo.body.data.cpr.emitterCnh).toBe('01234567890');
-    expect(salvo.body.data.cpr.emitterFatherName).toBe('José Nunes');
-    expect(salvo.body.data.cpr.mortgages).toContain('9.876');
+    expect(salvo.body.data.cpr.mortgages[0]).toMatchObject({
+      registryNumber: '9.876',
+      appraisedValue: 1500000,
+      documentFile: null,
+    });
     expect(salvo.body.data.cpr.guarantors).toHaveLength(1);
     expect(salvo.body.data.cpr.guarantors[0].spouseName).toBe('Joana Avalista');
 
-    // Nada disso virou pendência.
-    const pendencias = salvo.body.data.gaps.join(' ');
-    expect(pendencias).not.toContain('CNH');
+    // Qualificados por inteiro, o que falta são os ANEXOS — o SCR do avalista e
+    // o documento do bem.
+    expect(salvo.body.data.consultantGaps).toEqual(
+      expect.arrayContaining([
+        'o SCR do 1º avalista (anexo obrigatório, com o consultor)',
+        'o documento do 1º bem em hipoteca (matrícula atualizada, anexo obrigatório)',
+      ]),
+    );
+    const { guarantors, mortgages } = salvo.body.data.cpr as {
+      guarantors: { id: number }[];
+      mortgages: { id: number }[];
+    };
+    expect(
+      (await anexar(`PRM-2026-004/cpr/guarantors/${guarantors[0].id}/scr`, consultor)).status,
+    ).toBe(200);
+    const completa = await anexar(
+      `PRM-2026-004/cpr/mortgages/${mortgages[0].id}/document`,
+      consultor,
+    );
+    expect(completa.status).toBe(200);
+
+    const pendencias = completa.body.data.gaps.join(' ');
     expect(pendencias).not.toContain('avalista');
     expect(pendencias).not.toContain('hipoteca');
+    expect(pendencias).not.toContain('apólice');
   });
 
-  /** Os avalistas seguem a regra das lavouras: a lista inteira substitui. */
-  it('mandar avalistas substitui a lista; omiti-los preserva', async () => {
+  /** O anexo de um avalista que não é desta cédula não entra. */
+  it('o SCR só se anexa a um avalista desta cédula', async () => {
+    const resposta = await anexar('PRM-2026-004/cpr/guarantors/999999/scr', await asUser(ANA));
+    expect(resposta.status).toBe(404);
+  });
+
+  /**
+   * Os avalistas seguem a regra das lavouras — a lista inteira descreve a que
+   * fica, a ausência preserva —, com o ID decidindo quem é quem: o avalista que
+   * volta com o id que tinha é o mesmo, e o SCR dele FICA; o que sai leva o SCR
+   * junto.
+   */
+  it('mandar avalistas substitui a lista; o id preserva o SCR; omiti-los preserva', async () => {
+    await exigir('PRM-2026-004', { requiresGuarantor: true });
     const consultor = await asUser(ANA);
-    await saveCpr('PRM-2026-004', consultor, {
+    const dois = await saveCpr('PRM-2026-004', consultor, {
       guarantors: [{ name: 'Primeiro' }, { name: 'Segundo' }],
     });
+    const [primeiro, segundo] = dois.body.data.cpr.guarantors as { id: number }[];
+    await anexar(`PRM-2026-004/cpr/guarantors/${primeiro.id}/scr`, consultor);
 
     const semTocar = await saveCpr('PRM-2026-004', consultor, { cultivar: 'BMX Ativa RR' });
     expect(semTocar.body.data.cpr.guarantors).toHaveLength(2);
 
-    const um = await saveCpr('PRM-2026-004', consultor, { guarantors: [{ name: 'Único' }] });
+    // O PRIMEIRO volta com o id e o nome corrigido; o segundo sai.
+    const um = await saveCpr('PRM-2026-004', consultor, {
+      guarantors: [{ id: primeiro.id, name: 'Primeiro Corrigido' }],
+    });
     expect(um.body.data.cpr.guarantors).toHaveLength(1);
-    expect(um.body.data.cpr.guarantors[0].name).toBe('Único');
+    expect(um.body.data.cpr.guarantors[0]).toMatchObject({
+      id: primeiro.id,
+      name: 'Primeiro Corrigido',
+      scrFile: { fileName: 'scr.pdf' },
+    });
+
+    // O que saiu não tem mais SCR a baixar — nem avalista.
+    const removido = await request(app.getHttpServer())
+      .get(`/api/v1/barters/PRM-2026-004/cpr/guarantors/${segundo.id}/scr`)
+      .set('Authorization', consultor);
+    expect(removido.status).toBe(404);
+
+    // SEM ID é outro avalista: o SCR do anterior vai embora com ele.
+    const trocado = await saveCpr('PRM-2026-004', consultor, {
+      guarantors: [{ name: 'Primeiro Corrigido' }],
+    });
+    expect(trocado.body.data.cpr.guarantors[0].id).not.toBe(primeiro.id);
+    expect(trocado.body.data.cpr.guarantors[0].scrFile).toBeNull();
   });
 
   /**
@@ -556,9 +697,94 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     ]);
   });
 
-  it('o município do cadastro do produtor entra como sugestão, não como campo gravado', async () => {
+  /**
+   * A PRIMEIRA CÉDULA do produtor: o município sai do cadastro dele, e o padrão
+   * do grão sai do MODELO DA SOJA — os dois como sugestão, nada gravado.
+   */
+  it('o município do produtor e o modelo do grão entram como sugestão, não como campo gravado', async () => {
     const resposta = await readCpr('PRM-2026-004', await asUser(ANA));
-    expect(resposta.body.data.suggestion).toEqual({ emitterCity: 'Marialva/PR' });
+    expect(resposta.body.data.suggestion).toEqual({
+      emitterCity: 'Marialva/PR',
+      sackWeightKg: 60,
+      maxMoisture: 14,
+      maxImpurities: 1,
+      oilContent: 18,
+    });
+  });
+
+  /**
+   * O MODELO é do admin, na aba de grãos, e a cédula nova o lê de lá. A que já
+   * foi começada não muda: o modelo é ponto de partida, não regra.
+   */
+  it('mudar o modelo do grão muda a sugestão da cédula nova, e não a gravada', async () => {
+    const admin = await asUser(ADMIN);
+    const ana = await asUser(ANA);
+    const joao = await asUser(JOAO);
+    await saveCpr('PRM-2026-001', joao, { maxMoisture: 14 });
+
+    const modelo = await request(app.getHttpServer())
+      .put('/api/v1/products/1')
+      .set('Authorization', admin)
+      .send({ cprMaxMoisture: 13, cprOilContent: 19 });
+    expect(modelo.status).toBe(200);
+    expect(modelo.body.data.cprModel).toEqual({
+      sackWeightKg: 60,
+      maxMoisture: 13,
+      maxImpurities: 1,
+      oilContent: 19,
+    });
+
+    const nova = await readCpr('PRM-2026-004', ana);
+    expect(nova.body.data.suggestion.maxMoisture).toBe(13);
+    expect(nova.body.data.suggestion.oilContent).toBe(19);
+
+    const gravada = await readCpr('PRM-2026-001', joao);
+    expect(gravada.body.data.cpr.maxMoisture).toBe(14);
+  });
+
+  it('só grão tem modelo de CPR, e o percentual dele é conferido', async () => {
+    const admin = await asUser(ADMIN);
+    const insumo = await request(app.getHttpServer())
+      .put('/api/v1/products/5')
+      .set('Authorization', admin)
+      .send({ cprMaxMoisture: 13 });
+    expect(insumo.status).toBe(422);
+    expect(insumo.body.message).toContain('Apenas grãos');
+
+    const foraDaEscala = await request(app.getHttpServer())
+      .put('/api/v1/products/1')
+      .set('Authorization', admin)
+      .send({ cprMaxMoisture: 140 });
+    expect(foraDaEscala.status).toBe(422);
+  });
+
+  /**
+   * O LOCAL DA ENTREGA é uma FILIAL da lista, e a cédula guarda o NOME dela —
+   * congelado, para a cláusula não mudar se a unidade for renomeada. O texto
+   * livre de antes é descartado pelo `whitelist`.
+   */
+  it('o local da entrega é uma filial cadastrada, e a cédula guarda o nome dela', async () => {
+    const ana = await asUser(ANA);
+
+    const mesa = await readCpr('PRM-2026-004', ana);
+    expect(mesa.body.data.known.pickupUnitId).toEqual(expect.any(Number));
+
+    const salvo = await saveCpr('PRM-2026-004', ana, { deliveryUnitId: UNIT.filial04 });
+    expect(salvo.status).toBe(200);
+    expect(salvo.body.data.cpr.deliveryUnitId).toBe(UNIT.filial04);
+    expect(salvo.body.data.cpr.deliveryPlace).toBe('Filial 04 (Gran. Inharap.)');
+    expect(salvo.body.data.gaps).not.toContain('local da entrega');
+
+    const textoLivre = await saveCpr('PRM-2026-004', ana, { deliveryPlace: 'Qualquer lugar' });
+    expect(textoLivre.body.data.cpr.deliveryPlace).toBe('Filial 04 (Gran. Inharap.)');
+
+    const inexistente = await saveCpr('PRM-2026-004', ana, { deliveryUnitId: 999 });
+    expect(inexistente.status).toBe(422);
+    expect(inexistente.body.message).toContain('não existe mais');
+
+    const desfeito = await saveCpr('PRM-2026-004', ana, { deliveryUnitId: null });
+    expect(desfeito.body.data.cpr.deliveryUnitId).toBeNull();
+    expect(desfeito.body.data.gaps).toContain('local da entrega');
   });
 
   /**
@@ -602,6 +828,9 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     // O SCR também não: ele é uma fotografia com data, e a da safra passada não
     // diz nada sobre o endividamento de hoje.
     expect(nova.body.data.suggestion.scrFileId).toBeUndefined();
+    // Nem os AVALISTAS da cédula anterior: a permuta nova não tem exigência do
+    // comitê, e o servidor recusaria gravá-los.
+    expect(nova.body.data.suggestion.guarantors).toBeUndefined();
   });
 
   /**
@@ -617,14 +846,14 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
   });
 
   /**
-   * O QUE A PERMUTA JÁ SABE não é campo. Mandar sacas ou valor por cima é
-   * descartado pelo `whitelist` do ValidationPipe — e é para descartar mesmo: um
-   * número na cédula que discorde do registro é um título cobrando o que não foi
-   * acordado.
+   * O QUE A PERMUTA JÁ SABE não é campo. Mandar sacas, valor ou o número da
+   * cédula por cima é descartado pelo `whitelist` do ValidationPipe — e é para
+   * descartar mesmo: um número na cédula que discorde do registro é um título
+   * cobrando o que não foi acordado.
    */
-  it('valor e sacas mandados pelo cliente são descartados', async () => {
+  it('valor, sacas e número mandados pelo cliente são descartados', async () => {
     const salvo = await saveCpr('PRM-2026-004', await asUser(ANA), {
-      number: 'CPR-2026-014',
+      number: 'CPR-2026-999',
       sacks: 1,
       totalValue: 1,
       emitterName: 'Outro Nome',
@@ -633,7 +862,9 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     expect(salvo.status).toBe(200);
     expect(salvo.body.data.known.sacks).toBe(358.7879);
     expect(salvo.body.data.known.emitterName).toBe('Cláudia Nunes');
+    expect(salvo.body.data.known.cprNumber).toBe('CPR-2026-004');
     expect(salvo.body.data.cpr).not.toHaveProperty('sacks');
+    expect(salvo.body.data.cpr).not.toHaveProperty('number');
   });
 
   it('percentual fora da escala é recusado antes de virar documento', async () => {
@@ -676,18 +907,18 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
       .send({});
 
     // O dataset traz a cédula completa, então a lacuna precisa ser criada: uma
-    // cédula sem número não sai.
+    // cédula sem o RG do emitente não sai.
     expect(recusada.status).toBe(200);
 
     await resetDb(app);
-    await saveCpr('PRM-2026-001', await asUser(JOAO), { number: '' });
-    const semNumero = await request(app.getHttpServer())
+    await saveCpr('PRM-2026-001', await asUser(JOAO), { emitterRg: '' });
+    const semRg = await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-001/cpr/issue')
       .set('Authorization', await asUser(EMISSOR))
       .send({});
-    expect(semNumero.status).toBe(422);
-    expect(semNumero.body.message).toContain('não pode ser emitida');
-    expect(semNumero.body.message).toContain('número da CPR');
+    expect(semRg.status).toBe(422);
+    expect(semRg.body.message).toContain('não pode ser emitida');
+    expect(semRg.body.message).toContain('RG do emitente');
   });
 
   /**
@@ -1030,7 +1261,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     const linha = trilha.body.data[0];
     expect(linha.actorName).toBe('Ana Paula Ferreira');
     expect(linha.targetLabel).toBe('PRM-2026-004');
-    expect(linha.detail).toContain('CPR-2026-014');
+    expect(linha.detail).toContain('CPR-2026-004');
     expect(linha.detail).toContain('faltam');
     expect(linha.detail).not.toContain('10.234.567-8');
   });
@@ -1056,7 +1287,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     expect(trilha.status).toBe(200);
     expect(trilha.body.data[0].actorName).toBe('Renata Bicudo');
     expect(trilha.body.data[0].targetLabel).toBe('PRM-2026-001');
-    expect(trilha.body.data[0].detail).toContain('CPR-2026-014');
+    expect(trilha.body.data[0].detail).toContain('CPR-2026-001');
   });
 
   /* ── As bordas que a operação vai encontrar ──────────────────────────── */
@@ -1142,7 +1373,7 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
     // Na GRAVAÇÃO seguinte é que a ausência aparece: o servidor copia o
     // vencimento da safra a cada salvamento, e sem safra não há o que copiar. A
     // pendência então diz onde ela se resolve.
-    const salva = await saveCpr('PRM-2026-001', await asUser(JOAO), { number: 'CPR-2026-014' });
+    const salva = await saveCpr('PRM-2026-001', await asUser(JOAO), { emitterRg: '10.234.567-8' });
     expect(salva.status).toBe(200);
     expect(salva.body.data.cpr.dueDate).toBeNull();
     expect(salva.body.data.gaps.join(' ')).toContain('vencimento da CPR');
@@ -1265,32 +1496,19 @@ describe('CPR — o preenchimento e a emissão da cédula (e2e)', () => {
   });
 
   /**
-   * O NÚMERO DA CÉDULA é informado NO ATO de emitir — é a única coisa dela que o
-   * emissor escreve, e escreve porque é a única que ele tem: a numeração vem de
-   * fora do sistema (cartório, B3, controle da credora). Cobrá-la do consultor
-   * no encaminhamento travaria a esteira num número que só existe semanas
-   * depois.
+   * O NÚMERO DA CÉDULA não é mais do emissor: ele nasceu com a permuta, e o
+   * que vier no ato de emitir é descartado — a emissão não renumera um título.
    */
-  it('o emissor informa o número da cédula ao emitir', async () => {
-    const prisma = app.get(PrismaService);
-    const barter = await prisma.barter.findUniqueOrThrow({ where: { code: 'PRM-2026-001' } });
-    await prisma.barterCpr.update({ where: { barterId: barter.id }, data: { number: '' } });
-
+  it('a emissão usa o número do registro, e não o que vier no ato', async () => {
     const emissor = await asUser(EMISSOR);
-    const semNumero = await request(app.getHttpServer())
-      .post('/api/v1/barters/PRM-2026-001/cpr/issue')
-      .set('Authorization', emissor)
-      .send({});
-    expect(semNumero.status).toBe(422);
-    expect(semNumero.body.message).toContain('número da CPR');
-
-    const comNumero = await request(app.getHttpServer())
+    const emitida = await request(app.getHttpServer())
       .post('/api/v1/barters/PRM-2026-001/cpr/issue')
       .set('Authorization', emissor)
       .send({ number: 'CPR-2026-099' });
-    expect(comNumero.status).toBe(200);
+    expect(emitida.status).toBe(200);
+    expect(emitida.body.data.cprNumber).toBe('CPR-2026-001');
 
     const mesa = await readCpr('PRM-2026-001', emissor);
-    expect(mesa.body.data.cpr.number).toBe('CPR-2026-099');
+    expect(mesa.body.data.known.cprNumber).toBe('CPR-2026-001');
   });
 });

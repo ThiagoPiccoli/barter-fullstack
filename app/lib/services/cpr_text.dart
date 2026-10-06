@@ -71,7 +71,7 @@ class CprText {
 
   /// O cabeçalho: "CÉDULA DE PRODUTO RURAL – CPR Nº 014".
   static String heading(CprDesk desk) =>
-      'CÉDULA DE PRODUTO RURAL – CPR Nº ${_ou(desk.cpr?.number, '_______')}';
+      'CÉDULA DE PRODUTO RURAL – CPR Nº ${_ou(desk.known.cprNumber, '_______')}';
 
   /// O corpo inteiro, cláusula a cláusula.
   static List<CprParagraph> paragraphs(CprDesk desk) {
@@ -433,14 +433,15 @@ class CprText {
             'extrajudicial.',
         indented: true,
       ),
-      // A alínea "j" só existe quando HÁ seguro. O modelo a traz sempre, com a
+      // A alínea "j" só existe quando HÁ apólice. O modelo a traz sempre, com a
       // apólice em branco — e uma cláusula que afirma um seguro inexistente é
-      // pior do que uma cláusula a menos.
-      if (cpr.insurancePolicy.trim().isNotEmpty)
+      // pior do que uma cláusula a menos. O número é o que a SEGURADORA
+      // informou na etapa dela (`known`), e não algo digitado na cédula.
+      if (known.insurancePolicy.trim().isNotEmpty)
         CprParagraph(
           '',
           'j) No presente contrato está incluso o valor do seguro contratado conforme '
-              'apólice nº ${cpr.insurancePolicy}.',
+              'apólice nº ${known.insurancePolicy.trim()}.',
           indented: true,
         ),
       const CprParagraph(
@@ -468,6 +469,12 @@ class CprText {
   /// O do CÔNJUGE só existe quando há um: a anuência é exigida de quem é
   /// casado, e uma linha de assinatura em branco num título de crédito é um
   /// convite a alguém achar que falta assinatura.
+  ///
+  /// OS AVALISTAS vêm depois do emitente e do cônjuge dele — um bloco por
+  /// avalista, e o da anuência do cônjuge do avalista logo abaixo quando ele é
+  /// casado. Eles só existem quando o comitê exigiu aval, e é a ASSINATURA no
+  /// título que faz de alguém avalista: um aval exigido que não aparecesse
+  /// aqui seria uma garantia que ninguém assinou.
   static List<CprSignature> signatures(CprDesk desk) {
     final cpr = desk.cpr ?? const CprDraft();
     final qualificacao =
@@ -513,6 +520,30 @@ class CprText {
           document: 'CPF/MF: ${cpr.spouseDocument}',
           coopId: null,
         ),
+      for (final avalista in cpr.guarantors.where((g) => g.name.trim().isNotEmpty)) ...[
+        CprSignature(
+          role: 'AVALISTA:',
+          name: avalista.name,
+          qualification:
+              '${avalista.nationality}, ${avalista.maritalStatus}, ${avalista.profession}',
+          address: '${avalista.address}, nº ${avalista.addressNumber} – ${avalista.city}',
+          document: 'CPF/MF: ${_digitos(avalista.document)}',
+          coopId: null,
+        ),
+        // O cônjuge do avalista assina pela mesma razão do cônjuge do devedor:
+        // regime de bens. Estado civil e endereço são os do avalista, como no
+        // bloco do devedor — o domicílio é o mesmo.
+        if (avalista.spouseName.trim().isNotEmpty)
+          CprSignature(
+            role: 'ANUÊNCIA DO CÔNJUGE DO AVALISTA:',
+            name: avalista.spouseName,
+            qualification: '${avalista.spouseNationality}, ${avalista.maritalStatus}, '
+                '${avalista.spouseProfession}',
+            address: '${avalista.address}, nº ${avalista.addressNumber} – ${avalista.city}',
+            document: 'CPF/MF: ${_digitos(avalista.spouseDocument)}',
+            coopId: null,
+          ),
+      ],
     ];
   }
 

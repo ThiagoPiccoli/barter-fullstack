@@ -111,6 +111,7 @@ curl -X POST http://localhost:3333/api/v1/barters \
 | **Admin** | `admin@agrobarter.com.br` | — (enxerga tudo; administra, não decide) |
 | Gerente | `gerente@agrobarter.com.br` | — (o time dele; dá o parecer técnico) |
 | Comitê | `comite@agrobarter.com.br` | — (o ÓRGÃO, um acesso só; **decide** as permutas) |
+| Seguradora | `seguradora@agrobarter.com.br` | — (só as permutas COM SEGURO que chegaram à apólice; **informa a apólice**) |
 | Faturista | `faturista@agrobarter.com.br` | — (só o que chegou ao faturamento; **fatura** e anexa as notas) |
 | Emissor | `emissor@agrobarter.com.br` | — (só o que chegou à emissão; **emite** a CPR, colhe assinaturas e registra) |
 | Consultor | `joao.silva@agrobarter.com.br` | Antônio Carvalho, Sebastião Ramos |
@@ -172,6 +173,11 @@ São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts
 - **committee (comitê)** — **decide**: aprova ou nega, lendo o pedido do
   consultor e o parecer do gerente. É a única instância que decide, e é um
   ÓRGÃO: uma reunião, com um cadastro só (ver "O comitê é um cadastro só").
+- **insurer (seguradora)** — o setor interno que cuida dos seguros: recebe a
+  permuta aprovada **com seguro** (obrigatório, ou opcional aceito), **anexa a
+  apólice** e **informa o número** dela — o que a cédula cita. Sem seguro, a
+  permuta pula este posto. Enxerga só o trecho dele, e só o que tem seguro
+  (`barters.readInsurance`). Várias pessoas, cada uma com a sua conta.
 - **biller (faturista)** — **fatura** o que foi aprovado e **anexa as notas
   fiscais** (são várias: a permuta sai em mais de um carregamento). Ele não
   avalia e não devolve. Enxerga só o trecho dele (`barters.readInvoicing`); o
@@ -181,7 +187,7 @@ São cinco, definidos num só lugar ([`src/common/roles.ts`](src/common/roles.ts
   o **registro**. São três atos e três estados porque acontecem em dias
   diferentes. É o escopo mais estreito de todos (`barters.readIssuance`), um
   degrau adiante do faturista.
-- Cada um dos quatro escreve UMA coisa, e nenhum escreve a do outro — a matriz
+- Cada um dos cinco escreve UMA coisa, e nenhum escreve a do outro — a matriz
   inteira é varrida em [`test/rbac.e2e-spec.ts`](test/rbac.e2e-spec.ts).
 - **consultant (consultor)** — loga no app, registra permutas **apenas para os
   produtores que atende** e **preenche a cédula** delas: a matrícula da lavoura,
@@ -203,7 +209,7 @@ preencher a cédula, emitir, assinar e registrar o título. Cada permuta ainda t
 PRÓPRIA linha do tempo (ver abaixo) — são trilhas diferentes de propósito.
 
 Não há signup público: **usuário é provisionado pelo admin**, cada papel pela
-sua rota — `POST /consultants`, `/managers`, `/billers`, `/emitters` e
+sua rota — `POST /consultants`, `/managers`, `/insurers`, `/billers`, `/emitters` e
 `/committee`. O papel
 vem da ROTA, nunca do corpo, e cada rota só enxerga e altera o próprio papel
 (papel alheio responde 404).
@@ -355,6 +361,7 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | GET/POST/PUT/DELETE | `/managers[/:id]` | admin | Gerentes |
 | GET/POST/PUT | `/committee` | admin | O comitê — **um cadastro só** (ver abaixo) |
 | POST | `/committee/reset-password` | admin | Nova senha da conta do comitê |
+| GET/POST/PUT/DELETE | `/insurers[/:id]` | admin | Seguradora — sem ninguém, toda permuta aprovada com seguro para em "aguardando a apólice" |
 | GET/POST/PUT/DELETE | `/billers[/:id]` | admin | Faturistas |
 | GET/POST/PUT/DELETE | `/emitters[/:id]` | admin | Emissores — sem um, toda permuta faturada para em "a emitir a CPR" |
 | POST | `/<papel>/:id/reset-password` | admin | Nova senha provisória; encerra as sessões dele |
@@ -364,6 +371,8 @@ Entrar, falhar e ser bloqueado deixam rastro em `GET /audit-logs?targetType=sess
 | POST | `/barters` | consultor | Registra permuta (ver regras abaixo) |
 | POST | `/barters/:code/opinion` | gerente | Parecer técnico (move para o comitê) |
 | POST | `/barters/:code/review` | comitê | Aprova/nega, com observação |
+| POST | `/barters/:code/insure` | seguradora | Informa a apólice da aprovada com seguro (multipart: arquivo + `policyNumber`) |
+| GET | `/barters/:code/policy-file` | quem alcança a permuta | Baixa a apólice |
 | POST | `/barters/:code/invoice` | faturista | Fatura a aprovada — só com nota anexada |
 | POST | `/barters/:code/invoices` | faturista | Anexa uma nota fiscal (multipart: arquivo + número, série, duplicata, data, valor) |
 | DELETE | `/barters/:code/invoices/:id` | faturista | Remove a nota; o arquivo vai junto, e a permuta continua faturada |
@@ -434,6 +443,7 @@ sentToManager ──▶ pending ──▶ approved ──▶ invoiced ──▶ 
 |---|---|---|---|
 | 1 | **gerente** do consultor | Escreve o **parecer técnico**. Não decide. | `POST /barters/:code/opinion` |
 | 2 | **comitê** | **Decide**: lê o pedido e o parecer, aprova ou nega. | `POST /barters/:code/review` |
+| 2½ | **seguradora** | Só com seguro: **anexa a apólice** e informa o número. Sem seguro, a aprovada pula este posto. | `POST /barters/:code/insure` |
 | 3 | **faturista** | **Fatura** o que foi aprovado e anexa as notas. Não avalia, não devolve. | `POST /barters/:code/invoice` |
 | 4 | **emissor** | **Confere e emite** a cédula. É a única recusa do fluxo: com lacuna, ela não sai. | `POST /barters/:code/cpr/issue` |
 | 5 | **emissor** | Lança a **coleta de assinaturas**, anexando a cédula assinada. | `POST /barters/:code/cpr/signatures` |

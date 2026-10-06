@@ -44,6 +44,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
   Color get _accent => switch (_role) {
         UserRole.manager => AppColors.atManager,
         UserRole.committee => AppColors.pending,
+        UserRole.insurer => AppColors.atInsurer,
         UserRole.biller || UserRole.emitter => AppColors.invoiced,
         UserRole.admin => AppColors.primaryAccent,
         UserRole.consultant => AppColors.input,
@@ -52,6 +53,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
   IconData get _icon => switch (_role) {
         UserRole.manager => Icons.assignment_ind_outlined,
         UserRole.committee => Icons.groups_2_outlined,
+        UserRole.insurer => Icons.shield_outlined,
         UserRole.biller => Icons.receipt_long_outlined,
         UserRole.emitter => Icons.description_outlined,
         UserRole.admin => Icons.admin_panel_settings_outlined,
@@ -105,6 +107,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
       final provisioned = await switch (_role) {
         // O comitê não tem id na rota: o cadastro é um só.
         UserRole.committee => AppData.resetCommitteePassword(),
+        UserRole.insurer => AppData.resetInsurerPassword(user.id),
         UserRole.biller => AppData.resetBillerPassword(user.id),
         UserRole.emitter => AppData.resetEmitterPassword(user.id),
         UserRole.admin => AppData.resetAdminPassword(user.id),
@@ -119,7 +122,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
     }
   }
 
-  /// Exclusão de GERENTE, FATURISTA, EMISSOR e ADMIN.
+  /// Exclusão de GERENTE, SEGURADORA, FATURISTA, EMISSOR e ADMIN.
   ///
   /// No gerente o servidor RECUSA enquanto ele tiver consultores no time ou
   /// permutas esperando o parecer dele, e a mensagem diz qual dos dois falta — a
@@ -133,6 +136,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
       title: 'Excluir ${_role.label}',
       name: user.name,
       barterCount: switch (_role) {
+        UserRole.insurer => insuredBy(AppData.barters, user.name),
         UserRole.biller => invoicedBy(AppData.barters, user.name),
         UserRole.emitter => issuedBy(AppData.barters, user.name),
         UserRole.manager => opinionsOf(AppData.barters, user.id),
@@ -140,6 +144,7 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
       },
       onConfirm: () async {
         await switch (_role) {
+          UserRole.insurer => AppData.deleteInsurer(user.id),
           UserRole.biller => AppData.deleteBiller(user.id),
           UserRole.emitter => AppData.deleteEmitter(user.id),
           UserRole.admin => AppData.deleteAdmin(user.id),
@@ -242,6 +247,13 @@ class _StaffProfileScreenState extends State<StaffProfileScreen> {
   List<Widget> _work() => switch (_role) {
         UserRole.manager => _managerWork(),
         UserRole.committee => _committeeWork(),
+        UserRole.insurer => _signedWork(
+            title: 'Apólices informadas',
+            count: 'Apólices',
+            icon: Icons.shield,
+            barters: AppData.barters.where((b) => b.insuredBy == user.name),
+            empty: 'Nenhuma apólice informada',
+          ),
         UserRole.biller => _signedWork(
             title: 'Faturadas por ele',
             count: 'Faturadas',

@@ -12,6 +12,7 @@ import '../services/api/api_client.dart';
 import '../services/barter_pdf.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/policy_dialog.dart';
 import 'barter_screen.dart';
 import 'cpr_form_screen.dart';
 import 'invoicing_screen.dart';
@@ -108,7 +109,33 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
   ///
   /// Nos dois estados do trecho: a aprovada (o ato) e a já faturada (as notas
   /// continuam editáveis — nota cancelada é reemitida).
-  bool get _canOpenInvoicing => AppData.can(Capability.bartersInvoice) && _barter.wasApproved;
+  ///
+  /// A que espera a APÓLICE fica de fora: ela ainda não chegou ao faturamento.
+  bool get _canOpenInvoicing =>
+      AppData.can(Capability.bartersInvoice) && (_barter.awaitsInvoice || _barter.wasInvoiced);
+
+  /// BAIXA a apólice que a seguradora anexou — para quem alcança a permuta.
+  Future<void> _downloadPolicy() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final arquivo = await AppData.downloadBarterPolicy(_barter.id);
+      final ponto = arquivo.filename.lastIndexOf('.');
+      await FileSaver.instance.saveFile(
+        name: ponto > 0 ? arquivo.filename.substring(0, ponto) : arquivo.filename,
+        bytes: Uint8List.fromList(arquivo.bytes),
+        ext: ponto > 0 ? arquivo.filename.substring(ponto + 1) : 'pdf',
+        mimeType: MimeType.other,
+        customMimeType: arquivo.contentType,
+      );
+      messenger.showSnackBar(SnackBar(
+        content: Text('${arquivo.filename} salvo.'),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (error) {
+      if (!mounted) return;
+      showErrorSnack(context, error);
+    }
+  }
 
   /// E a CÉDULA — quem a alcança daqui?
   ///
@@ -255,6 +282,9 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                 _InfoRow(label: 'Safra', value: _barter.seasonName),
               if (_barter.versionCode.isNotEmpty)
                 _InfoRow(label: 'Barter', value: _barter.versionCode),
+              // O NÚMERO DA CPR existe desde o registro, e não só na emissão.
+              if (_barter.cprNumber.isNotEmpty)
+                _InfoRow(label: 'Nº da CPR', value: _barter.cprNumber),
               if (_barter.plantedAreaHa > 0)
                 _InfoRow(label: 'Área plantada', value: areaLabelOf(_barter.plantedAreaHa)),
               _InfoRow(label: 'Criada em', value: _formatDate(_barter.createdAt)),
@@ -265,7 +295,10 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               // ressalva: ele já as mostra em fichas, e repetidas nos dois
               // lugares elas viram paisagem. Este caminho é o da aprovação
               // limpa que veio com uma exigência marcada.
-              if (!_barter.hasConditions && _barter.requirements.isNotEmpty)
+              // Na permuta DEVOLVIDA, o cartão das exigências já as mostra.
+              if (!_barter.hasConditions &&
+                  !_barter.awaitsRequirements &&
+                  _barter.requirements.isNotEmpty)
                 _InfoRow(
                   label: 'Exigências',
                   value: _barter.requirements.join(', '),
@@ -280,6 +313,16 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
               // risco que o gerente e o comitê precisam ler.
               else if (_barter.insuranceChoice == InsuranceChoice.declined)
                 _InfoRow(label: 'Seguro agrícola', value: 'Recusado pelo produtor'),
+              // A APÓLICE, quando a seguradora já a informou: o número (o que a
+              // cédula cita) e quem o informou. O documento se baixa no bloco
+              // da apólice, mais abaixo.
+              if (_barter.hasPolicy) ...[
+                _InfoRow(label: 'Apólice', value: _barter.insurancePolicyNumber!),
+                if (_barter.insuredBy != null)
+                  _InfoRow(label: 'Apólice informada por', value: _barter.insuredBy!),
+                if (_barter.insuredAt != null)
+                  _InfoRow(label: 'Apólice informada em', value: _formatDate(_barter.insuredAt!)),
+              ],
               if (_barter.invoicedBy != null) ...[
                 _InfoRow(label: 'Faturada por', value: _barter.invoicedBy!),
                 if (_barter.invoicedAt != null)
@@ -554,6 +597,18 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
         ),
       ),
 
+    // AS EXIGÊNCIAS DO COMITÊ — a permuta devolvida ao consultor. Ele vê o
+    // que trazer e devolve; os outros veem com quem ela está e por quê.
+    if (_barter.awaitsRequirements)
+      DetailBlock.side(
+        _RequirementsCard(
+          barter: _barter,
+          canFulfill: _barter.awaitsRequirementsFrom(AppData.currentUser?.id) &&
+              AppData.can(Capability.bartersRegister),
+          onChanged: (updated) => setState(() => _barter = updated),
+        ),
+      ),
+
     if (_awaitsMyOpinion)
       DetailBlock.side(
         Column(
@@ -668,6 +723,24 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
+            const SizedBox(height: 12),
+            // AS EXIGÊNCIAS vêm antes da decisão, e não junto: marcá-las devolve
+            // a permuta ao consultor, que volta com elas na cédula. Por isso o
+            // botão não decide nada — ele é a alternativa a decidir agora.
+            OutlinedButton.icon(
+              onPressed: () => requireBarterGuarantees(
+                context,
+                _barter,
+                onRequired: (updated) => setState(() => _barter = updated),
+              ),
+              icon: const Icon(Icons.assignment_return_outlined),
+              label: const Text('Exigir Avalista ou Hipoteca'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.draft,
+                side: BorderSide(color: AppColors.draft),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
           ],
         ),
       ),
@@ -682,6 +755,63 @@ class _BarterDetailScreenState extends State<BarterDetailScreen> {
         _CreditDossierCard(
           barter: _barter,
           onChanged: (updated) => setState(() => _barter = updated),
+        ),
+      ),
+
+    // A APÓLICE — o posto da SEGURADORA, só nas permutas com seguro. Botão
+    // cheio, porque é ação de posto: a permuta está parada esperando ela.
+    if (AppData.can(Capability.bartersInsure) && _barter.awaitsPolicy)
+      DetailBlock.side(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Apólice do Seguro',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${_barter.hasConditions ? 'Aprovada com ressalva' : 'Aprovada'} pelo comitê'
+              '${_barter.hasDecision ? ' (${_barter.reviewedBy})' : ''}. '
+              'Anexe a apólice e informe o número — é ele que a cédula vai citar. '
+              'Depois disso, a permuta segue para o faturista.',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () => informBarterPolicy(
+                context,
+                _barter,
+                onInsured: (updated) => setState(() => _barter = updated),
+              ),
+              icon: const Icon(Icons.upload_file_outlined),
+              label: const Text('Anexar Apólice'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.atInsurer,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ],
+        ),
+      ),
+
+    // O DOCUMENTO DA APÓLICE, para quem alcança a permuta — o faturista, o
+    // emissor que confere a cédula, o consultor que a mostra ao produtor.
+    if (_barter.insurancePolicyFile != null)
+      DetailBlock.side(
+        OutlinedButton.icon(
+          onPressed: _downloadPolicy,
+          icon: const Icon(Icons.shield_outlined),
+          label: Text('Apólice nº ${_barter.insurancePolicyNumber ?? ''}'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: AppColors.atInsurer,
+            side: BorderSide(color: AppColors.atInsurer),
+            padding: const EdgeInsets.symmetric(vertical: 14),
+          ),
         ),
       ),
 
@@ -1360,6 +1490,186 @@ class _CprGapsCard extends StatelessWidget {
 /// consultor: sem este bloco, uma permuta registrada há três dias parecia
 /// parada sem motivo, e a pergunta ("cadê a minha permuta?") ia para o admin,
 /// que também não tinha o que responder.
+/// A PERMUTA DEVOLVIDA COM EXIGÊNCIAS DO COMITÊ — avalista, hipoteca, seguro.
+///
+/// Para o CONSULTOR dela é trabalho: o cartão diz o que o comitê pediu (as
+/// caixas e o texto), o que ainda falta na cédula, e tem os dois botões —
+/// preencher e devolver. A devolução vai DIRETO ao comitê, sem passar de novo
+/// pelo gerente.
+///
+/// Para os outros é a resposta a "por que esta não foi decidida?": com quem ela
+/// está, e o que se espera dele.
+class _RequirementsCard extends StatefulWidget {
+  final BarterModel barter;
+  final bool canFulfill;
+  final ValueChanged<BarterModel> onChanged;
+
+  const _RequirementsCard({
+    required this.barter,
+    required this.canFulfill,
+    required this.onChanged,
+  });
+
+  @override
+  State<_RequirementsCard> createState() => _RequirementsCardState();
+}
+
+class _RequirementsCardState extends State<_RequirementsCard> {
+  bool _sending = false;
+
+  /// O que ainda falta na cédula — a mesma lista com que o servidor recusa a
+  /// devolução (ver [CprDesk.consultantGaps]). `null` é "ainda não sei", e não
+  /// desliga o botão: o portão de verdade é o do servidor.
+  List<String>? _gaps;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.canFulfill) _loadGaps();
+  }
+
+  Future<void> _loadGaps() async {
+    try {
+      final desk = await AppData.barterCpr(widget.barter.id);
+      if (mounted) setState(() => _gaps = desk.consultantGaps);
+    } catch (_) {
+      if (mounted) setState(() => _gaps = null);
+    }
+  }
+
+  Future<void> _openCpr() async {
+    await openCprDesk(context, widget.barter, onChanged: widget.onChanged);
+    await _loadGaps();
+  }
+
+  Future<void> _fulfill() async {
+    setState(() => _sending = true);
+    try {
+      final updated = await AppData.fulfillRequirements(widget.barter.id);
+      if (!mounted) return;
+      setState(() => _sending = false);
+      widget.onChanged(updated);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Permuta devolvida ao comitê. O gerente foi avisado.'),
+        backgroundColor: AppColors.pending,
+      ));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      unawaited(_loadGaps());
+      showErrorSnack(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final barter = widget.barter;
+    final note = barter.requirementsNote;
+    final gaps = _gaps ?? const <String>[];
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.draftBg,
+        borderRadius: AppShape.card,
+        border: Border.all(color: AppColors.draft.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.assignment_return_outlined, size: 18, color: AppColors.draft),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Exigências do comitê',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.draft,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            widget.canFulfill
+                ? 'O comitê devolveu esta permuta a você. Traga para a cédula o que foi '
+                    'pedido e devolva — ela volta direto ao comitê, sem passar pelo gerente.'
+                : 'Com ${barter.consultantName}, que precisa trazer o que o comitê pediu. '
+                    'Depois ela volta direto ao comitê.',
+            style: TextStyle(fontSize: 12, color: AppColors.textDark),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final requirement in barter.requirements)
+                Chip(
+                  visualDensity: VisualDensity.compact,
+                  label: Text(requirement, style: const TextStyle(fontSize: 12)),
+                  backgroundColor: AppColors.surface,
+                  side: BorderSide(color: AppColors.draft.withValues(alpha: 0.4)),
+                ),
+            ],
+          ),
+          if (note != null && note.trim().isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Text(
+              note,
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.4),
+            ),
+          ],
+          if (widget.canFulfill) ...[
+            if (gaps.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Falta na cédula: ${gaps.join(', ')}.',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.denied,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _sending ? null : _openCpr,
+              icon: const Icon(Icons.description_outlined),
+              label: const Text('Preencher a Cédula'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.draft,
+                side: BorderSide(color: AppColors.draft),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              onPressed: _sending || gaps.isNotEmpty ? null : _fulfill,
+              icon: _sending
+                  ? SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: AppColors.onPrimary),
+                    )
+                  : const Icon(Icons.send_outlined),
+              label: const Text('Devolver ao Comitê'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.pending,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _AwaitingOpinionCard extends StatelessWidget {
   final String managerLabel;
   const _AwaitingOpinionCard({required this.managerLabel});

@@ -288,11 +288,14 @@ List<({String id, String name})> consultantsOf(Iterable<BarterModel> barters) {
 /// nome, e o que a exclusão precisa avisar que fica órfão.
 ///
 /// Cada posto deixa uma marca diferente na permuta, e é por ela que se conta: o
-/// gerente é o DESTINATÁRIO (`managerId`), o faturista e o emissor ficam
-/// assinados em texto (`invoicedBy`, `cprEmittedBy`) — snapshot que sobrevive à
+/// gerente é o DESTINATÁRIO (`managerId`), a seguradora, o faturista e o
+/// emissor ficam assinados em texto (`insuredBy`, `invoicedBy`, `cprEmittedBy`) — snapshot que sobrevive à
 /// exclusão da conta, que é justamente o caso em que alguém vai querer contar.
 int opinionsOf(Iterable<BarterModel> barters, String managerId) =>
     barters.where((b) => b.managerId == managerId).length;
+
+int insuredBy(Iterable<BarterModel> barters, String name) =>
+    barters.where((b) => b.insuredBy == name).length;
 
 int invoicedBy(Iterable<BarterModel> barters, String name) =>
     barters.where((b) => b.invoicedBy == name).length;

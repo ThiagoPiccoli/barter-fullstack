@@ -40,6 +40,12 @@ export const AUDIT_ACTION = {
    */
   barterOpinion: 'barter.opinion',
   barterReviewed: 'barter.reviewed',
+  /**
+   * A APÓLICE informada pela seguradora. Entra pelo mesmo critério do
+   * faturamento: ela é custo da permuta contratado para fora, com número e
+   * documento — e "quem informou esta apólice?" é pergunta de investigação.
+   */
+  barterInsured: 'barter.insured',
   barterInvoiced: 'barter.invoiced',
   /**
    * O DESVIO da linha: o pedido de alteração do consultor e a decisão do admin

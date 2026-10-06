@@ -292,6 +292,22 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     createdAt: at(2022, 3, 7),
   });
 
+  /**
+   * A SEGURADORA — o setor que cria a apólice das permutas aprovadas COM SEGURO
+   * e a informa, documento e número, antes de a permuta chegar ao faturista.
+   *
+   * Vem DEPOIS da Renata pela mesma razão de ela ter vindo depois do Gustavo:
+   * não deslocar os ids que os testes de provisionamento fixam.
+   */
+  const silvia = await mkUser({
+    fullName: 'Sílvia Moreira',
+    email: 'seguradora@agrobarter.com.br',
+    role: ROLE.insurer,
+    phone: '(44) 99999-0015',
+    branch: 'Matriz',
+    createdAt: at(2022, 5, 2),
+  });
+
   /* ── Unidades de retirada ─────────────────────────────────────────── */
   //
   // Elas nascem dos textos que estavam em `branch`: o cadastro de unidade é a
@@ -343,6 +359,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
   await lotar(comite, matriz);
   await lotar(patricia, matriz);
   await lotar(renata, matriz);
+  await lotar(silvia, matriz);
 
   /* ── Carteiras de produtores ──────────────────────────────────────── */
   // `documentDigits` (a forma canônica que garante a unicidade) é derivada
@@ -513,6 +530,12 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     prices: number[];
     requiredPerHa?: number;
     classId?: number;
+    /**
+     * O MODELO DA CPR do grão: peso da saca, umidade, impurezas e teor de
+     * óleo. A soja tem o modelo recebido inteiro; o teor de óleo dos outros
+     * fica sem definir — é o caso que a aba de grãos mostra pedindo revisão.
+     */
+    cprModel?: [number, number, number, number];
   }[] = [
     {
       sku: 'GRA-0001',
@@ -520,6 +543,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       unit: 'saca 60kg',
       type: 'grain',
       prices: [142.0, 144.5, 145.0, 147.2, 146.8, 149.3, 148.5],
+      cprModel: [60, 14, 1, 18],
     },
     {
       sku: 'GRA-0002',
@@ -527,6 +551,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       unit: 'saca 60kg',
       type: 'grain',
       prices: [58.0, 59.5, 60.0, 61.2, 63.0, 62.8, 62.3],
+      cprModel: [60, 14, 1, 0],
     },
     {
       sku: 'GRA-0003',
@@ -534,6 +559,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       unit: 'saca 60kg',
       type: 'grain',
       prices: [80.0, 81.5, 82.5, 84.0, 83.2, 86.1, 85.0],
+      cprModel: [60, 13, 1, 0],
     },
     {
       sku: 'GRA-0004',
@@ -541,6 +567,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       unit: 'saca 40kg',
       type: 'grain',
       prices: [43.0, 43.8, 44.5, 45.2, 44.9, 46.1, 45.8],
+      cprModel: [40, 13, 1, 0],
     },
     {
       sku: 'NPK-0414',
@@ -606,6 +633,14 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         currentPrice: item.prices[item.prices.length - 1],
         requiredPerHa: item.requiredPerHa ?? 0,
         classId: item.classId ?? null,
+        ...(item.cprModel
+          ? {
+              cprSackWeightKg: item.cprModel[0],
+              cprMaxMoisture: item.cprModel[1],
+              cprMaxImpurities: item.cprModel[2],
+              cprOilContent: item.cprModel[3],
+            }
+          : {}),
         priceHistory: {
           create: item.prices.map((price, i) => ({
             price,
@@ -880,6 +915,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       // comitê e faturamento. É a única `invoiced` — sem ela, o painel do
       // faturista não teria nada faturado para mostrar, só a fila.
       status: 'invoiced',
+      // O COMITÊ EXIGIU avalista e hipoteca antes de aprovar — é por isso que a
+      // cédula dela, a única completa do dataset, tem os dois blocos
+      // preenchidos. Sem a exigência, o servidor nem aceitaria gravá-los.
+      requirements: { requiresGuarantor: true, requiresCollateral: true },
       createdAt: at(2026, 1, 10, 9, 30),
       managerNote:
         'Volume compatível com a área declarada e com o histórico do produtor. ' +
@@ -1131,6 +1170,10 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     await prisma.barter.create({
       data: {
         code: entry.code,
+        // O NÚMERO DA CPR, que o service reserva no registro. No dataset ele
+        // acompanha o código (PRM-2026-001 → CPR-2026-001): as duas sequências
+        // começam juntas num banco vazio, que é o que o seed é.
+        cprNumber: entry.code.replace(/^PRM-/, 'CPR-'),
         versionId: entry.version.id,
         versionCode: entry.version.code,
         consultantId: entry.consultant.id,
@@ -1170,6 +1213,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         // assinatura mudou junto com a regra: uma demonstração em que o admin
         // aprova ensinaria errado o fluxo que o sistema passou a ter.
         reviewNote: entry.reviewNote ?? null,
+        // AS EXIGÊNCIAS DO COMITÊ, quando ele as fez antes de decidir.
+        ...entry.requirements,
         reviewedBy: entry.reviewedAt ? comite.fullName : null,
         reviewedById: entry.reviewedAt ? comite.id : null,
         reviewedAt: entry.reviewedAt ?? null,
@@ -1284,10 +1329,37 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
     },
   });
 
+  // O SCR DO AVALISTA e a MATRÍCULA do bem hipotecado — os dois anexos que as
+  // exigências do comitê trazem. Sem eles, a cédula "pronta" do dataset deixaria
+  // de estar pronta, pelo mesmo motivo do SCR do emitente.
+  const relatorioScrAvalista = pdfDeMentira('SCR Bacen - avalista');
+  const scrDoAvalista = await prisma.barterFile.create({
+    data: {
+      fileName: 'scr-nelson-carvalho-2026-01.pdf',
+      contentType: 'application/pdf',
+      size: relatorioScrAvalista.length,
+      content: relatorioScrAvalista,
+      uploadedBy: joao.fullName,
+      uploadedById: joao.id,
+      uploadedAt: at(2026, 1, 9, 14, 30),
+    },
+  });
+  const matriculaAtualizada = pdfDeMentira('Matricula 18.442');
+  const documentoDoBem = await prisma.barterFile.create({
+    data: {
+      fileName: 'matricula-18442-atualizada.pdf',
+      contentType: 'application/pdf',
+      size: matriculaAtualizada.length,
+      content: matriculaAtualizada,
+      uploadedBy: joao.fullName,
+      uploadedById: joao.id,
+      uploadedAt: at(2026, 1, 9, 15),
+    },
+  });
+
   await prisma.barterCpr.create({
     data: {
       barterId: faturada.id,
-      number: 'CPR-2026-014',
       // Emitida no dia do faturamento e vencendo na colheita — que é o que a
       // CPR é: a promessa de entregar o grão que ainda está na lavoura.
       //
@@ -1319,9 +1391,27 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       emitterEmail: 'antonio.carvalho@exemplo.com.br',
 
       // O local da entrega é a unidade de retirada dele — o caso comum, e o
-      // que a tela sugere. Ele SAI no documento (cláusula V, "d").
-      deliveryPlace: 'Filial 02 (Gran. Santa T.)',
-      mortgages: 'Hipoteca de 1º grau sobre a matrícula 18.442, junto ao Banco do Brasil S.A.',
+      // que a tela sugere. Ele SAI no documento (cláusula V, "d"): a filial
+      // escolhida e o nome dela, congelado como a gravação o congela.
+      deliveryUnitId: filial02.id,
+      deliveryPlace: filial02.name,
+      // O BEM DADO EM HIPOTECA — exigido pelo comitê, cadastrado campo por campo
+      // e com a matrícula atualizada anexada.
+      mortgages: {
+        create: [
+          {
+            position: 0,
+            description: 'Imóvel rural — Sítio São Sebastião, 32 ha',
+            registryNumber: '18.442',
+            registryDistrict: 'Maringá/PR',
+            city: 'Maringá/PR',
+            ownerName: 'Antônio Carvalho',
+            ownerDocument: '123.456.789-00',
+            appraisedValue: 1850000,
+            documentFileId: documentoDoBem.id,
+          },
+        ],
+      },
 
       spouseName: 'Marta Regina Carvalho',
       spouseNationality: 'brasileira',
@@ -1348,9 +1438,8 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
       scrFileId: scrDoProdutor.id,
       scrConsultedAt: at(2026, 1, 9, 14),
 
-      // Com apólice, para a alínea "j" da cláusula XVIII aparecer no documento:
-      // ela só existe quando há seguro, e uma cédula sem seguro não a imprime.
-      insurancePolicy: 'AP-2026-778.412',
+      // A APÓLICE não é mais campo da cédula: o número é da seguradora, e mora
+      // na permuta (ver logo abaixo).
 
       // Quem preencheu é o CONSULTOR que registrou a permuta, e não mais o
       // faturista: a qualificação do produtor, as matrículas das lavouras e o
@@ -1411,9 +1500,9 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
         ],
       },
 
-      // Um AVALISTA — coletado pela proposta e ainda não impresso (o modelo não
-      // tem cláusula de aval). Está aqui para o bloco mais longo do formulário
-      // abrir preenchido pelo menos uma vez.
+      // Um AVALISTA — exigido pelo comitê (ver `requirements` desta permuta),
+      // com o SCR dele anexado, e que ASSINA a cédula junto com o emitente. Está
+      // aqui também para o bloco mais longo do formulário abrir preenchido.
       guarantors: {
         create: [
           {
@@ -1436,6 +1525,7 @@ export async function seedDatabase(prisma: PrismaClient): Promise<void> {
             spouseRg: '7.881.230-4 SSP/PR',
             spouseNationality: 'brasileira',
             spouseProfession: 'advogada',
+            scrFileId: scrDoAvalista.id,
           },
         ],
       },

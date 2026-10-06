@@ -37,6 +37,7 @@ enum _Registry {
   consultants,
   managers,
   committee,
+  insurers,
   billers,
   emitters,
   units,
@@ -47,7 +48,7 @@ enum _Registry {
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
 /// (quem registra permuta e preenche a cédula), GERENTES (quem dá o parecer),
-/// COMITÊ (quem decide), FATURISTAS (quem fatura e anexa as notas), EMISSORES
+/// COMITÊ (quem decide), SEGURADORA (quem informa a apólice), FATURISTAS (quem fatura e anexa as notas), EMISSORES
 /// (quem emite a cédula, colhe as assinaturas e a registra) e UNIDADES (os
 /// locais de retirada), com busca em cada lista.
 ///
@@ -90,6 +91,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           _Registry.consultants => const EditStaffScreen(role: UserRole.consultant),
           _Registry.managers => const EditStaffScreen(role: UserRole.manager),
           _Registry.committee => const EditStaffScreen(role: UserRole.committee),
+          _Registry.insurers => const EditStaffScreen(role: UserRole.insurer),
           _Registry.billers => const EditStaffScreen(role: UserRole.biller),
           _Registry.emitters => const EditStaffScreen(role: UserRole.emitter),
           _Registry.units => const EditUnitScreen(),
@@ -136,6 +138,13 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             b.name.toLowerCase().contains(q) ||
             b.branch.toLowerCase().contains(q) ||
             b.email.toLowerCase().contains(q))
+        .toList();
+    final insurers = AppData.insurers
+        .where((i) =>
+            q.isEmpty ||
+            i.name.toLowerCase().contains(q) ||
+            i.branch.toLowerCase().contains(q) ||
+            i.email.toLowerCase().contains(q))
         .toList();
     final emitters = AppData.emitters
         .where((e) =>
@@ -186,6 +195,15 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           'Buscar não se aplica: o comitê é um cadastro só',
           AppData.committee == null ? 'sem cadastro' : '1 comitê',
           'Cadastrar comitê',
+        ),
+      // SEM NINGUÉM NA SEGURADORA, toda permuta aprovada com seguro para em
+      // "aguardando a apólice" — a contagem zerada diz isso antes da reclamação.
+      _Registry.insurers => (
+          'Buscar pessoa da seguradora, unidade ou e-mail...',
+          insurers.isEmpty
+              ? 'ninguém na seguradora — as permutas com seguro param sem apólice'
+              : '${insurers.length} pessoa(s) na seguradora',
+          'Nova pessoa na seguradora',
         ),
       _Registry.billers => (
           'Buscar faturista, unidade ou e-mail...',
@@ -284,6 +302,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 _Registry.consultants => _buildConsultantList(consultants),
                 _Registry.managers => _buildManagerList(managers),
                 _Registry.committee => _buildCommittee(),
+                _Registry.insurers => _buildInsurerList(insurers),
                 _Registry.billers => _buildBillerList(billers),
                 _Registry.emitters => _buildEmitterList(emitters),
                 _Registry.units => _buildUnitList(units),
@@ -495,6 +514,43 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
               context,
               MaterialPageRoute(
                 builder: (_) => StaffProfileScreen(user: b, role: UserRole.biller),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// A SEGURADORA — as pessoas que informam as apólices. O cartão conta quantas
+  /// cada uma informou.
+  Widget _buildInsurerList(List<UserModel> list) {
+    if (list.isEmpty) {
+      return const _EmptyState(label: 'Ninguém cadastrado na seguradora');
+    }
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_seguradora'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final person = list[i];
+        final apolices = insuredBy(AppData.barters, person.name);
+        return _PersonCard(
+          initials: person.avatarInitials,
+          name: person.name,
+          subtitle: person.branch,
+          accent: AppColors.atInsurer,
+          badgeIcon: Icons.shield,
+          chips: [
+            if (apolices > 0)
+              _StatChip(label: '$apolices apólice(s)', color: AppColors.atInsurer),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => StaffProfileScreen(user: person, role: UserRole.insurer),
               ),
             );
             if (mounted) setState(() {});
@@ -808,6 +864,7 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.consultants: ('Consultores', Icons.badge),
     _Registry.managers: ('Gerentes', Icons.assignment_ind),
     _Registry.committee: ('Comitê', Icons.groups_2),
+    _Registry.insurers: ('Seguradora', Icons.shield),
     _Registry.billers: ('Faturistas', Icons.receipt_long),
     _Registry.emitters: ('Emissores', Icons.description),
     _Registry.units: ('Unidades', Icons.store),
@@ -825,6 +882,7 @@ class _SegmentedToggle extends StatelessWidget {
         _Registry.consultants => AppColors.input,
         _Registry.managers => AppColors.atManager,
         _Registry.committee => AppColors.pending,
+        _Registry.insurers => AppColors.atInsurer,
         _Registry.billers => AppColors.invoiced,
         _Registry.emitters => AppColors.invoiced,
         _Registry.units => AppColors.primaryMedium,

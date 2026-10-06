@@ -162,6 +162,43 @@ describe('Barters (e2e)', () => {
   });
 
   /**
+   * A CPR TEM NÚMERO DESDE O REGISTRO — e não só na emissão.
+   *
+   * O número é reservado no mesmo ato do código, sequencial dentro do ano e
+   * único. A sequência continua depois do maior já usado, inclusive de um
+   * número que não segue o código da permuta (as anteriores à numeração
+   * herdaram o que o emissor tinha informado).
+   */
+  it('a permuta nasce com número de CPR sequencial e único', async () => {
+    const joao = await asUser(JOAO);
+    const registra = () =>
+      request(app.getHttpServer())
+        .post('/api/v1/barters')
+        .set('Authorization', joao)
+        .send(validPayload);
+
+    const primeira = await registra();
+    expect(primeira.status).toBe(201);
+    expect(primeira.body.data.cprNumber).toBe('CPR-2026-010');
+
+    // Um número herdado À FRENTE da sequência: a próxima continua depois dele.
+    await app
+      .get(PrismaService)
+      .barter.update({ where: { code: 'PRM-2026-002' }, data: { cprNumber: 'CPR-2026-040' } });
+
+    const segunda = await registra();
+    expect(segunda.body.data.code).toBe('PRM-2026-011');
+    expect(segunda.body.data.cprNumber).toBe('CPR-2026-041');
+
+    // E a cédula o mostra antes de o rascunho existir.
+    const mesa = await request(app.getHttpServer())
+      .get(`/api/v1/barters/${segunda.body.data.code}/cpr`)
+      .set('Authorization', joao);
+    expect(mesa.body.data.cpr).toBeNull();
+    expect(mesa.body.data.known.cprNumber).toBe('CPR-2026-041');
+  });
+
+  /**
    * CADA CULTURA É UM BARTER, e a permuta escolhe UMA.
    *
    * O seed tem a soja 26/27 e o milho safrinha 2027 abertos ao mesmo tempo,
@@ -982,8 +1019,8 @@ describe('Barters (e2e)', () => {
      *
      * É a metade que impede a regra de virar um impossível: no encaminhamento
      * não existe nota fiscal (a permuta nem foi decidida), o vencimento é da
-     * safra e o número da cédula só aparece na emissão. Se qualquer um deles
-     * entrasse na conta, nenhuma permuta sairia do rascunho.
+     * safra. Se qualquer um deles entrasse na conta, nenhuma permuta sairia do
+     * rascunho.
      */
     it('o encaminhamento não cobra o que é de outro posto', async () => {
       const code = await rascunho();
@@ -991,13 +1028,12 @@ describe('Barters (e2e)', () => {
       await fillCpr(app, joao, code);
 
       // A cédula tem o que é do consultor, e MESMO ASSIM está incompleta para
-      // emitir: faltam a nota e o número. Ela encaminha do mesmo jeito.
+      // emitir: falta a nota. Ela encaminha do mesmo jeito.
       const mesa = await request(app.getHttpServer())
         .get(`/api/v1/barters/${code}/cpr`)
         .set('Authorization', joao);
       expect(mesa.body.data.complete).toBe(false);
       expect(mesa.body.data.gaps.join(' ')).toContain('nota fiscal');
-      expect(mesa.body.data.gaps.join(' ')).toContain('número da CPR');
       // E a lista DELE está vazia — é ela que a tela lê para ligar o botão de
       // encaminhar, e não `gaps`, que continua cheio do que é de outro posto.
       expect(mesa.body.data.consultantGaps).toEqual([]);

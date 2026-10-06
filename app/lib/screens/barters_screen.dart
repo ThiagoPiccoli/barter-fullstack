@@ -7,6 +7,7 @@ import '../data/app_data.dart';
 import '../services/dashboard_stats.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/policy_dialog.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
 import 'invoicing_screen.dart';
@@ -122,6 +123,17 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
       ? _fullLine
       : AppData.can(Capability.bartersReadIssuance)
       ? const [BarterStatus.invoiced, BarterStatus.cprIssued]
+      // A SEGURADORA enxerga as permutas COM SEGURO da mesa dela em diante (o
+      // escopo dela no servidor é `lineFrom(insure)`). A fila dela abre a lista,
+      // e as abas seguintes recolhem o que já passou por ela — sem elas, a
+      // permuta cuja apólice ela acabou de informar sumiria da tela.
+      : AppData.can(Capability.bartersReadInsurance)
+      ? const [
+          BarterStatus.awaitingPolicy,
+          BarterStatus.approved,
+          BarterStatus.invoiced,
+          BarterStatus.cprRegistered,
+        ]
       : AppData.can(Capability.bartersReadInvoicing)
       // O FATURISTA ganhou "Concluídas" pelo mesmo motivo de quem acompanha, e
       // com um agravante: o escopo dele no servidor (`lineFrom(invoice)`) traz
@@ -145,6 +157,13 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           // lateral, não um degrau adiante.
           BarterStatus.sentToManager,
           BarterStatus.pending,
+          // DEVOLVIDAS COM EXIGÊNCIAS, logo depois da mesa do comitê: é o mesmo
+          // ponto da linha, com o consultor. Para ele é trabalho; para quem
+          // acompanha, é a resposta a "por que esta não foi decidida ainda?".
+          BarterStatus.awaitingRequirements,
+          // NA SEGURADORA, entre a decisão e o faturista: só as permutas com
+          // seguro param aqui.
+          BarterStatus.awaitingPolicy,
           BarterStatus.approved,
           BarterStatus.invoiced,
           // CONCLUÍDAS fecha a linha, e é o que faltava para ela ter FIM na
@@ -165,11 +184,18 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// emitida e assinada ainda estão com ele.
   bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance) && !_readsAll;
 
+  /// O mesmo para a seguradora: para ela a aba é a FILA ("A informar apólice");
+  /// para quem acompanha, é onde a permuta está ("Na seguradora").
+  bool get _worksInsurance => AppData.can(Capability.bartersReadInsurance) && !_readsAll;
+
   String _tabLabel(BarterStatus? status) => switch (status) {
         null => 'Todas',
         BarterStatus.draft => 'Rascunhos',
         BarterStatus.sentToManager => 'No gerente',
         BarterStatus.pending => 'No comitê',
+        BarterStatus.awaitingRequirements => 'Exigências',
+        BarterStatus.awaitingPolicy || BarterStatus.awaitingPolicyWithConditions =>
+          _worksInsurance ? 'A informar apólice' : 'Na seguradora',
         BarterStatus.approved || BarterStatus.approvedWithConditions => 'A faturar',
         BarterStatus.invoiced => _worksIssuance ? 'A emitir CPR' : 'No emissor',
         // Os degraus intermediários da cédula sob UMA aba: para quem varre a
@@ -215,9 +241,11 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
         ? BarterStatus.sentToManager
         : AppData.can(Capability.bartersReview)
             ? BarterStatus.pending
-            : AppData.can(Capability.bartersInvoice)
-                ? BarterStatus.approved
-                : null;
+            : AppData.can(Capability.bartersInsure)
+                ? BarterStatus.awaitingPolicy
+                : AppData.can(Capability.bartersInvoice)
+                    ? BarterStatus.approved
+                    : null;
     // A posição vem da LISTA de abas, e não de um número contado à mão: quem
     // tem menos abas continua entrando na etapa dele.
     final at = _statuses.indexOf(mine);
@@ -269,6 +297,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// exata — é a fila dele, e o que já andou está na aba ao lado. Ver
   /// [_worksIssuance].
   bool _inTab(BarterModel barter, BarterStatus tab) => switch (tab) {
+        BarterStatus.awaitingPolicy => barter.awaitsPolicy,
         BarterStatus.approved => barter.awaitsInvoice,
         BarterStatus.invoiced when !_worksIssuance =>
           barter.wasInvoiced && !barter.isCprRegistered,
@@ -722,6 +751,23 @@ class _BarterCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ],
+              // A APÓLICE, direto do cartão: a fila da seguradora é esta aba.
+              if (AppData.can(Capability.bartersInsure) && barter.awaitsPolicy) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () =>
+                        informBarterPolicy(context, barter, onInsured: (_) => onChanged()),
+                    icon: const Icon(Icons.upload_file_outlined, size: 16),
+                    label: const Text('Anexar apólice', style: TextStyle(fontSize: 13)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.atInsurer,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
                 ),
               ],
               if (AppData.can(Capability.bartersInvoice) && barter.awaitsInvoice) ...[
