@@ -385,6 +385,66 @@ describe('Seguro do produtor (e2e)', () => {
     });
 
     /**
+     * O MUNICÍPIO É ESCOLHA DO CONSULTOR, na opção do seguro: a lavoura nem
+     * sempre fica onde o produtor mora. Antônio é de Maringá/PR e planta em
+     * Campo Mourão/PR, a R$ 92,50/ha:
+     *
+     *     seguro = 120 × 92,50 = R$ 11.100,00
+     *     sacas  = (11.946,00 + 11.100,00) ÷ 148,50 = 155,1919
+     */
+    it('o consultor escolhe o município do seguro, e é ele que precifica', async () => {
+      await ligarSeguro();
+
+      const resposta = await registrar({ insuranceCity: 'Campo Mourão/PR' });
+      expect(resposta.status).toBe(201);
+      const barter = resposta.body.data;
+      expect(barter.insuranceCity).toBe('Campo Mourão/PR');
+      expect(barter.items.find((item: { insurance: boolean }) => item.insurance).productName).toBe(
+        'Seguro agrícola — Campo Mourão/PR',
+      );
+      expect(barter.items.find((item: { kind: string }) => item.kind === 'grain').quantity).toBe(
+        155.1919,
+      );
+    });
+
+    it('município escolhido fora da base recusa o registro, nomeando-o', async () => {
+      await ligarSeguro();
+
+      const resposta = await registrar({ insuranceCity: 'Cascavel/PR' });
+      expect(resposta.status).toBe(422);
+      expect(resposta.body.message).toContain('Cascavel/PR');
+    });
+
+    /**
+     * Na REMONTAGEM, trocar a praça cota a nova pela base de hoje; reenviar a
+     * mesma praça mantém a taxa congelada (o caso acima).
+     *
+     *     seguro = 120 × 82,50 = R$ 9.900,00 (Sarandi/PR)
+     *     sacas  = (11.946,00 + 9.900,00) ÷ 148,50 = 147,1111
+     */
+    it('a remontagem troca o município do seguro', async () => {
+      await ligarSeguro();
+      const code = (await registrar()).body.data.code as string;
+
+      const mesma = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/inputs`)
+        .set('Authorization', await asUser(JOAO))
+        .send({ inputs: payload.inputs, insuranceCity: 'maringa/pr' });
+      expect(mesma.status).toBe(200);
+      expect(mesma.body.data.insuranceCity).toBe('Maringá/PR');
+
+      const trocada = await request(app.getHttpServer())
+        .put(`/api/v1/barters/${code}/inputs`)
+        .set('Authorization', await asUser(JOAO))
+        .send({ inputs: payload.inputs, insuranceCity: 'Sarandi/PR' });
+      expect(trocada.status).toBe(200);
+      expect(trocada.body.data.insuranceCity).toBe('Sarandi/PR');
+      expect(
+        trocada.body.data.items.find((i: { kind: string }) => i.kind === 'grain').quantity,
+      ).toBe(147.1111);
+    });
+
+    /**
      * DESLIGAR o seguro vale para as PRÓXIMAS. As permutas que já nasceram com
      * ele continuam com ele — a taxa está congelada nelas, e o que foi acordado
      * não se reescreve.

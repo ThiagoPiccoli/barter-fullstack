@@ -114,6 +114,11 @@ class BarterSimulation {
   /// escolheu. Null quando a escolha não é dele (obrigatório ou sem seguro).
   final bool? insurance;
 
+  /// O MUNICÍPIO DO SEGURO que o consultor escolheu na opção do seguro — a
+  /// praça da base que precifica a apólice. Vazio é "o do cadastro do
+  /// produtor", que é o que o servidor usa quando o campo não vem.
+  final String insuranceCity;
+
   /// COMO o Funrural desta entrega vai ser recolhido — a escolha do fechamento,
   /// entre a comercialização e a folha de pagamento. Ver
   /// `services/tax_regime.dart`.
@@ -143,6 +148,7 @@ class BarterSimulation {
     this.grainName = '',
     this.plantedAreaHa = 0,
     this.insurance,
+    this.insuranceCity = '',
     this.taxRegime = TaxRegime.comercializacao,
     required this.createdAt,
     required this.updatedAt,
@@ -176,6 +182,7 @@ class BarterSimulation {
         grainName: grainName ?? this.grainName,
         plantedAreaHa: plantedAreaHa ?? this.plantedAreaHa,
         insurance: insurance,
+        insuranceCity: insuranceCity,
         taxRegime: taxRegime ?? this.taxRegime,
         createdAt: createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
@@ -211,6 +218,7 @@ class BarterSimulation {
         'grainName': grainName,
         'plantedAreaHa': plantedAreaHa,
         'insurance': insurance,
+        'insuranceCity': insuranceCity,
         'taxRegime': taxRegime.apiValue,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
@@ -252,6 +260,7 @@ class BarterSimulation {
       grainName: '${json['grainName'] ?? ''}',
       plantedAreaHa: toQuantity(json['plantedAreaHa']),
       insurance: json['insurance'] is bool ? json['insurance'] as bool : null,
+      insuranceCity: '${json['insuranceCity'] ?? ''}',
       // Simulação montada por uma versão anterior do app não tem o campo: cai
       // na comercialização, que é o que vale para quem não fez a opção formal
       // pela folha.

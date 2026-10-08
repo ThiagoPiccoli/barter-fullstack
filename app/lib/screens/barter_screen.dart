@@ -23,7 +23,14 @@ import 'send_simulation.dart';
 /// versão vigente da cultura escolhida, e é ela que converte o custo dos
 /// insumos em sacas. Sem Barter aberto não existe permuta nova, e a tela diz
 /// isso em vez de montar um pedido que o servidor recusaria.
+///
+/// O ADMIN usa a mesma tela para GERAR permuta (quando o cliente liga para a
+/// central): ele escolhe entre todos os produtores, e a permuta nasce do
+/// consultor da carteira do produtor escolhido — é ele quem segue com ela. Ver
+/// [_byAdmin].
 class NewBarterScreen extends StatefulWidget {
+  /// Quem está montando: o consultor dono da carteira, ou o admin que gera a
+  /// permuta em nome dele.
   final UserModel consultant;
 
   /// Uma SIMULAÇÃO sendo retomada, quando a tela foi aberta pela aba de
@@ -95,6 +102,11 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// O SEGURO, quando a versão o oferece como opcional: o que o produtor quis.
   bool _wantsInsurance = false;
 
+  /// O MUNICÍPIO DO SEGURO escolhido na opção do seguro. `null` é "o do
+  /// cadastro do produtor", que é por onde a escolha começa — a lavoura quase
+  /// sempre fica onde o produtor mora, e quando não fica o consultor troca.
+  String? _insuranceCity;
+
   /// A simulação que esta tela está escrevendo, quando já existe uma.
   ///
   /// Vem preenchida ao retomar uma simulação, e passa a existir no primeiro
@@ -123,6 +135,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       _seasonId = draft.seasonId;
       if (draft.plantedAreaHa > 0) _area.text = formatQty(draft.plantedAreaHa);
       _wantsInsurance = draft.insuranceChoice == InsuranceChoice.accepted;
+      if (draft.insuranceCity.isNotEmpty) _insuranceCity = draft.insuranceCity;
       for (final item in draft.inputs) {
         if (item.quantity > 0) _inputQty[item.productId] = item.quantity;
       }
@@ -145,6 +158,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         (simulation.seasonId.isEmpty ? null : simulation.seasonId);
     if (simulation.plantedAreaHa > 0) _area.text = formatQty(simulation.plantedAreaHa);
     _wantsInsurance = simulation.insurance ?? false;
+    if (simulation.insuranceCity.isNotEmpty) _insuranceCity = simulation.insuranceCity;
     _inputQty.addAll(simulation.inputQuantities);
 
     // A simulação é mais velha do que o cadastro: entre guardar e retomar, o
@@ -264,14 +278,55 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       classes: AppData.classes,
       plantedAreaHa: _plantedAreaHa,
       wantsInsurance: _wantsInsurance,
-      // A TAXA da praça do produtor entra pronta, na moeda da versão escolhida:
-      // a busca é do cache, e a regra — se ela se aplica, quanto custa, o que
-      // fazer quando falta — é de lá.
-      insuranceRate: producer == null
-          ? null
-          : AppData.insuranceRateFor(producer.city, versionSlug: version?.slug),
+      // A TAXA do município escolhido entra pronta, na moeda da versão: a busca
+      // é do cache, e a regra — se ela se aplica, quanto custa, o que fazer
+      // quando falta — é de lá.
+      insuranceRate: producer == null ? null : _insuranceRate,
+      hasInsuranceRates: _insuranceRates.isNotEmpty,
       offBarterCost: _offBarterCost,
     );
+  }
+
+  /// A BASE DE SEGUROS na moeda da versão desta tela — os municípios que a
+  /// opção do seguro oferece.
+  List<InsuranceRateModel> get _insuranceRates =>
+      AppData.insuranceRatesByVersion[_version?.slug] ?? AppData.insuranceRates;
+
+  /// O município que precifica o seguro: o escolhido, ou o do cadastro do
+  /// produtor enquanto ninguém escolheu.
+  String get _insuranceCityWanted => _insuranceCity ?? _producer?.city ?? '';
+
+  /// A taxa desse município, na moeda da versão — `null` fora da base.
+  InsuranceRateModel? get _insuranceRate => _insuranceCityWanted.isEmpty
+      ? null
+      : AppData.insuranceRateFor(_insuranceCityWanted, versionSlug: _version?.slug);
+
+  /// O município que vai no registro: a grafia da BASE, e só quando a permuta
+  /// leva seguro.
+  String get _insuranceCityToSend =>
+      _composition.insuranceApplies ? (_insuranceRate?.city ?? '') : '';
+
+  /// O ADMIN gerando permuta em nome do consultor do produtor.
+  ///
+  /// Muda três coisas, e só três: a lista de produtores (todos os que têm
+  /// consultor, e não uma carteira), o consultor da permuta (o do produtor) e o
+  /// desfecho (registra no servidor na hora — a central tem rede, e a permuta
+  /// precisa aparecer na mesa do consultor, não num aparelho que não é dele).
+  bool get _byAdmin => widget.consultant.role == UserRole.admin && _draft == null;
+
+  /// Os produtores que esta tela oferece.
+  List<ProducerModel> get _wallet => _byAdmin
+      ? AppData.producers.where((p) => (p.consultantId ?? '').isNotEmpty).toList()
+      : AppData.producersForConsultant(widget.consultant.id);
+
+  /// O NOME do consultor da permuta: quem monta, ou — gerada pelo admin — o
+  /// consultor do produtor escolhido.
+  String _consultantNameFor(ProducerModel? producer) {
+    if (_draft != null) return _draft!.consultantName;
+    if (!_byAdmin) return widget.consultant.name;
+    final id = producer?.consultantId;
+    if (id == null) return 'Consultor do produtor';
+    return AppData.consultantById(id)?.name ?? 'Consultor do produtor';
   }
 
   /// Os insumos que a versão desta tela colocou na mesa.
@@ -285,10 +340,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// conta — ver [BarterVersionModel.costPerSack].
   ProductModel? _productById(String id) => _composition.productById(id);
 
-  /// Custo total dos insumos escolhidos, na moeda da lente — o valor que a
-  /// permuta paga. Ver [_pricedInputs].
-  double get _inputCost => _composition.inputsCost;
-
   /// Produtor (cliente) designado para esta permuta (ou null).
   ProducerModel? get _producer => _producerId == null ? null : AppData.producerById(_producerId!);
 
@@ -300,13 +351,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// `BarterModel.addedProductRequestsCost`); zero numa permuta nova, que ainda
   /// não tem pedido nenhum.
   double get _offBarterCost => _draft?.addedProductRequestsCost ?? 0;
-
-  /// O seguro é obrigatório e a praça do produtor NÃO está na base — a recusa
-  /// do servidor, antecipada para cá.
-  bool get _insuranceMissing => _composition.insuranceMissing;
-
-  /// O CUSTO DO SEGURO na moeda da lente — área plantada × taxa da praça.
-  double get _insuranceCost => _composition.insuranceCost;
 
   /// Sacas da cultura escolhida necessárias para cobrir o custo. Mesmo
   /// arredondamento do servidor: o número da tela é o que será gravado.
@@ -347,10 +391,13 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// mínimos obrigatórios, calculados a partir da área plantada informada.
   void _selectProducer(String id) {
     final p = AppData.producerById(id);
-    // Só aceita produtores da carteira do consultor logado.
-    if (p == null || !p.isAttendedBy(widget.consultant.id)) return;
+    // Só aceita produtores da carteira do consultor logado — ou, para o admin,
+    // os que TÊM consultor: é ele quem fica com a permuta.
+    if (p == null) return;
+    if (_byAdmin ? (p.consultantId ?? '').isEmpty : !p.isAttendedBy(widget.consultant.id)) return;
     setState(() {
       _producerId = id;
+      _insuranceCity = null;
       _searchQuery = '';
       // OS INSUMOS EXIGIDOS POR ÁREA já entram no mínimo de cada um: eles são
       // obrigatórios, e começar em zero faria o consultor descobrir isso um a
@@ -383,6 +430,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     setState(() {
       _producerId = null;
       _unitId = null;
+      _insuranceCity = null;
       _searchQuery = '';
       _inputQty.clear();
     });
@@ -418,9 +466,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       _producerId != null &&
       _unitId != null &&
       _inputQty.values.any((qty) => qty > 0) &&
-      // Na REMONTAGEM a área é obrigatória: ela vai ao servidor junto. Na
-      // simulação, guardar sem ela é permitido — quem cobra é o envio.
-      (_draft == null || _plantedAreaHa > 0);
+      // Na REMONTAGEM a área é obrigatória: ela vai ao servidor junto — e na
+      // permuta GERADA PELO ADMIN também, pelo mesmo motivo. Na simulação,
+      // guardar sem ela é permitido — quem cobra é o envio.
+      ((_draft == null && !_byAdmin) || _plantedAreaHa > 0);
 
   /// Guarda a simulação NO APARELHO. Montar e guardar não falam com o servidor
   /// em momento algum — a permuta é montada na fazenda, onde pode não haver
@@ -476,6 +525,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       grainName: version?.grainName ?? '',
       plantedAreaHa: _plantedAreaHa,
       insurance: _composition.insuranceChoice,
+      insuranceCity: _insuranceCityToSend,
       // O REGIME é o do CADASTRO do produtor, lido agora: a permuta não escolhe
       // imposto, ela herda o que ele declarou ao fisco. Guardá-lo na simulação é
       // só o registro do que valia quando ela foi montada — quem aplica a
@@ -497,6 +547,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
 
     // A REMONTAGEM não passa por aqui: ela grava no servidor, não no aparelho.
     if (_draft != null) return _saveDraft();
+    // Nem a permuta GERADA PELO ADMIN: ela vai direto à mesa do consultor.
+    if (_byAdmin) return _generate(producer, unit, chosen);
 
     setState(() => _saving = true);
     final simulation = _simulationOf(producer, unit, chosen);
@@ -530,6 +582,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       _searchQuery = '';
       _area.clear();
       _wantsInsurance = false;
+      _insuranceCity = null;
     });
     // Quem acabou de encaminhar já viu o diálogo do registro: repetir "envie em
     // Simulações" mandaria procurar uma simulação que não existe mais.
@@ -567,6 +620,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         _inputQty,
         plantedAreaHa: _plantedAreaHa > 0 ? _plantedAreaHa : null,
         insurance: _composition.insuranceChoice,
+        insuranceCity: _insuranceCityToSend.isEmpty ? null : _insuranceCityToSend,
       );
       if (!mounted) return;
       setState(() => _saving = false);
@@ -662,9 +716,56 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           _searchQuery = '';
           _area.clear();
           _wantsInsurance = false;
+          _insuranceCity = null;
         });
       },
     );
+  }
+
+  /// A PERMUTA GERADA PELO ADMIN — registrada no servidor, como rascunho do
+  /// consultor do produtor.
+  ///
+  /// Sem simulação no aparelho: a simulação é do consultor (ela mora no
+  /// aparelho DELE, à espera do parecer), e uma guardada aqui ficaria num lugar
+  /// onde ele não a vê. O registro direto põe a permuta na mesa de quem segue
+  /// com ela; quem a gerou fica na linha do tempo (o servidor grava o admin no
+  /// evento do registro).
+  ///
+  /// SEM ENCAMINHAR: encaminhar pede o parecer e a cédula, e os dois são do
+  /// consultor, que conhece o produtor.
+  Future<void> _generate(
+    ProducerModel producer,
+    UnitModel unit,
+    List<MapEntry<String, double>> chosen,
+  ) async {
+    final version = _version;
+    if (version == null) return;
+    setState(() => _saving = true);
+    try {
+      final barter = await AppData.createBarter(
+        producerId: producer.id,
+        unitId: unit.id,
+        seasonId: version.seasonId,
+        plantedAreaHa: _plantedAreaHa,
+        inputQuantities: Map.fromEntries(chosen),
+        insurance: _composition.insuranceChoice,
+        insuranceCity: _insuranceCityToSend,
+      );
+      if (!mounted) return;
+      setState(() => _saving = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          '${barter.id} gerada para a carteira de ${barter.consultantName}. Ela fica '
+          'como rascunho dele até ele escrever o parecer e encaminhá-la.',
+        ),
+      ));
+      Navigator.pop(context, barter);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showErrorSnack(context, e);
+    }
   }
 
   /// "Encaminhar agora?" — a pergunta que vem logo depois de guardar.
@@ -750,6 +851,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         title: Text(
           _draft != null
               ? 'Alterar insumos • ${_draft!.id}'
+              : _byAdmin
+              ? 'Gerar ${brand.copy.barterTitle}'
               : widget.simulation == null
               ? 'Nova ${brand.copy.barterTitle}'
               : 'Simulação • ${widget.simulation!.producerName}',
@@ -900,7 +1003,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                 ),
                 subtitle: Text(
                   '${brand.copy.programTitle} ${version.code}'
-                  '${version.endsAt != null ? ' • até ${_BarterBanner._shortDate(version.endsAt!)}' : ''}'
+                  '${version.endsAt != null ? ' • até ${_shortDate(version.endsAt!)}' : ''}'
                   '${version.insurancePolicy != InsurancePolicy.none ? ' • ${version.insurancePolicy.label.toLowerCase()}' : ''}'
                   '${version.isOpen ? '' : ' • fechado'}',
                   style: TextStyle(fontSize: 12, color: AppColors.textMedium),
@@ -1022,7 +1125,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// A lista é a CARTEIRA do consultor logado: ele nunca vê produtores dos
   /// colegas — só o admin enxerga todas as carteiras.
   Widget _buildProducerStep(BarterVersionModel version) {
-    final wallet = AppData.producersForConsultant(widget.consultant.id);
+    final wallet = _wallet;
     final query = _searchQuery.trim().toLowerCase();
     final producers = query.isEmpty
         ? wallet
@@ -1038,10 +1141,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     return Column(
       children: [
         const OfflineBanner(),
-        _BarterBanner(
-          version: version,
-          onChangeCulture: _draft == null && AppData.currentVersions.length > 1 ? _changeCulture : null,
-        ),
+        _buildHeader(version),
         if (wallet.isEmpty)
           Expanded(child: _emptyWalletHint())
         else ...[
@@ -1053,7 +1153,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               // Só o que fazer agora. Que a área manda nos obrigatórios é
               // verdade, mas é assunto da etapa dos insumos — e lá ela é dita no
               // lugar onde a pessoa vê o efeito, em vez de duas telas antes.
-              text: 'Escolha um produtor da sua carteira.',
+              text: _byAdmin
+                  ? 'Escolha o produtor. A permuta fica com o consultor da carteira dele.'
+                  : 'Escolha um produtor da sua carteira.',
             ),
           ),
           Padding(
@@ -1111,11 +1213,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     return Column(
       children: [
         const OfflineBanner(),
-        _BarterBanner(
-          version: version,
-          onChangeCulture: _draft == null && AppData.currentVersions.length > 1 ? _changeCulture : null,
-        ),
-        _buildProducerHeader(producer),
+        _buildHeader(version, producer: producer),
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
           child: _hint(
@@ -1181,30 +1279,15 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   }
 
   /// Etapa 3: montar os insumos (já com os mínimos pré-preenchidos), com o
-  /// produtor, a unidade e o Barter vigente fixados no topo.
+  /// produtor, a unidade, o Barter vigente, o seguro e o total fixados no
+  /// CABEÇALHO.
   Widget _buildInputStep(BarterVersionModel version, ProducerModel producer, UnitModel unit) {
-    final inputCount = _inputQty.values.where((q) => q > 0).length;
     return Column(
       children: [
         const OfflineBanner(),
-        _BarterBanner(
-          version: version,
-          onChangeCulture: _draft == null && AppData.currentVersions.length > 1 ? _changeCulture : null,
-        ),
-        _buildProducerHeader(producer),
-        _buildUnitHeader(unit),
+        _buildHeader(version, producer: producer, unit: unit),
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 6),
-          child: BarterBalanceBar(
-            inputCost: _inputCost,
-            referenceValue: version.costPerSack,
-            referenceGrainName: version.grainName,
-            inputCount: inputCount,
-            showValue: false,
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
           child: _searchBox('Buscar insumo ou código...'),
         ),
         _buildInputFilters(),
@@ -1320,144 +1403,235 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     }
   }
 
-  /// Cabeçalho fixo com o produtor escolhido, com opção de trocar.
-  Widget _buildProducerHeader(ProducerModel p) {
+  /// O CABEÇALHO DA PERMUTA — tudo o que a identifica e o que ela custa, num
+  /// bloco só, no alto das três etapas.
+  ///
+  /// Eram quatro faixas empilhadas (o Barter, o produtor, a retirada e o painel
+  /// das sacas), e num telefone elas comiam metade da altura antes do primeiro
+  /// insumo. Agora são, no máximo, duas linhas:
+  ///
+  /// 1. a IDENTIFICAÇÃO, numa linha só — o mesmo componente que identifica a
+  ///    permuta no resto do app ([BarterIdentity]), com a cultura e a retirada
+  ///    junto; as trocas ficam no menu da ponta;
+  /// 2. o SEGURO (a opção e o município) e o TOTAL A ENTREGAR — um valor só, o
+  ///    da permuta inteira, seguro incluso.
+  ///
+  /// A segunda linha só existe na etapa dos insumos: antes dela não há conta.
+  Widget _buildHeader(BarterVersionModel version, {ProducerModel? producer, UnitModel? unit}) {
+    final grain = version.grainName.toLowerCase();
+    final menu = _headerMenu(producer, unit);
     return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
       decoration: BoxDecoration(
         color: AppColors.primarySurface,
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: AppColors.primary,
-            child: Text(
-              p.avatarInitials,
-              style: TextStyle(
-                color: AppColors.onPrimary,
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  p.name,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
+          SizedBox(
+            height: 32,
+            child: BarterIdentity.parts(
+              singleLine: true,
+              code: _draft?.id ?? (widget.simulation != null ? 'Simulação' : 'Nova ${brand.copy.barterTitle.toLowerCase()}'),
+              producerName: producer?.name ?? 'Produtor a escolher',
+              consultantName: _consultantNameFor(producer),
+              areaHa: _plantedAreaHa,
+              extra: [
+                BarterIdentityFact(
+                  icon: Icons.grass,
+                  tooltip: 'Cultura e ${brand.copy.programTitle} — pagamento em $grain',
+                  value: version.seasonName.isNotEmpty
+                      ? '${version.seasonName} • ${version.code}'
+                      : '${brand.copy.programTitle} ${version.code}',
+                ),
+                if (unit != null)
+                  BarterIdentityFact(
+                    icon: Icons.store_outlined,
+                    tooltip: 'Unidade de retirada',
+                    value: unit.label,
                   ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Row(
-                  children: [
-                    Icon(Icons.location_on_outlined, size: 12, color: AppColors.primary),
-                    const SizedBox(width: 3),
-                    // Expanded, e não Text solto — o mesmo motivo dos 33 pixels
-                    // do rodapé: numa Row sem Expanded o texto recebe largura
-                    // infinita, e `ellipsis` só corta DEPOIS que existe uma
-                    // largura máxima.
-                    Expanded(
-                      child: Text(
-                        p.location,
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
               ],
+              trailing: menu,
             ),
           ),
-          // EDITAR OS DADOS do cliente, de dentro da permuta.
-          //
-          // É aqui que o consultor descobre que o cadastro está velho: ele está
-          // com o produtor na frente, montando a permuta, e vê que o telefone
-          // mudou ou que a propriedade está com o nome errado. Mandá-lo procurar
-          // outra tela para corrigir é o mesmo que não oferecer a correção — e o
-          // cadastro continuaria envelhecendo em silêncio.
-          //
-          // O que ele NÃO alcança (a carteira) a tela de edição mostra travado,
-          // com o porquê. Ver `EditProducerScreen`.
-          if (AppData.can(Capability.producersEdit))
-            IconButton(
-              tooltip: 'Editar os dados de ${p.name.split(' ').first}',
-              onPressed: () => _editProducer(p),
-              icon: Icon(Icons.edit_outlined, size: 18, color: AppColors.primary),
-              visualDensity: VisualDensity.compact,
-            ),
-          // TROCAR só existe na permuta que está sendo MONTADA. Numa remontagem
-          // o produtor está congelado no registro, e trocá-lo seria outra
-          // permuta, não uma alteração desta.
-          if (_draft == null)
-            TextButton.icon(
-              onPressed: _changeProducer,
-              icon: const Icon(Icons.swap_horiz, size: 16),
-              label: const Text('Trocar', style: TextStyle(fontSize: 12)),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.primary,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                minimumSize: const Size(0, 0),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          if (producer != null && unit != null) ...[
+            const Divider(height: 10),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(child: _buildInsuranceOption(version, producer)),
+                  const SizedBox(width: 10),
+                  // O VALOR DO GRÃO: um número só, o que o produtor entrega
+                  // pela permuta inteira — seguro e itens de fora do Barter
+                  // inclusos. Eram dois (o painel sem o seguro e o rodapé com
+                  // ele), e o consultor tinha de explicar a diferença na fazenda.
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('A entregar', style: TextStyle(fontSize: 10, color: AppColors.textMedium)),
+                      Text.rich(
+                        TextSpan(children: [
+                          TextSpan(
+                            text: formatSacks(_sacksNeeded),
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.primary),
+                          ),
+                          TextSpan(
+                            text: ' $grain',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary),
+                          ),
+                        ]),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
+          ],
         ],
       ),
     );
   }
 
-  /// Faixa fina com a unidade de retirada escolhida.
+  /// As TROCAS do cabeçalho: a cultura, o produtor (e o cadastro dele) e a
+  /// unidade. Num menu, e não em botões, porque a linha da identificação é uma
+  /// só — e trocar é o caso raro, que pode custar um toque a mais.
   ///
-  /// Ela fica visível durante a montagem inteira porque é um combinado com o
-  /// produtor, e é o tipo de coisa que se lembra tarde ("ele disse que buscaria
-  /// na Matriz") — com a faixa à vista, trocar custa um toque.
-  Widget _buildUnitHeader(UnitModel unit) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.primarySurface,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.store_outlined, size: 16, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Retirada em ${unit.label}',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textDark,
+  /// Numa REMONTAGEM o produtor, a unidade e a cultura estão congelados no
+  /// registro (trocá-los seria outra permuta); sobra editar o cadastro.
+  Widget? _headerMenu(ProducerModel? producer, UnitModel? unit) {
+    final canChangeCulture = _draft == null && AppData.currentVersions.length > 1;
+    final canEditProducer = producer != null && AppData.can(Capability.producersEdit);
+    final canChangeProducer = producer != null && _draft == null;
+    final canChangeUnit = unit != null && _draft == null;
+    if (!canChangeCulture && !canEditProducer && !canChangeProducer && !canChangeUnit) return null;
+
+    return PopupMenuButton<VoidCallback>(
+      tooltip: 'Trocar',
+      icon: Icon(Icons.more_vert, size: 20, color: AppColors.primary),
+      padding: EdgeInsets.zero,
+      onSelected: (action) => action(),
+      itemBuilder: (_) => [
+        if (canChangeCulture)
+          PopupMenuItem(value: _changeCulture, child: const Text('Trocar cultura')),
+        // EDITAR OS DADOS do cliente, de dentro da permuta: é aqui que o
+        // consultor descobre que o cadastro está velho. Ver `EditProducerScreen`.
+        if (canEditProducer)
+          PopupMenuItem(
+            value: () => _editProducer(producer),
+            child: Text('Editar dados de ${producer.name.split(' ').first}'),
+          ),
+        if (canChangeProducer) PopupMenuItem(value: _changeProducer, child: const Text('Trocar produtor')),
+        if (canChangeUnit) PopupMenuItem(value: _changeUnit, child: const Text('Trocar unidade')),
+      ],
+    );
+  }
+
+  /// A OPÇÃO DO SEGURO, dentro do cabeçalho: se a permuta leva, por qual
+  /// MUNICÍPIO, e quanto custa — em sacas, porque é com grão que ele é pago.
+  ///
+  /// O município é ESCOLHA do consultor, entre os da base de seguros: começa no
+  /// do cadastro do produtor, e se troca quando a lavoura é em outro lugar (quem
+  /// arrenda do outro lado do rio). Sem taxa no escolhido, o aviso diz o que
+  /// fazer — escolher outro, ou pedir ao administrador —, que é a recusa que o
+  /// servidor daria no registro, antecipada.
+  Widget _buildInsuranceOption(BarterVersionModel version, ProducerModel producer) {
+    final draft = _composition;
+    if (version.insurancePolicy == InsurancePolicy.none) {
+      return Text('Sem seguro neste ${brand.copy.programTitle}',
+          style: TextStyle(fontSize: 11, color: AppColors.textLight));
+    }
+
+    final rates = _insuranceRates;
+    final chosen = _insuranceRate;
+    final applies = draft.insuranceApplies;
+    final grain = version.grainName.toLowerCase();
+
+    final String? warning = draft.insuranceBlocked
+        ? 'A base de seguros está vazia. Peça ao administrador.'
+        : draft.insuranceMissing
+        ? (_insuranceCityWanted.isEmpty
+              ? 'Escolha o município do seguro.'
+              : '$_insuranceCityWanted não tem valor por hectare. Escolha outro município.')
+        : null;
+
+    // A segunda linha é do QUANTO: o custo em sacas — ou, faltando a taxa, o
+    // que fazer. Fica embaixo, e não ao lado do município, porque num telefone
+    // de 360 a linha de cima já divide a largura com o total.
+    final String? detail = warning ??
+        (applies && draft.insuranceSacks > 0
+            ? '+ ${formatSacks(draft.insuranceSacks)} $grain de seguro'
+            : null);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          children: [
+            Tooltip(
+              message: draft.insuranceOffered ? 'Seguro agrícola (opcional)' : 'Seguro agrícola obrigatório',
+              child: Icon(Icons.shield_outlined, size: 16, color: AppColors.atManager),
+            ),
+            if (draft.insuranceOffered)
+              SizedBox(
+                height: 28,
+                child: FittedBox(
+                  child: Switch(
+                    value: _wantsInsurance && !draft.insuranceBlocked,
+                    onChanged: draft.insuranceBlocked
+                        ? null
+                        : (value) => setState(() => _wantsInsurance = value),
+                  ),
+                ),
               ),
-              overflow: TextOverflow.ellipsis,
+            const SizedBox(width: 4),
+            // O MUNICÍPIO ocupa o que sobra da linha, e corta com reticências:
+            // "Campo Mourão/PR" não cabe inteiro ao lado do total num telefone.
+            Expanded(
+              child: applies && rates.isNotEmpty
+                  ? DropdownButton<String>(
+                      value: chosen?.city,
+                      isExpanded: true,
+                      isDense: true,
+                      underline: const SizedBox.shrink(),
+                      hint: Text('Município do seguro',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.primary),
+                      items: [
+                        for (final rate in rates)
+                          DropdownMenuItem(
+                            value: rate.city,
+                            child: Text(rate.city, overflow: TextOverflow.ellipsis),
+                          ),
+                      ],
+                      onChanged: (city) => setState(() => _insuranceCity = city),
+                    )
+                  : Text(
+                      draft.insuranceOffered ? 'Seguro (opcional)' : 'Seguro obrigatório',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textDark),
+                    ),
+            ),
+          ],
+        ),
+        if (detail != null)
+          Text(
+            detail,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: warning != null ? AppColors.pending : AppColors.textMedium,
             ),
           ),
-          // Congelada na remontagem, pelo mesmo motivo do produtor: a retirada
-          // combinada está no registro. Ver o cabeçalho do produtor.
-          if (_draft == null)
-            TextButton.icon(
-              onPressed: _changeUnit,
-              icon: const Icon(Icons.swap_horiz, size: 16),
-              label: const Text('Trocar', style: TextStyle(fontSize: 12)),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.primary,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                minimumSize: const Size(0, 0),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 
@@ -1549,7 +1723,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     // O PEDIDO DE FORA DO BARTER fecha a lista, e só na SIMULAÇÃO: quem está
     // remontando um rascunho chegou aqui pelo detalhe da permuta, que já tem o
     // botão — e lá ele não precisa registrar nada antes.
-    final canRequest = _draft == null;
+    // Nem na permuta GERADA PELO ADMIN: quem atende o pedido é ele mesmo.
+    final canRequest = _draft == null && !_byAdmin;
 
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
@@ -1685,7 +1860,8 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     ),
   );
 
-  /// O rodapé da etapa 3: o total em sacas, o Funrural e o botão de guardar.
+  /// O rodapé da etapa 3: o que ainda trava a permuta, o Funrural e o botão de
+  /// guardar. O total em sacas mora no cabeçalho — ver [_buildHeader].
   ///
   /// Recebe o [producer] em vez de reler `_producerId`: o documento dele é o que
   /// escolhe entre as alíquotas de CPF e as de CNPJ, e o rodapé só existe dentro
@@ -1708,13 +1884,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // O SEGURO da praça do produtor, dito ANTES do total: ele muda o
-            // número que o consultor vai falar em voz alta, e o produtor vai
-            // perguntar de onde saiu.
-            //
-            // A PRAÇA SEM TAXA aparece como aviso, e não como silêncio: é a
-            // recusa que o servidor vai dar no registro, antecipada para agora
-            // — quando ainda dá tempo de alguém cadastrar o município.
             // A ÁREA ainda não informada: sem ela não há mínimo por hectare nem
             // seguro, e o registro é recusado.
             if (_plantedAreaHa <= 0) ...[
@@ -1726,77 +1895,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                     child: Text(
                       'Informe a área plantada para fechar a conta e poder registrar.',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.pending),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-            ],
-            // O SEGURO OPCIONAL: o produtor decide, e a escolha fica gravada —
-            // inclusive a recusa. Praça sem taxa deixa a opção BLOQUEADA, com o
-            // porquê; a permuta segue sem seguro.
-            if (_composition.insuranceOffered) ...[
-              Row(
-                children: [
-                  Icon(Icons.shield_outlined, size: 16, color: AppColors.atManager),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      _composition.insuranceBlocked
-                          ? 'Seguro opcional indisponível: ${producer.city} não tem valor por '
-                              'hectare cadastrado. Peça ao administrador.'
-                          : 'Incluir seguro agrícola (opcional)',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: _composition.insuranceBlocked ? AppColors.pending : AppColors.textDark,
-                      ),
-                    ),
-                  ),
-                  Switch(
-                    value: _wantsInsurance && !_composition.insuranceBlocked,
-                    onChanged: _composition.insuranceBlocked
-                        ? null
-                        : (value) => setState(() => _wantsInsurance = value),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-            ],
-            if (_insuranceMissing) ...[
-              Row(
-                children: [
-                  Icon(Icons.shield_outlined, size: 14, color: AppColors.pending),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'O seguro é obrigatório e ${producer.city} não tem valor por hectare '
-                      'cadastrado: o registro será recusado.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.pending,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-            ] else if (_insuranceCost > 0) ...[
-              Row(
-                children: [
-                  Icon(Icons.shield_outlined, size: 14, color: AppColors.atManager),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      'Seguro de ${producer.city}: ${formatQty(_plantedAreaHa)} ha • '
-                      '${version.showsCurrency ? formatCurrency(_insuranceCost) : '${formatSacks(_insuranceCost)} ${version.grainName.toLowerCase()}'}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textMedium,
-                      ),
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -1823,35 +1921,17 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               ),
               const SizedBox(height: 6),
             ],
-            Row(
-              children: [
-                Icon(Icons.local_shipping_outlined, size: 14, color: AppColors.textMedium),
-                const SizedBox(width: 6),
-                // Expanded, e não Text solto: `overflow: ellipsis` só corta o
-                // texto DEPOIS que ele recebe uma largura máxima. Numa Row sem
-                // Expanded ele recebe largura infinita, não corta nada e
-                // estoura a linha — eram os 33 pixels vermelhos no rodapé.
-                Expanded(
-                  child: Text(
-                    inputCount > 0
-                        ? 'Entregar: ${formatSacks(sacks)} ${version.grainName.toLowerCase()} • $inputCount insumo(s)'
-                              // O item de FORA DO BARTER está no total e não
-                              // está na lista desta tela (ele não é do
-                              // catálogo). Dizê-lo aqui é a diferença entre um
-                              // número que fecha e um número que parece errado
-                              // para quem confere insumo por insumo.
-                              '${_offBarterCost > 0 ? ' + ${_draft!.addedProductRequests.length} de fora do Barter' : ''}'
-                        : 'Escolha os insumos para ver quantas sacas serão necessárias',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textDark,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
+            // O TOTAL não se repete aqui: ele é o valor único do cabeçalho.
+            // Fica só o que explica o número — o item de FORA DO BARTER está no
+            // total e não está na lista desta tela (ele não é do catálogo), e
+            // sem a frase o número parece errado para quem confere item a item.
+            if (_offBarterCost > 0) ...[
+              Text(
+                'O total inclui ${_draft!.addedProductRequests.length} item(ns) de fora do Barter.',
+                style: TextStyle(fontSize: 11, color: AppColors.textMedium),
+              ),
+              const SizedBox(height: 4),
+            ],
             // O IMPOSTO DA ENTREGA, junto do total, porque é onde a conversa
             // acontece: o produtor pergunta "quanto eu entrego?" na fazenda, e a
             // resposta honesta inclui o Funrural. Descobrir depois, na nota, era
@@ -1864,7 +1944,6 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
             // permuta não tem como fazer. Corrigir o regime é ato do admin, no
             // cadastro.
             if (inputCount > 0) ...[
-              const SizedBox(height: 8),
               _TaxRegimeNotice(
                 regime: producer.taxRegime,
                 document: producer.document,
@@ -1889,12 +1968,14 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                       )
-                    : const Icon(Icons.bookmark_added_outlined, size: 18),
+                    : Icon(_byAdmin ? Icons.add_task : Icons.bookmark_added_outlined, size: 18),
                 label: Text(
                   _saving
-                      ? (_draft == null ? 'Guardando...' : 'Salvando...')
+                      ? (_draft == null && !_byAdmin ? 'Guardando...' : 'Salvando...')
                       : _draft != null
                       ? 'Salvar insumos da ${_draft!.id}'
+                      : _byAdmin
+                      ? 'Gerar ${brand.copy.barterTitle.toLowerCase()}'
                       : widget.simulation == null
                       ? 'Guardar simulação'
                       : 'Salvar alterações',
@@ -1913,6 +1994,9 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
               _draft != null
                   ? 'Os insumos são gravados na permuta. Ela continua rascunho até você '
                         'encaminhá-la de novo ao gerente.'
+                  : _byAdmin
+                  ? 'Ela é registrada como rascunho de ${_consultantNameFor(producer)}, que escreve '
+                        'o parecer e a encaminha ao gerente.'
                   : 'Nada é enviado agora: ela fica em Minhas ${brand.copy.barterPluralTitle} › '
                         'Simulações até você encaminhar.',
               textAlign: TextAlign.center,
@@ -2035,73 +2119,9 @@ class _TaxRegimeNotice extends StatelessWidget {
   }
 }
 
-/// Faixa do Barter: qual lançamento está valendo e EM QUE CULTURA a permuta
-/// será paga. Sem R\$ — o consultor não vê valores.
-///
-/// A CULTURA é a primeira escolha da permuta, e a faixa a mantém à vista o tempo
-/// todo: ela decide a tabela inteira. Trocar volta à escolha da cultura (e
-/// limpa os insumos, que eram da tabela da outra).
-class _BarterBanner extends StatelessWidget {
-  final BarterVersionModel version;
-
-  /// Voltar à escolha da cultura. Nulo quando não há o que escolher (uma
-  /// cultura só aberta, ou remontagem — a permuta é de uma cultura só).
-  final VoidCallback? onChangeCulture;
-
-  const _BarterBanner({required this.version, this.onChangeCulture});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.grainBg,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.grain.withValues(alpha: 0.30)),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.grass, size: 18, color: AppColors.grain),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // UMA LINHA cada, cortada: a faixa fica no alto de uma tela que já
-                // não tem altura sobrando num telefone estreito.
-                Text(
-                  version.seasonName.isNotEmpty
-                      ? '${version.seasonName} • ${version.code}'
-                      : '${brand.copy.programTitle} ${version.code}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.textDark),
-                ),
-                Text(
-                  'Pagamento em ${version.grainName.toLowerCase()}'
-                  '${version.endsAt != null ? ' • até ${_shortDate(version.endsAt!)}' : ''}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11, color: AppColors.textMedium),
-                ),
-              ],
-            ),
-          ),
-          if (onChangeCulture != null)
-            TextButton(
-              onPressed: onChangeCulture,
-              style: TextButton.styleFrom(foregroundColor: AppColors.grain),
-              child: const Text('Trocar cultura', style: TextStyle(fontSize: 12)),
-            ),
-        ],
-      ),
-    );
-  }
-
-  static String _shortDate(DateTime date) =>
-      '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
-}
+/// Dia e mês ("31/03") — o encerramento do Barter na escolha da cultura.
+String _shortDate(DateTime date) =>
+    '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}';
 
 class _ClassRuleTile extends StatelessWidget {
   final String name;
@@ -2327,16 +2347,24 @@ class _InputTileState extends State<_InputTile> {
                 ),
                 const SizedBox(width: 8),
                 _StepBtn(icon: Icons.add, color: AppColors.input, onTap: () => onChanged(qty + 1)),
-                const Spacer(),
-                if (qty > 0)
-                  Text(
-                    '${formatQty(qty)} ${product.unit}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.input,
-                    ),
-                  ),
+                const SizedBox(width: 8),
+                // Expanded, e não `Spacer` + texto solto: a unidade longa ("saco
+                // 50kg") não cabia ao lado dos botões num telefone de 320, e o
+                // texto sem largura máxima estourava a linha em vez de cortar.
+                Expanded(
+                  child: qty > 0
+                      ? Text(
+                          '${formatQty(qty)} ${product.unit}',
+                          textAlign: TextAlign.end,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.input,
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
               ],
             ),
           ],

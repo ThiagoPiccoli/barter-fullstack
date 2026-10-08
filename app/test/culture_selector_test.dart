@@ -144,8 +144,13 @@ void main() {
     await tester.tap(find.text('Milho 2027'));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Pagamento em milho'), findsOneWidget);
-    // E dá para voltar atrás: com duas culturas, a escolha continua à mão.
+    // A cultura está na linha de identificação do cabeçalho — e é ela que diz
+    // o grão do pagamento.
+    expect(find.textContaining('Milho 2027 •'), findsOneWidget);
+    // E dá para voltar atrás: com duas culturas, a escolha continua à mão, no
+    // menu do cabeçalho.
+    await tester.tap(find.byTooltip('Trocar'));
+    await tester.pumpAndSettle();
     expect(find.text('Trocar cultura'), findsOneWidget);
   });
 
@@ -155,8 +160,10 @@ void main() {
     await abrir(tester);
 
     expect(find.textContaining('escolha a cultura'), findsNothing);
-    expect(find.textContaining('Pagamento em soja'), findsOneWidget);
-    expect(find.text('Trocar cultura'), findsNothing);
+    expect(find.textContaining('Soja 26/27 •'), findsOneWidget);
+    // Sem produtor escolhido não há o que trocar além da cultura — e ela não é
+    // troca com uma só: o menu nem aparece.
+    expect(find.byTooltip('Trocar'), findsNothing);
   });
 
   /// A SIMULAÇÃO GUARDA A CULTURA e a área: ela sobrevive ao aparelho ficar no
@@ -164,7 +171,7 @@ void main() {
   testWidgets('a simulação retomada abre na cultura e com a área dela', (tester) async {
     await abrir(tester, simulation: simulacao(seasonId: '4', grainId: '2'));
 
-    expect(find.textContaining('Pagamento em milho'), findsOneWidget);
+    expect(find.textContaining('Milho 2027 •'), findsOneWidget);
     expect(find.text('Área plantada de milho (ha)'), findsOneWidget);
     expect(find.text('120'), findsOneWidget);
   });
@@ -174,6 +181,6 @@ void main() {
   testWidgets('a simulação antiga, só com o grão, abre na cultura dele', (tester) async {
     await abrir(tester, simulation: simulacao(seasonId: '', grainId: '1'));
 
-    expect(find.textContaining('Pagamento em soja'), findsOneWidget);
+    expect(find.textContaining('Soja 26/27 •'), findsOneWidget);
   });
 }

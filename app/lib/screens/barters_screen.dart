@@ -329,9 +329,36 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     return list;
   }
 
+  /// O ADMIN GERA PERMUTA — na mesma tela de montagem do consultor, em nome do
+  /// consultor do produtor escolhido. Gerada, ela abre no detalhe: é lá que o
+  /// admin confere o que acabou de registrar.
+  Future<void> _generateBarter(UserModel admin) async {
+    final barter = await Navigator.push<BarterModel>(
+      context,
+      MaterialPageRoute(builder: (_) => NewBarterScreen(consultant: admin)),
+    );
+    if (barter == null || !mounted) return;
+    setState(() {});
+    widget.onChanged?.call();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BarterDetailScreen(barter: barter, isAdmin: true)),
+    );
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final me = AppData.currentUser;
+    final admin = widget.isAdmin && me != null && me.role == UserRole.admin ? me : null;
     return Scaffold(
+      floatingActionButton: admin == null
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _generateBarter(admin),
+              icon: const Icon(Icons.add),
+              label: Text('Gerar ${brand.copy.barterTitle.toLowerCase()}'),
+            ),
       appBar: AppBar(
         title: Text(
           widget.isAdmin ? brand.copy.barterPluralTitle : 'Minhas ${brand.copy.barterPluralTitle}',

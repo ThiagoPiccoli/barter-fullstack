@@ -101,6 +101,21 @@ export class CreateBarterDto {
   insurance?: boolean;
 
   /**
+   * O MUNICÍPIO DO SEGURO — a praça da base de seguros que o consultor escolheu
+   * na opção do seguro.
+   *
+   * Ele era o do cadastro do produtor, sem escolha, e deixou de ser porque a
+   * lavoura nem sempre fica onde o produtor mora: quem arrenda do outro lado do
+   * rio planta num município e tem endereço noutro, e a seguradora cota a
+   * lavoura. Ausente, vale o do cadastro — que é o que a tela já vem marcando.
+   * Só é lido quando a permuta leva seguro.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  insuranceCity?: string;
+
+  /**
    * A UNIDADE em que o produtor vai retirar os insumos.
    *
    * É escolha do consultor, e não do cadastro do produtor: o mesmo produtor
@@ -671,6 +686,12 @@ export class ReplaceBarterInputsDto {
   @IsOptional()
   @IsBoolean({ message: 'insurance deve ser true ou false' })
   insurance?: boolean;
+
+  /** O município do seguro, quando o consultor o troca. Ver `CreateBarterDto`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  insuranceCity?: string;
 }
 
 /**

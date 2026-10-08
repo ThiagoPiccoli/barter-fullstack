@@ -28,6 +28,7 @@ class BarterRepository {
     required double plantedAreaHa,
     required Map<String, double> inputQuantities,
     bool? insurance,
+    String insuranceCity = '',
     String note = '',
   }) async {
     final data = await api.post('/barters', body: {
@@ -42,6 +43,9 @@ class BarterRepository {
       // O SEGURO, só quando a versão o oferece como opcional: nas outras a
       // política decide sozinha, e mandar o campo seria contradizê-la.
       'insurance': ?insurance,
+      // O MUNICÍPIO do seguro, escolhido na opção do seguro. Vazio fica fora, e
+      // o servidor usa o do cadastro do produtor.
+      if (insuranceCity.trim().isNotEmpty) 'insuranceCity': insuranceCity.trim(),
       if (note.trim().isNotEmpty) 'note': note.trim(),
       // SEM `taxRegime`: o regime é do produtor e mora no cadastro dele, e é de
       // lá que o servidor o lê. Mandá-lo daqui significaria mandar o que o
@@ -113,10 +117,12 @@ class BarterRepository {
     Map<String, double> inputQuantities, {
     double? plantedAreaHa,
     bool? insurance,
+    String? insuranceCity,
   }) async {
     final data = await api.put('/barters/$code/inputs', body: {
       'plantedAreaHa': ?plantedAreaHa,
       'insurance': ?insurance,
+      'insuranceCity': ?insuranceCity,
       'inputs': [
         for (final entry in inputQuantities.entries)
           if (entry.value > 0) {'productId': int.parse(entry.key), 'quantity': entry.value},

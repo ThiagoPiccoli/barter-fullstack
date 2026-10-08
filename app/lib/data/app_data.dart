@@ -735,6 +735,7 @@ class AppData {
     required double plantedAreaHa,
     required Map<String, double> inputQuantities,
     bool? insurance,
+    String insuranceCity = '',
     String note = '',
   }) async {
     final barter = await _barters.create(
@@ -744,6 +745,7 @@ class AppData {
       plantedAreaHa: plantedAreaHa,
       inputQuantities: inputQuantities,
       insurance: insurance,
+      insuranceCity: insuranceCity,
       note: note,
     );
     barters.insert(0, barter);
@@ -902,6 +904,7 @@ class AppData {
             : (versionOfSimulation(simulation)?.seasonId ?? ''),
         plantedAreaHa: simulation.plantedAreaHa,
         insurance: simulation.insurance,
+        insuranceCity: simulation.insuranceCity,
         inputQuantities: simulation.inputQuantities,
         note: note,
       );
@@ -1484,12 +1487,14 @@ class AppData {
     Map<String, double> inputQuantities, {
     double? plantedAreaHa,
     bool? insurance,
+    String? insuranceCity,
   }) async {
     final updated = await _barters.replaceInputs(
       code,
       inputQuantities,
       plantedAreaHa: plantedAreaHa,
       insurance: insurance,
+      insuranceCity: insuranceCity,
     );
     _replaceBarter(updated);
     return updated;

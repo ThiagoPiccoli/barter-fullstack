@@ -639,10 +639,62 @@ describe('Barters (e2e)', () => {
     expect((await registrar(ROBERTO)).status).toBe(403);
   });
 
-  it('admin não registra permuta (ato do consultor da carteira)', async () => {
+  /**
+   * O ADMIN GERA PERMUTA, na mesma tela do consultor — e ela nasce do CONSULTOR
+   * DO PRODUTOR, que é quem segue com ela (parecer, cédula, encaminhamento). A
+   * linha do tempo guarda que foi o admin quem a criou.
+   */
+  it('admin gera permuta em nome do consultor do produtor', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/barters')
       .set('Authorization', await asUser(ADMIN))
+      .send(validPayload);
+    expect(response.status).toBe(201);
+    const barter = response.body.data;
+    expect(barter.consultantId).toBe(CONSULTANT.joao);
+    expect(barter.consultantName).toBe('João Silva');
+    expect(barter.status).toBe('draft');
+
+    const registro = barter.events.find((e: { action: string }) => e.action === 'register');
+    expect(registro.actorRole).toBe('admin');
+    expect(registro.note).toContain('administrador');
+    expect(registro.note).toContain('João Silva');
+
+    // O admin continua vendo o rascunho que gerou; o comitê, não.
+    const doAdmin = await request(app.getHttpServer())
+      .get(`/api/v1/barters/${barter.code}`)
+      .set('Authorization', await asUser(ADMIN));
+    expect(doAdmin.status).toBe(200);
+    const doComite = await request(app.getHttpServer())
+      .get(`/api/v1/barters/${barter.code}`)
+      .set('Authorization', await asUser(COMITE));
+    expect(doComite.status).toBe(403);
+
+    // O rascunho é do consultor: ele o vê na lista dele e o encaminha.
+    const auth = await asUser(JOAO);
+    const doJoao = await request(app.getHttpServer())
+      .get(`/api/v1/barters/${barter.code}`)
+      .set('Authorization', auth);
+    expect(doJoao.status).toBe(200);
+    expect((await encaminhar(barter.code as string, auth)).status).toBe(200);
+  });
+
+  it('admin não gera permuta de produtor sem consultor', async () => {
+    await app
+      .get(PrismaService)
+      .producer.update({ where: { id: 1 }, data: { consultantId: null } });
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(ADMIN))
+      .send(validPayload);
+    expect(response.status).toBe(422);
+    expect(response.body.message).toContain('sem consultor');
+  });
+
+  it('gerente não registra permuta', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/api/v1/barters')
+      .set('Authorization', await asUser(GERENTE))
       .send(validPayload);
     expect(response.status).toBe(403);
   });

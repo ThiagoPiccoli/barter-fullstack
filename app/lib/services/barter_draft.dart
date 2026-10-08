@@ -52,11 +52,19 @@ class BarterDraft {
   /// escolheu. Ignorado nas outras políticas.
   final bool wantsInsurance;
 
-  /// A TAXA DE SEGURO da praça do produtor, quando ela existe na base.
+  /// A TAXA DE SEGURO do MUNICÍPIO escolhido na opção do seguro — o do
+  /// cadastro do produtor até o consultor trocar —, quando ele está na base.
   ///
   /// Ela entra pronta porque a busca é I/O (o cache do app); o que é regra —
   /// se ela se aplica, quanto custa e o que fazer quando falta — está aqui.
   final InsuranceRateModel? insuranceRate;
+
+  /// A BASE DE SEGUROS tem algum município para escolher?
+  ///
+  /// É o que separa as duas faltas: sem taxa no município escolhido, falta
+  /// ESCOLHER outro; sem município nenhum na base, o seguro opcional nem se
+  /// liga. `null` deduz da taxa em mãos (quem não passa a base inteira).
+  final bool? hasInsuranceRates;
 
   /// O que veio de FORA DO BARTER nesta permuta: os pedidos que o admin
   /// atendeu. Não está no catálogo (é item cotado para esta permuta só), mas
@@ -72,6 +80,7 @@ class BarterDraft {
     this.plantedAreaHa = 0,
     this.wantsInsurance = false,
     this.insuranceRate,
+    this.hasInsuranceRates,
     this.offBarterCost = 0,
   });
 
@@ -110,9 +119,11 @@ class BarterDraft {
   /// A versão OFERECE o seguro como opcional — e aí a tela mostra o interruptor.
   bool get insuranceOffered => version?.insuranceOptional == true && producer != null;
 
-  /// O seguro opcional não pode ser ligado: a praça do produtor não tem taxa.
-  /// A opção aparece BLOQUEADA, com o aviso — a permuta pode seguir sem seguro.
-  bool get insuranceBlocked => insuranceOffered && insuranceRate == null;
+  /// O seguro opcional não pode ser ligado: a base não tem município nenhum
+  /// para escolher. A opção aparece BLOQUEADA, com o aviso — a permuta pode
+  /// seguir sem seguro.
+  bool get insuranceBlocked =>
+      insuranceOffered && !(hasInsuranceRates ?? insuranceRate != null);
 
   /// ESTA PERMUTA LEVA SEGURO? A política é da VERSÃO: obrigatório leva sempre;
   /// opcional leva quando o produtor quis (e a praça tem taxa).
@@ -122,13 +133,13 @@ class BarterDraft {
     return insuranceOffered && wantsInsurance && !insuranceBlocked;
   }
 
-  /// O seguro é OBRIGATÓRIO e a praça do produtor NÃO está na base.
+  /// A permuta LEVA seguro e o município escolhido NÃO tem taxa na base (ou
+  /// nenhum foi escolhido).
   ///
   /// É a recusa que o servidor vai dar no registro, antecipada: sem ela, o
   /// consultor monta a permuta inteira com o produtor ao lado e só descobre o
   /// problema ao salvar.
-  bool get insuranceMissing =>
-      version?.insuranceRequired == true && producer != null && insuranceRate == null;
+  bool get insuranceMissing => insuranceApplies && insuranceRate == null;
 
   /// O custo do seguro na moeda da lente — área plantada × taxa da praça. A
   /// mesma conta do servidor (`insuranceCostFor`).
@@ -140,6 +151,17 @@ class BarterDraft {
 
   /// O que vai no campo `insurance` do registro: a escolha, só no opcional.
   bool? get insuranceChoice => insuranceOffered ? (wantsInsurance && !insuranceBlocked) : null;
+
+  /// O SEGURO PAGO EM GRÃO: o custo dele em sacas da cultura da permuta.
+  ///
+  /// É como ele aparece na tela, para as duas lentes: a apólice entra no total
+  /// e é paga na mesma entrega que paga os insumos, então a pergunta do
+  /// produtor ("quanto o seguro me custa?") se responde em sacas.
+  double get insuranceSacks {
+    final current = version;
+    if (current == null || insuranceCost <= 0) return 0;
+    return sacksToCover(insuranceCost, current.costPerSack);
+  }
 
   /// SACAS da cultura escolhida necessárias para cobrir o custo.
   ///

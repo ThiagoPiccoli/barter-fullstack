@@ -820,16 +820,19 @@ Duas escolhas dentro dela:
 [barters.service.ts](../api/src/barters/barters.service.ts), método `create`.
 Vale ler linha a linha; a sequência é:
 
-1. **só o consultor registra permuta** (é ato do consultor da carteira; admin e
-   retaguarda levam 403) → a regra é uma *lista de permitidos*, para papel novo
-   não entrar por omissão
+1. **o consultor registra permuta — e o admin gera em nome dele** (a
+   retaguarda leva 403) → a regra é uma *lista de permitidos*, para papel novo
+   não entrar por omissão. Gerada pelo admin, a permuta é do **consultor do
+   produtor** (422 se o produtor está sem consultor), e o evento do registro na
+   linha do tempo guarda o admin como ator
 1b. o consultor **não** precisa ter gerente para REGISTRAR: a permuta nasce
    rascunho, na mão dele. O gerente é lido no ENCAMINHAMENTO, que é onde o envio
    acontece — e é lá que a falta dele recusa o ato, com o rascunho intacto
 2. **precisa haver Barter aberto** (`requireOpenVersion`) → é ele que traz o
    grão da safra e a tabela de valores; sem ele, 422 com "aguarde o próximo
    lançamento"
-3. **produtor precisa estar na carteira de quem registra** → 403
+3. **produtor precisa estar na carteira de quem registra** → 403 (para o admin,
+   a carteira é a do próprio produtor)
 4. quantidades repetidas no payload são **consolidadas por produto**
 5. preços vêm **da versão** — o payload nem tem campo de preço, e o `whitelist`
    do ValidationPipe descartaria se tivesse; insumo fora da tabela da versão é

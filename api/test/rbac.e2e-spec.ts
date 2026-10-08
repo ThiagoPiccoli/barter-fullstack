@@ -317,7 +317,12 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
     }
   });
 
-  it('permuta é ato do consultor da carteira — nem retaguarda nem admin registram', async () => {
+  /**
+   * O ADMIN é a exceção de propósito (ele gera a permuta em nome do consultor
+   * do produtor — ver barters.e2e-spec.ts); os postos da retaguarda continuam
+   * de fora.
+   */
+  it('permuta é ato do consultor da carteira (ou do admin) — a retaguarda não registra', async () => {
     const payload = {
       producerId: 1,
       unitId: UNIT.filial02,
@@ -330,7 +335,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       ],
     };
 
-    for (const email of [...BACK_OFFICE, ADMIN]) {
+    for (const email of BACK_OFFICE) {
       const response = await request(app.getHttpServer())
         .post('/api/v1/barters')
         .set('Authorization', await asUser(email))

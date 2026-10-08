@@ -94,6 +94,7 @@ void main() {
     List<ProductModel>? inputs,
     List<ProductClassModel> classes = const [],
     InsuranceRateModel? insuranceRate,
+    bool? hasInsuranceRates,
     double offBarterCost = 0,
     double area = 100,
     bool wantsInsurance = false,
@@ -106,6 +107,7 @@ void main() {
         plantedAreaHa: area,
         wantsInsurance: wantsInsurance,
         insuranceRate: insuranceRate,
+        hasInsuranceRates: hasInsuranceRates,
         offBarterCost: offBarterCost,
       );
 
@@ -343,6 +345,46 @@ void main() {
       expect(d.insuranceApplies, isFalse);
       expect(d.insuranceChoice, isFalse);
       expect(d.canSubmit, isTrue);
+    });
+
+    /// O MUNICÍPIO É ESCOLHA: com a base cheia, o seguro opcional liga mesmo
+    /// que a praça do cadastro não tenha taxa — e aí falta ESCOLHER outra, que é
+    /// falta que trava o envio (o servidor recusaria a praça sem taxa).
+    test('opcional ligado sem município com taxa trava até escolher um', () {
+      final semEscolha = draft(
+        version: versao(insurance: InsurancePolicy.optional),
+        quantities: const {'5': 10},
+        wantsInsurance: true,
+        hasInsuranceRates: true,
+      );
+      expect(semEscolha.insuranceBlocked, isFalse);
+      expect(semEscolha.insuranceApplies, isTrue);
+      expect(semEscolha.insuranceMissing, isTrue);
+      expect(semEscolha.canSubmit, isFalse);
+
+      final escolhido = draft(
+        version: versao(insurance: InsurancePolicy.optional),
+        quantities: const {'5': 10},
+        wantsInsurance: true,
+        hasInsuranceRates: true,
+        insuranceRate: taxa,
+      );
+      expect(escolhido.insuranceMissing, isFalse);
+      expect(escolhido.canSubmit, isTrue);
+    });
+
+    /// O SEGURO É PAGO EM GRÃO: o custo dele sai em sacas, a mesma unidade do
+    /// total — e é a parcela do total que ele explica.
+    test('o custo do seguro sai em sacas do grão', () {
+      final d = draft(
+        version: versao(insurance: InsurancePolicy.required),
+        quantities: const {'5': 10},
+        insuranceRate: taxa,
+      );
+      expect(d.insuranceSacks, 200);
+      expect(d.sacksNeeded, 210);
+
+      expect(draft(quantities: const {'5': 10}, insuranceRate: taxa).insuranceSacks, 0);
     });
   });
 

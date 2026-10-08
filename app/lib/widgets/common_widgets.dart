@@ -874,21 +874,117 @@ class DashboardHeader extends StatelessWidget {
 /// campos nem vêm no JSON, e a linha de baixo some inteira; o mesmo vale para a
 /// permuta anterior ao campo de área, que não tem divisão a mostrar.
 class BarterIdentity extends StatelessWidget {
-  final BarterModel barter;
+  /// O código da permuta — ou o que ocupa o lugar dele enquanto ela ainda está
+  /// sendo montada ("Nova permuta").
+  final String code;
+  final String producerName;
+  final String consultantName;
+
+  /// A área plantada (ha); zero some.
+  final double areaHa;
+
+  /// O investimento por hectare, pronto do servidor; `null` some.
+  final double? sacksPerHa;
 
   /// O que vai na ponta direita da linha do código: o status, a espera na fila.
   final Widget? trailing;
 
-  const BarterIdentity({super.key, required this.barter, this.trailing});
+  /// TUDO NUMA LINHA SÓ — o código e os dados lado a lado, rolando de lado
+  /// quando não cabem. É o modo do CABEÇALHO da montagem, que não tem altura
+  /// sobrando num telefone: duas ou três linhas de identificação ali empurram
+  /// a lista de insumos para fora da tela.
+  final bool singleLine;
+
+  /// Dados que a identificação não tem e quem a usa precisa dizer junto (a
+  /// cultura, a retirada), no mesmo desenho dos outros.
+  final List<BarterIdentityFact> extra;
+
+  BarterIdentity({
+    super.key,
+    required BarterModel barter,
+    this.trailing,
+    this.singleLine = false,
+    this.extra = const [],
+  })  : code = barter.id,
+        producerName = barter.producerName,
+        consultantName = barter.consultantName,
+        areaHa = barter.plantedAreaHa,
+        sacksPerHa = barter.sacksPerHa;
+
+  /// A identificação de uma permuta que AINDA NÃO EXISTE no servidor — a da tela
+  /// de montagem. Mesmo componente, para ela se ler igual antes e depois de
+  /// registrada; o investimento fica de fora porque só o servidor o calcula.
+  const BarterIdentity.parts({
+    super.key,
+    required this.code,
+    required this.producerName,
+    required this.consultantName,
+    this.areaHa = 0,
+    this.sacksPerHa,
+    this.trailing,
+    this.singleLine = false,
+    this.extra = const [],
+  });
+
+  List<BarterIdentityFact> get _people => [
+        BarterIdentityFact(
+          icon: Icons.person_outline,
+          tooltip: 'Produtor',
+          value: producerName,
+          strong: true,
+        ),
+        BarterIdentityFact(icon: Icons.badge_outlined, tooltip: 'Consultor', value: consultantName),
+      ];
+
+  List<BarterIdentityFact> get _size => [
+        if (areaHa > 0)
+          BarterIdentityFact(
+            icon: Icons.landscape_outlined,
+            tooltip: 'Área plantada da cultura nesta permuta',
+            value: '${formatQty(areaHa)} ha',
+          ),
+        if (sacksPerHa != null)
+          BarterIdentityFact(
+            icon: Icons.straighten,
+            tooltip: 'Investimento médio por hectare (sacas ÷ área)',
+            label: 'Investimento',
+            value: formatSacksPerHa(sacksPerHa!),
+            strong: true,
+          ),
+      ];
 
   @override
   Widget build(BuildContext context) {
-    final area = barter.plantedAreaHa;
-    final hasArea = area > 0;
-    final code = Text(barter.id,
+    final codeText = Text(code,
         overflow: TextOverflow.ellipsis,
         style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark));
 
+    if (singleLine) {
+      final facts = [..._people, ...extra, ..._size];
+      return Row(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  codeText,
+                  for (final fact in facts) ...[
+                    const SizedBox(width: 12),
+                    // Sem `Flexible`: numa rolagem lateral a largura é infinita,
+                    // e um filho flexível ali não teria medida.
+                    _IdentityFact(fact: fact, flexible: false),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 8), trailing!],
+        ],
+      );
+    }
+
+    final size = _size;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -896,48 +992,21 @@ class BarterIdentity extends StatelessWidget {
         // Sem `trailing`, o código não leva `Expanded`: os diálogos medem a
         // largura pelo conteúdo, e um filho flexível ali não teria largura.
         if (trailing == null)
-          code
+          codeText
         else
-          Row(children: [Expanded(child: code), const SizedBox(width: 8), trailing!]),
+          Row(children: [Expanded(child: codeText), const SizedBox(width: 8), trailing!]),
         const SizedBox(height: 3),
         Wrap(
           spacing: 12,
           runSpacing: 2,
-          children: [
-            _IdentityFact(
-              icon: Icons.person_outline,
-              tooltip: 'Produtor',
-              value: barter.producerName,
-              strong: true,
-            ),
-            _IdentityFact(
-              icon: Icons.badge_outlined,
-              tooltip: 'Consultor',
-              value: barter.consultantName,
-            ),
-          ],
+          children: [for (final fact in [..._people, ...extra]) _IdentityFact(fact: fact)],
         ),
-        if (hasArea || barter.sacksPerHa != null) ...[
+        if (size.isNotEmpty) ...[
           const SizedBox(height: 2),
           Wrap(
             spacing: 12,
             runSpacing: 2,
-            children: [
-              if (hasArea)
-                _IdentityFact(
-                  icon: Icons.landscape_outlined,
-                  tooltip: 'Área plantada da cultura nesta permuta',
-                  value: '${formatQty(area)} ha',
-                ),
-              if (barter.sacksPerHa != null)
-                _IdentityFact(
-                  icon: Icons.straighten,
-                  tooltip: 'Investimento médio por hectare (sacas ÷ área)',
-                  label: 'Investimento',
-                  value: formatSacksPerHa(barter.sacksPerHa!),
-                  strong: true,
-                ),
-            ],
+            children: [for (final fact in size) _IdentityFact(fact: fact)],
           ),
         ],
       ],
@@ -946,44 +1015,54 @@ class BarterIdentity extends StatelessWidget {
 }
 
 /// Um dado da [BarterIdentity]: ícone, rótulo opcional e valor.
-///
-/// O valor é um `Text` SEPARADO do rótulo de propósito — "2,10 sc/ha" tem de
-/// poder ser achado sozinho, nos testes e por quem lê a tela com leitor.
-class _IdentityFact extends StatelessWidget {
+class BarterIdentityFact {
   final IconData icon;
   final String tooltip;
   final String? label;
   final String value;
   final bool strong;
 
-  const _IdentityFact({
+  const BarterIdentityFact({
     required this.icon,
     required this.tooltip,
     required this.value,
     this.label,
     this.strong = false,
   });
+}
+
+/// O desenho de um [BarterIdentityFact].
+///
+/// O valor é um `Text` SEPARADO do rótulo de propósito — "2,10 sc/ha" tem de
+/// poder ser achado sozinho, nos testes e por quem lê a tela com leitor.
+class _IdentityFact extends StatelessWidget {
+  final BarterIdentityFact fact;
+
+  /// O valor encolhe (com reticências) quando falta largura. Desligado na linha
+  /// única, que rola de lado em vez de cortar.
+  final bool flexible;
+
+  const _IdentityFact({required this.fact, this.flexible = true});
 
   @override
   Widget build(BuildContext context) {
+    final value = Text(fact.value,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: fact.strong ? FontWeight.w600 : FontWeight.w400,
+          color: fact.strong ? AppColors.textDark : AppColors.textMedium,
+        ));
     return Tooltip(
-      message: tooltip,
+      message: fact.tooltip,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 13, color: AppColors.textLight),
+          Icon(fact.icon, size: 13, color: AppColors.textLight),
           const SizedBox(width: 4),
-          if (label != null)
-            Text('$label ', style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-          Flexible(
-            child: Text(value,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: strong ? FontWeight.w600 : FontWeight.w400,
-                  color: strong ? AppColors.textDark : AppColors.textMedium,
-                )),
-          ),
+          if (fact.label != null)
+            Text('${fact.label} ', style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+          if (flexible) Flexible(child: value) else value,
         ],
       ),
     );

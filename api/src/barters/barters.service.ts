@@ -108,6 +108,7 @@ import {
   insuranceCostFor,
   insuranceItemNameOf,
   missingRateRefusal,
+  sameCity,
 } from '../insurance/insurance-rate';
 import {
   INSURANCE_CHOICE,
@@ -608,6 +609,15 @@ function insuranceOf(barter: Barter): InsuranceQuote | null {
 }
 
 /**
+ * O MUNICÍPIO QUE PRECIFICA O SEGURO: o que o consultor escolheu na opção do
+ * seguro, ou — sem escolha — o do cadastro do produtor, que é o que a tela já
+ * vem marcando. Vazio quando não há nenhum dos dois.
+ */
+function insuranceCityOf(chosen: string | undefined, producerCity: string | null): string {
+  return chosen?.trim() || producerCity?.trim() || '';
+}
+
+/**
  * A LINHA DO SEGURO dentro da permuta.
  *
  * Em um lugar só porque ela nasce em DOIS momentos, como o item de fora do
@@ -756,6 +766,13 @@ export class BartersService {
           ...(can(user, CAPABILITY.bartersProductReview)
             ? [{ productRequests: { some: {} } }]
             : []),
+          // O RASCUNHO QUE ELE MESMO GEROU: o admin que registra em nome do
+          // consultor do produtor (ver `create`) não perde de vista, no clique
+          // seguinte, a permuta que acabou de criar. Quem a gerou é o ator do
+          // evento do registro — a mesma linha que a linha do tempo mostra.
+          ...(can(user, CAPABILITY.bartersRegister)
+            ? [{ events: { some: { action: BARTER_ACTION.register, actorId: user.id } } }]
+            : []),
         ],
       };
     }
@@ -876,12 +893,15 @@ export class BartersService {
    * registra e monta o rascunho normalmente; ele só não consegue encaminhar — e
    * a mensagem que ele lê nesse momento diz exatamente isso.
    */
-  async create(consultant: User, dto: CreateBarterDto): Promise<BarterDetail> {
+  async create(author: User, dto: CreateBarterDto): Promise<BarterDetail> {
     // A rota já exige a capacidade `barters.register`; aqui a regra é repetida
     // como invariante do DOMÍNIO, e na forma de LISTA DE PERMITIDOS. Enquanto
     // isto perguntava "é admin?", cada papel novo entrava por omissão — gerente,
     // comitê e faturista registrariam permuta sem ninguém ter decidido isso.
-    if (consultant.role !== ROLE.consultant) {
+    //
+    // O ADMIN entrou na lista, e entrou por decisão: ele gera a permuta na mesma
+    // tela do consultor, quando o cliente liga para a central. Ver o passo 2.
+    if (author.role !== ROLE.consultant && author.role !== ROLE.admin) {
       throw new ForbiddenException('Permutas são registradas pelo consultor da carteira');
     }
 
@@ -917,11 +937,29 @@ export class BartersService {
     }
 
     // 2. O produtor precisa estar na carteira de QUEM REGISTRA.
+    //
+    // Quando quem registra é o ADMIN, a carteira é a do produtor: o consultor da
+    // permuta é o CONSULTOR DO PRODUTOR, e não quem apertou o botão. É ele quem
+    // segue com ela — escreve o parecer, preenche a cédula e a encaminha ao
+    // gerente dele —, e uma permuta em nome do admin não teria gerente para
+    // quem ir. Quem a gerou fica na linha do tempo, no evento do registro.
     const producer = await this.prisma.producer.findUnique({ where: { id: dto.producerId } });
     if (!producer) {
       throw new UnprocessableEntityException('Produtor não encontrado');
     }
-    if (producer.consultantId !== consultant.id) {
+    let consultant = author;
+    if (author.role === ROLE.admin) {
+      const owner =
+        producer.consultantId === null
+          ? null
+          : await this.prisma.user.findUnique({ where: { id: producer.consultantId } });
+      if (!owner || owner.role !== ROLE.consultant) {
+        throw new UnprocessableEntityException(
+          `${producer.name} está sem consultor na carteira. Designe um consultor antes de gerar a permuta`,
+        );
+      }
+      consultant = owner;
+    } else if (producer.consultantId !== author.id) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
 
@@ -934,11 +972,16 @@ export class BartersService {
     }
 
     // 3.5. O SEGURO: a escolha que a política da versão permite (obrigatório,
-    //      opcional ou sem seguro) e, quando leva, a taxa da praça do produtor,
+    //      opcional ou sem seguro) e, quando leva, a taxa do MUNICÍPIO que o
+    //      consultor escolheu (o do cadastro do produtor, se ele não escolheu),
     //      cotada agora e congelada no registro. A recusa por praça sem taxa
     //      acontece AQUI, pelo mesmo motivo da recusa por versão sem
     //      produtividade — aqui ela é grátis.
-    const { choice, quote: insurance } = await this.insuranceFor(version, producer, dto.insurance);
+    const { choice, quote: insurance } = await this.insuranceFor(
+      version,
+      insuranceCityOf(dto.insuranceCity, producer.city),
+      dto.insurance,
+    );
 
     // 4, 5 e 6 — a precificação e as travas — em um lugar só, porque a
     // ALTERAÇÃO de um rascunho passa exatamente pelas mesmas (ver
@@ -1003,15 +1046,30 @@ export class BartersService {
       items: { create: items },
       // O PRIMEIRO EVENTO da linha do tempo nasce junto com a permuta, na mesma
       // transação — não existe permuta sem o registro de que ela foi registrada.
+      //
+      // O ATOR é quem REGISTROU, e não o dono da carteira: gerada pelo admin, a
+      // permuta é do consultor do produtor, e é este evento que guarda que foi
+      // o admin quem a criou — com a frase que diz em nome de quem.
       events: {
-        create: [this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.draft)],
+        create: [
+          this.eventOf(
+            author,
+            BARTER_ACTION.register,
+            null,
+            BARTER_STATUS.draft,
+            author.id === consultant.id
+              ? null
+              : `Gerada pelo administrador ${author.fullName} para a carteira de ${consultant.fullName}`,
+          ),
+        ],
       },
     });
   }
 
   /**
    * O SEGURO DESTA PERMUTA — a escolha que a política da versão permite e,
-   * quando a permuta leva seguro, a praça do produtor e a taxa dela.
+   * quando a permuta leva seguro, a praça escolhida e a taxa dela. A praça
+   * chega resolvida (ver `insuranceCityOf`).
    *
    * Quem decide a POLÍTICA é o lançamento (`BarterVersion.insurancePolicy`).
    * Quando ela é opcional, quem decide a permuta é o consultor com o produtor
@@ -1029,7 +1087,7 @@ export class BartersService {
    */
   private async insuranceFor(
     version: { insurancePolicy: string },
-    producer: { city: string | null },
+    city: string,
     wanted: boolean | undefined,
   ): Promise<{ choice: InsuranceChoice; quote: InsuranceQuote | null }> {
     const decided = insuranceChoiceFor(version.insurancePolicy, wanted);
@@ -1038,7 +1096,6 @@ export class BartersService {
     }
     if (!choiceInsures(decided.choice)) return { choice: decided.choice, quote: null };
 
-    const city = producer.city?.trim() ?? '';
     if (!city) {
       throw new UnprocessableEntityException(MISSING_CITY_REFUSAL);
     }
@@ -2796,26 +2853,34 @@ export class BartersService {
     // A ESCOLHA só muda quando o consultor a manda, e só no opcional: é a
     // versão DA PERMUTA que diz se o seguro era opcional quando ela nasceu.
     const plantedAreaHa = dto.plantedAreaHa ?? barter.plantedAreaHa;
+    //
+    // O MUNICÍPIO também só reprecifica quando MUDA: o consultor que corrige a
+    // praça do seguro (a lavoura é em outro município) cota a nova pela base de
+    // hoje; o que reenvia a mesma praça mantém a taxa congelada.
     let choice = barter.insuranceChoice as InsuranceChoice;
     let insurance = insuranceOf(barter);
-    if (dto.insurance !== undefined) {
-      const wantedNow = dto.insurance;
-      const hadIt = choiceInsures(choice);
-      if (wantedNow !== hadIt) {
-        const producer = barter.producerId
-          ? await this.prisma.producer.findUnique({ where: { id: barter.producerId } })
-          : null;
-        const decided = await this.insuranceFor(
-          version,
-          { city: producer?.city ?? null },
-          wantedNow,
-        );
-        choice = decided.choice;
-        insurance = decided.quote;
-      } else if (choice === INSURANCE_CHOICE.required && !wantedNow) {
-        // `required` com `false`: a mesma recusa do registro.
-        await this.insuranceFor(version, { city: null }, false);
-      }
+    const hadIt = choiceInsures(choice);
+    const wantedNow = dto.insurance ?? hadIt;
+    const cityChanged =
+      wantedNow &&
+      dto.insuranceCity !== undefined &&
+      dto.insuranceCity.trim() !== '' &&
+      !sameCity(dto.insuranceCity, barter.insuranceCity);
+    if (wantedNow !== hadIt || cityChanged) {
+      const producer =
+        dto.insuranceCity?.trim() || !barter.producerId
+          ? null
+          : await this.prisma.producer.findUnique({ where: { id: barter.producerId } });
+      const decided = await this.insuranceFor(
+        version,
+        insuranceCityOf(dto.insuranceCity, producer?.city ?? null),
+        wantedNow,
+      );
+      choice = decided.choice;
+      insurance = decided.quote;
+    } else if (dto.insurance === false && choice === INSURANCE_CHOICE.required) {
+      // `required` com `false`: a mesma recusa do registro.
+      await this.insuranceFor(version, '', false);
     }
 
     const items = await this.pricedItemsFor(

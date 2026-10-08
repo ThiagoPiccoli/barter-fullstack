@@ -163,13 +163,14 @@ void main() {
     expect(find.textContaining('+ 0,8 sc soja'), findsOneWidget);
   });
 
-  /// O CABEÇALHO DO PRODUTOR não pode estourar a linha.
+  /// O CABEÇALHO não pode estourar a linha.
   ///
   /// "1.200 ha • Mandaguari/PR" vinha num `Text` solto dentro de uma `Row`: sem
   /// largura máxima o `ellipsis` não tem onde cortar, e a faixa saía com 127
-  /// pixels de listra vermelha por cima num telefone de 360. O arquivo já tinha
-  /// consertado exatamente isso no rodapé — este teste é para não voltar pela
-  /// terceira porta.
+  /// pixels de listra vermelha por cima num telefone de 360. Hoje a
+  /// identificação é uma linha só, que rola de lado — e com ela compacta os
+  /// insumos aparecem na tela pequena, e a linha da quantidade passou a ser
+  /// conferida também.
   ///
   /// Roda em 320 e em 360: o defeito é de largura, e um teste que só olha o
   /// aparelho grande não veria nenhum dos dois casos.
@@ -177,8 +178,8 @@ void main() {
     testWidgets('a etapa 3 cabe na tela de ${largura.toInt()} sem estourar', (tester) async {
       await abrirEtapa3(tester, largura: largura);
 
-      // Nome longo e cidade longa é o pior caso real, não um inventado.
-      expect(find.textContaining('Mandaguari/PR'), findsOneWidget);
+      // Nome longo é o pior caso real, não um inventado.
+      expect(find.text(AppData.producers.single.name), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

@@ -145,4 +145,5 @@ export function missingRateRefusal(city: string): string {
  */
 export const MISSING_CITY_REFUSAL =
   'Este Barter leva seguro agrícola, e o cadastro deste produtor está sem o município — ' +
-  'é ele que define o valor por hectare. Peça ao administrador para completá-lo';
+  'é ele que define o valor por hectare. Escolha o município na opção do seguro, ou peça ao ' +
+  'administrador para completar o cadastro';
