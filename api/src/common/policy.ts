@@ -422,14 +422,16 @@ export const CAPABILITY = {
    *
    * É a única medida que compara duas permutas de tamanhos diferentes: R$ 400
    * mil numa fazenda de 2.000 ha e R$ 400 mil numa de 300 ha são negócios
-   * distintos, e o total sozinho não diz qual é qual. Quem decide, quem
-   * administra e quem fatura leem esse número; o consultor e o gerente não —
-   * não por sigilo, mas porque para eles a permuta é UMA, e uma régua de
-   * comparação sem com quem comparar é ruído na tela.
+   * distintos, e o total sozinho não diz qual é qual.
    *
-   * Ela é SEPARADA de `pricesRead` de propósito: sc/ha não é R$, e o dia em que
-   * o gerente precisar comparar as permutas do time dele é esta linha que muda —
-   * sem lhe dar de carona a tabela de valores do fornecedor.
+   * O consultor e o gerente ficaram de fora enquanto, para eles, a permuta era
+   * UMA — uma régua sem com quem comparar é ruído. Os painéis mudaram isso: o
+   * consultor lê o investimento médio da própria carteira, e o gerente compara
+   * os consultores do time na aba Análise. Só a SEGURADORA continua sem ela —
+   * o trecho dela é a apólice, e a área já chega a todo mundo.
+   *
+   * Ela é SEPARADA de `pricesRead` de propósito: sc/ha não é R$, e dar a régua
+   * ao consultor não lhe dá de carona a tabela de valores do fornecedor.
    */
   bartersInvestmentPerHa: 'barters.investmentPerHa',
 } as const;
@@ -469,6 +471,9 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersReadTeam,
     CAPABILITY.bartersOpinion,
     CAPABILITY.pricesRead,
+    // O sc/ha é a régua da aba Análise: é com ela que ele compara os
+    // consultores do time. Ver `bartersInvestmentPerHa`.
+    CAPABILITY.bartersInvestmentPerHa,
   ],
   // O COMITÊ decide. É a única instância que aprova ou nega — e ele o faz sobre
   // o que já chegou pronto das duas etapas anteriores, daí a leitura de tudo
@@ -552,6 +557,9 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     // Quem preenche também lê: o `GET` da mesa da cédula pede esta capacidade, e
     // sem ela o consultor não teria a própria tela.
     CAPABILITY.bartersCprRead,
+    // O sc/ha das PRÓPRIAS permutas — é dele que sai o investimento médio do
+    // painel dele. Em sacas e hectares, e não em R$: não abre `pricesRead`.
+    CAPABILITY.bartersInvestmentPerHa,
   ],
 };
 

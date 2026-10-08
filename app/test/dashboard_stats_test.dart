@@ -229,4 +229,213 @@ void main() {
       expect(grupos.map((g) => g.key), ['Zeca', 'Ana']);
     });
   });
+
+  /// O INVESTIMENTO MÉDIO NÃO REFAZ A CONTA DO SERVIDOR: é a média dos números
+  /// de cada permuta ponderada pela área, que é o mesmo Σ sacas ÷ Σ área.
+  group('área e investimento médio', () {
+    BarterModel medida(String id, {required double sacks, required double area, bool comRegua = true}) =>
+        BarterModel(
+          id: id,
+          consultantId: '2',
+          consultantName: 'João Silva',
+          consultantBranch: 'Filial 02',
+          producerId: '10',
+          producerName: 'Antônio Carvalho',
+          status: BarterStatus.approved,
+          createdAt: DateTime(2026, 3, 1),
+          plantedAreaHa: area,
+          // O que o serializer manda: sacas ÷ área, ou nada para quem não lê a
+          // régua, ou null sem área.
+          sacksPerHa: !comRegua || area <= 0 ? null : sacks / area,
+          grains: [grain('Soja', sacks)],
+          inputs: const [],
+        );
+
+    test('a média ponderada pela área é Σ sacas ÷ Σ área', () {
+      final permutas = [medida('A', sacks: 1000, area: 100), medida('B', sacks: 300, area: 100)];
+      // Média simples dos sc/ha daria (10 + 3) ÷ 2 = 6,5; a da lavoura é 6,5
+      // aqui só por coincidência de áreas iguais — o caso abaixo separa as duas.
+      expect(investmentPerHaOf(permutas), closeTo(1300 / 200, 1e-9));
+
+      final desiguais = [medida('A', sacks: 1000, area: 100), medida('B', sacks: 300, area: 300)];
+      expect(investmentPerHaOf(desiguais), closeTo(1300 / 400, 1e-9));
+      expect(areaOf(desiguais), 400);
+    });
+
+    /// A permuta sem área não entra na média — nem as sacas dela, que
+    /// inflariam o número sem hectare nenhum por baixo.
+    test('a permuta sem área fica fora da média', () {
+      final permutas = [medida('A', sacks: 1000, area: 100), medida('velha', sacks: 5000, area: 0)];
+      expect(investmentPerHaOf(permutas), 10);
+    });
+
+    /// Sem a régua (quem não a recebe do servidor), o número some — e não vira
+    /// zero.
+    test('sem a régua do servidor, não há média', () {
+      expect(investmentPerHaOf([medida('A', sacks: 1000, area: 100, comRegua: false)]), isNull);
+      expect(investmentPerHaOf(const []), isNull);
+    });
+
+    test('o painel mede a área e o investimento das fechadas', () {
+      final stats = statsOf([
+        medida('A', sacks: 1000, area: 100),
+        barter(id: 'B', status: BarterStatus.pending),
+      ]);
+      expect(stats.area, 100);
+      expect(stats.investmentPerHa, 10);
+    });
+  });
+
+  group('fases', () {
+    /// A cédula emitida e a assinada ainda são permuta faturada: o painel não
+    /// pode perdê-las da conta no dia em que o emissor age.
+    test('agrupam os estados, e a cédula em andamento continua faturada', () {
+      final fases = phaseCounts([
+        barter(id: 'A', status: BarterStatus.approved),
+        barter(id: 'B', status: BarterStatus.approvedWithConditions),
+        barter(id: 'C', status: BarterStatus.invoiced),
+        barter(id: 'D', status: BarterStatus.cprIssued),
+        barter(id: 'E', status: BarterStatus.cprSigned),
+        barter(id: 'F', status: BarterStatus.cprRegistered),
+        barter(id: 'G', status: BarterStatus.awaitingPolicyWithConditions),
+      ]);
+      expect(fases[BarterPhase.toInvoice], 2);
+      expect(fases[BarterPhase.invoiced], 3);
+      expect(fases[BarterPhase.registered], 1);
+      expect(fases[BarterPhase.atInsurer], 1);
+      // Todas as fases vêm, inclusive as vazias.
+      expect(fases.keys, BarterPhase.values);
+      expect(fases[BarterPhase.denied], 0);
+    });
+  });
+
+  group('tempo nas etapas', () {
+    BarterModel andamento(String id, {
+      required BarterStatus status,
+      DateTime? sent,
+      DateTime? opinion,
+      DateTime? decided,
+      String? reviewedBy,
+    }) =>
+        BarterModel(
+          id: id,
+          consultantId: '2',
+          consultantName: 'João Silva',
+          consultantBranch: 'Filial 02',
+          producerId: '10',
+          producerName: 'Antônio Carvalho',
+          status: status,
+          createdAt: DateTime(2026, 3, 1),
+          consultantSentAt: sent,
+          managerReviewedAt: opinion,
+          updatedAt: decided,
+          reviewedBy: reviewedBy,
+          grains: const [],
+          inputs: const [],
+        );
+
+    /// O parecer conta do ENCAMINHAMENTO: o rascunho que o consultor segurou
+    /// não é espera do gerente.
+    test('cada etapa mede da chegada à saída', () {
+      final permutas = [
+        andamento('A',
+            status: BarterStatus.approved,
+            sent: DateTime(2026, 3, 3),
+            opinion: DateTime(2026, 3, 5),
+            decided: DateTime(2026, 3, 11),
+            reviewedBy: 'Comitê'),
+        andamento('B',
+            status: BarterStatus.pending, sent: DateTime(2026, 3, 1), opinion: DateTime(2026, 3, 5)),
+      ];
+      expect(averageStageDays(permutas, BarterStage.assembly), 1); // (2 + 0) ÷ 2
+      expect(averageStageDays(permutas, BarterStage.opinion), 3); // (2 + 4) ÷ 2
+      // B ainda está no comitê: o relógio dela não parou, e ela não entra.
+      expect(averageStageDays(permutas, BarterStage.decision), 6);
+      expect(averageStageDays(permutas, BarterStage.policy), isNull);
+    });
+
+    test('a espera em curso conta da chegada à etapa atual', () {
+      final noComite = andamento('B',
+          status: BarterStatus.pending, sent: DateTime(2026, 3, 1), opinion: DateTime(2026, 3, 5));
+      expect(currentStageOf(noComite), BarterStage.decision);
+      expect(daysWaiting(noComite, now: DateTime(2026, 3, 12)), 7);
+      expect(daysWaiting(barter(id: 'X', status: BarterStatus.denied)), 0);
+    });
+  });
+
+  group('por consultor', () {
+    test('cada consultor tem os próprios números', () {
+      BarterModel de(String id, String consultantId, String name, BarterStatus status) => BarterModel(
+            id: id,
+            consultantId: consultantId,
+            consultantName: name,
+            consultantBranch: 'Filial 02',
+            producerId: '10',
+            producerName: 'Antônio Carvalho',
+            status: status,
+            createdAt: DateTime(2026, 3, 1),
+            grains: [grain('Soja', 100)],
+            inputs: const [],
+          );
+      final linhas = analysisByConsultant([
+        de('A', '2', 'João Silva', BarterStatus.approved),
+        de('B', '2', 'João Silva', BarterStatus.pending),
+        de('C', '3', 'Ana Souza', BarterStatus.approved),
+      ]);
+      expect(linhas.map((l) => l.name), ['Ana Souza', 'João Silva']);
+      final joao = linhas.last;
+      expect(joao.barters.length, 2);
+      expect(joao.stats.sacksReceivable, 100);
+      expect(joao.phases[BarterPhase.atCommittee], 1);
+    });
+  });
+
+  group('seguradora e emissor', () {
+    /// A área segurada é a da LINHA DO SEGURO, e só das que já têm apólice.
+    test('a área segurada se agrupa por cultura, só com apólice', () {
+      BarterModel segurada(String id, String grainName, double area, {String? policy}) => BarterModel(
+            id: id,
+            consultantId: '2',
+            consultantName: 'João Silva',
+            consultantBranch: 'Filial 02',
+            producerId: '10',
+            producerName: 'Antônio Carvalho',
+            status: BarterStatus.approved,
+            createdAt: DateTime(2026, 3, 1),
+            plantedAreaHa: 999,
+            insurancePolicyNumber: policy,
+            grains: [grain(grainName, 100)],
+            inputs: [
+              BarterItem(
+                productId: '9',
+                productName: 'Seguro agrícola',
+                unit: 'ha',
+                quantity: area,
+                unitValue: 50,
+                insurance: true,
+              ),
+            ],
+          );
+      final fatias = insuredAreaByGrain([
+        segurada('A', 'Soja', 100, policy: 'AP-1'),
+        segurada('B', 'Milho', 300, policy: 'AP-2'),
+        segurada('C', 'Soja', 50, policy: 'AP-3'),
+        segurada('D', 'Soja', 1000),
+      ]);
+      expect(fatias.map((f) => f.label), ['Milho', 'Soja']);
+      expect(fatias.map((f) => f.value), [300, 150]);
+    });
+
+    test('as cédulas em aberto se agrupam por safra', () {
+      final grupos = openCprsBySeason([
+        barter(id: 'A', status: BarterStatus.invoiced, seasonId: '3', seasonName: 'Soja 26/27'),
+        barter(id: 'B', status: BarterStatus.cprSigned, seasonId: '3', seasonName: 'Soja 26/27'),
+        barter(id: 'C', status: BarterStatus.cprIssued, seasonId: '4', seasonName: 'Milho 2027'),
+        barter(id: 'D', status: BarterStatus.cprRegistered, seasonId: '4', seasonName: 'Milho 2027'),
+      ]);
+      expect(grupos.map((g) => g.label), ['Soja 26/27', 'Milho 2027']);
+      expect(grupos.first.barters.length, 2);
+      expect(grupos.last.barters.single.id, 'C');
+    });
+  });
 }

@@ -8,12 +8,14 @@ import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/dashboard_widgets.dart';
 import '../widgets/policy_dialog.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
 import 'invoicing_screen.dart';
 import 'barters_screen.dart';
 import 'creditor_screen.dart';
+import 'team_analysis_screen.dart';
 
 /// Casa dos papéis de RETAGUARDA — gerente, comitê, SEGURADORA, faturista e
 /// EMISSOR.
@@ -56,6 +58,8 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
     ),
   ];
 
+  bool get _hasTeam => widget.user.can(Capability.bartersReadTeam);
+
   @override
   Widget build(BuildContext context) {
     // O que espera AÇÃO DE QUEM ESTÁ OLHANDO — o parecer do gerente, a decisão
@@ -70,7 +74,14 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
       user: widget.user,
       selectedIndex: _selectedIndex,
       onSelect: (i) => setState(() => _selectedIndex = i),
-      body: IndexedStack(index: _selectedIndex, children: _screens),
+      body: IndexedStack(index: _selectedIndex, children: [
+        ..._screens,
+        // A ANÁLISE DO TIME — de quem enxerga um time. Pela capacidade, como
+        // tudo aqui: é `barters.readTeam` que faz alguém ter consultores para
+        // comparar. Criada a cada desenho (o estado, com a ordenação escolhida,
+        // fica): um parecer dado na outra aba precisa já ter andado aqui.
+        if (_hasTeam) TeamAnalysisTab(user: widget.user),
+      ]),
       destinations: [
         const AdaptiveDestination(
           icon: Icons.insights_outlined,
@@ -84,6 +95,12 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
           badgeCount: waiting,
           badgeColor: post?.color,
         ),
+        if (_hasTeam)
+          const AdaptiveDestination(
+            icon: Icons.analytics_outlined,
+            activeIcon: Icons.analytics,
+            label: 'Análise',
+          ),
       ],
     );
   }
@@ -464,7 +481,21 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
               icon: post?.icon ?? Icons.badge_outlined,
             ),
             const SizedBox(height: 16),
-            _SummaryStrip(post: post, sacks: sacksReceivable),
+            // A FAIXA DE NÚMEROS é do posto. A seguradora e o emissor têm a
+            // sua — os números do trecho deles —, e o resto lê a fila, a etapa
+            // vizinha e as sacas a receber.
+            if (post?.post == WorkPost.insurer)
+              _InsurerStrip(queue: post!.queue, barters: AppData.barters)
+            else if (post?.post == WorkPost.emitter)
+              _EmitterStrip(barters: AppData.barters)
+            else
+              _SummaryStrip(post: post, sacks: sacksReceivable),
+            // O COMITÊ lê a operação com a mesma régua dos outros painéis: a
+            // área feita e o investimento médio por hectare.
+            if (post?.post == WorkPost.committee) ...[
+              const SizedBox(height: 12),
+              _OperationStrip(stats: statsOf(AppData.barters)),
+            ],
             const SizedBox(height: 20),
             // OS AVISOS vêm antes da fila: são poucos, são novidade, e somem
             // quando dispensados. É por aqui que o gerente fica sabendo que o
@@ -485,6 +516,16 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
                 _WorkQueueCard(post: post, onChanged: _onQueueChanged),
               const SizedBox(height: 20),
             ],
+            // O TRECHO DE QUEM OLHA, depois da fila: o que não pede ação
+            // agora, mas diz como o posto está andando.
+            if (post?.post == WorkPost.insurer) ...[
+              _InsuredAreaPanel(barters: AppData.barters),
+              const SizedBox(height: 20),
+            ],
+            if (post?.post == WorkPost.emitter) ...[
+              _EmitterPanel(barters: AppData.barters, onChanged: _onQueueChanged),
+              const SizedBox(height: 20),
+            ],
             // A EMPRESA — só para quem mantém o timbre dos documentos, que na
             // retaguarda é o faturista. Fica depois da fila pelo mesmo critério
             // do painel abaixo: não pede ação, é cadastro que se visita quando
@@ -499,6 +540,20 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
             if (user.can(Capability.bartersReview)) ...[
               _UpstreamPanel(
                 atManager: statsOf(AppData.barters).atManager,
+              ),
+              const SizedBox(height: 20),
+            ],
+            if (post?.post == WorkPost.committee) ...[
+              DashboardSectionTitle('${brand.copy.barterPluralTitle} por Status'),
+              const SizedBox(height: 12),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: PhaseBreakdown(
+                    counts: phaseCounts(AppData.barters),
+                    phases: backOfficePhases,
+                  ),
+                ),
               ),
               const SizedBox(height: 20),
             ],
@@ -1189,6 +1244,377 @@ class _SummaryCell extends StatelessWidget {
         Text(label, textAlign: TextAlign.center,
             style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
       ],
+    );
+  }
+}
+
+/// A RÉGUA DA OPERAÇÃO no painel do comitê — a mesma do admin e do consultor:
+/// a área que as permutas aprovadas cobrem, o investimento médio por hectare e
+/// quantas foram aprovadas.
+class _OperationStrip extends StatelessWidget {
+  final BarterStats stats;
+  const _OperationStrip({required this.stats});
+
+  @override
+  Widget build(BuildContext context) {
+    return StatStrip(cells: [
+      StatStripCell(
+        icon: Icons.landscape_outlined,
+        color: AppColors.primary,
+        value: areaLabelOf(stats.area),
+        label: 'Área total',
+        detail: 'em aprovadas',
+      ),
+      StatStripCell(
+        icon: Icons.straighten,
+        color: AppColors.primaryAccent,
+        value: formatInvestment(stats.investmentPerHa),
+        label: 'Investimento médio',
+        detail: stats.investmentPerHa == null ? null : investmentBasisOf(stats.closed),
+      ),
+      StatStripCell(
+        icon: Icons.check_circle_outline,
+        color: AppColors.approved,
+        value: '${stats.closedCount}',
+        label: 'Aprovadas',
+      ),
+    ]);
+  }
+}
+
+/// OS NÚMEROS DA SEGURADORA: o que espera a apólice, quanto ela costuma levar
+/// para emiti-la e quanta área já está segurada.
+class _InsurerStrip extends StatelessWidget {
+  final List<BarterModel> queue;
+  final List<BarterModel> barters;
+  const _InsurerStrip({required this.queue, required this.barters});
+
+  @override
+  Widget build(BuildContext context) {
+    final oldest = queue.isEmpty ? 0 : queue.map(daysWaiting).reduce((a, b) => a > b ? a : b);
+    final insured = barters.where((b) => b.hasPolicy);
+    return StatStrip(cells: [
+      StatStripCell(
+        icon: Icons.pending_actions_outlined,
+        color: AppColors.atInsurer,
+        value: '${queue.length}',
+        label: 'Pendentes de apólice',
+        detail: queue.isEmpty ? null : 'mais antiga: há $oldest dia${oldest == 1 ? '' : 's'}',
+      ),
+      StatStripCell(
+        icon: Icons.schedule,
+        color: AppColors.primaryMedium,
+        value: formatDays(averageStageDays(barters, BarterStage.policy)),
+        label: 'Tempo médio',
+        detail: 'da aprovação à apólice',
+      ),
+      StatStripCell(
+        icon: Icons.shield_outlined,
+        color: AppColors.approved,
+        value: areaLabelOf(insured.fold(0.0, (sum, b) => sum + insuredAreaOf(b))),
+        label: 'Área segurada',
+        detail: '${insured.length} com apólice',
+      ),
+    ]);
+  }
+}
+
+/// A ÁREA SEGURADA POR CULTURA — onde está o risco que a seguradora carrega.
+class _InsuredAreaPanel extends StatelessWidget {
+  final List<BarterModel> barters;
+  const _InsuredAreaPanel({required this.barters});
+
+  @override
+  Widget build(BuildContext context) {
+    final slices = insuredAreaByGrain(barters);
+    final total = slices.fold(0.0, (sum, s) => sum + s.value);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DashboardSectionTitle('Área Segurada por Cultura'),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: slices.isEmpty
+                ? Text('Nenhuma apólice informada ainda.',
+                    style: TextStyle(fontSize: 13, color: AppColors.textMedium))
+                : Column(
+                    children: [
+                      for (final (i, slice) in slices.indexed) ...[
+                        if (i > 0) const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(color: AppColors.series(i), shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(slice.label,
+                                  style: TextStyle(fontSize: 13, color: AppColors.textDark)),
+                            ),
+                            Text(areaLabelOf(slice.value),
+                                style: TextStyle(
+                                    fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 42,
+                              child: Text(
+                                total > 0 ? '${(slice.value / total * 100).round()}%' : '0%',
+                                textAlign: TextAlign.end,
+                                style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 5),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: total > 0 ? slice.value / total : 0,
+                            minHeight: 7,
+                            backgroundColor: AppColors.primarySurface,
+                            valueColor: AlwaysStoppedAnimation(AppColors.series(i)),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// AS CÉDULAS POR ESTADO — os quatro degraus do trecho do emissor, do que
+/// espera a emissão ao que já está registrado.
+class _EmitterStrip extends StatelessWidget {
+  final List<BarterModel> barters;
+  const _EmitterStrip({required this.barters});
+
+  @override
+  Widget build(BuildContext context) {
+    return StatStrip(cells: [
+      StatStripCell(
+        icon: Icons.note_add_outlined,
+        color: AppColors.invoiced,
+        value: '${countWithStatus(barters, BarterStatus.invoiced)}',
+        label: 'A emitir',
+      ),
+      StatStripCell(
+        icon: Icons.description_outlined,
+        color: AppColors.invoiced,
+        value: '${countWithStatus(barters, BarterStatus.cprIssued)}',
+        label: 'Emitidas',
+        detail: 'a assinar',
+      ),
+      StatStripCell(
+        icon: Icons.draw_outlined,
+        color: AppColors.invoiced,
+        value: '${countWithStatus(barters, BarterStatus.cprSigned)}',
+        label: 'Assinadas',
+        detail: 'a registrar',
+      ),
+      StatStripCell(
+        icon: Icons.verified_rounded,
+        color: AppColors.approved,
+        value: '${countWithStatus(barters, BarterStatus.cprRegistered)}',
+        label: 'Registradas',
+      ),
+    ]);
+  }
+}
+
+/// O PAINEL DO EMISSOR depois da fila: quanto cada ato costuma levar, os
+/// vencimentos das safras com cédula em aberto e as cédulas paradas há mais
+/// tempo.
+class _EmitterPanel extends StatelessWidget {
+  final List<BarterModel> barters;
+  final VoidCallback onChanged;
+  const _EmitterPanel({required this.barters, required this.onChanged});
+
+  static const _acts = [
+    BarterStage.cprIssue,
+    BarterStage.cprSignature,
+    BarterStage.cprRegistration,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final bySeason = openCprsBySeason(barters);
+    final open = bySeason.expand((g) => g.barters);
+    final stalled = oldestWaitingFirst(open).take(5).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DashboardSectionTitle('Tempo Médio por Ato'),
+        const SizedBox(height: 12),
+        StatStrip(cells: [
+          for (final act in _acts)
+            StatStripCell(
+              icon: Icons.schedule,
+              color: AppColors.invoiced,
+              value: formatDays(averageStageDays(barters, act)),
+              label: stageLabel(act),
+            ),
+        ]),
+        const SizedBox(height: 20),
+        // OS PRAZOS: o vencimento é da SAFRA, e a cédula que não estiver
+        // registrada até lá vence sem garantia contra terceiros.
+        DashboardSectionTitle('Prazos'),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: bySeason.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text('Nenhuma cédula em aberto.',
+                        style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
+                  )
+                : Column(
+                    children: [
+                      for (final (i, group) in bySeason.indexed) ...[
+                        if (i > 0) const Divider(height: 1),
+                        _DeadlineRow(
+                          label: group.label,
+                          open: group.barters.length,
+                          dueDate: AppData.versionForSeason(group.seasonId)?.cprDueDate,
+                        ),
+                      ],
+                    ],
+                  ),
+          ),
+        ),
+        const SizedBox(height: 20),
+        // AS PENDÊNCIAS: as cédulas paradas há mais tempo no degrau em que
+        // estão — a ordem é a de cobrar, e não a da fila.
+        DashboardSectionTitle('Pendências'),
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: stalled.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text('Nada parado. Todas as cédulas estão registradas.',
+                        style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
+                  )
+                : Column(
+                    children: [
+                      for (final (i, barter) in stalled.indexed) ...[
+                        if (i > 0) const Divider(height: 1),
+                        _StalledCprRow(barter: barter, onChanged: onChanged),
+                      ],
+                    ],
+                  ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Uma safra com cédula em aberto e o vencimento dela.
+class _DeadlineRow extends StatelessWidget {
+  final String label;
+  final int open;
+  final DateTime? dueDate;
+  const _DeadlineRow({required this.label, required this.open, required this.dueDate});
+
+  @override
+  Widget build(BuildContext context) {
+    final due = dueDate;
+    final today = DateUtils.dateOnly(DateTime.now());
+    final days = due == null ? null : DateUtils.dateOnly(due).difference(today).inDays;
+    // Vencido em vermelho, a um mês em alerta; sem data, alerta também — é uma
+    // pendência do cadastro da safra, e a cédula não sai sem ela.
+    final color = days == null
+        ? AppColors.pending
+        : days < 0
+            ? AppColors.denied
+            : days <= 30
+                ? AppColors.pending
+                : AppColors.textMedium;
+    final when = days == null
+        ? 'vencimento não informado'
+        : days < 0
+            ? 'venceu há ${-days} dia${days == -1 ? '' : 's'} (${formatDate(due!)})'
+            : days == 0
+                ? 'vence hoje'
+                : 'vence em $days dia${days == 1 ? '' : 's'} (${formatDate(due!)})';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Icon(Icons.event_outlined, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                Text(when, style: TextStyle(fontSize: 11, color: color)),
+              ],
+            ),
+          ),
+          Text('$open em aberto',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.invoiced)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Uma cédula parada: em que degrau ela está e há quanto tempo.
+class _StalledCprRow extends StatelessWidget {
+  final BarterModel barter;
+  final VoidCallback onChanged;
+  const _StalledCprRow({required this.barter, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final days = daysWaiting(barter);
+    final stage = currentStageOf(barter);
+    final urgency = _UpstreamPanel._urgencyOf(days);
+
+    return InkWell(
+      onTap: () => openCprDesk(context, barter, onChanged: (_) => onChanged()),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 4,
+              height: 34,
+              decoration: BoxDecoration(color: urgency, borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${barter.cprNumber.isEmpty ? barter.id : barter.cprNumber} • ${barter.producerName}',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+                  Text(stage == null ? barter.statusLabel : stageLabel(stage),
+                      style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(_UpstreamPanel._waitLabel(days),
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: urgency)),
+          ],
+        ),
+      ),
     );
   }
 }

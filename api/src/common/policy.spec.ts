@@ -274,6 +274,8 @@ describe('Tabela de capacidades', () => {
         CAPABILITY.producersReadAll,
         CAPABILITY.bartersOpinion,
         CAPABILITY.pricesRead,
+        // A régua da aba Análise — leitura, como `pricesRead`.
+        CAPABILITY.bartersInvestmentPerHa,
       ].sort(),
     );
   });
@@ -293,17 +295,18 @@ describe('Tabela de capacidades', () => {
   /**
    * O INVESTIMENTO POR HECTARE (sc/ha) é de quem COMPARA permutas.
    *
-   * O recorte não é o mesmo de `pricesRead`, e a diferença é o gerente: ele vê
-   * R$ (avalia a negociação do time dele) e não vê sc/ha — para ele a permuta é
-   * uma, e uma régua de comparação sem com quem comparar é ruído na tela. Quem
-   * a tem são os três que olham a operação de cima: admin, comitê e faturista.
+   * O recorte não é o mesmo de `pricesRead`, e a diferença é o consultor: ele
+   * não vê R$ e vê sc/ha — o painel dele mostra o investimento médio da própria
+   * carteira, e o gerente compara os consultores do time na aba Análise. Quem
+   * fica de fora é só a seguradora, cujo trecho é a apólice.
    */
-  it('o sc/ha é de quem compara permutas — o gerente e o consultor não o veem', () => {
+  it('o sc/ha é de quem compara permutas — só a seguradora não o vê', () => {
     expect(rolesWith(CAPABILITY.bartersInvestmentPerHa).sort()).toEqual(
-      [ROLE.admin, ROLE.committee, ROLE.biller, ROLE.emitter].sort(),
+      [ROLE.admin, ROLE.manager, ROLE.committee, ROLE.biller, ROLE.emitter, ROLE.consultant].sort(),
     );
-    expect(can({ role: ROLE.manager }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
-    expect(can({ role: ROLE.consultant }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
+    expect(can({ role: ROLE.insurer }, CAPABILITY.bartersInvestmentPerHa)).toBe(false);
+    // A régua não abre a tabela: o consultor continua sem R$.
+    expect(can({ role: ROLE.consultant }, CAPABILITY.pricesRead)).toBe(false);
   });
 
   /**

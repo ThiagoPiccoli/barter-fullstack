@@ -1126,8 +1126,8 @@ class BarterModel {
   /// O INVESTIMENTO POR HECTARE — quantas sacas do grão a lavoura compromete
   /// por hectare plantado.
   ///
-  /// Vem null para quem não tem `barters.investmentPerHa` (consultor e
-  /// gerente): o servidor simplesmente não o manda. Também é null nas permutas
+  /// Vem null para quem não tem `barters.investmentPerHa` (a seguradora): o
+  /// servidor simplesmente não o manda. Também é null nas permutas
   /// sem área — sem área não há divisão, e zero seria afirmar um investimento
   /// por hectare que ninguém fez.
   final double? sacksPerHa;

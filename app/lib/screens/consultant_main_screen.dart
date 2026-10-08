@@ -7,6 +7,7 @@ import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/dashboard_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_screen.dart';
 
@@ -122,8 +123,6 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
     final myBarters = ofConsultant(AppData.barters, consultant.id)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final stats = statsOf(myBarters);
-    final approved = stats.closed;
-    final pending = stats.pendingCount;
     // OS RASCUNHOS dele: registrados, e ainda esperando o parecer que ele tem de
     // escrever. É a única fila da tela que é DELE.
     final myDrafts = stats.drafts;
@@ -162,35 +161,37 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             icon: Icons.agriculture_outlined,
           ),
           const SizedBox(height: 16),
-          AdaptiveCardGrid(
-            children: [
-              SummaryCard(
-                title: 'Minhas ${brand.copy.barterPluralTitle}',
-                value: myBarters.length.toString(),
-                icon: Icons.swap_horiz,
-                color: AppColors.primary,
-              ),
-              SummaryCard(
-                title: 'Sacas Entregues',
-                value: formatQty(sacksDelivered),
-                icon: Icons.grass,
-                color: AppColors.grain,
-                subtitle: 'em permutas aprovadas',
-              ),
-              SummaryCard(
-                title: 'Aprovadas',
-                value: approved.length.toString(),
-                icon: Icons.check_circle_outline,
-                color: AppColors.approved,
-              ),
-              SummaryCard(
-                title: 'No Comitê',
-                value: pending.toString(),
-                icon: Icons.hourglass_top,
-                color: AppColors.pending,
-              ),
-            ],
-          ),
+          // O TOTAL E O FUNIL no mesmo cartão: "12 permutas" só diz alguma
+          // coisa junto com onde elas estão — 12 rascunhos e 12 registradas são
+          // carteiras opostas.
+          _MyBartersCard(total: myBarters.length, phases: phaseCounts(myBarters)),
+          const SizedBox(height: 12),
+          // A LAVOURA das permutas aprovadas dele: a área, o investimento médio
+          // (as sacas ÷ a área, ponderado pelo número de cada permuta — ver
+          // `investmentPerHaOf`) e as sacas que essa área entrega.
+          StatStrip(cells: [
+            StatStripCell(
+              icon: Icons.landscape_outlined,
+              color: AppColors.primary,
+              value: areaLabelOf(stats.area),
+              label: 'Área total',
+              detail: 'em aprovadas',
+            ),
+            StatStripCell(
+              icon: Icons.straighten,
+              color: AppColors.primaryAccent,
+              value: formatInvestment(stats.investmentPerHa),
+              label: 'Investimento médio',
+              detail: stats.investmentPerHa == null ? null : investmentBasisOf(stats.closed),
+            ),
+            StatStripCell(
+              icon: Icons.grass,
+              color: AppColors.grain,
+              value: formatSacks(sacksDelivered),
+              label: 'Sacas entregues',
+              detail: 'em aprovadas',
+            ),
+          ]),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -333,6 +334,56 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
           const SizedBox(height: 16),
         ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// MINHAS PERMUTAS: o total, e logo abaixo dele quantas há em cada fase.
+///
+/// Só as fases com permuta aparecem na legenda — a carteira do consultor passa
+/// por todas elas, e nove rótulos com zero esconderiam os dois que importam.
+class _MyBartersCard extends StatelessWidget {
+  final int total;
+  final Map<BarterPhase, int> phases;
+  const _MyBartersCard({required this.total, required this.phases});
+
+  @override
+  Widget build(BuildContext context) {
+    final present = [for (final phase in BarterPhase.values) if ((phases[phase] ?? 0) > 0) phase];
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.swap_horiz, color: AppColors.primary, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Text('$total',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Minhas ${brand.copy.barterPluralTitle}',
+                      style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
+                ),
+              ],
+            ),
+            if (present.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              PhaseBreakdown(counts: phases, phases: present, dense: true),
+            ],
+          ],
         ),
       ),
     );

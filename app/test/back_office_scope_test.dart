@@ -315,8 +315,12 @@ void main() {
 
       await abrir(tester, BackOfficeMainScreen(user: pessoa));
 
-      expect(find.text('Esperando você'), findsOneWidget);
-      expect(find.text('A faturar'), findsOneWidget);
+      // OS NÚMEROS DELA: o que espera a apólice, o tempo que ela leva e a área
+      // que já segurou — e não as sacas a receber de quem fatura.
+      expect(find.text('Pendentes de apólice'), findsOneWidget);
+      expect(find.text('Tempo médio'), findsOneWidget);
+      expect(find.text('Área segurada'), findsOneWidget);
+      expect(find.text('Área Segurada por Cultura'), findsOneWidget);
       expect(find.textContaining('esperando a apólice'), findsWidgets);
       expect(find.text('No comitê'), findsNothing);
       expect(find.text('No gerente'), findsNothing);
@@ -372,8 +376,12 @@ void main() {
 
       await abrir(tester, BackOfficeMainScreen(user: emissor));
 
-      expect(find.text('Esperando você'), findsOneWidget);
-      expect(find.text('Registradas'), findsOneWidget);
+      // AS CÉDULAS POR ESTADO — um número por degrau do trecho dele.
+      for (final degrau in ['A emitir', 'Emitidas', 'Assinadas', 'Registradas']) {
+        expect(find.text(degrau), findsOneWidget, reason: degrau);
+      }
+      expect(find.text('Prazos'), findsOneWidget);
+      expect(find.text('Pendências'), findsOneWidget);
       // As etapas de antes não aparecem nem como rótulo de um número zerado.
       expect(find.text('No comitê'), findsNothing);
       expect(find.text('No gerente'), findsNothing);
@@ -415,9 +423,13 @@ void main() {
 
       await abrir(tester, BackOfficeMainScreen(user: comite));
 
-      // Agrupado por pessoa: a Beatriz segura duas, o Gustavo uma.
-      expect(find.text('Beatriz Nogueira'), findsOneWidget);
-      expect(find.text('Gustavo Ramos'), findsOneWidget);
+      // Agrupado por pessoa: a Beatriz segura duas, o Gustavo uma. O nome
+      // aparece também em cada permuta (o comitê vê o gerente de todas), e o
+      // painel é o primeiro lugar em que ele aparece.
+      final beatriz = find.text('Beatriz Nogueira').first;
+      final gustavo = find.text('Gustavo Ramos').first;
+      expect(beatriz, findsOneWidget);
+      expect(gustavo, findsOneWidget);
       expect(find.textContaining('2 permutas'), findsOneWidget);
       expect(find.textContaining('1 permuta •'), findsOneWidget);
 
@@ -428,9 +440,38 @@ void main() {
       // E quem segura há mais tempo vem primeiro: em ordem alfabética, a linha
       // que se quer ler ficaria escondida no meio.
       expect(
-        tester.getTopLeft(find.text('Beatriz Nogueira')).dy,
-        lessThan(tester.getTopLeft(find.text('Gustavo Ramos')).dy),
+        tester.getTopLeft(beatriz).dy,
+        lessThan(tester.getTopLeft(gustavo).dy),
       );
+    });
+
+    /// O COMITÊ LÊ O GERENTE DE CADA PERMUTA: o parecer pesa conforme quem o
+    /// deu, e saber de quem é antes de abrir é parte de decidir. Para quem não
+    /// decide, o gerente não aparece — ele é sempre o mesmo, ou não é assunto.
+    testWidgets('o comitê vê o gerente em cada permuta', (tester) async {
+      final comite = staff(UserRole.committee, [
+        Capability.bartersReview,
+        Capability.pricesRead,
+      ]);
+      AppData.currentUser = comite;
+      AppData.barters = [barter('PRM-2026-002', 'pending', manager: 'Gustavo Ramos')];
+
+      await abrir(tester, BackOfficeMainScreen(user: comite));
+      expect(find.text('Gustavo Ramos'), findsWidgets);
+      expect(find.text('Gerente '), findsWidgets);
+    });
+
+    testWidgets('quem não decide não vê o gerente na permuta', (tester) async {
+      final faturista = staff(UserRole.biller, [
+        Capability.bartersInvoice,
+        Capability.bartersReadInvoicing,
+        Capability.pricesRead,
+      ]);
+      AppData.currentUser = faturista;
+      AppData.barters = [barter('PRM-2026-004', 'approved', manager: 'Gustavo Ramos')];
+
+      await abrir(tester, BackOfficeMainScreen(user: faturista));
+      expect(find.text('Gustavo Ramos'), findsNothing);
     });
 
     /// Vazio, o painel FICA — pelo mesmo motivo do cartão de fila vazia: um

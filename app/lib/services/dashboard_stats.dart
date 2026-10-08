@@ -70,6 +70,14 @@ class BarterStats {
   /// Produtores distintos com permuta fechada.
   final int activeProducers;
 
+  /// A ÁREA FEITA (ha): a área plantada que as permutas fechadas cobrem.
+  final double area;
+
+  /// O INVESTIMENTO MÉDIO POR HECTARE das fechadas (sc/ha) — ver
+  /// [investmentPerHaOf]. Null quando quem olha não recebe a régua, ou quando
+  /// nenhuma fechada tem área.
+  final double? investmentPerHa;
+
   const BarterStats({
     required this.closed,
     required this.pending,
@@ -83,6 +91,8 @@ class BarterStats {
     required this.inputsValue,
     required this.grainValue,
     required this.activeProducers,
+    required this.area,
+    required this.investmentPerHa,
   });
 
   int get closedCount => closed.length;
@@ -118,12 +128,352 @@ BarterStats statsOf(List<BarterModel> barters) {
     inputsValue: closed.fold(0.0, (sum, b) => sum + b.inputCost),
     grainValue: closed.fold(0.0, (sum, b) => sum + b.grainCredit),
     activeProducers: closed.map((b) => b.producerId).toSet().length,
+    area: areaOf(closed),
+    investmentPerHa: investmentPerHaOf(closed),
   );
 }
 
 /// As sacas comprometidas por um conjunto de permutas.
 double sacksOf(Iterable<BarterModel> barters) =>
     barters.fold(0.0, (sum, b) => sum + b.totalGrainQty);
+
+/// A área plantada (ha) que um conjunto de permutas cobre.
+double areaOf(Iterable<BarterModel> barters) =>
+    barters.fold(0.0, (sum, b) => sum + b.plantedAreaHa);
+
+/// O INVESTIMENTO MÉDIO POR HECTARE de um conjunto de permutas (sc/ha).
+///
+/// A DIVISÃO NÃO É FEITA AQUI. Ela mora numa função só, `investmentPerHa` no
+/// serializer da API, e chega pronta em [BarterModel.sacksPerHa]. O que esta
+/// função faz é a MÉDIA desses números ponderada pela área de cada permuta —
+/// que é exatamente Σ sacas ÷ Σ área, sem uma segunda conta de sacas por
+/// hectare no app.
+///
+/// Ela herda as duas regras do número do servidor: some para quem não recebe a
+/// régua (`barters.investmentPerHa`), e a permuta sem área não entra — nem no
+/// numerador nem no denominador, que é o que impede as sacas dela de inflarem a
+/// média. Null quando nenhuma permuta trouxe o número.
+double? investmentPerHaOf(Iterable<BarterModel> barters) {
+  var weighted = 0.0;
+  var area = 0.0;
+  for (final barter in barters) {
+    final perHa = barter.sacksPerHa;
+    if (perHa == null || barter.plantedAreaHa <= 0) continue;
+    weighted += perHa * barter.plantedAreaHa;
+    area += barter.plantedAreaHa;
+  }
+  return area > 0 ? weighted / area : null;
+}
+
+/// AS FASES em que os painéis contam as permutas — os estados da linha,
+/// agrupados como quem acompanha a operação os lê.
+///
+/// São menos que os estados: as duas aprovações dividem "a faturar", as duas
+/// esperas de apólice dividem "na seguradora", e a cédula emitida e a assinada
+/// ainda são permuta faturada esperando o emissor. Uma barra com doze cores
+/// seria lida como doze desfechos.
+///
+/// A ORDEM é a da linha, e é conteúdo: a barra lida da esquerda para a direita
+/// conta o caminho da permuta.
+enum BarterPhase {
+  draft,
+  atManager,
+  atCommittee,
+  requirements,
+  atInsurer,
+  toInvoice,
+  invoiced,
+  registered,
+  denied,
+}
+
+/// A fase de uma permuta.
+BarterPhase phaseOf(BarterModel barter) {
+  switch (barter.status) {
+    case BarterStatus.draft:
+      return BarterPhase.draft;
+    case BarterStatus.sentToManager:
+      return BarterPhase.atManager;
+    case BarterStatus.pending:
+      return BarterPhase.atCommittee;
+    case BarterStatus.awaitingRequirements:
+      return BarterPhase.requirements;
+    case BarterStatus.awaitingPolicy:
+    case BarterStatus.awaitingPolicyWithConditions:
+      return BarterPhase.atInsurer;
+    case BarterStatus.approved:
+    case BarterStatus.approvedWithConditions:
+      return BarterPhase.toInvoice;
+    case BarterStatus.invoiced:
+    case BarterStatus.cprIssued:
+    case BarterStatus.cprSigned:
+      return BarterPhase.invoiced;
+    case BarterStatus.cprRegistered:
+      return BarterPhase.registered;
+    case BarterStatus.denied:
+      return BarterPhase.denied;
+  }
+}
+
+/// QUANTAS PERMUTAS EM CADA FASE — todas as fases, inclusive as vazias, na
+/// ordem da linha. Quem desenha decide quais mostrar; a conta não esconde nada.
+Map<BarterPhase, int> phaseCounts(Iterable<BarterModel> barters) {
+  final counts = {for (final phase in BarterPhase.values) phase: 0};
+  for (final barter in barters) {
+    final phase = phaseOf(barter);
+    counts[phase] = counts[phase]! + 1;
+  }
+  return counts;
+}
+
+/// Quantas permutas em cada ESTADO — o recorte fino, para quem trabalha dentro
+/// de uma fase (o emissor separa a cédula emitida da assinada).
+int countWithStatus(Iterable<BarterModel> barters, BarterStatus status) =>
+    barters.where((b) => b.status == status).length;
+
+/// AS ETAPAS DA LINHA medidas no relógio — de quando a permuta chegou ao posto
+/// a quando ele a soltou.
+///
+/// Cada uma é um par de marcas que a permuta já carrega (o envio, o parecer, a
+/// decisão, a apólice, a nota, os três atos da cédula). Nenhuma depende da
+/// linha do tempo, que só vem no detalhe: o painel mede o que a listagem traz.
+enum BarterStage {
+  /// Montagem: do registro ao encaminhamento — o tempo do CONSULTOR.
+  assembly,
+
+  /// Parecer: do encaminhamento ao parecer — o tempo do GERENTE.
+  opinion,
+
+  /// Decisão: do parecer à decisão — o tempo do COMITÊ.
+  decision,
+
+  /// Apólice: da aprovação à apólice — o tempo da SEGURADORA.
+  policy,
+
+  /// Faturamento: da liberação (aprovação ou apólice) à nota.
+  invoicing,
+
+  /// Os três atos do EMISSOR: emitir, colher as assinaturas, registrar.
+  cprIssue,
+  cprSignature,
+  cprRegistration,
+}
+
+/// Quando a permuta CHEGOU a uma etapa. Null quando ela não chegou.
+///
+/// O parecer conta do ENCAMINHAMENTO, e não do registro: o rascunho que o
+/// consultor segurou uma semana não é espera do gerente. A permuta anterior ao
+/// encaminhamento (sem a marca) cai no registro, que era quando ela chegava.
+DateTime? stageStart(BarterModel barter, BarterStage stage) {
+  switch (stage) {
+    case BarterStage.assembly:
+      return barter.createdAt;
+    case BarterStage.opinion:
+      return barter.isDraft ? null : barter.consultantSentAt ?? barter.createdAt;
+    case BarterStage.decision:
+      return barter.managerReviewedAt;
+    case BarterStage.policy:
+      return barter.insured && barter.hasDecision ? barter.updatedAt : null;
+    // Com seguro, o faturamento só começa quando a apólice sai.
+    case BarterStage.invoicing:
+      if (!barter.wasApproved || barter.awaitsPolicy) return null;
+      return barter.insuredAt ?? barter.updatedAt;
+    case BarterStage.cprIssue:
+      return barter.invoicedAt;
+    case BarterStage.cprSignature:
+      return barter.cprEmittedAt;
+    case BarterStage.cprRegistration:
+      return barter.cprSignedAt;
+  }
+}
+
+/// Quando a permuta SAIU de uma etapa. Null enquanto ela está nela.
+DateTime? stageEnd(BarterModel barter, BarterStage stage) {
+  switch (stage) {
+    case BarterStage.assembly:
+      return barter.consultantSentAt;
+    case BarterStage.opinion:
+      return barter.managerReviewedAt;
+    case BarterStage.decision:
+      return barter.hasDecision ? barter.updatedAt : null;
+    case BarterStage.policy:
+      return barter.insuredAt;
+    case BarterStage.invoicing:
+      return barter.invoicedAt;
+    case BarterStage.cprIssue:
+      return barter.cprEmittedAt;
+    case BarterStage.cprSignature:
+      return barter.cprSignedAt;
+    case BarterStage.cprRegistration:
+      return barter.cprRegisteredAt;
+  }
+}
+
+/// Os dias de uma duração, com fração — "meio dia" é informação quando a
+/// média de uma etapa é de horas.
+double _days(Duration d) => d.inMinutes / (60 * 24);
+
+/// O TEMPO MÉDIO de uma etapa (dias), sobre as permutas que já passaram por
+/// ela. Null quando nenhuma passou — e não zero, que seria afirmar uma etapa
+/// instantânea.
+///
+/// A permuta que ainda está na etapa não entra: o relógio dela não parou, e
+/// contá-la puxaria a média para baixo justamente quando a fila está parada.
+/// Quem mede a espera em curso é [daysWaiting].
+double? averageStageDays(Iterable<BarterModel> barters, BarterStage stage) {
+  var total = 0.0;
+  var count = 0;
+  for (final barter in barters) {
+    final start = stageStart(barter, stage);
+    final end = stageEnd(barter, stage);
+    if (start == null || end == null) continue;
+    // Uma marca fora de ordem (o pedido de alteração devolve a permuta a
+    // rascunho e o encaminhamento é regravado) não vira duração negativa.
+    final days = _days(end.difference(start));
+    if (days < 0) continue;
+    total += days;
+    count++;
+  }
+  return count == 0 ? null : total / count;
+}
+
+/// A ETAPA EM QUE A PERMUTA ESTÁ, na régua de [BarterStage]. Null nos fins de
+/// linha (negada, registrada) e nas exigências, que é tempo do consultor fora
+/// da linha.
+BarterStage? currentStageOf(BarterModel barter) {
+  switch (barter.status) {
+    case BarterStatus.draft:
+      return BarterStage.assembly;
+    case BarterStatus.sentToManager:
+      return BarterStage.opinion;
+    case BarterStatus.pending:
+      return BarterStage.decision;
+    case BarterStatus.awaitingPolicy:
+    case BarterStatus.awaitingPolicyWithConditions:
+      return BarterStage.policy;
+    case BarterStatus.approved:
+    case BarterStatus.approvedWithConditions:
+      return BarterStage.invoicing;
+    case BarterStatus.invoiced:
+      return BarterStage.cprIssue;
+    case BarterStatus.cprIssued:
+      return BarterStage.cprSignature;
+    case BarterStatus.cprSigned:
+      return BarterStage.cprRegistration;
+    case BarterStatus.awaitingRequirements:
+    case BarterStatus.denied:
+    case BarterStatus.cprRegistered:
+      return null;
+  }
+}
+
+/// HÁ QUANTOS DIAS a permuta espera na etapa em que está. Zero quando ela não
+/// está em etapa nenhuma, ou quando a marca de chegada não veio.
+///
+/// [now] é parâmetro pelo mesmo motivo de [waitingDays].
+int daysWaiting(BarterModel barter, {DateTime? now}) {
+  final stage = currentStageOf(barter);
+  final start = stage == null ? null : stageStart(barter, stage);
+  if (start == null) return 0;
+  final days = (now ?? DateTime.now()).difference(start).inDays;
+  return days < 0 ? 0 : days;
+}
+
+/// AS QUE ESPERAM HÁ MAIS TEMPO, da mais antiga para a mais nova — a lista de
+/// pendências de um posto. É a ordem inversa da fila (que é da mais nova para a
+/// mais antiga) de propósito: a fila é para trabalhar, a pendência é para
+/// cobrar.
+List<BarterModel> oldestWaitingFirst(Iterable<BarterModel> barters, {DateTime? now}) =>
+    barters.toList()
+      ..sort((a, b) => daysWaiting(b, now: now).compareTo(daysWaiting(a, now: now)));
+
+/// OS NÚMEROS DE UM CONSULTOR — uma linha da aba Análise do gerente.
+class ConsultantAnalysis {
+  final String id;
+  final String name;
+
+  /// As permutas dele, dentro do que quem olha enxerga.
+  final List<BarterModel> barters;
+
+  /// Os mesmos números de todo painel, sobre as permutas dele.
+  final BarterStats stats;
+
+  /// Quantas em cada fase — o funil dele.
+  final Map<BarterPhase, int> phases;
+
+  const ConsultantAnalysis({
+    required this.id,
+    required this.name,
+    required this.barters,
+    required this.stats,
+    required this.phases,
+  });
+
+  /// O tempo médio de uma etapa, só nas permutas dele.
+  double? averageDays(BarterStage stage) => averageStageDays(barters, stage);
+}
+
+/// A ANÁLISE POR CONSULTOR — um [ConsultantAnalysis] por quem registrou estas
+/// permutas, em ordem de nome.
+///
+/// Os consultores saem das PERMUTAS, e não do cadastro, pelo motivo de
+/// [consultantsOf]: o gerente não lê o cadastro, e o que ele enxerga é o que foi
+/// endereçado a ele. A ordem de comparação (por sacas, por área, por sc/ha) é
+/// escolha de tela.
+List<ConsultantAnalysis> analysisByConsultant(Iterable<BarterModel> barters) => [
+      for (final consultant in consultantsOf(barters))
+        () {
+          final mine = ofConsultant(barters, consultant.id);
+          return ConsultantAnalysis(
+            id: consultant.id,
+            name: consultant.name,
+            barters: mine,
+            stats: statsOf(mine),
+            phases: phaseCounts(mine),
+          );
+        }(),
+    ];
+
+/// A ÁREA SEGURADA de uma permuta (ha): a quantidade da linha do seguro, que é
+/// o que a apólice cobre; a área plantada quando a linha não veio.
+double insuredAreaOf(BarterModel barter) =>
+    barter.insuranceItem?.quantity ?? barter.plantedAreaHa;
+
+/// A ÁREA SEGURADA POR CULTURA — das permutas que já têm apólice, da cultura
+/// com mais hectares para a com menos.
+///
+/// Só as que têm apólice: a que espera a seguradora ainda não está segurada, e
+/// é a fila dela, contada à parte.
+List<StatSlice> insuredAreaByGrain(Iterable<BarterModel> barters) {
+  final byGrain = <String, double>{};
+  for (final barter in barters.where((b) => b.hasPolicy)) {
+    final name = barter.referenceGrainName.isEmpty ? 'sem grão' : barter.referenceGrainName;
+    byGrain[name] = (byGrain[name] ?? 0) + insuredAreaOf(barter);
+  }
+  return _ranked(byGrain);
+}
+
+/// AS CÉDULAS EM ABERTO POR SAFRA — o que o emissor tem para fechar antes de
+/// cada vencimento. O vencimento é da safra, e é por ela que se agrupa; a data
+/// em si é cadastro da versão, e quem a junta é a tela.
+List<({String seasonId, String label, List<BarterModel> barters})> openCprsBySeason(
+  Iterable<BarterModel> barters,
+) {
+  final grouped = <String, List<BarterModel>>{};
+  final labels = <String, String>{};
+  for (final barter in barters) {
+    if (!(barter.awaitsCprIssue || barter.awaitsSignatures || barter.awaitsRegistration)) {
+      continue;
+    }
+    final key = barter.seasonId.isNotEmpty ? barter.seasonId : seasonLabelOf(barter);
+    grouped.putIfAbsent(key, () => []).add(barter);
+    labels[key] = seasonLabelOf(barter);
+  }
+  return [
+    for (final entry in grouped.entries)
+      (seasonId: entry.key, label: labels[entry.key]!, barters: entry.value),
+  ]..sort((a, b) => b.barters.length.compareTo(a.barters.length));
+}
 
 /// SACAS POR CULTURA — soja, milho, trigo.
 ///

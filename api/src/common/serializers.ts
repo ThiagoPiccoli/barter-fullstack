@@ -688,9 +688,13 @@ function progressStepJson(
  * e 12 sc/ha em 2.000 ha são o mesmo negócio em escalas diferentes. Em SACAS, e
  * não em R$, porque é a unidade em que a lavoura raciocina.
  *
- * Ele vai para QUEM PODE COMPARAR (`barters.investmentPerHa`: admin, comitê e
- * faturista) e some para os outros — não por sigilo, mas porque uma régua sem
- * com quem comparar é ruído. Ver a capacidade em policy.ts.
+ * Ele vai para QUEM PODE COMPARAR (`barters.investmentPerHa`: todos os papéis
+ * menos a seguradora) e some para os outros — não por sigilo, mas porque uma
+ * régua sem com quem comparar é ruído. Ver a capacidade em policy.ts.
+ *
+ * Os PAINÉIS não refazem esta conta: a média de um conjunto de permutas é a
+ * média destes números ponderada pela área (`investmentPerHaOf`, no app), que é
+ * o mesmo Σ sacas ÷ Σ área — e some junto com eles.
  *
  * `null` — e não zero — quando não dá para dizer: permuta sem área registrada
  * (`plantedAreaHa` 0) ou resposta sem os itens.

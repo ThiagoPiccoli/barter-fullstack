@@ -458,7 +458,7 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | `barters.readInvoicing` | **faturista** — o que chegou ao faturamento |
 | `barters.readIssuance` | **emissor** — o que chegou à emissão, um degrau adiante |
 | `barters.review` | **comitê** (era do admin) |
-| `barters.investmentPerHa` | admin, comitê, faturista, emissor — o sc/ha, a régua que compara permutas |
+| `barters.investmentPerHa` | todos menos a seguradora — o sc/ha, a régua que compara permutas (o consultor e o gerente a ganharam com os painéis) |
 | `barters.invoice` | **faturista** — faturar e anexar as notas |
 | `barters.cprFill` | **consultor** — preencher a cédula (era do faturista) |
 | `barters.cprIssue` | **emissor** — emitir, colher assinaturas e registrar |
@@ -2081,12 +2081,15 @@ multiplicação devolveria os R$ e a conversão não teria servido para nada.
 
 **O sc/ha é um recorte à parte, e não é sigilo.** O investimento por hectare
 (`sacksPerHa`, com a área congelada em `producerAreaHa`) sai sob a capacidade
-`barters.investmentPerHa` — admin, comitê, faturista e emissor —, e o gerente NÃO a tem,
-embora veja R$. A diferença não é confiança: é para que serve o número. Ele é a
-única medida que compara duas permutas de tamanhos diferentes (R$ 400 mil numa
-fazenda de 2.000 ha e numa de 300 ha são negócios distintos), e quem trabalha
-uma permuta de cada vez não tem com quem compará-la — uma régua sem régua ao
-lado é ruído na tela. A área é **snapshot**, pelo mesmo motivo do preço do item:
+`barters.investmentPerHa` — todos os papéis menos a seguradora. Ele é a única
+medida que compara duas permutas de tamanhos diferentes (R$ 400 mil numa fazenda
+de 2.000 ha e numa de 300 ha são negócios distintos). O consultor e o gerente
+ficaram de fora enquanto trabalhavam uma permuta de cada vez; os painéis deram a
+eles com o que comparar (a carteira do consultor, os consultores do time na aba
+Análise do gerente), e a régua foi junto. O consultor a recebe **sem** R$: sc/ha
+é saca e hectare, e não reabre a tabela. Os painéis não refazem a divisão — a
+média de um conjunto é a média ponderada pela área destes números
+(`investmentPerHaOf`), que é o mesmo Σ sacas ÷ Σ área. A área é **snapshot**, pelo mesmo motivo do preço do item:
 o produtor arrenda mais terra na safra seguinte, e quem aprovou 12 sc/ha não pode
 ver 9 no dia da auditoria. Sem área registrada o campo vem `null`, e não zero —
 zero seria afirmar um investimento que ninguém fez.

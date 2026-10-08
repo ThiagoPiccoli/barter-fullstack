@@ -7,6 +7,7 @@ import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/dashboard_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
 import 'prices_screen.dart';
@@ -139,13 +140,12 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             ),
             const SizedBox(height: 16),
 
-            // Estrela do painel: o compromisso de entrega de grãos das aprovadas.
-            _ReceivableHero(
-              sacks: stats.sacksReceivable,
-              value: stats.grainValue,
-              approvedCount: stats.closedCount,
-              pendingSacks: stats.pendingSacks,
-              pendingCount: stats.pendingCount,
+            // Estrela do painel: a ÁREA FEITA — a lavoura que as permutas
+            // fechadas cobrem — e o investimento médio por hectare dela. As
+            // sacas a receber continuam no cartão, como a outra ponta da conta.
+            _AreaHero(
+              stats: stats,
+              pendingArea: areaOf(stats.pending),
               onTapPending: () => onNavigate(1),
             ),
             const SizedBox(height: 16),
@@ -191,15 +191,16 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
               const SizedBox(height: 20),
             ],
 
-            Text('${brand.copy.barterPluralTitle} por Status',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            DashboardSectionTitle('${brand.copy.barterPluralTitle} por Status'),
             const SizedBox(height: 12),
-            _StatusBreakdownCard(
-              atManager: stats.atManagerCount,
-              pending: stats.pendingCount,
-              toInvoice: stats.toInvoice,
-              invoiced: stats.invoiced,
-              denied: stats.denied,
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: PhaseBreakdown(
+                  counts: phaseCounts(AppData.barters),
+                  phases: backOfficePhases,
+                ),
+              ),
             ),
             const SizedBox(height: 20),
 
@@ -295,26 +296,27 @@ class _DashboardSection extends StatelessWidget {
 /// prender o app à soja — e sem prender o painel à paleta de um cliente.
 Color _grainColor(int i) => AppColors.series(i);
 
-/// Cartão-herói: as sacas a receber (compromisso de entrega das permutas
-/// aprovadas) como número-estrela, com o valor em R$ e o potencial parado no comitê.
-class _ReceivableHero extends StatelessWidget {
-  final double sacks;
-  final double value;
-  final int approvedCount;
-  final double pendingSacks;
-  final int pendingCount;
+/// Cartão-herói: a ÁREA FEITA — os hectares de lavoura que as permutas
+/// aprovadas cobrem — como número-estrela, com o investimento médio por hectare
+/// ao lado, as sacas a receber embaixo e o que ainda está parado no comitê.
+///
+/// A área entrou no lugar das sacas porque é a medida que se compara entre
+/// culturas: sacas de soja e de milho não somam, hectares somam. As sacas não
+/// saíram do cartão — são o numerador do investimento, e é por isso que ficam
+/// logo abaixo dele.
+class _AreaHero extends StatelessWidget {
+  final BarterStats stats;
+  final double pendingArea;
   final VoidCallback onTapPending;
-  const _ReceivableHero({
-    required this.sacks,
-    required this.value,
-    required this.approvedCount,
-    required this.pendingSacks,
-    required this.pendingCount,
+  const _AreaHero({
+    required this.stats,
+    required this.pendingArea,
     required this.onTapPending,
   });
 
   @override
   Widget build(BuildContext context) {
+    final perHa = stats.investmentPerHa;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -326,7 +328,7 @@ class _ReceivableHero extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('Sacas a Receber',
+              Text('Área Total Feita',
                   style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 13, fontWeight: FontWeight.w600)),
               const Spacer(),
               Container(
@@ -335,22 +337,43 @@ class _ReceivableHero extends StatelessWidget {
                   color: AppColors.onPrimaryOverlay,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text('$approvedCount aprovadas',
+                child: Text('${stats.closedCount} aprovadas',
                     style: TextStyle(color: AppColors.onPrimary, fontSize: 11, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
           const SizedBox(height: 6),
-          Text.rich(
-            TextSpan(children: [
-              TextSpan(
-                text: formatSacks(sacks),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: 16,
+            runSpacing: 4,
+            children: [
+              Text(
+                areaLabelOf(stats.area),
                 style: TextStyle(color: AppColors.onPrimary, fontSize: 34, fontWeight: FontWeight.w800),
               ),
-            ]),
+              if (perHa != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(formatSacksPerHa(perHa),
+                          style: TextStyle(
+                              color: AppColors.onPrimary, fontSize: 18, fontWeight: FontWeight.w800)),
+                      Text('investimento médio',
+                          style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11)),
+                    ],
+                  ),
+                ),
+            ],
           ),
-          Text('≈ ${formatCurrency(value)} em grãos na colheita',
-              style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12)),
+          Text(
+            '${formatSacks(stats.sacksReceivable)} a receber '
+            '≈ ${formatCurrency(stats.grainValue)} em grãos na colheita',
+            style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12),
+          ),
           const SizedBox(height: 14),
           InkWell(
             onTap: onTapPending,
@@ -367,8 +390,8 @@ class _ReceivableHero extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      pendingCount > 0
-                          ? '$pendingCount no comitê • +${formatSacks(pendingSacks)} se aprovadas'
+                      stats.pendingCount > 0
+                          ? '${stats.pendingCount} no comitê • +${areaLabelOf(pendingArea)} se aprovadas'
                           : 'Nenhuma permuta esperando o comitê',
                       style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
@@ -696,93 +719,6 @@ class _EmptyHint extends StatelessWidget {
     );
   }
 }
-
-class _StatusBreakdownCard extends StatelessWidget {
-  final int atManager, pending, toInvoice, invoiced, denied;
-  const _StatusBreakdownCard({
-    required this.atManager,
-    required this.pending,
-    required this.toInvoice,
-    required this.invoiced,
-    required this.denied,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: SizedBox(
-                height: 12,
-                child: Row(
-                  children: [
-                    // Na ordem do fluxo, e não na do tamanho: a barra lida da
-                    // esquerda para a direita conta o caminho da permuta.
-                    if (atManager > 0)
-                      Expanded(flex: atManager, child: Container(color: AppColors.atManager)),
-                    if (pending > 0) Expanded(flex: pending, child: Container(color: AppColors.pending)),
-                    if (toInvoice > 0)
-                      Expanded(flex: toInvoice, child: Container(color: AppColors.approved)),
-                    if (invoiced > 0)
-                      Expanded(flex: invoiced, child: Container(color: AppColors.invoiced)),
-                    if (denied > 0) Expanded(flex: denied, child: Container(color: AppColors.denied)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              alignment: WrapAlignment.spaceAround,
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                _LegendItem(color: AppColors.atManager, label: 'No Gerente', count: atManager),
-                _LegendItem(color: AppColors.pending, label: 'No Comitê', count: pending),
-                _LegendItem(color: AppColors.approved, label: 'A Faturar', count: toInvoice),
-                _LegendItem(color: AppColors.invoiced, label: 'Faturadas', count: invoiced),
-                _LegendItem(color: AppColors.denied, label: 'Negadas', count: denied),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LegendItem extends StatelessWidget {
-  final Color color;
-  final String label;
-  final int count;
-  const _LegendItem({required this.color, required this.label, required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    // `MainAxisSize.min` nos dois eixos, e não por economia: o [Wrap] que
-    // hospeda a legenda entrega a cada item a largura INTEIRA do cartão como
-    // folga. Com o `Row` no padrão (`max`), cada item esticava até a borda,
-    // caía sozinho numa linha e empurrava o número para o meio do cartão —
-    // cinco linhas de legenda no lugar da faixa única que o `spaceAround`
-    // pressupõe.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-          const SizedBox(width: 4),
-          Text(label, style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-        ]),
-        const SizedBox(height: 4),
-        Text('$count', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
-      ],
-    );
-  }
-}
-
 
 /// O PAINEL POR CULTURA — uma linha por safra, com o que fechou, o que espera e
 /// as sacas que ela tem a receber.

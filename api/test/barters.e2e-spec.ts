@@ -1207,7 +1207,7 @@ describe('Barters (e2e)', () => {
       return response.body.data as {
         sacksPerHa?: number | null;
         plantedAreaHa?: number;
-        items: { kind: string; quantity: number }[];
+        items: { kind: string; quantity: number; unitValue?: number }[];
       };
     };
 
@@ -1232,22 +1232,23 @@ describe('Barters (e2e)', () => {
     });
 
     /**
-     * Ele vai para QUEM COMPARA, e some para os outros dois. Não é sigilo: para
-     * o consultor e para o gerente a permuta é UMA, e uma régua de comparação
-     * sem com quem comparar é ruído na tela. Ver `barters.investmentPerHa`.
+     * Ele vai para QUEM COMPARA — e desde os painéis isso inclui o consultor (o
+     * investimento médio da carteira dele) e o gerente (a aba Análise, que
+     * compara os consultores do time). Ver `barters.investmentPerHa`.
+     *
+     * O consultor recebe o sc/ha SEM receber R$: a régua é em sacas e
+     * hectares, e não reabre a tabela do fornecedor.
      */
-    it('some para o consultor e para o gerente, e aparece para os três que comparam', async () => {
-      for (const quem of [ADMIN, COMITE, FATURISTA]) {
+    it('aparece para quem compara, inclusive o consultor e o gerente', async () => {
+      for (const quem of [ADMIN, COMITE, FATURISTA, JOAO, GERENTE]) {
         const barter = await permutaDe('PRM-2026-001', quem);
-        expect(barter.sacksPerHa).toBeGreaterThan(0);
-      }
-
-      for (const quem of [JOAO, GERENTE]) {
-        const barter = await permutaDe('PRM-2026-001', quem);
-        expect(barter.sacksPerHa).toBeUndefined();
-        // A ÁREA, essa, vai para todo mundo: é o consultor quem a informa.
+        expect(barter.sacksPerHa).toBeCloseTo(251.4142 / 120, 6);
+        // A ÁREA vai para todo mundo: é o consultor quem a informa.
         expect(barter.plantedAreaHa).toBe(120);
       }
+
+      const doConsultor = await permutaDe('PRM-2026-001', JOAO);
+      expect(doConsultor.items.every((item) => item.unitValue === undefined)).toBe(true);
     });
 
     /**

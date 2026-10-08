@@ -869,10 +869,15 @@ class DashboardHeader extends StatelessWidget {
 /// [BarterModel.sacksPerHa]; a tela só a formata. Uma segunda conta no app
 /// seria uma segunda resposta possível para a mesma pergunta.
 ///
-/// A área e o investimento chegam só a quem pode compará-los (admin, comitê,
-/// faturista e emissor — ver `barters.investmentPerHa`). Para os outros os dois
-/// campos nem vêm no JSON, e a linha de baixo some inteira; o mesmo vale para a
-/// permuta anterior ao campo de área, que não tem divisão a mostrar.
+/// O investimento chega só a quem pode compará-lo (todos menos a seguradora —
+/// ver `barters.investmentPerHa`). Para ela o campo nem vem no JSON, e o fato
+/// some; o mesmo vale para a permuta anterior ao campo de área, que não tem
+/// divisão a mostrar.
+///
+/// O GERENTE aparece para quem DECIDE (`barters.review`): o comitê lê o parecer
+/// de vários gerentes, e saber de quem é o parecer antes de abrir a permuta é
+/// saber o peso que ele vai ter. Para os outros o gerente é sempre o mesmo, ou
+/// não é assunto.
 class BarterIdentity extends StatelessWidget {
   /// O código da permuta — ou o que ocupa o lugar dele enquanto ela ainda está
   /// sendo montada ("Nova permuta").
@@ -885,6 +890,13 @@ class BarterIdentity extends StatelessWidget {
 
   /// O investimento por hectare, pronto do servidor; `null` some.
   final double? sacksPerHa;
+
+  /// O gerente a quem a permuta foi enviada; vazio some.
+  final String managerName;
+
+  /// Mostra o gerente? Null é "quem olha decide permutas" — ver a documentação
+  /// da classe.
+  final bool? showManager;
 
   /// O que vai na ponta direita da linha do código: o status, a espera na fila.
   final Widget? trailing;
@@ -905,9 +917,11 @@ class BarterIdentity extends StatelessWidget {
     this.trailing,
     this.singleLine = false,
     this.extra = const [],
+    this.showManager,
   })  : code = barter.id,
         producerName = barter.producerName,
         consultantName = barter.consultantName,
+        managerName = barter.managerName ?? '',
         areaHa = barter.plantedAreaHa,
         sacksPerHa = barter.sacksPerHa;
 
@@ -921,10 +935,15 @@ class BarterIdentity extends StatelessWidget {
     required this.consultantName,
     this.areaHa = 0,
     this.sacksPerHa,
+    this.managerName = '',
+    this.showManager,
     this.trailing,
     this.singleLine = false,
     this.extra = const [],
   });
+
+  bool get _showsManager =>
+      managerName.isNotEmpty && (showManager ?? AppData.can(Capability.bartersReview));
 
   List<BarterIdentityFact> get _people => [
         BarterIdentityFact(
@@ -934,6 +953,13 @@ class BarterIdentity extends StatelessWidget {
           strong: true,
         ),
         BarterIdentityFact(icon: Icons.badge_outlined, tooltip: 'Consultor', value: consultantName),
+        if (_showsManager)
+          BarterIdentityFact(
+            icon: Icons.assignment_ind_outlined,
+            tooltip: 'Gerente',
+            label: 'Gerente',
+            value: managerName,
+          ),
       ];
 
   List<BarterIdentityFact> get _size => [
