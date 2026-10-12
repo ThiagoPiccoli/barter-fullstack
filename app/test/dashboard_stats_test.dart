@@ -438,4 +438,15 @@ void main() {
       expect(grupos.last.barters.single.id, 'C');
     });
   });
+
+  /// DOIS CLIENTES COM O MESMO NOME são dois produtores: o ranking agrupa pelo
+  /// id, como a contagem de produtores ativos.
+  test('as sacas por produtor agrupam pelo cadastro, e não pelo nome', () {
+    final fatias = sacksByProducer([
+      barter(id: 'A', status: BarterStatus.approved, producerId: '10', sacks: 100),
+      barter(id: 'B', status: BarterStatus.approved, producerId: '11', sacks: 300),
+      barter(id: 'C', status: BarterStatus.approved, producerId: '10', sacks: 50),
+    ]);
+    expect(fatias.map((f) => f.value), [300, 150]);
+  });
 }

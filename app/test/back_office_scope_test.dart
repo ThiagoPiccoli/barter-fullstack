@@ -320,7 +320,8 @@ void main() {
       expect(find.text('Pendentes de apólice'), findsOneWidget);
       expect(find.text('Tempo médio'), findsOneWidget);
       expect(find.text('Área segurada'), findsOneWidget);
-      expect(find.text('Área Segurada por Cultura'), findsOneWidget);
+      // A área por cultura mora dentro do cartão da área segurada.
+      expect(find.textContaining('por cultura'), findsOneWidget);
       expect(find.textContaining('esperando a apólice'), findsWidgets);
       expect(find.text('No comitê'), findsNothing);
       expect(find.text('No gerente'), findsNothing);

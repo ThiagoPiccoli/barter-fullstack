@@ -110,12 +110,9 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     // conta como aprovada" é regra, não layout. Dentro do `build` elas eram
     // reescritas a cada mudança de tela e não tinham teste fora do widget.
     final stats = statsOf(AppData.barters);
-    // POR SAFRA DA CULTURA, e não só por grão: cada safra é um Barter à parte,
-    // com a sua meta e o seu encerramento.
-    final grainEntries = sacksBySeason(stats.closed);
-    final seasonStats = statsBySeason(AppData.barters);
-    final branchEntries = sacksByBranch(stats.closed);
-    final inputEntries = topInputs(stats.closed);
+    final phases = phaseCounts(AppData.barters);
+    final visible = backOfficePhases.where((p) => (phases[p] ?? 0) > 0).toList();
+    final total = visible.fold(0, (sum, p) => sum + phases[p]!);
 
     return Scaffold(
       appBar: AppBar(
@@ -150,71 +147,94 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             ),
             const SizedBox(height: 16),
 
-            _InsightStrip(
-              insumosValue: stats.inputsValue,
-              activeProducers: stats.activeProducers,
-              avgSacks: stats.averageSacks,
-            ),
-            const SizedBox(height: 20),
-
-            // Os dois lados da mesma história — o insumo retirado, que origina o
-            // custo, e a saca que vai cobri-lo. Lidos juntos quando a tela
-            // permite; empilhados quando não permite.
-            if (inputEntries.isNotEmpty || grainEntries.isNotEmpty) ...[
-              AdaptiveColumns(
-                children: [
-                  if (inputEntries.isNotEmpty)
-                    _DashboardSection(
-                      title: '${brand.copy.inputPluralTitle} Mais Retirados',
-                      child: _RankingBars(
-                          entries: inputEntries,
-                          formatValue: formatCurrency,
-                          color: AppColors.input),
-                    ),
-                  if (grainEntries.isNotEmpty)
-                    _DashboardSection(
-                      title: 'Sacas a Receber por Safra',
-                      child: _GrainBreakdownCard(
-                          entries: grainEntries, total: stats.sacksReceivable),
-                    ),
-                ],
+            // A OPERAÇÃO NUM OLHAR: cada número com o seu desdobramento ao lado.
+            // Os rankings (insumos, safras, filiais) e as fases moravam em
+            // blocos espalhados pelo painel, e quem lia "R$ 293 mil em insumos"
+            // tinha de rolar até achar QUAIS insumos.
+            KpiGrid(tiles: [
+              KpiTile(
+                icon: Icons.swap_horiz,
+                color: AppColors.primary,
+                label: '${brand.copy.barterPluralTitle} por status',
+                value: '$total',
+                caption: 'na linha de produção',
+                onTap: () => onNavigate(2),
+                child: visible.isEmpty
+                    ? null
+                    : PhaseBreakdown(counts: phases, phases: visible, dense: true),
               ),
-              const SizedBox(height: 20),
-            ],
-
-            // O PAINEL POR CULTURA: os mesmos números do topo, safra a safra.
-            if (seasonStats.length > 1) ...[
-              Text('Por Safra',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-              const SizedBox(height: 12),
-              _SeasonStatsCard(entries: seasonStats),
-              const SizedBox(height: 20),
-            ],
-
-            DashboardSectionTitle('${brand.copy.barterPluralTitle} por Status'),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: PhaseBreakdown(
-                  counts: phaseCounts(AppData.barters),
-                  phases: backOfficePhases,
+              KpiTile(
+                icon: Icons.science_outlined,
+                color: AppColors.input,
+                label: '${brand.copy.inputPluralTitle} liberados',
+                value: formatCompactCurrency(stats.inputsValue),
+                caption: 'em ${stats.closedCount} permutas aprovadas',
+                child: rankingBars(
+                  topInputs(stats.closed),
+                  format: formatCompactCurrency,
+                  color: AppColors.input,
+                  empty: 'Nenhum insumo liberado ainda.',
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // "Ver todas" leva à aba Filas, onde o admin também decide.
-                Text('No Comitê, Esperando Decisão',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                TextButton(
-                  onPressed: () => onNavigate(1),
-                  child: Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
+              KpiTile(
+                icon: Icons.agriculture,
+                color: AppColors.primary,
+                label: 'Produtores ativos',
+                value: '${stats.activeProducers}',
+                caption: 'com permuta aprovada • os que mais devem',
+                child: rankingBars(
+                  sacksByProducer(stats.closed),
+                  format: formatSacks,
+                  color: AppColors.primaryAccent,
+                  empty: 'Nenhum produtor com permuta aprovada.',
                 ),
-              ],
+              ),
+              KpiTile(
+                icon: Icons.grass,
+                color: AppColors.grain,
+                label: 'Ticket médio',
+                value: formatSacks(stats.averageSacks),
+                caption: 'por permuta aprovada',
+                child: KpiFacts(facts: [
+                  KpiFact('Área média', areaLabelOf(stats.averageArea)),
+                  KpiFact('Insumos por permuta', formatCompactCurrency(stats.averageInputsValue)),
+                  KpiFact('Investimento médio', formatInvestment(stats.investmentPerHa)),
+                  KpiFact('No comitê', '${stats.pendingCount} • ${formatSacks(stats.pendingSacks)}'),
+                ]),
+              ),
+              KpiTile(
+                icon: Icons.eco_outlined,
+                color: AppColors.grain,
+                label: 'Sacas a receber por safra',
+                value: formatSacks(stats.sacksReceivable),
+                caption: '≈ ${formatCompactCurrency(stats.grainValue)} na colheita',
+                child: seasonSacksBars(AppData.barters),
+              ),
+              KpiTile(
+                icon: Icons.store_outlined,
+                color: AppColors.primaryAccent,
+                label: 'Volume por filial',
+                value: '${sacksByBranch(stats.closed).length}',
+                caption: 'filiais com permuta aprovada',
+                child: rankingBars(
+                  sacksByBranch(stats.closed),
+                  format: formatSacks,
+                  color: AppColors.primaryAccent,
+                  empty: 'Nenhuma permuta aprovada ainda.',
+                ),
+              ),
+            ]),
+            const SizedBox(height: 24),
+
+            // O QUE PEDE AÇÃO fica embaixo dos números, em lista: é para abrir
+            // uma a uma, e não para ler de relance.
+            DashboardSectionTitle(
+              'No Comitê, Esperando Decisão',
+              // "Ver todas" leva à aba Filas, onde o admin também decide.
+              trailing: TextButton(
+                onPressed: () => onNavigate(1),
+                child: Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
+              ),
             ),
             const SizedBox(height: 8),
             if (stats.pending.isEmpty)
@@ -226,31 +246,12 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
               ...stats.pending.map((b) => _PendingActionCard(barter: b)),
             const SizedBox(height: 20),
 
-            // O rodapé do painel: o volume por filial e o que andou. Nenhum dos
-            // dois pede ação, e é por isso que podem dividir a mesma faixa.
-            AdaptiveColumns(
-              children: [
-                if (branchEntries.isNotEmpty)
-                  _DashboardSection(
-                    title: 'Volume por Filial',
-                    child: _RankingBars(
-                        entries: branchEntries,
-                        formatValue: formatSacks,
-                        color: AppColors.primaryAccent),
-                  ),
-                _DashboardSection(
-                  title: 'Atividade Recente',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: AppData.barters
-                        .where((b) => b.status != BarterStatus.pending)
-                        .take(3)
-                        .map((b) => MiniBarterCard(barter: b, isAdmin: true))
-                        .toList(),
-                  ),
-                ),
-              ],
-            ),
+            DashboardSectionTitle('Atividade Recente'),
+            const SizedBox(height: 12),
+            ...AppData.barters
+                .where((b) => b.status != BarterStatus.pending)
+                .take(3)
+                .map((b) => MiniBarterCard(barter: b, isAdmin: true)),
             const SizedBox(height: 16),
           ],
           ),
@@ -265,36 +266,6 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
     return '${now.day} ${months[now.month]} ${now.year}';
   }
 }
-
-/// Um bloco do painel: o título e o que ele apresenta.
-///
-/// Existe para o bloco poder virar coluna dentro de [AdaptiveColumns] — solto na
-/// lista, o título e o conteúdo eram dois irmãos separados por um `SizedBox`, e
-/// não havia o que colocar lado a lado.
-class _DashboardSection extends StatelessWidget {
-  final String title;
-  final Widget child;
-  const _DashboardSection({required this.title, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(title,
-            style: TextStyle(
-                fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-        const SizedBox(height: 12),
-        child,
-      ],
-    );
-  }
-}
-
-/// Cor do grão [i] no painel (soja, milho, trigo, aveia...). A série vem da
-/// marca ativa e é cíclica, então qualquer grão cadastrado ganha cor sem
-/// prender o app à soja — e sem prender o painel à paleta de um cliente.
-Color _grainColor(int i) => AppColors.series(i);
 
 /// Cartão-herói: a ÁREA FEITA — os hectares de lavoura que as permutas
 /// aprovadas cobrem — como número-estrela, com o investimento médio por hectare
@@ -407,212 +378,6 @@ class _AreaHero extends StatelessWidget {
   }
 }
 
-/// Mix das sacas a receber por grão: barra empilhada + legenda com sacas e %.
-class _GrainBreakdownCard extends StatelessWidget {
-  final List<StatSlice> entries;
-  final double total;
-  const _GrainBreakdownCard({required this.entries, required this.total});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: SizedBox(
-                height: 12,
-                child: Row(
-                  children: [
-                    for (var i = 0; i < entries.length; i++)
-                      Expanded(
-                        flex: (entries[i].value * 100).round().clamp(1, 1 << 30),
-                        child: Container(color: _grainColor(i)),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            for (var i = 0; i < entries.length; i++) ...[
-              if (i > 0) const SizedBox(height: 10),
-              Row(
-                children: [
-                  Container(width: 10, height: 10,
-                      decoration: BoxDecoration(color: _grainColor(i), shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(entries[i].label,
-                        style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
-                  ),
-                  Text(formatSacks(entries[i].value),
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 42,
-                    child: Text(
-                      total > 0 ? '${(entries[i].value / total * 100).round()}%' : '0%',
-                      textAlign: TextAlign.end,
-                      style: TextStyle(fontSize: 12, color: AppColors.textLight),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Moeda compacta para faixas estreitas: "R$ 125,2 mil" / "R$ 1,3 mi".
-String _compactCurrency(double v) {
-  String n(double x) => x.toStringAsFixed(1).replaceAll('.', ',');
-  if (v >= 1000000) return 'R\$ ${n(v / 1000000)} mi';
-  if (v >= 1000) return 'R\$ ${n(v / 1000)} mil';
-  return formatCurrency(v);
-}
-
-/// Faixa enxuta de 3 indicadores secundários, separados por divisórias. Substitui
-/// um grid de cards genéricos por algo compacto que não repete o herói/status.
-class _InsightStrip extends StatelessWidget {
-  final double insumosValue;
-  final int activeProducers;
-  final double avgSacks;
-  const _InsightStrip({
-    required this.insumosValue,
-    required this.activeProducers,
-    required this.avgSacks,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        child: IntrinsicHeight(
-          child: Row(
-            children: [
-              Expanded(
-                child: _StripCell(
-                  icon: Icons.science_outlined,
-                  color: AppColors.input,
-                  value: _compactCurrency(insumosValue),
-                  label: 'Insumos liberados',
-                ),
-              ),
-              const VerticalDivider(width: 1, indent: 4, endIndent: 4),
-              Expanded(
-                child: _StripCell(
-                  icon: Icons.agriculture,
-                  color: AppColors.primary,
-                  value: '$activeProducers',
-                  label: 'Produtores ativos',
-                ),
-              ),
-              const VerticalDivider(width: 1, indent: 4, endIndent: 4),
-              Expanded(
-                child: _StripCell(
-                  icon: Icons.grass,
-                  color: AppColors.grain,
-                  value: formatSacks(avgSacks),
-                  label: 'Ticket médio',
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StripCell extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String value;
-  final String label;
-  const _StripCell({required this.icon, required this.color, required this.value, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(height: 6),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(value,
-              maxLines: 1,
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
-        ),
-        const SizedBox(height: 2),
-        Text(label,
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-      ],
-    );
-  }
-}
-
-/// Ranking genérico (filiais, insumos...) com barra proporcional ao maior valor.
-/// [formatValue] decide se o valor sai em sacas, R$, etc.
-class _RankingBars extends StatelessWidget {
-  final List<StatSlice> entries;
-  final String Function(double) formatValue;
-  final Color color;
-  const _RankingBars({required this.entries, required this.formatValue, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final max = entries.first.value;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            for (var i = 0; i < entries.length; i++) ...[
-              if (i > 0) const SizedBox(height: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(entries[i].label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(formatValue(entries[i].value),
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: max > 0 ? entries[i].value / max : 0,
-                      minHeight: 7,
-                      backgroundColor: AppColors.primarySurface,
-                      valueColor: AlwaysStoppedAnimation(color),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Card de permuta parada no comitê, com o tempo de espera ("há X dias")
 /// destacado. Quanto mais antiga, mais quente a cor.
 class _PendingActionCard extends StatelessWidget {
@@ -713,63 +478,6 @@ class _EmptyHint extends StatelessWidget {
             Expanded(
               child: Text(text, style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// O PAINEL POR CULTURA — uma linha por safra, com o que fechou, o que espera e
-/// as sacas que ela tem a receber.
-class _SeasonStatsCard extends StatelessWidget {
-  final List<({String label, BarterStats stats})> entries;
-  const _SeasonStatsCard({required this.entries});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: Column(
-          children: [
-            for (final (index, entry) in entries.indexed) ...[
-              if (index > 0) const Divider(height: 1),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Row(
-                  children: [
-                    Icon(Icons.grass, size: 18, color: AppColors.grain),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(entry.label,
-                              style: TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                          Text(
-                            '${entry.stats.closedCount} fechada(s) • '
-                            '${entry.stats.pendingCount} no comitê • '
-                            '${entry.stats.atManagerCount} no gerente',
-                            style: TextStyle(fontSize: 11, color: AppColors.textMedium),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(formatSacks(entry.stats.sacksReceivable),
-                            style: TextStyle(
-                                fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.grain)),
-                        Text('sc a receber', style: TextStyle(fontSize: 10, color: AppColors.textLight)),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ],
         ),
       ),

@@ -102,6 +102,13 @@ class BarterStats {
   /// Ticket médio em sacas por permuta fechada. Zero sem permuta nenhuma — e
   /// não uma divisão por zero.
   double get averageSacks => closed.isEmpty ? 0 : sacksReceivable / closed.length;
+
+  /// A área média de uma permuta fechada (ha) — o tamanho do negócio típico.
+  double get averageArea => closed.isEmpty ? 0 : area / closed.length;
+
+  /// Quanto de insumo (R$) uma permuta fechada retira, em média. Zero para quem
+  /// não vê R$.
+  double get averageInputsValue => closed.isEmpty ? 0 : inputsValue / closed.length;
 }
 
 /// Os números de um painel a partir das permutas que ele enxerga.
@@ -550,6 +557,25 @@ List<StatSlice> sacksByBranch(Iterable<BarterModel> barters) {
         barter.totalGrainQty;
   }
   return _ranked(byBranch);
+}
+
+/// Sacas por PRODUTOR — quem mais compromete grão com a empresa.
+///
+/// Agrupa pelo ID, como [BarterStats.activeProducers] conta: dois clientes com
+/// o mesmo nome são dois produtores, e o ranking não pode somá-los num só. O
+/// rótulo é o nome da permuta mais recente.
+List<StatSlice> sacksByProducer(Iterable<BarterModel> barters) {
+  final sacks = <String, double>{};
+  final latest = <String, BarterModel>{};
+  for (final barter in barters) {
+    sacks[barter.producerId] = (sacks[barter.producerId] ?? 0) + barter.totalGrainQty;
+    final seen = latest[barter.producerId];
+    if (seen == null || barter.createdAt.isAfter(seen.createdAt)) latest[barter.producerId] = barter;
+  }
+  final slices = [
+    for (final entry in sacks.entries) StatSlice(latest[entry.key]!.producerName, entry.value),
+  ]..sort((a, b) => b.value.compareTo(a.value));
+  return slices;
 }
 
 /// OS INSUMOS MAIS RETIRADOS (R$) — o lado insumo da história, que origina o

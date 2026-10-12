@@ -326,3 +326,319 @@ class DashboardSectionTitle extends StatelessWidget {
     );
   }
 }
+
+/// Moeda compacta para os cartões: "R$ 125,2 mil" / "R$ 1,3 mi".
+String formatCompactCurrency(double v) {
+  String n(double x) => x.toStringAsFixed(1).replaceAll('.', ',');
+  if (v >= 1000000) return 'R\$ ${n(v / 1000000)} mi';
+  if (v >= 1000) return 'R\$ ${n(v / 1000)} mil';
+  return formatCurrency(v);
+}
+
+/// UM INDICADOR DO TOPO DO PAINEL — o número, o que ele quer dizer e, logo
+/// abaixo, o que o explica.
+///
+/// Os painéis tinham a faixa de números no alto e a explicação de cada número
+/// espalhada pela tela, em blocos que era preciso rolar para achar: o total de
+/// insumos lá em cima, quais insumos lá embaixo. O cartão junta os dois — o
+/// número e o seu desdobramento (os três maiores, a conta, a fase) — para a
+/// pessoa ler o painel sem caçar.
+///
+/// O texto fica nas cores de texto; a cor do indicador vai só no ícone e nas
+/// barras, que é onde ela identifica alguma coisa.
+class KpiTile extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final String value;
+
+  /// O que o número mede, em uma linha ("por permuta aprovada").
+  final String? caption;
+
+  /// O desdobramento — [KpiFacts], [KpiBars], uma barra de fases.
+  final Widget? child;
+
+  /// Leva aonde o número se abre (a lista, a fila). Sem ele, o cartão é só
+  /// leitura e não finge ser botão.
+  final VoidCallback? onTap;
+
+  const KpiTile({
+    super.key,
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.value,
+    this.caption,
+    this.child,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final body = Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: color, size: 17),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textMedium)),
+              ),
+              if (onTap != null) Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
+            ],
+          ),
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value,
+                maxLines: 1,
+                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, color: AppColors.textDark)),
+          ),
+          if (caption != null)
+            Text(caption!, style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+          if (child != null) ...[
+            const SizedBox(height: 12),
+            Divider(height: 1, color: AppColors.primarySurface),
+            const SizedBox(height: 12),
+            child!,
+          ],
+        ],
+      ),
+    );
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: onTap == null
+          ? body
+          : InkWell(borderRadius: BorderRadius.circular(12), onTap: onTap, child: body),
+    );
+  }
+}
+
+/// A GRADE DOS INDICADORES — [maxColumns] lado a lado no monitor, dois no
+/// tablet, um embaixo do outro no telefone.
+///
+/// Cada linha tem a altura do cartão mais alto dela: cartões de alturas
+/// diferentes lado a lado fazem a linha parecer quebrada, e a pessoa lê o
+/// desnível como se fosse informação.
+class KpiGrid extends StatelessWidget {
+  final List<Widget> tiles;
+  final int maxColumns;
+  final double spacing;
+
+  const KpiGrid({super.key, required this.tiles, this.maxColumns = 3, this.spacing = 12});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final columns = (width >= 1000 ? maxColumns : width >= 620 ? 2 : 1)
+            .clamp(1, tiles.isEmpty ? 1 : tiles.length);
+        final rows = <Widget>[];
+        for (var start = 0; start < tiles.length; start += columns) {
+          final slice = tiles.skip(start).take(columns).toList();
+          if (rows.isNotEmpty) rows.add(SizedBox(height: spacing));
+          rows.add(IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < columns; i++) ...[
+                  if (i > 0) SizedBox(width: spacing),
+                  // A última linha incompleta guarda o lugar dos que faltam,
+                  // para o cartão não esticar até a largura de dois.
+                  Expanded(child: i < slice.length ? slice[i] : const SizedBox.shrink()),
+                ],
+              ],
+            ),
+          ));
+        }
+        return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: rows);
+      },
+    );
+  }
+}
+
+/// Uma linha de [KpiFacts]: rótulo à esquerda, valor à direita.
+class KpiFact {
+  final String label;
+  final String value;
+
+  /// A bolinha de cor que identifica a linha (uma fase, um estado) — nunca a
+  /// cor do texto.
+  final Color? dot;
+
+  const KpiFact(this.label, this.value, {this.dot});
+}
+
+/// OS NÚMEROS POR TRÁS DO NÚMERO — duas a quatro linhas de "rótulo → valor".
+class KpiFacts extends StatelessWidget {
+  final List<KpiFact> facts;
+  const KpiFacts({super.key, required this.facts});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final (i, fact) in facts.indexed) ...[
+          if (i > 0) const SizedBox(height: 6),
+          Row(
+            children: [
+              if (fact.dot != null) ...[
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(color: fact.dot, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Expanded(
+                child: Text(fact.label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+              ),
+              const SizedBox(width: 8),
+              Text(fact.value,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Uma linha de [KpiBars].
+class KpiBar {
+  final String label;
+  final double value;
+  final String valueLabel;
+
+  /// Uma segunda linha, miúda ("3 aprovadas • 1 no comitê").
+  final String? detail;
+
+  const KpiBar(this.label, this.value, this.valueLabel, {this.detail});
+}
+
+/// OS MAIORES, com barra — o "quais" de um total: os insumos que mais saíram,
+/// as safras que mais devem, os produtores que mais compraram.
+///
+/// A barra mede contra o MAIOR da lista, e não contra o total: o que se
+/// compara aqui é um com o outro. [colorOf] dá a cor de cada linha quando ela
+/// é IDENTIDADE (cada safra a sua); sem ele, todas na mesma cor, porque aí a
+/// barra é só tamanho.
+class KpiBars extends StatelessWidget {
+  final List<KpiBar> bars;
+  final Color color;
+  final Color Function(int index)? colorOf;
+
+  /// O que dizer quando não há nada para listar.
+  final String empty;
+
+  const KpiBars({
+    super.key,
+    required this.bars,
+    required this.color,
+    this.colorOf,
+    this.empty = 'Nada ainda.',
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (bars.isEmpty) {
+      return Text(empty, style: TextStyle(fontSize: 12, color: AppColors.textLight));
+    }
+    final max = bars.map((b) => b.value).reduce((a, b) => a > b ? a : b);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final (i, bar) in bars.indexed) ...[
+          if (i > 0) const SizedBox(height: 9),
+          Row(
+            children: [
+              Expanded(
+                child: Text(bar.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+              ),
+              const SizedBox(width: 8),
+              Text(bar.valueLabel,
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: max > 0 ? bar.value / max : 0,
+              minHeight: 5,
+              backgroundColor: AppColors.primarySurface,
+              valueColor: AlwaysStoppedAnimation(colorOf?.call(i) ?? color),
+            ),
+          ),
+          if (bar.detail != null) ...[
+            const SizedBox(height: 2),
+            Text(bar.detail!, style: TextStyle(fontSize: 10, color: AppColors.textLight)),
+          ],
+        ],
+      ],
+    );
+  }
+}
+
+/// AS SACAS POR SAFRA como barras — o desdobramento das sacas a receber em
+/// todo painel que as mostra. A cor é da safra (identidade), na ordem fixa da
+/// série.
+KpiBars seasonSacksBars(Iterable<BarterModel> barters, {int take = 4}) {
+  final seasons = statsBySeason(barters).where((s) => s.stats.closedCount > 0 || s.stats.pendingCount > 0);
+  return KpiBars(
+    color: AppColors.grain,
+    colorOf: AppColors.series,
+    empty: 'Nenhuma permuta aprovada ainda.',
+    bars: [
+      for (final s in seasons.take(take))
+        KpiBar(
+          s.label,
+          s.stats.sacksReceivable,
+          formatSacks(s.stats.sacksReceivable),
+          detail: '${s.stats.closedCount} aprovada${s.stats.closedCount == 1 ? '' : 's'}'
+              '${s.stats.pendingCount > 0 ? ' • ${s.stats.pendingCount} no comitê' : ''}',
+        ),
+    ],
+  );
+}
+
+/// OS MAIORES DE UM RANKING como barras, já formatados.
+KpiBars rankingBars(
+  List<StatSlice> slices, {
+  required String Function(double) format,
+  required Color color,
+  int take = 3,
+  String empty = 'Nada ainda.',
+}) =>
+    KpiBars(
+      color: color,
+      empty: empty,
+      bars: [for (final s in slices.take(take)) KpiBar(s.label, s.value, format(s.value))],
+    );

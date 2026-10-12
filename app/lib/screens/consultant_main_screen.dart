@@ -161,35 +161,65 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             icon: Icons.agriculture_outlined,
           ),
           const SizedBox(height: 16),
-          // O TOTAL E O FUNIL no mesmo cartão: "12 permutas" só diz alguma
-          // coisa junto com onde elas estão — 12 rascunhos e 12 registradas são
-          // carteiras opostas.
-          _MyBartersCard(total: myBarters.length, phases: phaseCounts(myBarters)),
-          const SizedBox(height: 12),
-          // A LAVOURA das permutas aprovadas dele: a área, o investimento médio
-          // (as sacas ÷ a área, ponderado pelo número de cada permuta — ver
-          // `investmentPerHaOf`) e as sacas que essa área entrega.
-          StatStrip(cells: [
-            StatStripCell(
+          // O PAINEL DELE NUM OLHAR: cada número com o desdobramento ao lado —
+          // o total com as fases, a área com o investimento, as sacas com as
+          // safras, os produtores com quem mais compra.
+          KpiGrid(maxColumns: 4, tiles: [
+            KpiTile(
+              icon: Icons.swap_horiz,
+              color: AppColors.primary,
+              label: 'Minhas ${brand.copy.barterPluralTitle}',
+              value: '${myBarters.length}',
+              caption: 'por status',
+              onTap: () => onNavigate(1),
+              child: _presentPhases(myBarters).isEmpty
+                  ? null
+                  : PhaseBreakdown(
+                      counts: phaseCounts(myBarters),
+                      phases: _presentPhases(myBarters),
+                      dense: true,
+                    ),
+            ),
+            KpiTile(
               icon: Icons.landscape_outlined,
               color: AppColors.primary,
-              value: areaLabelOf(stats.area),
               label: 'Área total',
-              detail: 'em aprovadas',
+              value: areaLabelOf(stats.area),
+              caption: 'em permutas aprovadas',
+              // O INVESTIMENTO é as sacas ÷ a área, ponderado pelo número de
+              // cada permuta — ver `investmentPerHaOf`.
+              child: KpiFacts(facts: [
+                KpiFact('Investimento médio', formatInvestment(stats.investmentPerHa)),
+                if (stats.investmentPerHa != null)
+                  KpiFact('Conta', investmentBasisOf(stats.closed)),
+                KpiFact('Área média', areaLabelOf(stats.averageArea)),
+              ]),
             ),
-            StatStripCell(
-              icon: Icons.straighten,
-              color: AppColors.primaryAccent,
-              value: formatInvestment(stats.investmentPerHa),
-              label: 'Investimento médio',
-              detail: stats.investmentPerHa == null ? null : investmentBasisOf(stats.closed),
-            ),
-            StatStripCell(
+            KpiTile(
               icon: Icons.grass,
               color: AppColors.grain,
-              value: formatSacks(sacksDelivered),
               label: 'Sacas entregues',
-              detail: 'em aprovadas',
+              value: formatSacks(sacksDelivered),
+              caption: 'ticket médio ${formatSacks(stats.averageSacks)}',
+              child: seasonSacksBars(myBarters, take: 3),
+            ),
+            KpiTile(
+              icon: Icons.agriculture,
+              color: AppColors.primaryAccent,
+              label: 'Meus produtores',
+              value: '${stats.activeProducers}',
+              // A CARTEIRA ao lado: "3 de 12" diz quanto dela ainda não fechou
+              // nada. Sem a carteira carregada, o número fica sozinho — "3 de 0"
+              // seria uma conta errada.
+              caption: AppData.producersForConsultant(consultant.id).isEmpty
+                  ? 'com permuta aprovada'
+                  : 'de ${AppData.producersForConsultant(consultant.id).length} na carteira, com permuta aprovada',
+              child: rankingBars(
+                sacksByProducer(stats.closed),
+                format: formatSacks,
+                color: AppColors.primaryAccent,
+                empty: 'Nenhum produtor com permuta aprovada.',
+              ),
             ),
           ]),
           const SizedBox(height: 20),
@@ -340,54 +370,11 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
   }
 }
 
-/// MINHAS PERMUTAS: o total, e logo abaixo dele quantas há em cada fase.
-///
-/// Só as fases com permuta aparecem na legenda — a carteira do consultor passa
-/// por todas elas, e nove rótulos com zero esconderiam os dois que importam.
-class _MyBartersCard extends StatelessWidget {
-  final int total;
-  final Map<BarterPhase, int> phases;
-  const _MyBartersCard({required this.total, required this.phases});
-
-  @override
-  Widget build(BuildContext context) {
-    final present = [for (final phase in BarterPhase.values) if ((phases[phase] ?? 0) > 0) phase];
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.swap_horiz, color: AppColors.primary, size: 20),
-                ),
-                const SizedBox(width: 12),
-                Text('$total',
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppColors.textDark)),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('Minhas ${brand.copy.barterPluralTitle}',
-                      style: TextStyle(fontSize: 13, color: AppColors.textMedium)),
-                ),
-              ],
-            ),
-            if (present.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              PhaseBreakdown(counts: phases, phases: present, dense: true),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
+/// As fases em que o consultor TEM permuta — a carteira dele passa por todas,
+/// e nove rótulos com zero esconderiam os dois que importam.
+List<BarterPhase> _presentPhases(List<BarterModel> barters) {
+  final counts = phaseCounts(barters);
+  return [for (final phase in BarterPhase.values) if (counts[phase]! > 0) phase];
 }
 
 class _ConsultantProfileTab extends StatelessWidget {
