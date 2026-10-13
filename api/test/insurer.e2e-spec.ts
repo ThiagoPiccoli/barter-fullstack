@@ -263,7 +263,9 @@ describe('Seguradora (e2e)', () => {
 
     const semNumero = await informar(SEGURADORA, code, {});
     expect(semNumero.status).toBe(422);
-    expect(semNumero.body.message).toBe('Informe o número da apólice do seguro (até 60 caracteres)');
+    expect(semNumero.body.message).toBe(
+      'Informe o número da apólice do seguro (até 60 caracteres)',
+    );
 
     const emBranco = await informar(SEGURADORA, code, { policyNumber: '   ' });
     expect(emBranco.status).toBe(422);
