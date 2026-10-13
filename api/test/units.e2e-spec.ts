@@ -210,7 +210,8 @@ describe('Unidades (e2e)', () => {
       .set('Authorization', await asUser(JOAO))
       .send({
         producerId: 1,
-        grainId: 1,
+        seasonId: 3, // Soja 26/27
+        plantedAreaHa: 120,
         unitId: UNIT.filial34, // praça do Gustavo, consultor é do time da Beatriz
         inputs: [
           { productId: 5, quantity: 48 },

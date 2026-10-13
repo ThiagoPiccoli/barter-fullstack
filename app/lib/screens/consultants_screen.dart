@@ -3,12 +3,16 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
 import 'creditor_screen.dart';
 import 'producer_profile_screen.dart';
 import 'consultant_profile_screen.dart';
+import 'staff_profile_screen.dart';
+import 'unit_profile_screen.dart';
+import 'insurance_rate_profile_screen.dart';
 import 'edit_forms.dart';
 
 /// O que a aba de cadastros administra.
@@ -22,6 +26,8 @@ import 'edit_forms.dart';
 /// PRÓPRIA EMPRESA, como ela se identifica nos documentos que emite. Ela vem por
 /// último porque é a única que não participa do caminho de uma permuta; ela é o
 /// timbre do papel em que o caminho termina.
+/// `admins` fecha a fila: quem administra o sistema, com todas as
+/// capacidades.
 /// `insurance` entra depois das unidades e antes da empresa: ela é a outra
 /// coisa que não é gente — é o CUSTO DO LUGAR, a base que diz quanto vale
 /// segurar um hectare em cada praça. Vem colada às unidades porque as duas são
@@ -31,16 +37,18 @@ enum _Registry {
   consultants,
   managers,
   committee,
+  insurers,
   billers,
   emitters,
   units,
   insurance,
   creditor,
+  admins,
 }
 
 /// Aba de cadastros do admin: PRODUTORES (clientes designados), CONSULTORES
 /// (quem registra permuta e preenche a cédula), GERENTES (quem dá o parecer),
-/// COMITÊ (quem decide), FATURISTAS (quem fatura e anexa as notas), EMISSORES
+/// COMITÊ (quem decide), SEGURADORA (quem informa a apólice), FATURISTAS (quem fatura e anexa as notas), EMISSORES
 /// (quem emite a cédula, colhe as assinaturas e a registra) e UNIDADES (os
 /// locais de retirada), com busca em cada lista.
 ///
@@ -83,6 +91,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           _Registry.consultants => const EditStaffScreen(role: UserRole.consultant),
           _Registry.managers => const EditStaffScreen(role: UserRole.manager),
           _Registry.committee => const EditStaffScreen(role: UserRole.committee),
+          _Registry.insurers => const EditStaffScreen(role: UserRole.insurer),
           _Registry.billers => const EditStaffScreen(role: UserRole.biller),
           _Registry.emitters => const EditStaffScreen(role: UserRole.emitter),
           _Registry.units => const EditUnitScreen(),
@@ -90,6 +99,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           // A credora não tem "novo": ela é uma só, e o formulário dela é a
           // própria aba. O FAB some neste segmento — ver `showFab`.
           _Registry.creditor => const CreditorScreen(),
+          _Registry.admins => const EditStaffScreen(role: UserRole.admin),
         },
       ),
     );
@@ -129,6 +139,13 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             b.branch.toLowerCase().contains(q) ||
             b.email.toLowerCase().contains(q))
         .toList();
+    final insurers = AppData.insurers
+        .where((i) =>
+            q.isEmpty ||
+            i.name.toLowerCase().contains(q) ||
+            i.branch.toLowerCase().contains(q) ||
+            i.email.toLowerCase().contains(q))
+        .toList();
     final emitters = AppData.emitters
         .where((e) =>
             q.isEmpty ||
@@ -141,6 +158,12 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             q.isEmpty ||
             u.name.toLowerCase().contains(q) ||
             u.city.toLowerCase().contains(q))
+        .toList();
+    final admins = AppData.admins
+        .where((a) =>
+            q.isEmpty ||
+            a.name.toLowerCase().contains(q) ||
+            a.email.toLowerCase().contains(q))
         .toList();
     final rates = AppData.insuranceRates
         .where((r) =>
@@ -172,6 +195,15 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           'Buscar não se aplica: o comitê é um cadastro só',
           AppData.committee == null ? 'sem cadastro' : '1 comitê',
           'Cadastrar comitê',
+        ),
+      // SEM NINGUÉM NA SEGURADORA, toda permuta aprovada com seguro para em
+      // "aguardando a apólice" — a contagem zerada diz isso antes da reclamação.
+      _Registry.insurers => (
+          'Buscar pessoa da seguradora, unidade ou e-mail...',
+          insurers.isEmpty
+              ? 'ninguém na seguradora — as permutas com seguro param sem apólice'
+              : '${insurers.length} pessoa(s) na seguradora',
+          'Nova pessoa na seguradora',
         ),
       _Registry.billers => (
           'Buscar faturista, unidade ou e-mail...',
@@ -209,6 +241,11 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           'A empresa como ela aparece nas cédulas emitidas',
           'Empresa',
         ),
+      _Registry.admins => (
+          'Buscar administrador ou e-mail...',
+          '${admins.length} administrador(es)',
+          'Novo admin',
+        ),
     };
 
     // O comitê já cadastrado não ganha botão de "novo": ele é único, e um botão
@@ -233,23 +270,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
-              child: _SegmentedToggle(
-                tab: _tab,
-                counts: {
-                  _Registry.producers: AppData.producers.length,
-                  _Registry.consultants: AppData.consultants.length,
-                  _Registry.managers: AppData.managers.length,
-                  _Registry.committee: AppData.committee == null ? 0 : 1,
-                  _Registry.billers: AppData.billers.length,
-                  _Registry.emitters: AppData.emitters.length,
-                  _Registry.units: AppData.units.length,
-                  _Registry.insurance: AppData.insuranceRates.length,
-                  // Um, sempre: a credora é cadastro ÚNICO, e a linha existe
-                  // (vazia ou preenchida) desde a instalação. Ver CreditorScreen.
-                  _Registry.creditor: 1,
-                },
-                onChanged: _setTab,
-              ),
+              child: _SegmentedToggle(tab: _tab, onChanged: _setTab),
             ),
             if (_tab != _Registry.committee && _tab != _Registry.creditor)
             Padding(
@@ -281,11 +302,13 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
                 _Registry.consultants => _buildConsultantList(consultants),
                 _Registry.managers => _buildManagerList(managers),
                 _Registry.committee => _buildCommittee(),
+                _Registry.insurers => _buildInsurerList(insurers),
                 _Registry.billers => _buildBillerList(billers),
                 _Registry.emitters => _buildEmitterList(emitters),
                 _Registry.units => _buildUnitList(units),
                 _Registry.insurance => _buildInsuranceList(rates),
                 _Registry.creditor => const CreditorScreen(embedded: true),
+                _Registry.admins => _buildAdminList(admins),
               },
             ),
           ],
@@ -304,11 +327,11 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final p = list[i];
-        final bs = AppData.barters.where((b) => b.producerId == p.id).toList();
+        final bs = ofProducer(AppData.barters, p.id);
         return _PersonCard(
           initials: p.avatarInitials,
           name: p.name,
-          subtitle: '${p.location} • ${p.areaLabel}',
+          subtitle: p.location,
           accent: AppColors.primary,
           badgeIcon: Icons.agriculture,
           chips: [
@@ -330,16 +353,11 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     );
   }
 
-  /// A carteira do produtor num selo de uma linha: "Carteira: João",
-  /// "Carteira: João +1" quando ele é dividido, "sem consultor" quando o
-  /// último vínculo caiu junto com a exclusão do consultor.
+  /// A carteira do produtor num selo de uma linha: "Carteira: João", ou "sem
+  /// consultor" quando o dele foi excluído.
   String _walletLabel(ProducerModel p) {
-    final nomes = AppData.consultantNamesFor(p);
-    if (nomes.isEmpty) return 'Carteira: sem consultor';
-    final primeiro = nomes.first.split(' ').first;
-    return nomes.length == 1
-        ? 'Carteira: $primeiro'
-        : 'Carteira: $primeiro +${nomes.length - 1}';
+    final nome = AppData.consultantNameFor(p);
+    return nome == null ? 'Carteira: sem consultor' : 'Carteira: ${nome.split(' ').first}';
   }
 
   Widget _buildConsultantList(List<UserModel> list) {
@@ -350,7 +368,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final v = list[i];
-        final bs = AppData.barters.where((b) => b.consultantId == v.id).toList();
+        final bs = ofConsultant(AppData.barters, v.id);
         return _PersonCard(
           initials: v.avatarInitials,
           name: v.name,
@@ -407,7 +425,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: m, role: UserRole.manager),
+                builder: (_) => StaffProfileScreen(user: m, role: UserRole.manager),
               ),
             );
             if (mounted) setState(() {});
@@ -429,7 +447,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
     }
 
     final queue = AppData.committeeQueue.length;
-    final decided = AppData.barters.where((b) => b.hasDecision).length;
+    final decided = decidedCount(AppData.barters);
     return ListView(
       key: const PageStorageKey('cadastros_comite'),
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
@@ -449,7 +467,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: committee, role: UserRole.committee),
+                builder: (_) => StaffProfileScreen(user: committee, role: UserRole.committee),
               ),
             );
             if (mounted) setState(() {});
@@ -480,7 +498,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final b = list[i];
-        final invoiced = AppData.barters.where((p) => p.invoicedBy == b.name).length;
+        final invoiced = invoicedBy(AppData.barters, b.name);
         return _PersonCard(
           initials: b.avatarInitials,
           name: b.name,
@@ -495,7 +513,44 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: b, role: UserRole.biller),
+                builder: (_) => StaffProfileScreen(user: b, role: UserRole.biller),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// A SEGURADORA — as pessoas que informam as apólices. O cartão conta quantas
+  /// cada uma informou.
+  Widget _buildInsurerList(List<UserModel> list) {
+    if (list.isEmpty) {
+      return const _EmptyState(label: 'Ninguém cadastrado na seguradora');
+    }
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_seguradora'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final person = list[i];
+        final apolices = insuredBy(AppData.barters, person.name);
+        return _PersonCard(
+          initials: person.avatarInitials,
+          name: person.name,
+          subtitle: person.branch,
+          accent: AppColors.atInsurer,
+          badgeIcon: Icons.shield,
+          chips: [
+            if (apolices > 0)
+              _StatChip(label: '$apolices apólice(s)', color: AppColors.atInsurer),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => StaffProfileScreen(user: person, role: UserRole.insurer),
               ),
             );
             if (mounted) setState(() {});
@@ -519,7 +574,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final e = list[i];
-        final emitidas = AppData.barters.where((p) => p.cprEmittedBy == e.name).length;
+        final emitidas = issuedBy(AppData.barters, e.name);
         return _PersonCard(
           initials: e.avatarInitials,
           name: e.name,
@@ -534,7 +589,40 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => EditStaffScreen(user: e, role: UserRole.emitter),
+                builder: (_) => StaffProfileScreen(user: e, role: UserRole.emitter),
+              ),
+            );
+            if (mounted) setState(() {});
+          },
+        );
+      },
+    );
+  }
+
+  /// Os ADMINISTRADORES. A própria conta aparece marcada.
+  Widget _buildAdminList(List<UserModel> list) {
+    if (list.isEmpty) return const _EmptyState(label: 'Nenhum administrador encontrado');
+    return ListView.builder(
+      key: const PageStorageKey('cadastros_admins'),
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: list.length,
+      itemBuilder: (_, i) {
+        final a = list[i];
+        return _PersonCard(
+          initials: a.avatarInitials,
+          name: a.name,
+          subtitle: a.email,
+          accent: AppColors.primaryAccent,
+          badgeIcon: Icons.admin_panel_settings,
+          chips: [
+            if (a.id == AppData.currentUser?.id)
+              _StatChip(label: 'Você', color: AppColors.primaryAccent),
+          ],
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => StaffProfileScreen(user: a, role: UserRole.admin),
               ),
             );
             if (mounted) setState(() {});
@@ -588,7 +676,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           onTap: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => EditInsuranceRateScreen(rate: rate)),
+              MaterialPageRoute(builder: (_) => InsuranceRateProfileScreen(rate: rate)),
             );
             if (mounted) setState(() {});
           },
@@ -724,7 +812,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
       itemCount: list.length,
       itemBuilder: (_, i) {
         final u = list[i];
-        final pickups = AppData.barters.where((b) => b.unitId == u.id).length;
+        final pickups = ofUnit(AppData.barters, u.id).length;
         final staff = AppData.consultants.where((c) => c.unitId == u.id).length;
         return _PersonCard(
           initials: u.avatarInitials,
@@ -739,7 +827,7 @@ class _ConsultantsScreenState extends State<ConsultantsScreen> {
           onTap: () async {
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => EditUnitScreen(unit: u)),
+              MaterialPageRoute(builder: (_) => UnitProfileScreen(unit: u)),
             );
             if (mounted) setState(() {});
           },
@@ -765,13 +853,8 @@ List<Widget> _statChips(List<BarterModel> bs) {
 
 class _SegmentedToggle extends StatelessWidget {
   final _Registry tab;
-  final Map<_Registry, int> counts;
   final ValueChanged<_Registry> onChanged;
-  const _SegmentedToggle({
-    required this.tab,
-    required this.counts,
-    required this.onChanged,
-  });
+  const _SegmentedToggle({required this.tab, required this.onChanged});
 
   /// Rótulo, ícone e cor de cada segmento, em um lugar só. Com três abas, a
   /// forma anterior (um bloco por segmento, copiado) já era o começo de uma
@@ -781,11 +864,13 @@ class _SegmentedToggle extends StatelessWidget {
     _Registry.consultants: ('Consultores', Icons.badge),
     _Registry.managers: ('Gerentes', Icons.assignment_ind),
     _Registry.committee: ('Comitê', Icons.groups_2),
+    _Registry.insurers: ('Seguradora', Icons.shield),
     _Registry.billers: ('Faturistas', Icons.receipt_long),
     _Registry.emitters: ('Emissores', Icons.description),
     _Registry.units: ('Unidades', Icons.store),
     _Registry.insurance: ('Seguros', Icons.shield_outlined),
     _Registry.creditor: ('Empresa', Icons.domain),
+    _Registry.admins: ('Admins', Icons.admin_panel_settings),
   };
 
   /// A cor de cada segmento é a da ETAPA dele no fluxo — o mesmo índigo do
@@ -797,11 +882,13 @@ class _SegmentedToggle extends StatelessWidget {
         _Registry.consultants => AppColors.input,
         _Registry.managers => AppColors.atManager,
         _Registry.committee => AppColors.pending,
+        _Registry.insurers => AppColors.atInsurer,
         _Registry.billers => AppColors.invoiced,
         _Registry.emitters => AppColors.invoiced,
         _Registry.units => AppColors.primaryMedium,
         _Registry.insurance => AppColors.atManager,
         _Registry.creditor => AppColors.textMedium,
+        _Registry.admins => AppColors.primaryAccent,
       };
 
   @override
@@ -825,7 +912,6 @@ class _SegmentedToggle extends StatelessWidget {
               _seg(
                 label: entry.value.$1,
                 icon: entry.value.$2,
-                count: counts[entry.key] ?? 0,
                 selected: tab == entry.key,
                 accent: _accentOf(entry.key),
                 onTap: () => onChanged(entry.key),
@@ -839,7 +925,6 @@ class _SegmentedToggle extends StatelessWidget {
   Widget _seg({
     required String label,
     required IconData icon,
-    required int count,
     required bool selected,
     required Color accent,
     required VoidCallback onTap,
@@ -858,10 +943,8 @@ class _SegmentedToggle extends StatelessWidget {
               ? [BoxShadow(color: accent.withValues(alpha: 0.30), blurRadius: 8, offset: const Offset(0, 2))]
               : null,
         ),
-        // Ícone em cima, rótulo e contagem embaixo: lado a lado eles não cabiam
-        // nem com quatro segmentos, e o `ellipsis` comia o rótulo até sobrar uma
-        // letra. O FittedBox garante que nada estoure quando a fonte do sistema
-        // for maior.
+        // Ícone em cima, rótulo embaixo. O FittedBox garante que nada estoure
+        // quando a fonte do sistema for maior.
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -869,34 +952,13 @@ class _SegmentedToggle extends StatelessWidget {
             const SizedBox(height: 3),
             FittedBox(
               fit: BoxFit.scaleDown,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(label,
-                      maxLines: 1,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: selected ? AppColors.onPrimary : AppColors.textMedium,
-                      )),
-                  const SizedBox(width: 5),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? AppColors.onPrimary.withValues(alpha: 0.25)
-                          : AppColors.textLight.withValues(alpha: 0.20),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Text('$count',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: selected ? AppColors.onPrimary : AppColors.textMedium,
-                        )),
-                  ),
-                ],
-              ),
+              child: Text(label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: selected ? AppColors.onPrimary : AppColors.textMedium,
+                  )),
             ),
           ],
         ),

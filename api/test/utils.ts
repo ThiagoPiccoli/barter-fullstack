@@ -134,6 +134,12 @@ export const FATURISTA = 'faturista@agrobarter.com.br';
 export const EMISSOR = 'emissor@agrobarter.com.br';
 
 /**
+ * A SEGURADORA — o setor que informa a apólice das permutas aprovadas COM
+ * SEGURO, antes de elas chegarem ao faturista. Sílvia, no dataset.
+ */
+export const SEGURADORA = 'seguradora@agrobarter.com.br';
+
+/**
  * O SEGUNDO gerente do dataset — Gustavo, das filiais do sul.
  *
  * Ele existe para os testes poderem perguntar a coisa que um gerente só não
@@ -142,7 +148,7 @@ export const EMISSOR = 'emissor@agrobarter.com.br';
 export const GERENTE_SUL = 'gerente.sul@agrobarter.com.br';
 
 /** Os papéis de retaguarda, para varrer todos. */
-export const BACK_OFFICE = [GERENTE, COMITE, FATURISTA, EMISSOR];
+export const BACK_OFFICE = [GERENTE, COMITE, SEGURADORA, FATURISTA, EMISSOR];
 
 /**
  * Os ids dos dois gerentes do dataset.
@@ -223,7 +229,7 @@ export async function fillCpr(app: INestApplication, auth: string, code: string)
       emitterAddress: 'Rua das Acácias',
       emitterAddressNumber: '340',
       emitterCity: 'Maringá/PR',
-      deliveryPlace: 'Filial 02 — Granel Santa Tecla',
+      deliveryUnitId: UNIT.filial02,
       cultivar: 'BMX Ativa RR',
       maxMoisture: 14,
       maxImpurities: 1,

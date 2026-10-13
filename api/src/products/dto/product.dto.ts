@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -49,7 +50,7 @@ export class CreateProductDto {
   sku?: string;
 }
 
-/** Edição de cadastro (nome/unidade/código/classe/exigência). */
+/** Edição de cadastro (nome/unidade/código/classe/exigência/modelo da CPR). */
 export class UpdateProductDto {
   @IsOptional()
   @IsString()
@@ -83,6 +84,34 @@ export class UpdateProductDto {
   @IsString()
   @MaxLength(40)
   sku?: string;
+
+  /**
+   * O MODELO DA CPR do grão (ver `Product.cprSackWeightKg`) — só grão tem.
+   * Percentual zero é "não definido", como na cédula.
+   */
+  @IsOptional()
+  @IsNumber()
+  @IsPositive()
+  @Max(1000)
+  cprSackWeightKg?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  cprMaxMoisture?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  cprMaxImpurities?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  cprOilContent?: number;
 }
 
 /**

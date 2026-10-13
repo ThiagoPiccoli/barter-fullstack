@@ -185,10 +185,19 @@ SimulationCheck checkSimulation(
   // Barter fechado vem primeiro porque atinge TODAS as simulações dele de uma
   // vez: não adianta mandar corrigir o produtor de uma se nenhuma vai sair hoje.
   if (version == null || !version.isOpen) {
+    final cultura = simulation.seasonName.isNotEmpty ? ' de ${simulation.seasonName}' : '';
     return _blocked(
       simulation,
-      'O Barter está fechado no momento. Sua simulação continua guardada e pode '
+      'O Barter$cultura está fechado no momento. Sua simulação continua guardada e pode '
       'ser enviada assim que o próximo for publicado.',
+    );
+  }
+  // A ÁREA PLANTADA é obrigatória no registro, e as simulações guardadas antes
+  // do campo não a têm: o consultor precisa abri-la e informar.
+  if (simulation.plantedAreaHa <= 0) {
+    return _blocked(
+      simulation,
+      'Informe a área plantada da cultura nesta simulação antes de enviar.',
     );
   }
   if (!producerInWallet) {
@@ -228,6 +237,9 @@ SimulationCheck checkSimulation(
   final rebuilt = simulation.copyWith(
     versionCode: version.code,
     simulatedSacks: sacks,
+    seasonId: version.seasonId,
+    seasonName: version.seasonName,
+    grainId: version.grainId,
     grainName: version.grainName,
     updatedAt: DateTime.now(),
   );

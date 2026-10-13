@@ -16,6 +16,7 @@ void main() {
   final desk = CprDesk(
     known: CprKnown(
       barterCode: 'PRM-2026-014',
+      cprNumber: 'CPR-2026-014',
       emitterName: 'João da Silva & Filhos',
       emitterDocument: 'CPF 123.456.789-00',
       grainName: 'Soja',
@@ -44,7 +45,6 @@ void main() {
       effectiveForum: 'Maringá/PR',
     ),
     cpr: CprDraft(
-      number: 'CPR-2026-014',
       issuedAt: DateTime(2026, 5, 12),
       emitterNationality: 'brasileiro',
       emitterMaritalStatus: 'casado',
@@ -71,6 +71,20 @@ void main() {
           registryBook: '2-RG',
           registryDistrict: 'Maringá/PR',
           owners: [CprOwner(name: 'Antônio Pereira', document: '111.222.333-44')],
+        ),
+      ],
+      // O AVALISTA que o comitê exigiu — ele assina o documento, e o docx
+      // precisa trazer o bloco dele.
+      guarantors: const [
+        CprGuarantor(
+          name: 'Carlos Avalista',
+          document: '222.333.444-55',
+          nationality: 'brasileiro',
+          maritalStatus: 'solteiro',
+          profession: 'comerciante',
+          address: 'Rua das Palmeiras',
+          addressNumber: '12',
+          city: 'Sarandi/PR',
         ),
       ],
     ),
@@ -125,6 +139,10 @@ void main() {
     expect(xml, contains('XX – DO FORO:'));
     expect(xml, contains('EMITENTE DEVEDOR:'));
     expect(xml, contains('ANUÊNCIA DO CÔNJUGE DO DEVEDOR:'));
+    // O AVALISTA assina: o bloco dele sai no docx, como no texto.
+    expect(xml, contains('AVALISTA:'));
+    expect(xml, contains('Carlos Avalista'));
+    expect(xml, contains('CPF/MF: 222.333.444-55'));
   });
 
   /// `xml:space="preserve"` é o que impede o Word de comer os espaços das
@@ -153,10 +171,14 @@ void main() {
       expect(CprDocx.filename(desk), 'cpr-2026-014');
     });
 
-    /// Sem número ainda, cai no código da permuta — um arquivo sem nome é pior
-    /// do que um arquivo com o nome do registro que o originou.
+    /// Servidor que não manda o número (anterior à numeração no registro): cai
+    /// no código da permuta — um arquivo sem nome é pior do que um arquivo com o
+    /// nome do registro que o originou.
     test('sem número, cai no código da permuta', () {
-      final semNumero = CprDesk(known: desk.known, creditor: desk.creditor);
+      final semNumero = CprDesk(
+        known: CprKnown(barterCode: desk.known.barterCode),
+        creditor: desk.creditor,
+      );
       expect(CprDocx.filename(semNumero), 'prm-2026-014');
     });
   });

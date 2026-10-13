@@ -48,6 +48,9 @@ describe('Usuários — uma rota por papel (e2e)', () => {
     // ROTA, ignorar `role` no corpo, não alcançar papel alheio, entrar com a
     // provisória, trocá-la e ter as sessões derrubadas no reset.
     { path: 'emitters', role: 'emitter', seedId: 11 }, // Renata
+    // A SEGURADORA pelo mesmo caminho do emissor: o papel novo entra na
+    // varredura inteira com uma linha.
+    { path: 'insurers', role: 'insurer', seedId: 12 }, // Sílvia
   ];
 
   /** O id da conta do comitê no seed — o alvo "de papel alheio" das outras rotas. */
@@ -56,7 +59,10 @@ describe('Usuários — uma rota por papel (e2e)', () => {
   const novoUsuario = (email: string) => ({
     fullName: 'Pessoa Nova',
     email,
-    unitId: UNIT.matriz,
+    // Unidade SEM gerente no seed (a Matriz é da Beatriz, a Filial 34 do
+    // Gustavo): a rota de gerentes também cria por aqui, e cada unidade tem um
+    // gerente só.
+    unitId: UNIT.filial02,
     // Só a rota de consultor declara `managerId`; nas outras três o whitelist
     // do ValidationPipe o descarta, que é justamente o que se quer provar.
     managerId: MANAGER.beatriz,
@@ -133,8 +139,64 @@ describe('Usuários — uma rota por papel (e2e)', () => {
     }
   });
 
-  /** Não existe rota que crie ou gerencie admin — nem por um id. Ver ManagedRole. */
-  it('o admin (id 1) não é gerenciado por nenhuma das rotas', async () => {
+  /**
+   * ADMINS cadastram outros admins pela rota própria. O sistema nunca fica sem
+   * admin: ninguém exclui a própria conta, e o último não sai.
+   */
+  describe('/admins', () => {
+    it('cria outro admin, que entra com todas as capacidades', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admins')
+        .set('Authorization', await admin())
+        .send(novoUsuario('segundo.admin@agrobarter.com.br'));
+      expect(created.status).toBe(201);
+      expect(created.body.data.role).toBe('admin');
+
+      const lista = await request(app.getHttpServer())
+        .get('/api/v1/admins')
+        .set('Authorization', await admin());
+      expect(lista.body.data.map((u: { email: string }) => u.email)).toContain(
+        'segundo.admin@agrobarter.com.br',
+      );
+    });
+
+    it('ninguém exclui a própria conta, e o último admin não sai', async () => {
+      const proprio = await request(app.getHttpServer())
+        .delete('/api/v1/admins/1')
+        .set('Authorization', await admin());
+      expect(proprio.status).toBe(422);
+      expect(proprio.body.message).toContain('própria conta');
+    });
+
+    it('um admin exclui outro enquanto sobrar pelo menos um', async () => {
+      const created = await request(app.getHttpServer())
+        .post('/api/v1/admins')
+        .set('Authorization', await admin())
+        .send(novoUsuario('temporario.admin@agrobarter.com.br'));
+      const id = created.body.data.id as number;
+
+      await request(app.getHttpServer())
+        .delete(`/api/v1/admins/${id}`)
+        .set('Authorization', await admin())
+        .expect(204);
+    });
+
+    it('a rota de admins não alcança usuário de outro papel', async () => {
+      await request(app.getHttpServer())
+        .delete('/api/v1/admins/2')
+        .set('Authorization', await admin())
+        .expect(404);
+    });
+
+    it('só quem gerencia usuários chega à rota', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/api/v1/admins')
+        .set('Authorization', await asUser(JOAO));
+      expect(response.status).toBe(403);
+    });
+  });
+
+  it('o admin (id 1) não é gerenciado pelas rotas dos outros papéis', async () => {
     const auth = await admin();
     for (const route of ROUTES) {
       await request(app.getHttpServer())
@@ -418,5 +480,103 @@ describe('Usuários — uma rota por papel (e2e)', () => {
       .get('/api/v1/barters/PRM-2026-001')
       .set('Authorization', auth);
     expect(depois.body.data.cprEmittedBy).toBe('Renata Bicudo');
+  });
+
+  /**
+   * UM GERENTE POR UNIDADE. No seed, a Beatriz (7) está na Matriz e o Gustavo
+   * (10) na Filial 34.
+   */
+  describe('um gerente por unidade', () => {
+    const gerente = (unitId: number, email = 'gerente.novo@agrobarter.com.br') => ({
+      fullName: 'Gerente Novo',
+      email,
+      unitId,
+    });
+
+    it('cadastrar gerente em unidade que já tem um é recusado, dizendo quem é', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/managers')
+        .set('Authorization', await admin())
+        .send(gerente(UNIT.filial34));
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Gustavo Ramires');
+      expect(response.body.message).toContain('Filial 34');
+    });
+
+    it('mover um gerente para a unidade de outro é recusado', async () => {
+      const response = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          unitId: UNIT.filial34,
+        });
+
+      expect(response.status).toBe(422);
+      expect(response.body.message).toContain('Gustavo Ramires');
+    });
+
+    it('editar o gerente na própria unidade não esbarra nele mesmo', async () => {
+      const response = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          phone: '(44) 99999-1111',
+          unitId: UNIT.matriz,
+        });
+
+      expect(response.status).toBe(200);
+    });
+
+    /**
+     * Gerente gravado antes da regra, dividindo a unidade com outro: a edição
+     * dele cobra a escolha, mesmo sem mudar a unidade. É o único momento em que
+     * alguém está olhando para o cadastro — e a recusa diz com quem ele divide.
+     */
+    it('gerente que já dividia a unidade precisa sair dela na próxima edição', async () => {
+      const prisma = app.get(PrismaService);
+      await prisma.user.update({
+        where: { id: MANAGER.beatriz },
+        data: { unitId: UNIT.filial34 },
+      });
+
+      const naMesma = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          unitId: UNIT.filial34,
+        });
+      expect(naMesma.status).toBe(422);
+      expect(naMesma.body.message).toContain('Gustavo Ramires');
+
+      const emOutra = await request(app.getHttpServer())
+        .put(`/api/v1/managers/${MANAGER.beatriz}`)
+        .set('Authorization', await admin())
+        .send({
+          fullName: 'Beatriz Nogueira',
+          email: 'gerente@agrobarter.com.br',
+          unitId: UNIT.matriz,
+        });
+      expect(emOutra.status).toBe(200);
+    });
+
+    /** A regra é do GERENTE: consultores dividem unidade normalmente. */
+    it('outros papéis continuam dividindo a unidade', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/api/v1/consultants')
+        .set('Authorization', await admin())
+        .send({
+          ...gerente(UNIT.filial34, 'consultor.novo@agrobarter.com.br'),
+          managerId: MANAGER.gustavo,
+        });
+
+      expect(response.status).toBe(201);
+    });
   });
 });

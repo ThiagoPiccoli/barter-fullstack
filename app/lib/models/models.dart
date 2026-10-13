@@ -15,6 +15,13 @@ enum UserRole {
   admin('admin', 'Administrador'),
   manager('manager', 'Gerente'),
   committee('committee', 'Comitê'),
+
+  /// SEGURADORA — o setor da empresa que cuida dos seguros: cria a apólice da
+  /// permuta aprovada COM SEGURO, anexa o documento e informa o número, antes de
+  /// ela chegar ao faturista. A permuta sem seguro não passa por ela.
+  ///
+  /// Não é a companhia de seguros: é um posto interno, com várias pessoas.
+  insurer('insurer', 'Seguradora'),
   biller('biller', 'Faturista'),
 
   /// EMISSOR — o posto que vem depois do faturamento: ele confere a cédula que
@@ -67,6 +74,13 @@ class Capability {
   /// DECIDIR a permuta: aprovar ou negar (comitê).
   static const bartersReview = 'barters.review';
 
+  /// INFORMAR A APÓLICE da permuta aprovada com seguro — o documento e o
+  /// número, no mesmo ato (seguradora).
+  ///
+  /// O número saiu da cédula, onde o consultor o digitava: ele é o produto de
+  /// quem cria a apólice, e a cédula o lê da permuta.
+  static const bartersInsure = 'barters.insure';
+
   /// FATURAR a permuta aprovada e ANEXAR as notas fiscais dela (faturista).
   ///
   /// As notas andam junto com o ato, e não numa capacidade própria: a nota é o
@@ -117,21 +131,22 @@ class Capability {
   /// MANTER a base de seguros por município (admin).
   static const insuranceManage = 'insurance.manage';
 
-  /// EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — do CONSULTOR (e do
-  /// admin, que também cadastra e exclui).
+  /// EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — todos eles, do
+  /// CONSULTOR (e do admin, que alcança qualquer carteira).
   ///
-  /// Quem visita a fazenda é quem sabe que o telefone mudou, que o cliente
-  /// passou a plantar noutro município e que o nome da propriedade saiu errado.
-  /// Enquanto isso foi só do admin, corrigir um telefone virava um chamado — e o
-  /// cadastro envelhecia em silêncio.
+  /// Quem visita a fazenda é quem sabe que o telefone mudou, que a área desta
+  /// cultura é outra, que o produtor fez a opção pela folha e que o CPF saiu com
+  /// um dígito trocado.
   ///
-  /// O que ela NÃO alcança, e o servidor recusa: o CPF/CNPJ (é a identidade do
-  /// cadastro), a área cultivável e o regime de Funrural (as duas réguas que
-  /// medem toda permuta dele) e a carteira (quem atende quem é decisão de quem
-  /// administra).
+  /// O que ela NÃO alcança, e o servidor recusa: a carteira (quem atende quem é
+  /// decisão de quem administra).
   static const producersEdit = 'producers.edit';
 
-  /// CADASTRAR, EXCLUIR e definir a CARTEIRA de um produtor — só do admin.
+  /// CADASTRAR um produtor novo — do CONSULTOR e do admin. O do consultor nasce
+  /// na carteira dele, e só na dele; quem escolhe outra é o admin.
+  static const producersRegister = 'producers.register';
+
+  /// Alcançar QUALQUER produtor: EXCLUIR e definir a CARTEIRA — só do admin.
   static const producersManage = 'producers.manage';
 
   /// Registrar permuta (consultor).
@@ -165,6 +180,10 @@ class Capability {
   /// minhas" e "todas". É por ela que as telas dizem "do seu time".
   static const bartersReadTeam = 'barters.readTeam';
 
+  /// Enxergar só as permutas COM SEGURO que chegaram à apólice — o escopo da
+  /// seguradora. A aprovada sem seguro pula a mesa dela e nunca aparece aqui.
+  static const bartersReadInsurance = 'barters.readInsurance';
+
   /// Enxergar só o que CHEGOU AO FATURAMENTO — o escopo do faturista.
   ///
   /// A tela pergunta por ela para não desenhar cômodo que não existe: sem isto,
@@ -180,6 +199,13 @@ class Capability {
   /// isto, o emissor abriria abas de etapas das quais não participa e um painel
   /// contando permutas que o servidor responde vazias.
   static const bartersReadIssuance = 'barters.readIssuance';
+
+  /// Enxergar a OPERAÇÃO INTEIRA — admin e comitê. Vence os escopos estreitos
+  /// acima quando alguém acumula os dois.
+  static const bartersReadAll = 'barters.readAll';
+
+  /// Provisionar, editar e excluir usuários — o admin.
+  static const usersManage = 'users.manage';
 
   /// Ver valores em R$ — todo mundo menos o consultor.
   static const pricesRead = 'prices.read';
@@ -371,15 +397,11 @@ class ProducerModel {
   final String id;
   final String name;
 
-  /// Os consultores que ATENDEM este produtor — a carteira dele.
+  /// O consultor que ATENDE este produtor — a carteira dele, uma só.
   ///
-  /// É lista porque consultores dividem região: o mesmo produtor pode ser
-  /// atendido por vários, e todos eles o veem e permutam com ele. Cada permuta
-  /// continua sendo de um consultor só — o que a registrou.
-  ///
-  /// Vazia quando o último consultor vinculado foi excluído: o produtor espera
-  /// realocação e, até lá, só a retaguarda o enxerga.
-  final List<String> consultantIds;
+  /// Nulo quando o consultor foi excluído: o produtor espera realocação e, até
+  /// lá, só a retaguarda o enxerga.
+  final String? consultantId;
 
   /// CPF ou CNPJ.
   final String document;
@@ -391,10 +413,9 @@ class ProducerModel {
   /// Município/UF (ex.: "Maringá/PR").
   final String city;
 
-  /// Área cultivável da propriedade, em hectares. É a base de cálculo das
-  /// exigências mínimas de insumo: cada insumo com taxa por hectare exige, no
-  /// mínimo, `taxa × areaHa` na permuta deste produtor.
-  final double areaHa;
+  // A ÁREA não é mais do cadastro: ela é a área plantada de cada PERMUTA (ver
+  // [BarterModel.plantedAreaHa]). A fazenda planta mais de uma cultura, e um
+  // número só para ela media a soja contra a terra do trigo.
 
   /// COMO ESTE PRODUTOR RECOLHE o Funrural: sobre a comercialização (o padrão,
   /// de quem não fez opção nenhuma) ou sobre a folha de pagamento — e aí sobre
@@ -412,12 +433,11 @@ class ProducerModel {
   const ProducerModel({
     required this.id,
     required this.name,
-    required this.consultantIds,
+    required this.consultantId,
     required this.document,
     required this.phone,
     required this.farmName,
     required this.city,
-    required this.areaHa,
     this.taxRegime = TaxRegime.comercializacao,
     required this.avatarInitials,
     required this.createdAt,
@@ -426,35 +446,31 @@ class ProducerModel {
   factory ProducerModel.fromJson(Map<String, dynamic> json) => ProducerModel(
         id: _asId(json['id']),
         name: json['name'] as String,
-        // Vazia quando o último consultor vinculado foi excluído (aguarda
-        // realocação) — e o app precisa desenhar essa lista vazia, não quebrar.
-        consultantIds:
-            ((json['consultantIds'] ?? const []) as List).map(_asId).toList(),
+        // Nulo quando o consultor foi excluído (aguarda realocação).
+        consultantId: json['consultantId'] == null ? null : _asId(json['consultantId']),
         document: json['document'] as String,
         phone: (json['phone'] ?? '') as String,
         farmName: json['farmName'] as String,
         city: json['city'] as String,
-        areaHa: _asDouble(json['areaHa']),
         taxRegime: taxRegimeFrom(json['taxRegime']),
         avatarInitials: (json['initials'] ?? '?') as String,
         createdAt: _asDate(json['createdAt']),
       );
 
-  /// Este consultor atende o produtor? É a pergunta que a carteira passou a
-  /// responder quando deixou de ser um id só — e a que o servidor faz antes de
-  /// aceitar uma permuta.
-  bool isAttendedBy(String consultantId) => consultantIds.contains(consultantId);
+  /// Este consultor atende o produtor? É a pergunta que o servidor faz antes
+  /// de aceitar uma permuta.
+  bool isAttendedBy(String consultantId) => this.consultantId == consultantId;
 
   /// Localização resumida (ex.: "Fazenda Boa Vista – Maringá/PR").
   String get location => '$farmName, $city';
+}
 
-  /// Área formatada (ex.: "120 ha" / "85,5 ha").
-  String get areaLabel {
-    final s = areaHa == areaHa.roundToDouble()
-        ? areaHa.toStringAsFixed(0)
-        : areaHa.toStringAsFixed(1).replaceAll('.', ',');
-    return '$s ha';
-  }
+/// Área formatada (ex.: "120 ha" / "85,5 ha").
+String areaLabelOf(double areaHa) {
+  final s = areaHa == areaHa.roundToDouble()
+      ? areaHa.toStringAsFixed(0)
+      : areaHa.toStringAsFixed(1).replaceAll('.', ',');
+  return '$s ha';
 }
 
 /// Em uma permuta (escambo) existem dois tipos de produto: o insumo que o
@@ -487,7 +503,9 @@ enum ProductType { grain, input }
 ///
 ///     draft → sentToManager → pending → approved             → invoiced
 ///  (consultor) (gerente)     (comitê)   approvedWithConditions (faturista)
-///                                ↘ denied
+///                              ↑  ↓  ↘ denied
+///                    awaitingRequirements
+///                         (consultor)
 ///
 /// Espelham `api/src/barters/barter-workflow.ts`, que é quem decide o caminho.
 /// `draft` é o RASCUNHO do consultor: ela existe, os valores já estão
@@ -496,10 +514,20 @@ enum ProductType { grain, input }
 /// era do admin, e ficou porque descreve o estado, não o cargo de quem decide.
 /// `approvedWithConditions` é a aprovação COM RESSALVA: mesma fila do faturista,
 /// e uma exigência escrita junto (ver [BarterModel.reviewNote]).
+/// `awaitingRequirements` é a permuta DEVOLVIDA AO CONSULTOR com exigências do
+/// comitê (avalista, hipoteca): cumpridas, ela volta direto ao comitê, sem
+/// passar de novo pelo gerente.
+/// `awaitingPolicy` e `awaitingPolicyWithConditions` são as aprovadas COM
+/// SEGURO na mesa da SEGURADORA, esperando a apólice. A apólice devolve cada
+/// uma ao seu par — `approved` e `approvedWithConditions` —, e só então ela
+/// chega ao faturista. A permuta sem seguro pula este degrau.
 enum BarterStatus {
   draft,
   sentToManager,
   pending,
+  awaitingRequirements,
+  awaitingPolicy,
+  awaitingPolicyWithConditions,
   approved,
   approvedWithConditions,
   denied,
@@ -631,6 +659,12 @@ class BarterEventModel {
         if (toStatus == BarterStatus.approved) return 'Aprovada pelo comitê';
         if (toStatus == BarterStatus.denied) return 'Negada pelo comitê';
         return 'Decisão do comitê';
+      // O DESVIO DAS EXIGÊNCIAS: o comitê pede avalista, hipoteca ou seguro, e
+      // o consultor devolve quando cumpriu. O texto do evento diz o quê.
+      case 'require':
+        return 'Exigências do comitê: voltou ao consultor';
+      case 'fulfill':
+        return 'Exigências cumpridas: voltou ao comitê';
       case 'invoice':
         return 'Faturada';
       // O DESVIO: o pedido de alteração e a decisão do admin sobre ele. Três
@@ -991,6 +1025,10 @@ class BarterProductRequest {
 class BarterModel {
   final String id;
 
+  /// O NÚMERO DA CPR (ex.: CPR-2026-001) — reservado pelo servidor no registro,
+  /// antes de existir rascunho da cédula. Vazio só em respostas antigas.
+  final String cprNumber;
+
   /// Versão do Barter em que esta permuta foi fechada (ex.: "S2026.02").
   /// Vazio nas permutas anteriores ao lançamento por versões.
   final String versionCode;
@@ -1074,14 +1112,24 @@ class BarterModel {
   final String? consultantNote;
   final DateTime? consultantSentAt;
 
-  /// A ÁREA cultivável (ha) congelada no registro e o INVESTIMENTO POR HECTARE
-  /// que ela produz — quantas sacas do grão a lavoura compromete por hectare.
+  /// A SAFRA DA CULTURA desta permuta ("Soja 26/27") — fixa desde o registro.
+  /// O id é o que o filtro e o painel por cultura usam; o nome vai na tela, no
+  /// comprovante e na CPR.
+  final String seasonId;
+  final String seasonName;
+
+  /// A ÁREA PLANTADA (ha) da cultura que esta permuta cobre — informada pelo
+  /// consultor no registro, e a régua do seguro, dos mínimos e do penhor. Zero
+  /// nas permutas anteriores ao campo.
+  final double plantedAreaHa;
+
+  /// O INVESTIMENTO POR HECTARE — quantas sacas do grão a lavoura compromete
+  /// por hectare plantado.
   ///
-  /// Os dois vêm null para quem não tem `barters.investmentPerHa` (consultor e
-  /// gerente): o servidor simplesmente não os manda. [sacksPerHa] também é null
-  /// nas permutas anteriores ao campo de área — sem área não há divisão, e zero
-  /// seria afirmar um investimento por hectare que ninguém fez.
-  final double? producerAreaHa;
+  /// Vem null para quem não tem `barters.investmentPerHa` (a seguradora): o
+  /// servidor simplesmente não o manda. Também é null nas permutas
+  /// sem área — sem área não há divisão, e zero seria afirmar um investimento
+  /// por hectare que ninguém fez.
   final double? sacksPerHa;
 
   /// A DECISÃO DO COMITÊ: a observação e quem assinou.
@@ -1091,7 +1139,10 @@ class BarterModel {
   final String? reviewNote;
   final String? reviewedBy;
 
-  /// AS EXIGÊNCIAS DO COMITÊ: avalista, garantia real e seguro.
+  /// AS EXIGÊNCIAS DO COMITÊ: avalista e hipoteca ([requiresCollateral]),
+  /// pedidas ANTES da decisão — marcá-las devolve a permuta ao
+  /// consultor ([BarterStatus.awaitingRequirements]). Cada uma abre, no
+  /// formulário da cédula, o bloco que ela exige.
   ///
   /// Elas viviam DENTRO de [reviewNote], em prosa — "com aval", "exigir aval do
   /// cônjuge", "condicionada a garantia real" —, e isso bastava para quem lia a
@@ -1099,8 +1150,8 @@ class BarterModel {
   /// pendente de aval, e a exigência perdida no meio do parágrafo não era
   /// esquecida por ninguém em particular.
   ///
-  /// Elas NÃO substituem o texto: as caixas dizem O QUÊ, e só [reviewNote] diz
-  /// QUAL — qual matrícula, qual valor segurado, quem se espera como avalista.
+  /// Elas NÃO substituem o texto: as caixas dizem O QUÊ, e só o texto do
+  /// pedido diz QUAL — ver [requirementsNote].
   ///
   /// Chegam a todo mundo que enxerga a permuta, e não só a quem decidiu: são
   /// trabalho para OUTRA pessoa — o consultor as leva ao produtor, o faturista
@@ -1108,17 +1159,31 @@ class BarterModel {
   /// espera um avalista.
   final bool requiresGuarantor;
   final bool requiresCollateral;
-  final bool requiresInsurance;
 
-  /// O SEGURO AGRÍCOLA desta permuta: a praça que o precificou e a taxa (R$/ha)
-  /// congeladas no registro.
+  /// O SEGURO AGRÍCOLA desta permuta: COMO ele chegou (ver [InsuranceChoice]),
+  /// a praça que o precificou e a taxa (R$/ha) congeladas no registro.
   ///
-  /// [insuranceCity] vazio é permuta SEM seguro — ou porque o Barter dela não
-  /// leva, ou porque ela é anterior à regra. A taxa é R$, e por isso só chega a
-  /// quem vê valores; o consultor lê o seguro pela própria linha da permuta,
-  /// onde a quantidade é a área e o total já está dentro das sacas do grão.
+  /// [insuranceCity] vazio é permuta SEM seguro — e [insuranceChoice] diz por
+  /// quê: a versão não oferecia, ou o produtor recusou. A taxa é R$, e por isso
+  /// só chega a quem vê valores; o consultor lê o seguro pela própria linha da
+  /// permuta, onde a quantidade é a área e o total já está dentro das sacas.
+  final InsuranceChoice insuranceChoice;
   final String insuranceCity;
   final double? insuranceRatePerHa;
+
+  /// Esta permuta PASSA PELA SEGURADORA? — resolvido pelo servidor, a partir
+  /// de [insuranceChoice]. É o que diz se a checklist dela tem a etapa da
+  /// apólice, e se a aprovação cai na seguradora ou direto no faturista.
+  final bool insured;
+
+  /// A APÓLICE, informada pela SEGURADORA: o número (o que a cédula cita), o
+  /// documento anexado e quem os informou. Tudo null antes da etapa dela — e
+  /// para sempre na permuta sem seguro.
+  final String? insurancePolicyNumber;
+  final BarterFileModel? insurancePolicyFile;
+  final String? insuredBy;
+  final DateTime? insuredAt;
+  final String? insuranceNote;
 
   /// AS PEÇAS DA ANÁLISE DE CRÉDITO que o comitê juntou — a consulta ao Serasa,
   /// o endividamento do produtor dentro da cooperativa.
@@ -1220,6 +1285,7 @@ class BarterModel {
 
   const BarterModel({
     required this.id,
+    this.cprNumber = '',
     this.versionCode = '',
     required this.consultantId,
     required this.consultantName,
@@ -1244,15 +1310,23 @@ class BarterModel {
     this.managerReviewedAt,
     this.consultantNote,
     this.consultantSentAt,
-    this.producerAreaHa,
+    this.seasonId = '',
+    this.seasonName = '',
+    this.plantedAreaHa = 0,
     this.sacksPerHa,
     this.reviewNote,
     this.reviewedBy,
     this.requiresGuarantor = false,
     this.requiresCollateral = false,
-    this.requiresInsurance = false,
+    this.insuranceChoice = InsuranceChoice.none,
     this.insuranceCity = '',
     this.insuranceRatePerHa,
+    this.insured = false,
+    this.insurancePolicyNumber,
+    this.insurancePolicyFile,
+    this.insuredBy,
+    this.insuredAt,
+    this.insuranceNote,
     this.creditFiles,
     this.invoicedBy,
     this.invoicedAt,
@@ -1286,6 +1360,7 @@ class BarterModel {
         .cast<Map<String, dynamic>>();
     return BarterModel(
       id: json['code'] as String,
+      cprNumber: (json['cprNumber'] ?? '') as String,
       versionCode: (json['versionCode'] ?? '') as String,
       consultantId: _asId(json['consultantId']),
       consultantName: json['consultantName'] as String,
@@ -1316,15 +1391,26 @@ class BarterModel {
       managerReviewedAt: _asDateOrNull(json['managerReviewedAt']),
       consultantNote: json['consultantNote'] as String?,
       consultantSentAt: _asDateOrNull(json['consultantSentAt']),
-      producerAreaHa: _asDoubleOrNull(json['producerAreaHa']),
+      seasonId: _asId(json['seasonId']),
+      seasonName: (json['seasonName'] ?? '') as String,
+      plantedAreaHa: _asDouble(json['plantedAreaHa']),
       sacksPerHa: _asDoubleOrNull(json['sacksPerHa']),
       reviewNote: json['reviewNote'] as String?,
       reviewedBy: json['reviewedBy'] as String?,
       requiresGuarantor: json['requiresGuarantor'] == true,
       requiresCollateral: json['requiresCollateral'] == true,
-      requiresInsurance: json['requiresInsurance'] == true,
+      insuranceChoice: InsuranceChoice.fromApi(json['insuranceChoice']),
       insuranceCity: (json['insuranceCity'] ?? '') as String,
       insuranceRatePerHa: _asDoubleOrNull(json['insuranceRatePerHa']),
+      insured: json['insured'] == true,
+      insurancePolicyNumber: json['insurancePolicyNumber'] as String?,
+      insurancePolicyFile: json['insurancePolicyFile'] == null
+          ? null
+          : BarterFileModel.fromJson(
+              (json['insurancePolicyFile'] as Map).cast<String, dynamic>()),
+      insuredBy: json['insuredBy'] as String?,
+      insuredAt: _asDateOrNull(json['insuredAt']),
+      insuranceNote: json['insuranceNote'] as String?,
       // `null` quando o campo NÃO VEIO (quem não pode ler o dossiê), e lista
       // quando veio — inclusive vazia, que aí significa "não há peça nenhuma".
       creditFiles: json['creditFiles'] == null
@@ -1531,17 +1617,53 @@ class BarterModel {
   /// Está na mesa do COMITÊ, esperando ser aprovada ou negada.
   bool get awaitsCommittee => status == BarterStatus.pending;
 
+  /// Foi DEVOLVIDA ao consultor com exigências do comitê, e espera que ele as
+  /// cumpra — o avalista, a hipoteca, a apólice, na cédula.
+  bool get awaitsRequirements => status == BarterStatus.awaitingRequirements;
+
+  /// Espera ESTE consultor cumprir as exigências? Mesma conferência do servidor
+  /// (o escopo dele são as próprias permutas) — aqui só para a tela não
+  /// oferecer um botão que levaria 403.
+  bool awaitsRequirementsFrom(String? userId) =>
+      userId != null && consultantId == userId && awaitsRequirements;
+
+  /// O TEXTO do último pedido do comitê — quem como avalista, qual imóvel. Ele
+  /// vive na linha do tempo (o pedido não é decisão, e não escreve
+  /// nos campos dela), e por isso só vem no detalhe. Null na listagem e na
+  /// permuta de que nada foi pedido.
+  String? get requirementsNote {
+    BarterEventModel? last;
+    for (final event in events) {
+      if (event.action != 'require') continue;
+      if (last == null || event.at.isAfter(last.at)) last = event;
+    }
+    return last?.note;
+  }
+
+  /// Foi aprovada COM SEGURO e espera a APÓLICE — a fila da seguradora.
+  ///
+  /// As DUAS aprovações contam, como na fila do faturista: a ressalva continua
+  /// sendo ressalva enquanto a permuta está com a seguradora.
+  bool get awaitsPolicy =>
+      status == BarterStatus.awaitingPolicy ||
+      status == BarterStatus.awaitingPolicyWithConditions;
+
+  /// A apólice já foi informada pela seguradora.
+  bool get hasPolicy => insurancePolicyNumber != null && insurancePolicyNumber!.isNotEmpty;
+
   /// Foi aprovada e espera o FATURAMENTO — a fila do faturista.
   ///
-  /// As DUAS aprovações contam: a ressalva é uma condição do negócio (garantia,
-  /// seguro, aval), não um portão do fluxo, e a permuta com ressalva está na
-  /// mesma fila. Ler só `approved` faria ela sumir da tela de quem tem de
+  /// As DUAS aprovações contam: a ressalva é uma condição do negócio, não um
+  /// portão do fluxo, e a permuta com ressalva está na mesma fila. Ler só `approved` faria ela sumir da tela de quem tem de
   /// faturá-la.
   bool get awaitsInvoice =>
       status == BarterStatus.approved || status == BarterStatus.approvedWithConditions;
 
-  /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote].
-  bool get hasConditions => status == BarterStatus.approvedWithConditions;
+  /// Foi aprovada COM RESSALVA — há uma exigência escrita em [reviewNote]. Vale
+  /// também enquanto ela espera a apólice.
+  bool get hasConditions =>
+      status == BarterStatus.approvedWithConditions ||
+      status == BarterStatus.awaitingPolicyWithConditions;
 
   /// AS EXIGÊNCIAS DO COMITÊ, por extenso e na ordem em que a reunião as pensa:
   /// quem se obriga junto, o que garante, e o que protege a lavoura.
@@ -1550,8 +1672,7 @@ class BarterModel {
   /// limpa quanto para a permuta que ainda não foi decidida.
   List<String> get requirements => [
         if (requiresGuarantor) 'Avalista',
-        if (requiresCollateral) 'Garantia real',
-        if (requiresInsurance) 'Seguro',
+        if (requiresCollateral) 'Hipoteca',
       ];
 
   /// Esta permuta CARREGA SEGURO — a linha que a empresa adiantou e as sacas
@@ -1605,7 +1726,7 @@ class BarterModel {
   /// `status == approved`: faturar não desfaz a aprovação. Enquanto os totais
   /// olhavam um estado só, a permuta sumia da conta no dia em que a nota saía —
   /// o negócio mais consolidado que existe fazia a barra andar para trás.
-  bool get wasApproved => awaitsInvoice || wasInvoiced;
+  bool get wasApproved => awaitsPolicy || awaitsInvoice || wasInvoiced;
 
   /// A decisão do comitê já foi tomada? (aprovada, negada ou já faturada).
   bool get hasDecision => reviewedBy != null && reviewedBy!.isNotEmpty;
@@ -1662,6 +1783,16 @@ class BarterModel {
   List<BarterProductRequest> get addedProductRequests =>
       productRequests.where((r) => r.isAdded).toList();
 
+  /// O CUSTO do que entrou por pedido, na moeda da lente.
+  ///
+  /// Ele não está na tabela do Barter (é item cotado para ESTA permuta), mas foi
+  /// retirado — e as sacas o pagam, como no servidor. E entra SÓ na conta do
+  /// total: as réguas das pastas e do mínimo por hectare não o enxergam, porque
+  /// ele não tem classe e engordaria o denominador de todas elas (ver
+  /// `pricedItemsFor`, na API).
+  double get addedProductRequestsCost =>
+      addedProductRequests.fold(0.0, (sum, request) => sum + (request.total ?? 0));
+
   /// Há pedido de produto esperando resposta?
   bool get hasOpenProductRequest => productRequests.any((r) => r.isOpen);
 
@@ -1675,7 +1806,10 @@ class BarterModel {
   bool canRequestProductBy(String? userId) =>
       userId != null &&
       consultantId == userId &&
-      (isDraft || status == BarterStatus.sentToManager || status == BarterStatus.pending);
+      (isDraft ||
+          status == BarterStatus.sentToManager ||
+          status == BarterStatus.pending ||
+          status == BarterStatus.awaitingRequirements);
 
   /// Esta permuta espera o parecer DESTE gerente? Mesma conferência do servidor
   /// — repetida aqui só para a tela não oferecer um botão que levaria 403.
@@ -1939,6 +2073,12 @@ String barterStatusLabel(BarterStatus status) {
       return 'No gerente';
     case BarterStatus.pending:
       return 'No comitê';
+    case BarterStatus.awaitingRequirements:
+      return 'Exigências do comitê, com o consultor';
+    case BarterStatus.awaitingPolicy:
+      return 'Aprovada, aguardando a apólice';
+    case BarterStatus.awaitingPolicyWithConditions:
+      return 'Aprovada com ressalva, aguardando a apólice';
     case BarterStatus.approved:
       return 'Aprovada, a faturar';
     case BarterStatus.approvedWithConditions:
@@ -2010,6 +2150,9 @@ class ProductModel {
   /// de itens pedindo revisão do que uma unidade inventada no comprovante.
   final bool unitPending;
 
+  /// O MODELO DA CPR — só o grão tem. Null no insumo.
+  final GrainCprModel? cprModel;
+
   const ProductModel({
     required this.id,
     required this.name,
@@ -2023,6 +2166,7 @@ class ProductModel {
     this.classId,
     this.sku,
     this.unitPending = false,
+    this.cprModel,
   });
 
   /// O item atende a uma busca por nome OU por código.
@@ -2070,7 +2214,66 @@ class ProductModel {
       requiredPerHa: _asDouble(json['requiredPerHa']),
       classId: json['classId'] == null ? null : _asId(json['classId']),
       sku: json['sku'] as String?,
+      cprModel: json['cprModel'] == null
+          ? null
+          : GrainCprModel.fromJson((json['cprModel'] as Map).cast<String, dynamic>()),
     );
+  }
+}
+
+/// O MODELO DA CPR de um grão — o padrão com que ele é recebido (cláusula V,
+/// "c") e o peso da saca que converte sacas em quilos.
+///
+/// É o PONTO DE PARTIDA da cédula: a CPR nova nasce com estes números, e a
+/// cédula guarda os dela. Mudar o modelo não reescreve cédula já preenchida.
+///
+/// Zero nos percentuais é "não definido", como na cédula — uma umidade máxima
+/// de 0% recusaria a colheita inteira.
+class GrainCprModel {
+  final double sackWeightKg;
+  final double maxMoisture;
+  final double maxImpurities;
+  final double oilContent;
+
+  const GrainCprModel({
+    this.sackWeightKg = 60,
+    this.maxMoisture = 0,
+    this.maxImpurities = 0,
+    this.oilContent = 0,
+  });
+
+  factory GrainCprModel.fromJson(Map<String, dynamic> json) => GrainCprModel(
+        sackWeightKg: _asDouble(json['sackWeightKg']) > 0 ? _asDouble(json['sackWeightKg']) : 60,
+        maxMoisture: _asDouble(json['maxMoisture']),
+        maxImpurities: _asDouble(json['maxImpurities']),
+        oilContent: _asDouble(json['oilContent']),
+      );
+
+  /// Os campos do `PUT /products/:id` — o modelo mora no cadastro do grão.
+  Map<String, dynamic> toProductFields() => {
+        'cprSackWeightKg': sackWeightKg,
+        'cprMaxMoisture': maxMoisture,
+        'cprMaxImpurities': maxImpurities,
+        'cprOilContent': oilContent,
+      };
+
+  /// Quantos números do padrão ainda estão por definir — o que a aba de grãos
+  /// mostra pedindo revisão. O peso da saca não conta: ele tem padrão de
+  /// mercado e nunca é zero.
+  int get undefinedCount => [maxMoisture, maxImpurities, oilContent].where((v) => v == 0).length;
+
+  /// "Saca de 60 kg · umidade 14% · impurezas 1% · óleo a definir" — o modelo
+  /// numa linha, como a aba de grãos o lista.
+  String get summary {
+    String number(double v) =>
+        v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString().replaceAll('.', ',');
+    String percent(String label, double v) => v == 0 ? '$label a definir' : '$label ${number(v)}%';
+    return [
+      'Saca de ${number(sackWeightKg)} kg',
+      percent('umidade', maxMoisture),
+      percent('impurezas', maxImpurities),
+      percent('óleo', oilContent),
+    ].join(' · ');
   }
 }
 
@@ -2279,116 +2482,94 @@ class VersionPriceModel {
 /// É ela que responde "por quanto se permuta agora": o valor da saca do grão e
 /// a tabela de valores dos insumos. O consultor não escolhe grão nem tabela —
 /// recebe esta aqui pronta, e sem ela não existe permuta nova.
-/// UMA CULTURA do lançamento — o grão em que a permuta pode ser paga.
+/// A POLÍTICA DE SEGURO de uma versão do Barter — e o padrão da safra da
+/// cultura, que vem preenchido ao publicar a próxima versão.
 ///
-/// Ela existe porque as culturas COEXISTEM: o mesmo Barter aceita soja e milho
-/// ao mesmo tempo, sobre a MESMA tabela de insumos, e o consultor escolhe em
-/// qual delas o cliente paga. O que muda de uma para a outra é o que está aqui —
-/// a cotação da saca, a produtividade que dimensiona o penhor e o vencimento da
-/// cédula.
-class VersionGrainModel {
+/// Espelha `insurance-policy.ts` na API: obrigatório (toda permuta leva),
+/// opcional (o consultor decide com o produtor) ou sem seguro.
+enum InsurancePolicy {
+  required('required', 'Obrigatório'),
+  optional('optional', 'Opcional'),
+  none('none', 'Sem seguro');
+
+  const InsurancePolicy(this.apiValue, this.label);
+  final String apiValue;
+  final String label;
+
+  static InsurancePolicy fromApi(dynamic value) {
+    for (final policy in values) {
+      if (policy.apiValue == value) return policy;
+    }
+    return InsurancePolicy.none;
+  }
+}
+
+/// COMO o seguro chegou (ou não) a uma permuta — o que ficou gravado nela.
+///
+/// Quatro valores porque "sem seguro" passou a ter duas histórias: a versão não
+/// oferecia, ou o produtor recusou. As duas pesam diferente na mesa do comitê.
+enum InsuranceChoice {
+  required('required', 'Seguro obrigatório'),
+  accepted('accepted', 'Seguro contratado'),
+  declined('declined', 'Produtor recusou o seguro'),
+  none('none', 'Sem seguro');
+
+  const InsuranceChoice(this.apiValue, this.label);
+  final String apiValue;
+  final String label;
+
+  static InsuranceChoice fromApi(dynamic value) {
+    for (final choice in values) {
+      if (choice.apiValue == value) return choice;
+    }
+    return InsuranceChoice.none;
+  }
+}
+
+/// O BARTER LANÇADO — uma versão da safra de UMA cultura (SOJA26/27.02).
+///
+/// É ela que responde "por quanto se permuta esta cultura agora": a cotação da
+/// saca, a produtividade, o vencimento da cédula, o seguro e a tabela de
+/// insumos — que é desta cultura. Várias podem estar vigentes ao mesmo tempo,
+/// uma por cultura aberta, e o consultor escolhe em qual monta a permuta.
+class BarterVersionModel {
+  final String id;
+
+  /// O código que se lê (`SOJA26/27.02`) e o que vai na URL (`SOJA2627.02`): a
+  /// barra do primeiro não cabe numa rota.
+  final String code;
+  final String slug;
+  final int number;
+
+  /// A SAFRA DA CULTURA desta versão.
+  final String seasonId;
+  final String seasonCode;
+  final String seasonSlug;
+  final String seasonName;
+
+  /// O GRÃO em que as permutas desta versão são pagas.
   final String grainId;
   final String grainName;
   final String grainUnit;
 
+  /// Valor (R$) da saca. **Zero para quem não vê R$**: o servidor não a manda ao
+  /// consultor, porque ela devolveria os R$ da tabela por multiplicação.
+  final double grainPrice;
+
   /// A PRODUTIVIDADE ESTIMADA (sc/ha) — a taxa que converte as sacas da permuta
-  /// na ÁREA DE LAVOURA que precisa garanti-las.
-  ///
-  /// Ela vai para TODO MUNDO, inclusive para quem não vê R$: é sacas por
-  /// hectare, e não moeda. É o que explica ao consultor por que a permuta dele
-  /// exige a área que exige.
+  /// na ÁREA DE LAVOURA que precisa garanti-las. Vai para todo mundo: não é moeda.
   final double estimatedYield;
 
-  /// O VENCIMENTO da entrega desta cultura — a data que sai na cédula. Nulo
-  /// enquanto o admin não o acertou no lançamento, e aí a cédula o cobra dele.
+  /// O VENCIMENTO da entrega — a data que sai nas cédulas desta versão. Nulo
+  /// enquanto o admin não o acertou.
   final DateTime? cprDueDate;
 
-  /// A meta de sacas desta cultura, quando há. Sacas de grãos diferentes não
-  /// somam, e por isso a meta é de cada uma.
-  final double? targetSacks;
+  /// A POLÍTICA DE SEGURO desta versão. Chega a todo mundo: é por ela que a tela
+  /// do consultor mostra a linha do seguro, o interruptor, ou nada.
+  final InsurancePolicy insurancePolicy;
 
-  /// Valor (R$) da saca desta cultura.
-  ///
-  /// **Zero para quem não vê R$.** O servidor não a manda ao consultor de
-  /// propósito: entregá-la a quem recebe a tabela em sacas devolveria os R$ por
-  /// multiplicação.
-  final double price;
-
-  /// Esta cultura chegou com o valor em R$? É a lente da API vista daqui.
-  final bool showsCurrency;
-
-  const VersionGrainModel({
-    required this.grainId,
-    required this.grainName,
-    required this.grainUnit,
-    this.estimatedYield = 0,
-    this.cprDueDate,
-    this.targetSacks,
-    this.price = 0,
-    this.showsCurrency = true,
-  });
-
-  factory VersionGrainModel.fromJson(Map<String, dynamic> json) => VersionGrainModel(
-        grainId: _asId(json['grainId']),
-        grainName: (json['grainName'] ?? '') as String,
-        grainUnit: (json['grainUnit'] ?? '') as String,
-        estimatedYield: _asDouble(json['estimatedYield']),
-        cprDueDate: _asDateOrNull(json['cprDueDate']),
-        targetSacks: json['targetSacks'] == null ? null : _asDouble(json['targetSacks']),
-        price: _asDouble(json['price']),
-        showsCurrency: json['price'] != null,
-      );
-}
-
-/// As SACAS JÁ COMPROMETIDAS em uma cultura — o realizado da meta dela.
-class RealizedSacksModel {
-  final String grainId;
-  final String grainName;
-  final double sacks;
-
-  const RealizedSacksModel({
-    required this.grainId,
-    required this.grainName,
-    required this.sacks,
-  });
-
-  factory RealizedSacksModel.fromJson(Map<String, dynamic> json) => RealizedSacksModel(
-        grainId: _asId(json['grainId']),
-        grainName: (json['grainName'] ?? '') as String,
-        sacks: _asDouble(json['sacks']),
-      );
-}
-
-class BarterVersionModel {
-  final String id;
-  final String code;
-  final int number;
-  final String seasonCode;
-  final String seasonName;
-
-  /// AS CULTURAS que este Barter aceita, na ordem em que foram lançadas.
-  ///
-  /// A primeira é a que a tela mostra escolhida. Elas COEXISTEM: o produtor
-  /// escolhe se paga em soja ou em milho, e cada uma tem cotação, produtividade
-  /// e vencimento próprios sobre a MESMA tabela de insumos.
-  final List<VersionGrainModel> grains;
-
-  /// EM QUE CULTURA a tabela [prices] está expressa.
-  ///
-  /// Ela importa para quem lê em sacas: o mesmo insumo custa 0,77 saca de soja
-  /// e 1,78 de milho, e a conversão é feita no servidor por UMA cotação de cada
-  /// vez (a tabela tem milhares de itens; mandá-la vezes o número de culturas
-  /// engordaria a resposta para entregar de uma vez o que a tela mostra uma por
-  /// vez). Trocar a cultura na tela é uma leitura a mais — ver `?grainId=`.
-  final String pricedInGrainId;
-
-  /// Esta versão chegou com os valores em R$?
-  ///
-  /// É a LENTE DE VALOR da API vista do lado de cá: quem tem `prices.read`
-  /// recebe a cotação de cada cultura e a tabela em `price`; o consultor recebe
-  /// a tabela já convertida em `sacksPerUnit`, e sem as cotações. A presença do
-  /// preço da cultura é o sinal porque é exatamente nela que o servidor decide —
-  /// ver `toBarterVersionJson` em `api/src/common/serializers.ts`.
+  /// Esta versão chegou com os valores em R$? É a LENTE DE VALOR da API vista
+  /// do lado de cá — a presença da cotação da saca é o sinal.
   final bool showsCurrency;
 
   final String status;
@@ -2401,30 +2582,18 @@ class BarterVersionModel {
   final DateTime? endsAt;
   final DateTime? closedAt;
 
-  /// Quem encerrou — ou a FRASE do encerramento automático ("Automático — meta
-  /// de vendas atingida"). O servidor escreve as duas coisas no mesmo campo de
-  /// propósito: quem lê uma versão encerrada quer saber por que ela fechou, e a
-  /// resposta é uma pessoa ou uma meta.
+  /// Quem encerrou — ou a FRASE do encerramento automático ("Automático: meta de
+  /// vendas atingida").
   final String? closedBy;
 
-  /// Bater a meta ENCERRA este Barter, ou só avisa?
-  ///
-  /// A escolha é do lançamento e vive no servidor — o app não decide nada com
-  /// ela, só conta ao admin em que modo o Barter está. Quem fecha, quando ligado,
-  /// é a aprovação que cruza a meta (ver `closeIfGoalReached` na API).
+  /// Bater a meta ENCERRA esta versão, ou só avisa?
   final bool closeOnGoal;
 
-  /// ESTE BARTER LEVA SEGURO AGRÍCOLA?
-  ///
-  /// É a chave do seguro, e ela é do LANÇAMENTO: contratar seguro é decisão
-  /// comercial da safra (a empresa fechou apólice, ou não), e não caso a caso
-  /// do consultor. Ligada, toda permuta desta versão nasce com a linha do
-  /// seguro, precificada pelo município do produtor.
-  ///
-  /// Ela chega a todo mundo, como [closeOnGoal] e [isOpen]: não é um valor, é
-  /// uma regra do lançamento. É por ela que a tela do consultor sabe que a
-  /// prévia dele leva a linha do seguro.
-  final bool insuranceRequired;
+  /// As metas definidas no lançamento (null = sem meta). Só chegam para a
+  /// retaguarda.
+  final double? targetSales;
+  final double? targetSacks;
+  final int? targetBarters;
 
   final String? sourceFile;
   final String? note;
@@ -2435,24 +2604,28 @@ class BarterVersionModel {
   /// Metas e realizado — só chegam para quem gerencia o Barter.
   final List<BarterGoal> goals;
   final double realizedSales;
-
-  /// As sacas já comprometidas, UMA LINHA POR CULTURA: 4.000 de soja e 3.000 de
-  /// milho não são 7.000 de coisa nenhuma.
-  final List<RealizedSacksModel> realizedSacks;
+  final double realizedSacks;
   final int realizedBarters;
 
   const BarterVersionModel({
     required this.id,
     required this.code,
+    this.slug = '',
     required this.number,
+    this.seasonId = '',
     required this.seasonCode,
+    this.seasonSlug = '',
     required this.seasonName,
-    required this.grains,
-    this.pricedInGrainId = '',
+    this.grainId = '',
+    this.grainName = '',
+    this.grainUnit = '',
+    this.grainPrice = 0,
+    this.estimatedYield = 0,
+    this.cprDueDate,
+    this.insurancePolicy = InsurancePolicy.none,
     // Padrão da RETAGUARDA porque é o único que se pode montar à mão: quem
-    // escreve a cotação de uma cultura num construtor está escrevendo R$. O
-    // caminho que vem da rede — [BarterVersionModel.fromJson] — nunca usa este
-    // padrão, ele lê a lente do próprio JSON.
+    // escreve a cotação num construtor está escrevendo R$. O caminho que vem da
+    // rede — [BarterVersionModel.fromJson] — lê a lente do próprio JSON.
     this.showsCurrency = true,
     required this.status,
     required this.isOpen,
@@ -2462,32 +2635,36 @@ class BarterVersionModel {
     this.closedAt,
     this.closedBy,
     this.closeOnGoal = false,
-    this.insuranceRequired = false,
+    this.targetSales,
+    this.targetSacks,
+    this.targetBarters,
     this.sourceFile,
     this.note,
     this.goals = const [],
     this.realizedSales = 0,
-    this.realizedSacks = const [],
+    this.realizedSacks = 0,
     this.realizedBarters = 0,
   });
 
   factory BarterVersionModel.fromJson(Map<String, dynamic> json) {
     final realized = (json['realized'] as Map<String, dynamic>?) ?? const {};
-    final grains = (json['grains'] as List? ?? const [])
-        .cast<Map<String, dynamic>>()
-        .map(VersionGrainModel.fromJson)
-        .toList();
     return BarterVersionModel(
       id: _asId(json['id']),
       code: json['code'] as String,
+      slug: (json['slug'] ?? json['code']) as String,
       number: (json['number'] as num?)?.toInt() ?? 0,
+      seasonId: _asId(json['seasonId']),
       seasonCode: (json['seasonCode'] ?? '') as String,
+      seasonSlug: (json['seasonSlug'] ?? '') as String,
       seasonName: (json['seasonName'] ?? '') as String,
-      grains: grains,
-      pricedInGrainId: _asId(json['pricedInGrainId']),
-      // A lente é a das CULTURAS: a primeira delas basta, porque o servidor
-      // entrega as cotações de todas ou de nenhuma.
-      showsCurrency: grains.isNotEmpty && grains.first.showsCurrency,
+      grainId: _asId(json['grainId']),
+      grainName: (json['grainName'] ?? '') as String,
+      grainUnit: (json['grainUnit'] ?? '') as String,
+      grainPrice: _asDouble(json['grainPrice']),
+      estimatedYield: _asDouble(json['estimatedYield']),
+      cprDueDate: _asDateOrNull(json['cprDueDate']),
+      insurancePolicy: InsurancePolicy.fromApi(json['insurancePolicy']),
+      showsCurrency: json['grainPrice'] != null,
       status: (json['status'] ?? 'closed') as String,
       isOpen: json['isOpen'] == true,
       startsAt: _asDate(json['startsAt']),
@@ -2495,7 +2672,9 @@ class BarterVersionModel {
       closedAt: _asDateOrNull(json['closedAt']),
       closedBy: json['closedBy'] as String?,
       closeOnGoal: json['closeOnGoal'] == true,
-      insuranceRequired: json['insuranceRequired'] == true,
+      targetSales: _asDoubleOrNull(json['targetSales']),
+      targetSacks: _asDoubleOrNull(json['targetSacks']),
+      targetBarters: (json['targetBarters'] as num?)?.toInt(),
       sourceFile: json['sourceFile'] as String?,
       note: json['note'] as String?,
       prices: (json['prices'] as List? ?? const [])
@@ -2507,54 +2686,14 @@ class BarterVersionModel {
           .map(BarterGoal.fromJson)
           .toList(),
       realizedSales: _asDouble(realized['sales']),
-      realizedSacks: (realized['sacks'] as List? ?? const [])
-          .cast<Map<String, dynamic>>()
-          .map(RealizedSacksModel.fromJson)
-          .toList(),
+      realizedSacks: _asDouble(realized['sacks']),
       realizedBarters: (realized['barters'] as num?)?.toInt() ?? 0,
     );
   }
 
-  /// A CULTURA EM USO — aquela em que a tabela [prices] está expressa.
-  ///
-  /// Ela é o que os getters abaixo respondem, e é o que faz a tela continuar
-  /// falando de "o grão da permuta" no singular mesmo com o Barter aceitando
-  /// vários: em cada momento, uma está escolhida. Sem cultura nenhuma (Barter
-  /// fechado, ou versão que não trouxe a lista), devolve null e quem lê cai nos
-  /// vazios — que é a verdade daquele estado.
-  VersionGrainModel? get pricedGrain {
-    for (final grain in grains) {
-      if (grain.grainId == pricedInGrainId) return grain;
-    }
-    return grains.isEmpty ? null : grains.first;
-  }
-
-  /// A cultura de um id, quando este Barter a aceita.
-  VersionGrainModel? grainFor(String grainId) {
-    for (final grain in grains) {
-      if (grain.grainId == grainId) return grain;
-    }
-    return null;
-  }
-
-  /// Os atalhos para a CULTURA EM USO. Eles existem porque quase toda tela fala
-  /// de uma cultura por vez — a que o consultor escolheu —, e escrever
-  /// `version.pricedGrain?.grainName ?? ''` em cada uma delas trocaria clareza
-  /// por cerimônia.
-  String get grainId => pricedGrain?.grainId ?? '';
-  String get grainName => pricedGrain?.grainName ?? '';
-  String get grainUnit => pricedGrain?.grainUnit ?? '';
-  double get grainPrice => pricedGrain?.price ?? 0;
-  double get estimatedYield => pricedGrain?.estimatedYield ?? 0;
-
-  /// As sacas já comprometidas em uma cultura — zero quando ainda não houve
-  /// permuta nenhuma nela, que é o começo certo de uma barra de progresso.
-  double realizedSacksOf(String grainId) {
-    for (final row in realizedSacks) {
-      if (row.grainId == grainId) return row.sacks;
-    }
-    return 0;
-  }
+  /// A versão obriga o seguro? / oferece como opcional?
+  bool get insuranceRequired => insurancePolicy == InsurancePolicy.required;
+  bool get insuranceOptional => insurancePolicy == InsurancePolicy.optional;
 
   /// Quanto custa UMA SACA, na moeda da lente — o divisor que transforma custo
   /// em sacas.
@@ -2562,13 +2701,7 @@ class BarterVersionModel {
   /// Em R$ é a cotação do grão; em sacas é **1**, porque o custo somado a partir
   /// de [VersionPriceModel.perUnit] já ESTÁ em sacas. É esta linha que permite
   /// [sacksToCover] continuar sendo espelho exato de `barter-math.ts`: a conta
-  /// não muda, muda a unidade em que ela entra — e as duas dão o mesmo número,
-  /// porque `Σ(qtd × preço/cotação)` é `Σ(qtd × preço)/cotação`.
-  ///
-  /// Somar em sacas e só então arredondar é o que o próprio servidor pede (ver
-  /// o comentário de `inSacks` em `serializers.ts`): arredondar por linha
-  /// introduziria uma diferença por item, e a prévia deixaria de bater com o
-  /// que é gravado.
+  /// não muda, muda a unidade em que ela entra.
   double get costPerSack => showsCurrency ? grainPrice : 1;
 
   /// O valor de um insumo nesta versão, ou null se ele não está na tabela —
@@ -2584,46 +2717,68 @@ class BarterVersionModel {
   /// para o admin; no automático, a versão já vem encerrada do servidor.
   bool get anyGoalMet => goals.any((goal) => goal.met);
 
-  /// Rótulo curto para a faixa do consultor: "B2026.02 • paga em soja".
+  /// Rótulo curto para a faixa do consultor: "SOJA26/27.02 • paga em soja".
   String get shortLabel => '$code • paga em ${grainName.toLowerCase()}';
 }
 
-/// A SAFRA: o CICLO em que o Barter acontece. Carrega as versões lançadas nela,
-/// da mais recente para a mais antiga.
+/// A SAFRA DA CULTURA — "Soja 26/27", "Canola 2027". Carrega as versões lançadas
+/// nela, da mais recente para a mais antiga.
 ///
-/// ELA NÃO É MAIS A CULTURA. O grão saiu daqui — e com ele o vencimento da CPR
-/// — quando as culturas passaram a coexistir dentro do lançamento (ver
-/// [VersionGrainModel]): o mesmo ciclo aceita soja e milho, e uma safra que
-/// tivesse um grão só obrigaria a abrir duas para vender os dois.
+/// Cada cultura tem a sua: abre, publica versões, bate meta, encerra e reabre
+/// sem que as outras percebam.
 class SeasonModel {
   final String id;
   final String code;
+  final String slug;
   final String name;
-  final int year;
+  final String grainId;
+  final String grainName;
+  final String grainUnit;
+  final int startYear;
+  final int endYear;
   final String status;
+
+  /// O SEGURO PADRÃO da cultura — o que vem preenchido ao publicar a próxima
+  /// versão. Não é regra: quem vale é a política de cada versão.
+  final InsurancePolicy insurancePolicy;
   final DateTime openedAt;
   final DateTime? closedAt;
+  final String? closedBy;
   final List<BarterVersionModel> versions;
 
   const SeasonModel({
     required this.id,
     required this.code,
+    this.slug = '',
     required this.name,
-    required this.year,
+    this.grainId = '',
+    this.grainName = '',
+    this.grainUnit = '',
+    this.startYear = 0,
+    this.endYear = 0,
     required this.status,
+    this.insurancePolicy = InsurancePolicy.none,
     required this.openedAt,
     required this.versions,
     this.closedAt,
+    this.closedBy,
   });
 
   factory SeasonModel.fromJson(Map<String, dynamic> json) => SeasonModel(
         id: _asId(json['id']),
         code: json['code'] as String,
+        slug: (json['slug'] ?? json['code']) as String,
         name: json['name'] as String,
-        year: (json['year'] as num?)?.toInt() ?? 0,
+        grainId: _asId(json['grainId']),
+        grainName: (json['grainName'] ?? '') as String,
+        grainUnit: (json['grainUnit'] ?? '') as String,
+        startYear: (json['startYear'] as num?)?.toInt() ?? 0,
+        endYear: (json['endYear'] as num?)?.toInt() ?? 0,
         status: (json['status'] ?? 'closed') as String,
+        insurancePolicy: InsurancePolicy.fromApi(json['insurancePolicy']),
         openedAt: _asDate(json['openedAt']),
         closedAt: _asDateOrNull(json['closedAt']),
+        closedBy: json['closedBy'] as String?,
         versions: (json['versions'] as List? ?? const [])
             .cast<Map<String, dynamic>>()
             .map(BarterVersionModel.fromJson)
@@ -2631,6 +2786,17 @@ class SeasonModel {
       );
 
   bool get isOpen => status == 'open';
+
+  /// A versão vigente desta safra, quando há.
+  BarterVersionModel? get activeVersion {
+    for (final version in versions) {
+      if (version.status == 'active') return version;
+    }
+    return null;
+  }
+
+  /// A cultura cruza o ano (Soja 26/27) ou cabe num só (Canola 2027)?
+  bool get crossesYear => endYear != startYear;
 }
 
 class PriceHistoryEntry {
@@ -2649,5 +2815,38 @@ class PriceHistoryEntry {
         price: _asDouble(json['price']),
         changedAt: _asDate(json['changedAt']),
         changedBy: json['changedBy'] as String,
+      );
+}
+
+/// UM AVISO — algo que aconteceu numa permuta que esta pessoa acompanha, e que
+/// não pede ação dela. Ver `Notice` na API.
+///
+/// Nasceu para o GERENTE no desvio das exigências: a permuta do time dele volta
+/// ao consultor e depois direto ao comitê, sem passar pela mesa dele — e ele
+/// precisa saber disso sem ter de procurar.
+///
+/// O texto vem pronto do servidor, como o rótulo do estado: a frase é do
+/// domínio, e um aviso novo chega escrito certo no app já instalado.
+class NoticeModel {
+  final int id;
+
+  /// A permuta de que ele fala — é por ela que a tela abre o detalhe. Vazio
+  /// quando a permuta já não existe.
+  final String barterCode;
+  final String message;
+  final DateTime createdAt;
+
+  const NoticeModel({
+    required this.id,
+    required this.barterCode,
+    required this.message,
+    required this.createdAt,
+  });
+
+  factory NoticeModel.fromJson(Map<String, dynamic> json) => NoticeModel(
+        id: (json['id'] as num).toInt(),
+        barterCode: (json['barterCode'] ?? '') as String,
+        message: (json['message'] ?? '') as String,
+        createdAt: _asDate(json['createdAt']),
       );
 }

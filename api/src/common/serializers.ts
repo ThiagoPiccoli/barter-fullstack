@@ -1,6 +1,8 @@
 import {
   BARTER_HOLDER,
   BARTER_STATUS_LABELS,
+  BARTER_STEP_STATE,
+  insuredOf,
   nextActionOf,
   outcomeLabelOf,
   progressOf,
@@ -10,9 +12,9 @@ import { CREDIT_FILE_LABELS, type CreditFileKind } from '../barters/credit-file'
 import { CAPABILITY, can, capabilitiesOf } from './policy';
 import { ROLE_LABELS, type Role } from './roles';
 import { isOpenAt, type Goal, type Realized } from '../seasons/version-progress';
-import type { VersionWithGrains } from '../seasons/seasons.service';
 import { creditorGaps, forumOf } from './creditor';
 import { pledgeAreaFor } from '../barters/barter-math';
+import { grainCprModelOf } from '../barters/cpr';
 import type {
   AuditLog,
   Barter,
@@ -26,8 +28,10 @@ import type {
   CprArea,
   CprAreaOwner,
   CprGuarantor,
+  CprMortgage,
   Creditor,
   InsuranceRate,
+  Notice,
   ProductClass,
   PriceHistoryEntry,
   Producer,
@@ -35,7 +39,6 @@ import type {
   Season,
   Unit,
   User,
-  VersionGrain,
   VersionPrice,
 } from '@prisma/client';
 
@@ -193,27 +196,20 @@ export function toUnitJson(unit: Unit) {
 }
 
 /**
- * O produtor, com a CARTEIRA como lista.
+ * O produtor, com a CARTEIRA: o consultor que o atende.
  *
- * `consultantIds` substituiu o antigo `consultantId` — e substituiu mesmo, sem
- * deixar o campo velho para trás: mantê-lo obrigaria a eleger um dos
- * consultores como "o" consultor, e o primeiro da lista viraria dono por
- * acidente de ordenação. Os dois lados deste repositório sobem juntos; um
- * campo que mente é pior do que um campo que sumiu.
- *
- * Vazio significa produtor esperando realocação (o último consultor vinculado
- * foi excluído) — só a retaguarda o enxerga até o admin designar alguém.
+ * `consultantId` nulo significa produtor esperando realocação (o consultor
+ * dele foi excluído) — só a retaguarda o enxerga até o admin designar alguém.
  */
-export function toProducerJson(producer: Producer & { consultants: { consultantId: number }[] }) {
+export function toProducerJson(producer: Producer) {
   return {
     id: producer.id,
     name: producer.name,
-    consultantIds: producer.consultants.map((link) => link.consultantId),
+    consultantId: producer.consultantId,
     document: producer.document,
     phone: producer.phone,
     farmName: producer.farmName,
     city: producer.city,
-    areaHa: producer.areaHa,
     // COMO ELE RECOLHE o Funrural — a opção formal dele perante o fisco, que
     // vale para todas as entregas e por isso mora no cadastro. É o que a permuta
     // nova assume sem perguntar. Ver `Producer.taxRegime`.
@@ -288,6 +284,10 @@ function productFields(product: Product, lens: ValueLens) {
     unitPending: product.unitPending,
     requiredPerHa: product.requiredPerHa,
     classId: product.classId,
+    // O MODELO DA CPR só existe no grão: é o padrão com que ELE é recebido. No
+    // insumo as colunas têm o default e não querem dizer nada — mandá-las
+    // sugeriria ao app que insumo tem padrão de recebimento.
+    ...(product.type === 'grain' ? { cprModel: grainCprModelOf(product) } : {}),
   };
 }
 
@@ -363,54 +363,37 @@ export function toInsuranceRateJson(rate: InsuranceRate, lens: ValueLens = CURRE
 /* ── Barter: safra e versões ──────────────────────────────────────────── */
 
 /**
- * A SAFRA — o ciclo, e não mais a cultura.
+ * A SAFRA DA CULTURA — "Soja 26/27" —, com as versões dela.
  *
- * O grão e o vencimento da CPR saíram daqui: eles são de cada CULTURA, e as
- * culturas são do lançamento (ver `toVersionGrainJson`). O que a safra responde
- * é "qual ciclo está aberto e quais gestões ele teve".
+ * `code` é o que se lê (`SOJA26/27`); `slug` é o que vai na URL (`SOJA2627`).
+ * `insurancePolicy` é o SEGURO PADRÃO da cultura, o que vem preenchido ao
+ * publicar a próxima versão — não é regra, é sugestão.
  */
 export function toSeasonJson(
-  season: Season & { versions?: VersionWithGrains[] },
+  season: Season & { versions?: BarterVersion[] },
   viewer?: Pick<User, 'role'>,
 ) {
   return {
     id: season.id,
     code: season.code,
+    slug: season.slug,
     name: season.name,
-    year: season.year,
+    grainId: season.grainId,
+    grainName: season.grainName,
+    grainUnit: season.grainUnit,
+    startYear: season.startYear,
+    endYear: season.endYear,
     status: season.status,
+    insurancePolicy: season.insurancePolicy,
     openedAt: season.openedAt,
     closedAt: season.closedAt,
+    closedBy: season.closedBy,
     // O viewer atravessa: sem ele a lente cai no padrão fechado e a safra sairia
     // sem valor nenhum — inclusive para quem tem barterManage, que é o único
     // papel que chega a estas rotas.
-    versions: season.versions?.map((version) => toBarterVersionJson(version, undefined, viewer)),
-  };
-}
-
-/**
- * UMA CULTURA do lançamento — o grão em que a permuta pode ser paga.
- *
- * A COTAÇÃO da saca só vai para quem vê R$, pelo mesmo motivo de sempre:
- * entregá-la a quem recebe a tabela em sacas devolveria os R$ por multiplicação.
- *
- * O RESTO vai para todo mundo, e cada um por um motivo:
- *
- * - `estimatedYield` é sc/ha, e não moeda — é o que explica ao consultor por que
- *   a permuta dele pede a área de penhor que pede;
- * - `cprDueDate` é a data em que o produtor entrega, e é ele quem vai dizê-la ao
- *   cliente;
- * - `targetSacks` é meta em sacas, a mesma natureza do que a versão já mandava.
- */
-export function toVersionGrainJson(grain: VersionGrain, lens: ValueLens = CURRENCY_LENS) {
-  return {
-    grainId: grain.grainId,
-    grainName: grain.grainName,
-    grainUnit: grain.grainUnit,
-    estimatedYield: grain.estimatedYield,
-    cprDueDate: grain.cprDueDate,
-    targetSacks: grain.targetSacks,
-    ...(lens.showsCurrency ? { price: grain.price } : {}),
+    versions: season.versions?.map((version) =>
+      toBarterVersionJson({ ...version, season }, undefined, viewer),
+    ),
   };
 }
 
@@ -434,7 +417,7 @@ export function toVersionPriceJson(price: VersionPrice, lens: ValueLens = CURREN
 }
 
 /**
- * A versão do Barter. Três públicos, um formato:
+ * A versão do Barter — de UMA cultura. Três públicos, um formato:
  *
  * - o consultor precisa da tabela `prices` em sacas para a prévia (a tela
  *   esconde o R$, mas a conta é a mesma do servidor);
@@ -446,75 +429,55 @@ export function toVersionPriceJson(price: VersionPrice, lens: ValueLens = CURREN
  * `progress` só vai quando quem chamou pode gerenciar o Barter: meta é número
  * de retaguarda, e o consultor não vê valores.
  *
- * AS CULTURAS e a TABELA EM SACAS, agora que a versão aceita mais de um grão:
- *
- * `grains` lista todas as culturas do lançamento, sempre. A tabela `prices`,
- * porém, é convertida por UMA cotação — e `pricedInGrainId` diz por qual. Quem
- * escolhe é quem chama (`?grainId=`, a cultura que o consultor selecionou na
- * tela); sem escolha, a primeira do lançamento.
- *
- * Uma conversão por vez, e não um `sacksPerUnit` por cultura em cada linha,
- * porque a tabela do fornecedor tem milhares de itens: multiplicá-la pelo número
- * de culturas engordaria a resposta inteira para entregar de uma vez o que a
- * tela mostra uma de cada vez. Trocar a cultura é uma leitura a mais — e é um
- * toque raro, feito uma vez antes de montar a permuta.
+ * A COTAÇÃO da saca só vai para quem vê R$: entregá-la a quem recebe a tabela
+ * em sacas devolveria os R$ por multiplicação. O RESTO dos termos da cultura vai
+ * para todo mundo — a produtividade é sc/ha (é o que explica ao consultor a área
+ * de penhor que a permuta dele pede), o vencimento é a data que ele diz ao
+ * produtor, e a política de seguro decide o que a tela dele mostra.
  */
 export function toBarterVersionJson(
-  version: BarterVersion & {
-    season?: Season;
-    prices?: VersionPrice[];
-    grains?: VersionGrain[];
-  },
+  version: BarterVersion & { season?: Season; prices?: VersionPrice[] },
   extra?: { realized: Realized; goals: Goal[] },
   viewer?: Pick<User, 'role'>,
-  pricedInGrainId?: number | null,
 ) {
-  const grains = version.grains ?? [];
-  // A CULTURA pela qual a tabela é convertida: a pedida, ou a primeira do
-  // lançamento. Pedir uma que não está nesta versão cai na primeira também — a
-  // resposta diz em `pricedInGrainId` qual foi usada, e a tela não fica
-  // mostrando sacas de um grão que este Barter não aceita.
-  const priced = grains.find((grain) => grain.grainId === pricedInGrainId) ?? grains[0];
-  // A cotação da saca DESTA cultura é o divisor da conversão — por isso a lente
+  // A cotação da saca desta versão é o divisor da conversão — por isso a lente
   // nasce aqui, e não na porta da requisição.
-  const lens = lensFor(viewer, priced?.price ?? 0);
+  const lens = lensFor(viewer, version.grainPrice);
   return {
     id: version.id,
     code: version.code,
+    slug: version.slug,
     number: version.number,
     seasonId: version.seasonId,
     seasonCode: version.season?.code,
+    seasonSlug: version.season?.slug,
     seasonName: version.season?.name,
-    // AS CULTURAS que este Barter aceita, na ordem em que foram lançadas — a
-    // primeira é a que a tela mostra escolhida.
-    grains: grains.map((grain) => toVersionGrainJson(grain, lens)),
-    // EM QUE CULTURA a tabela abaixo está expressa. Ela importa para quem lê em
-    // sacas (o consultor) e é informação honesta para todo mundo: o mesmo insumo
-    // custa duas quantidades de saca diferentes conforme o grão.
-    pricedInGrainId: priced?.grainId ?? null,
-    // ESTE BARTER LEVA SEGURO? Vai para todo mundo, e não é valor: é uma regra
-    // do lançamento, da mesma natureza de `closeOnGoal` e de `isOpen`.
-    //
-    // É ela que a tela do consultor lê para mostrar a linha do seguro na prévia
-    // — e para avisar, antes de ele montar a permuta inteira, que a praça do
-    // produtor ainda não tem taxa cadastrada. Ver `InsuranceRate`.
-    insuranceRequired: version.insuranceRequired,
+    // A CULTURA desta versão — o grão em que as permutas dela são pagas.
+    grainId: version.season?.grainId ?? null,
+    grainName: version.season?.grainName,
+    grainUnit: version.season?.grainUnit,
+    ...(lens.showsCurrency ? { grainPrice: version.grainPrice } : {}),
+    estimatedYield: version.estimatedYield,
+    cprDueDate: version.cprDueDate,
+    // A POLÍTICA DE SEGURO vai para todo mundo, e não é valor: é uma regra do
+    // lançamento. É ela que a tela do consultor lê para mostrar a linha do
+    // seguro (obrigatório), o interruptor (opcional) ou nada.
+    insurancePolicy: version.insurancePolicy,
     status: version.status,
-    isOpen: isOpenAt(version, new Date()),
+    isOpen: isOpenAt(version, new Date()) && version.season?.status !== 'closed',
     startsAt: version.startsAt,
     endsAt: version.endsAt,
-    // Metas são número de retaguarda; `targetSales` é R$ direto. A de SACAS não
-    // está aqui: ela é de cada cultura, e sai dentro de `grains`.
+    // Metas: `targetSales` é R$ direto, e só vai para a retaguarda. A de SACAS e
+    // a de PERMUTAS não são moeda, mas são número de retaguarda do mesmo jeito.
     ...(lens.showsCurrency
       ? {
           targetSales: version.targetSales,
+          targetSacks: version.targetSacks,
           targetBarters: version.targetBarters,
         }
       : {}),
-    // O MODO de encerramento vai para todo mundo, e não só para a retaguarda:
-    // ele não é um valor, é uma regra de vigência — a mesma natureza de `isOpen`
-    // e de `endsAt`, que o consultor já recebe. Saber que o Barter pode fechar ao
-    // bater meta é o que explica a tela dele fechar no meio da tarde.
+    // O MODO de encerramento vai para todo mundo: ele não é um valor, é uma
+    // regra de vigência — a mesma natureza de `isOpen` e de `endsAt`.
     closeOnGoal: version.closeOnGoal,
     sourceFile: version.sourceFile,
     note: version.note,
@@ -569,8 +532,8 @@ export function toBarterItemJson(item: BarterItem, lens: ValueLens = CURRENCY_LE
     // se separa em lugar nenhum (não há o que entregar), e o produtor precisa
     // ler no comprovante que parte das sacas dele paga a apólice, e não adubo.
     //
-    // A conta fica legível na própria linha: `quantity` é a área cultivável
-    // dele (ha) e `unitValue` é a taxa do município (ver `InsuranceRate`).
+    // A conta fica legível na própria linha: `quantity` é a área plantada da
+    // permuta (ha) e `unitValue` é a taxa do município (ver `InsuranceRate`).
     insurance: item.insurance,
     // O VALOR DE TABELA, quando o admin escreveu outro por cima. Só para quem vê
     // R$, pelo mesmo motivo de `unitValue`: é dinheiro, e o consultor lê a
@@ -664,12 +627,30 @@ function toBarterProgressJson(
 ): ReturnType<typeof progressStepJson>[] {
   const byAction = new Map<string, BarterEvent>();
   // O primeiro evento de cada ato: um ato acontece uma vez só (a máquina de
-  // estados não deixa repetir), e na dúvida vale o que veio antes.
+  // estados não deixa repetir), e na dúvida vale o que veio antes. "Antes" pela
+  // DATA, e não pela posição: a linha do tempo chega do mais recente para o
+  // mais antigo, e quem casa etapa e evento não pode depender disso.
   for (const event of events) {
-    if (!byAction.has(event.action)) byAction.set(event.action, event);
+    const kept = byAction.get(event.action);
+    if (!kept || isEarlier(event, kept)) byAction.set(event.action, event);
   }
 
-  return progressOf(barter).map((step) => progressStepJson(step, byAction.get(step.action)));
+  // SÓ A ETAPA CUMPRIDA leva assinatura. Um ato pode ter evento de uma rodada
+  // anterior — o desvio das exigências se repete, e o pedido de alteração
+  // devolve a permuta a rascunho com o encaminhamento antigo gravado —, e
+  // assinar a etapa de AGORA com ele diria que ela já aconteceu.
+  return progressOf(barter).map((step) =>
+    progressStepJson(
+      step,
+      step.state === BARTER_STEP_STATE.done ? byAction.get(step.action) : undefined,
+    ),
+  );
+}
+
+/** A ordem cronológica dos eventos, com o `id` desempatando o mesmo instante. */
+function isEarlier(a: BarterEvent, b: BarterEvent): boolean {
+  const diff = a.at.getTime() - b.at.getTime();
+  return diff !== 0 ? diff < 0 : a.id < b.id;
 }
 
 function progressStepJson(
@@ -701,27 +682,27 @@ function progressStepJson(
 
 /**
  * O INVESTIMENTO POR HECTARE — quantas sacas do grão esta permuta compromete
- * por hectare de área cultivável do produtor.
+ * por hectare da área plantada que ela cobre.
  *
- * É a régua que compara duas permutas de tamanhos diferentes: 12 sc/ha numa
- * fazenda de 300 ha e 12 sc/ha numa de 2.000 ha são o mesmo negócio em escalas
- * diferentes, e o total sozinho não diz isso. Em SACAS, e não em R$, porque é a
- * unidade em que a lavoura raciocina — "a soja paga o insumo com doze sacas do
- * que ela produz" — e porque é o número que sobrevive à cotação mudar.
+ * É a régua que compara duas permutas de tamanhos diferentes: 12 sc/ha em 300 ha
+ * e 12 sc/ha em 2.000 ha são o mesmo negócio em escalas diferentes. Em SACAS, e
+ * não em R$, porque é a unidade em que a lavoura raciocina.
  *
- * Ele vai para QUEM PODE COMPARAR (`barters.investmentPerHa`: admin, comitê e
- * faturista) e some para os outros — não por sigilo, mas porque uma régua sem
- * com quem comparar é ruído. Ver a capacidade em policy.ts.
+ * Ele vai para QUEM PODE COMPARAR (`barters.investmentPerHa`: todos os papéis
+ * menos a seguradora) e some para os outros — não por sigilo, mas porque uma
+ * régua sem com quem comparar é ruído. Ver a capacidade em policy.ts.
  *
- * `null` — e não zero — quando não dá para dizer: permuta anterior ao campo de
- * área (`producerAreaHa` 0) ou resposta sem os itens (a listagem os traz; um
- * chamador futuro pode não trazer). Zero seria um investimento por hectare de
- * zero, que é uma afirmação, e falsa.
+ * Os PAINÉIS não refazem esta conta: a média de um conjunto de permutas é a
+ * média destes números ponderada pela área (`investmentPerHaOf`, no app), que é
+ * o mesmo Σ sacas ÷ Σ área — e some junto com eles.
+ *
+ * `null` — e não zero — quando não dá para dizer: permuta sem área registrada
+ * (`plantedAreaHa` 0) ou resposta sem os itens.
  */
 function investmentPerHa(
   barter: Barter & { items?: BarterItem[] },
   viewer: Pick<User, 'role'> | undefined,
-): { producerAreaHa: number; sacksPerHa: number | null } | Record<string, never> {
+): { sacksPerHa: number | null } | Record<string, never> {
   if (!viewer || !can(viewer, CAPABILITY.bartersInvestmentPerHa)) return {};
 
   const sacks = barter.items
@@ -729,9 +710,8 @@ function investmentPerHa(
     .reduce((total, item) => total + item.quantity, 0);
 
   return {
-    producerAreaHa: barter.producerAreaHa,
     sacksPerHa:
-      sacks === undefined || barter.producerAreaHa <= 0 ? null : sacks / barter.producerAreaHa,
+      sacks === undefined || barter.plantedAreaHa <= 0 ? null : sacks / barter.plantedAreaHa,
   };
 }
 
@@ -860,6 +840,7 @@ export function toBarterJson(
     productRequests?: BarterProductRequest[];
     invoices?: (BarterInvoice & { file?: BarterFileMeta | null })[];
     creditFiles?: (BarterCreditFile & { file?: BarterFileMeta | null })[];
+    insurancePolicyFile?: BarterFileMeta | null;
   },
   viewer?: Pick<User, 'role'>,
 ) {
@@ -867,8 +848,14 @@ export function toBarterJson(
   return {
     id: barter.id,
     code: barter.code,
+    // O número da CPR, reservado no registro — a permuta o tem antes da cédula.
+    cprNumber: barter.cprNumber,
     // Em qual gestão esta permuta foi fechada — vai no detalhe e no comprovante.
     versionCode: barter.versionCode,
+    // A SAFRA DA CULTURA ("Soja 26/27"): a cultura da permuta, fixa desde o
+    // registro. O id é o que o filtro da listagem e o painel por cultura usam.
+    seasonId: barter.seasonId,
+    seasonName: barter.seasonName,
     consultantId: barter.consultantId,
     consultantName: barter.consultantName,
     consultantBranch: barter.consultantBranch,
@@ -884,8 +871,11 @@ export function toBarterJson(
     // se a permuta já saiu da mão dele.
     consultantNote: barter.consultantNote,
     consultantSentAt: barter.consultantSentAt,
-    // A ÁREA congelada no registro e o INVESTIMENTO POR HECTARE que ela produz.
-    // Ver `investmentPerHa`: o número só vai para quem pode compará-lo.
+    // A ÁREA PLANTADA da cultura que esta permuta cobre — para todo mundo: é o
+    // consultor quem a informa, e é a régua do seguro, dos mínimos e do penhor.
+    plantedAreaHa: barter.plantedAreaHa,
+    // O INVESTIMENTO POR HECTARE que ela produz. Ver `investmentPerHa`: o número
+    // só vai para quem pode compará-lo.
     ...investmentPerHa(barter, viewer),
     // O IMPOSTO DA ENTREGA: a forma de recolhimento escolhida no fechamento e a
     // alíquota que ela produziu, como ficaram no registro.
@@ -923,29 +913,46 @@ export function toBarterJson(
     reviewNote: barter.reviewNote,
     reviewedBy: barter.reviewedBy,
     reviewedAt: barter.reviewedAt,
-    // AS EXIGÊNCIAS DO COMITÊ — avalista, garantia real, seguro.
+    // AS EXIGÊNCIAS DO COMITÊ — avalista e hipoteca (`requiresCollateral`),
+    // pedidos antes da decisão (ver `require` no service).
     //
-    // Vão para TODO MUNDO que enxerga a permuta, e não só para quem decidiu:
+    // Vão para TODO MUNDO que enxerga a permuta, e não só para quem as pediu:
     // elas são trabalho para OUTRA pessoa. O consultor precisa levá-las ao
-    // produtor, o faturista precisa saber que a retirada foi condicionada, e o
-    // emissor precisa saber que aquele título espera um avalista antes de ser
-    // assinado. Enquanto isso viveu dentro do texto da decisão, a única maneira
-    // de descobrir era ler o parágrafo até o fim.
+    // produtor — e é por elas que o formulário da cédula dele abre os campos de
+    // avalista e hipoteca —, e o emissor precisa saber que aquele título espera
+    // um avalista antes de ser assinado.
     //
-    // Elas não substituem `reviewNote`: as caixas dizem O QUÊ, e só o texto diz
-    // QUAL — qual matrícula, qual valor segurado, quem se espera como avalista.
+    // O QUAL — quem como avalista, qual imóvel — está no texto do evento
+    // `require`, na linha do tempo.
     requiresGuarantor: barter.requiresGuarantor,
     requiresCollateral: barter.requiresCollateral,
-    requiresInsurance: barter.requiresInsurance,
-    // O SEGURO AGRÍCOLA desta permuta: a praça que o precificou e a taxa
-    // congelada no registro. `insuranceCity` vazio é permuta sem seguro — ou
-    // porque o Barter dela não leva, ou porque ela é anterior à regra.
+    // O SEGURO AGRÍCOLA desta permuta: COMO ele chegou (obrigatório, aceito,
+    // recusado ou não oferecido), a praça que o precificou e a taxa congelada no
+    // registro. `insuranceChoice` vai para todo mundo: "o produtor recusou o
+    // seguro" é informação que o gerente e o comitê precisam ler.
     //
     // A TAXA sai pela lente, como todo R$: quem não vê moeda lê o seguro pela
     // própria linha da permuta, em que a quantidade é a área e o total já está
     // dentro das sacas do grão.
+    insuranceChoice: barter.insuranceChoice,
     insuranceCity: barter.insuranceCity,
     ...(lens.showsCurrency ? { insuranceRatePerHa: barter.insuranceRatePerHa } : {}),
+    // ELA PASSA PELA SEGURADORA? — resolvido pela máquina de estados
+    // (`insuredOf`), pelo mesmo motivo de `waitingFor`: o app não deveria ter
+    // uma segunda cópia de "quais escolhas levam seguro" para sair de sincronia.
+    insured: insuredOf(barter),
+    // A APÓLICE, informada pela seguradora: o número (o que a cédula cita), o
+    // documento (sem os bytes — o conteúdo se baixa em
+    // `GET /barters/:code/policy-file`) e a assinatura da etapa. Tudo null
+    // enquanto ela não passou pela seguradora, e para sempre na permuta sem
+    // seguro.
+    insurancePolicyNumber: barter.insurancePolicyNumber,
+    insurancePolicyFile: barter.insurancePolicyFile
+      ? toBarterFileJson(barter.insurancePolicyFile)
+      : null,
+    insuredBy: barter.insuredBy,
+    insuredAt: barter.insuredAt,
+    insuranceNote: barter.insuranceNote,
     // AS PEÇAS DA ANÁLISE DE CRÉDITO — a consulta ao Serasa, o endividamento do
     // produtor dentro da cooperativa.
     //
@@ -1074,7 +1081,8 @@ export function toCprJson(desk: {
   cpr:
     | (BarterCpr & {
         areas: (CprArea & { owners: CprAreaOwner[] })[];
-        guarantors: CprGuarantor[];
+        guarantors: (CprGuarantor & { scrFile?: BarterFileMeta | null })[];
+        mortgages: (CprMortgage & { documentFile?: BarterFileMeta | null })[];
         scrFile?: BarterFileMeta | null;
         signedFile?: BarterFileMeta | null;
         registryFile?: BarterFileMeta | null;
@@ -1098,8 +1106,8 @@ export function toCprJson(desk: {
     // O QUE TRAVA O ENCAMINHAMENTO, separado do resto pelo mesmo motivo de
     // `creditorGaps`: é o recorte de um posto só. A tela do detalhe avisa o
     // consultor com esta lista antes de ele tentar encaminhar — mostrar `gaps`
-    // ali mandaria ele procurar o número da CPR, que é do emissor, e a nota
-    // fiscal, que é do faturista, num formulário onde nenhum dos dois existe.
+    // ali mandaria ele procurar a nota fiscal, que é do faturista, e o
+    // vencimento, que é da safra, num formulário onde nenhum dos dois existe.
     consultantGaps: desk.consultantGaps,
     // O PLACAR DO PENHOR — exigido, penhorado, faltando. Ele acompanha a lista de
     // pendências sem se confundir com ela: a lacuna some quando a área fecha, e
@@ -1123,14 +1131,14 @@ export function toCprJson(desk: {
 function toCprDraftJson(
   cpr: BarterCpr & {
     areas: (CprArea & { owners: CprAreaOwner[] })[];
-    guarantors: CprGuarantor[];
+    guarantors: (CprGuarantor & { scrFile?: BarterFileMeta | null })[];
+    mortgages: (CprMortgage & { documentFile?: BarterFileMeta | null })[];
     scrFile?: BarterFileMeta | null;
     signedFile?: BarterFileMeta | null;
     registryFile?: BarterFileMeta | null;
   },
 ) {
   return {
-    number: cpr.number,
     issuedAt: cpr.issuedAt,
     dueDate: cpr.dueDate,
     emitterNationality: cpr.emitterNationality,
@@ -1147,8 +1155,8 @@ function toCprDraftJson(
     emitterMotherName: cpr.emitterMotherName,
     emitterEmail: cpr.emitterEmail,
     // O local da entrega SAI (cláusula V, "d"), e por isso é cobrado em `gaps`.
+    deliveryUnitId: cpr.deliveryUnitId,
     deliveryPlace: cpr.deliveryPlace,
-    mortgages: cpr.mortgages,
     spouseName: cpr.spouseName,
     spouseNationality: cpr.spouseNationality,
     spouseProfession: cpr.spouseProfession,
@@ -1170,7 +1178,8 @@ function toCprDraftJson(
     // `cprRegisteredAt`), que é onde o andamento mora.
     signedFile: cpr.signedFile ? toBarterFileJson(cpr.signedFile) : null,
     registryFile: cpr.registryFile ? toBarterFileJson(cpr.registryFile) : null,
-    insurancePolicy: cpr.insurancePolicy,
+    // A APÓLICE não está mais aqui: o número é da seguradora e sai em
+    // `known.insurancePolicy`, ao lado das notas — leitura, como elas.
     // Quem mexeu por último e quando. É o par que uma cédula editável precisa
     // mostrar: dois faturistas dividem a fila, e "isto aqui está como eu deixei?"
     // é a primeira pergunta de quem reabre um rascunho.
@@ -1186,10 +1195,11 @@ function toCprDraftJson(
       registryDistrict: area.registryDistrict,
       owners: area.owners.map((owner) => ({ name: owner.name, document: owner.document })),
     })),
-    // Os AVALISTAS vão inteiros. Eles não saem no documento por enquanto (o
-    // modelo não tem cláusula de aval), mas a tela os edita, e o que ela edita
-    // ela precisa receber de volta.
+    // Os AVALISTAS vão inteiros, com o ID — é ele que a tela devolve para o
+    // SCR anexado continuar no mesmo avalista (ver `syncGuarantors`) — e o SCR
+    // de cada um, sem os bytes.
     guarantors: cpr.guarantors.map((guarantor) => ({
+      id: guarantor.id,
       name: guarantor.name,
       document: guarantor.document,
       rg: guarantor.rg,
@@ -1208,7 +1218,36 @@ function toCprDraftJson(
       spouseRg: guarantor.spouseRg,
       spouseNationality: guarantor.spouseNationality,
       spouseProfession: guarantor.spouseProfession,
+      scrFile: guarantor.scrFile ? toBarterFileJson(guarantor.scrFile) : null,
     })),
+    // OS BENS EM HIPOTECA, com o id pelo mesmo motivo e o documento de cada um.
+    mortgages: cpr.mortgages.map((mortgage) => ({
+      id: mortgage.id,
+      description: mortgage.description,
+      registryNumber: mortgage.registryNumber,
+      registryDistrict: mortgage.registryDistrict,
+      city: mortgage.city,
+      ownerName: mortgage.ownerName,
+      ownerDocument: mortgage.ownerDocument,
+      appraisedValue: mortgage.appraisedValue,
+      documentFile: mortgage.documentFile ? toBarterFileJson(mortgage.documentFile) : null,
+    })),
+  };
+}
+
+/**
+ * UM AVISO — o que aconteceu, em que permuta, e quando.
+ *
+ * `barterCode` vai junto, e não só o id: é por ele que a tela abre a permuta, e
+ * é ele que continua legível se a permuta for excluída.
+ */
+export function toNoticeJson(notice: Notice) {
+  return {
+    id: notice.id,
+    barterCode: notice.barterCode,
+    message: notice.message,
+    createdAt: notice.createdAt,
+    readAt: notice.readAt,
   };
 }
 

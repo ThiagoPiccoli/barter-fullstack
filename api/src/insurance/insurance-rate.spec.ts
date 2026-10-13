@@ -67,7 +67,7 @@ describe('InsuranceRate', () => {
   });
 
   describe('o custo', () => {
-    it('é a área cultivável vezes a taxa da praça', () => {
+    it('é a área plantada vezes a taxa da praça', () => {
       expect(insuranceCostFor(120, 85)).toBe(10200);
       expect(insuranceCostFor(1200, 140.5)).toBe(168600);
     });

@@ -17,9 +17,9 @@ import type {
   CprArea,
   CprAreaOwner,
   CprGuarantor,
+  CprMortgage,
   Prisma,
   User,
-  VersionGrain,
 } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +30,7 @@ import {
   classSpend,
   inputCost,
   minQuantityFor,
+  pledgeAreaFor,
   roundQuantity,
   sacksToCover,
   type PricedInput,
@@ -39,10 +40,13 @@ import {
   BARTER_STATUS,
   BARTER_STATUS_LABELS,
   BARTER_STEPS,
+  insuredOf,
   lineFrom,
   outcomeLabelOf,
+  policyOutcomeFor,
   refusalFor,
   requirementsOf,
+  reviewOutcomeFor,
   stageOf,
   type BarterAction,
   type BarterStatus,
@@ -59,7 +63,6 @@ import {
   cultureRefusal,
   itemPriceRefusal,
   priceChangeRefusal,
-  type BarterCulture,
   type ChangeRequestAction,
 } from './change-request';
 import {
@@ -73,8 +76,10 @@ import {
 } from './product-request';
 import {
   EMPTY_CPR,
+  NO_REQUIREMENTS,
   consultantCprGaps,
   cprGaps,
+  grainCprModelOf,
   knownFrom,
   pledgeReadingOf,
   suggestFrom,
@@ -82,6 +87,8 @@ import {
   type CprKnown,
   type CprPledge,
   type CprPledgeReading,
+  type CprRequirements,
+  type GrainCprModel,
 } from './cpr';
 import {
   CREDIT_FILE_KIND,
@@ -101,7 +108,14 @@ import {
   insuranceCostFor,
   insuranceItemNameOf,
   missingRateRefusal,
+  sameCity,
 } from '../insurance/insurance-rate';
+import {
+  INSURANCE_CHOICE,
+  choiceInsures,
+  insuranceChoiceFor,
+  type InsuranceChoice,
+} from '../insurance/insurance-policy';
 import { SeasonsService, type VersionWithPrices } from '../seasons/seasons.service';
 import { countsAsRealized } from '../seasons/version-progress';
 import {
@@ -114,16 +128,28 @@ import {
   DecideBarterChangeDto,
   DecideBarterProductDto,
   ForwardBarterDto,
+  FulfillRequirementsDto,
+  InsureBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
   MIN_OPINION_LENGTH,
+  NO_REQUIREMENT_MESSAGE,
+  POLICY_NUMBER_MESSAGE,
   ReplaceBarterInputsDto,
   RequestBarterChangeDto,
   RequestBarterProductDto,
+  RequireBarterDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
-import { IssueCprDto, RegisterCprDto, SaveCprDto, SignCprDto } from './dto/cpr.dto';
+import {
+  CprGuarantorDto,
+  CprMortgageDto,
+  IssueCprDto,
+  RegisterCprDto,
+  SaveCprDto,
+  SignCprDto,
+} from './dto/cpr.dto';
 
 /**
  * O ARQUIVO SEM OS BYTES — nome, tipo, tamanho e quem anexou.
@@ -163,6 +189,11 @@ export type CreditFileWithFile = BarterCreditFile & { file: FileMeta | null };
  * custo que ele controla é o de receber, não o de guardar.
  */
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+
+/** Bytes em MB, como a frase os escreve: "10,0". */
+export function megabytes(bytes: number): string {
+  return (bytes / 1024 / 1024).toFixed(1).replace('.', ',');
+}
 
 /**
  * O QUE SE ACEITA como anexo — os formatos em que nota fiscal e SCR de fato
@@ -249,23 +280,27 @@ export interface StoredFile {
 }
 
 /**
- * A CULTURA da permuta, do ponto de vista da CÉDULA: o nome da gestão, o grão
- * que a paga e o vencimento da entrega daquele grão.
+ * A CULTURA da permuta, do ponto de vista da CÉDULA: o nome da safra, o grão
+ * que a paga, a versão e o vencimento da entrega.
  *
- * Os três viajam juntos porque a cédula os usa juntos — o vencimento é o dado, e
- * os dois nomes são o endereço da pendência quando ele falta ("defina-o na
- * cultura soja, no lançamento do Barter").
+ * Viajam juntos porque a cédula os usa juntos — o vencimento é o dado, e os
+ * nomes são o endereço da pendência quando ele falta ("defina-o no lançamento
+ * SOJA26/27.02").
  */
 type CprCulture = {
   seasonName: string;
   grainName: string;
+  versionCode: string;
   cprDueDate: Date | null;
+  /** O modelo da CPR do grão da safra — nulo quando o grão saiu do catálogo. */
+  grainModel: GrainCprModel | null;
 };
 
 type BarterWithItems = Barter & {
   items: BarterItem[];
   productRequests: BarterProductRequest[];
   invoices: InvoiceWithFile[];
+  insurancePolicyFile: FileMeta | null;
 };
 
 /**
@@ -292,7 +327,8 @@ type BarterDetail = BarterWithItems & {
  */
 const BARTER_INCLUDE = {
   items: true,
-  productRequests: { orderBy: { id: 'asc' } },
+  // Toda lista que a tela desenha vem do MAIS RECENTE para o mais antigo.
+  productRequests: { orderBy: { id: 'desc' } },
   // AS NOTAS do faturamento vão junto pelo mesmo motivo dos pedidos: elas são
   // ESTADO. "Esta permuta já tem nota?" é o que a fila do faturista pergunta, e
   // o que a cédula precisa saber para poder ser emitida.
@@ -301,9 +337,12 @@ const BARTER_INCLUDE = {
   // viajar numa listagem de cinquenta permutas para desenhar cinquenta linhas de
   // tabela. Quem quer o arquivo pede o arquivo (ver `invoiceFile`).
   invoices: {
-    orderBy: { id: 'asc' },
+    orderBy: { id: 'desc' },
     include: { file: { select: FILE_META } },
   },
+  // A APÓLICE pelo mesmo motivo das notas: "esta permuta já tem apólice?" é o
+  // que a fila da seguradora pergunta. Sem os bytes, como todo anexo em lista.
+  insurancePolicyFile: { select: FILE_META },
 } as const satisfies Prisma.BarterInclude;
 
 /**
@@ -315,11 +354,11 @@ const BARTER_INCLUDE = {
  */
 const BARTER_DETAIL_INCLUDE = {
   ...BARTER_INCLUDE,
-  events: { orderBy: [{ at: 'asc' }, { id: 'asc' }] },
+  events: { orderBy: [{ at: 'desc' }, { id: 'desc' }] },
   // O DOSSIÊ DO COMITÊ, sem os bytes — pelo mesmo motivo das notas: a tela lista
   // os documentos, e quem quer o arquivo pede o arquivo (ver `creditFile`).
   creditFiles: {
-    orderBy: { id: 'asc' },
+    orderBy: { id: 'desc' },
     include: { file: { select: FILE_META } },
   },
 } as const satisfies Prisma.BarterInclude;
@@ -327,7 +366,8 @@ const BARTER_DETAIL_INCLUDE = {
 /** A cédula com as lavouras, os donos delas e os anexos. */
 type CprWithAreas = BarterCpr & {
   areas: (CprArea & { owners: CprAreaOwner[] })[];
-  guarantors: CprGuarantor[];
+  guarantors: (CprGuarantor & { scrFile: FileMeta | null })[];
+  mortgages: (CprMortgage & { documentFile: FileMeta | null })[];
   scrFile: FileMeta | null;
   signedFile: FileMeta | null;
   registryFile: FileMeta | null;
@@ -339,7 +379,10 @@ const CPR_INCLUDE = {
     orderBy: { position: 'asc' },
     include: { owners: { orderBy: { position: 'asc' } } },
   },
-  guarantors: { orderBy: { position: 'asc' } },
+  // Avalistas e bens em hipoteca com o anexo de cada um — sem os bytes, como
+  // os da cédula.
+  guarantors: { orderBy: { position: 'asc' }, include: { scrFile: { select: FILE_META } } },
+  mortgages: { orderBy: { position: 'asc' }, include: { documentFile: { select: FILE_META } } },
   // OS ANEXOS sem os bytes, pelo mesmo motivo das notas: a mesa da cédula é uma
   // tela de formulário, e não o download do anexo.
   scrFile: { select: FILE_META },
@@ -407,6 +450,17 @@ interface CprDesk {
   pledgeWarnings: string[];
   suggestion: ReturnType<typeof suggestFrom>;
 }
+
+/**
+ * AS ESCOLHAS DE SEGURO QUE LEVAM SEGURO — a forma que o escopo da seguradora
+ * precisa para perguntar ao banco.
+ *
+ * Tirada de `choiceInsures`, e não escrita à mão: é a mesma pergunta que decide
+ * se a permuta passa pela seguradora (`insuredOf`), e as duas respostas não
+ * podem divergir — uma divergência seria uma permuta na mesa da seguradora que
+ * ela não enxerga, ou o contrário.
+ */
+const INSURED_CHOICES: string[] = Object.values(INSURANCE_CHOICE).filter(choiceInsures);
 
 /** Quanto de um texto longo cabe numa linha da trilha sem afogá-la. */
 const AUDIT_DETAIL_LIMIT = 180;
@@ -489,6 +543,43 @@ function noteWithRequirements(
 }
 
 /**
+ * O QUE O COMITÊ EXIGIU desta permuta, na forma que a cédula lê.
+ *
+ * Lido das colunas, e não do último evento: as exigências se acumulam entre
+ * rodadas (ver `require`), e a coluna é a soma.
+ */
+function requirementsFrom(barter: Barter): CprRequirements {
+  return {
+    requiresGuarantor: barter.requiresGuarantor,
+    requiresCollateral: barter.requiresCollateral,
+  };
+}
+
+/**
+ * O AVISO ao gerente da permuta — criado no MESMO ato que o motiva.
+ *
+ * Ele entra como escrita aninhada no `update` de `applyStep`, e não numa
+ * chamada à parte, pela regra do evento: o aviso de que a permuta voltou ao
+ * consultor existe porque ela voltou, e uma transição gravada sem ele deixaria
+ * o gerente sem saber de algo que aconteceu. Ao contrário da auditoria, que é
+ * best-effort, aqui a linha É parte do ato.
+ *
+ * Sem gerente gravado (permutas anteriores ao encaminhamento), não há a quem
+ * avisar, e o ato segue.
+ */
+function noticeToManager(
+  barter: Barter,
+  message: string,
+): Pick<Prisma.BarterUncheckedUpdateInput, 'notices'> {
+  if (barter.managerId === null) return {};
+  return {
+    notices: {
+      create: [{ userId: barter.managerId, barterCode: barter.code, message }],
+    },
+  };
+}
+
+/**
  * A COTAÇÃO DO SEGURO desta permuta: a praça e a taxa dela.
  *
  * Tipo próprio, e não o registro do cadastro (`InsuranceRate`), porque o que a
@@ -518,13 +609,22 @@ function insuranceOf(barter: Barter): InsuranceQuote | null {
 }
 
 /**
+ * O MUNICÍPIO QUE PRECIFICA O SEGURO: o que o consultor escolheu na opção do
+ * seguro, ou — sem escolha — o do cadastro do produtor, que é o que a tela já
+ * vem marcando. Vazio quando não há nenhum dos dois.
+ */
+function insuranceCityOf(chosen: string | undefined, producerCity: string | null): string {
+  return chosen?.trim() || producerCity?.trim() || '';
+}
+
+/**
  * A LINHA DO SEGURO dentro da permuta.
  *
  * Em um lugar só porque ela nasce em DOIS momentos, como o item de fora do
  * Barter: no registro e de novo a cada remontagem do rascunho
  * (`replaceInputs`), que apaga os itens e recria a lista inteira.
  *
- * A CONTA FICA LEGÍVEL NA PRÓPRIA LINHA: `quantity` é a área cultivável (ha) e
+ * A CONTA FICA LEGÍVEL NA PRÓPRIA LINHA: `quantity` é a área plantada (ha) e
  * `unitValue` é a taxa do município. É o que permite ao produtor conferir o
  * valor lendo o comprovante — 1.200 ha × R$ 85,00 —, em vez de receber um
  * número fechado cuja origem está em outro lugar.
@@ -546,6 +646,36 @@ function insuranceItemOf(
     unitValue: quote.ratePerHa,
     insurance: true,
   };
+}
+
+/**
+ * O TETO DO PENHOR: a área de garantia que a permuta exige não pode passar da
+ * área plantada que ela cobre.
+ *
+ * É a leitura literal do penhor: a garantia é a lavoura, e uma permuta que pede
+ * 70 ha de soja em garantia sobre 60 ha plantados é uma permuta que a lavoura
+ * não paga. Descobrir isso na emissão da cédula — onde a soma das matrículas já
+ * é conferida contra a mesma área — seria descobrir com o insumo na fazenda.
+ *
+ * As sacas saem da linha do grão recém-precificada. Versão sem produtividade não
+ * chega aqui: o registro já a recusou.
+ */
+function assertPledgeFits(
+  items: Prisma.BarterItemUncheckedCreateWithoutBarterInput[],
+  yieldPerHa: number,
+  marginPercent: number,
+  plantedAreaHa: number,
+): void {
+  const sacks = items.find((item) => item.kind === 'grain')?.quantity ?? 0;
+  const required = pledgeAreaFor(sacks, yieldPerHa, marginPercent);
+  if (required > plantedAreaHa + AREA_EPSILON) {
+    const ha = (value: number) =>
+      value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    throw new UnprocessableEntityException(
+      `Esta permuta exige ${ha(required)} ha de lavoura em garantia, e a área plantada informada é ` +
+        `${ha(plantedAreaHa)} ha. Reduza os insumos ou corrija a área`,
+    );
+  }
 }
 
 /**
@@ -591,6 +721,8 @@ export class BartersService {
    *   dele;
    * - **o time** (gerente): as permutas endereçadas a ele. Ele não é auditor —
    *   responde por um time, e a permuta de outro time não é assunto dele;
+   * - **o que tem seguro e chegou à apólice** (seguradora): o próprio trecho da
+   *   linha, e só das permutas com seguro. Ver `bartersReadInsurance`;
    * - **o que chegou ao faturamento** (faturista): o próprio trecho da linha,
    *   e nada antes dele. Ver `bartersReadInvoicing` em policy.ts;
    * - **o que chegou à emissão** (emissor): um degrau adiante do anterior — as
@@ -634,10 +766,27 @@ export class BartersService {
           ...(can(user, CAPABILITY.bartersProductReview)
             ? [{ productRequests: { some: {} } }]
             : []),
+          // O RASCUNHO QUE ELE MESMO GEROU: o admin que registra em nome do
+          // consultor do produtor (ver `create`) não perde de vista, no clique
+          // seguinte, a permuta que acabou de criar. Quem a gerou é o ator do
+          // evento do registro — a mesma linha que a linha do tempo mostra.
+          ...(can(user, CAPABILITY.bartersRegister)
+            ? [{ events: { some: { action: BARTER_ACTION.register, actorId: user.id } } }]
+            : []),
         ],
       };
     }
     if (can(user, CAPABILITY.bartersReadTeam)) return { managerId: user.id };
+    if (can(user, CAPABILITY.bartersReadInsurance)) {
+      // O TRECHO DA APÓLICE E O SEGURO, juntos: a aprovada sem seguro também
+      // está "depois da decisão", mas pulou esta mesa e nunca foi trabalho dela.
+      // A pergunta do seguro é a mesma da máquina de estados (`insuredOf`), dita
+      // na língua do banco — as escolhas que levam seguro.
+      return {
+        status: { in: lineFrom(BARTER_ACTION.insure) },
+        insuranceChoice: { in: INSURED_CHOICES },
+      };
+    }
     if (can(user, CAPABILITY.bartersReadInvoicing)) {
       return { status: { in: lineFrom(BARTER_ACTION.invoice) } };
     }
@@ -671,6 +820,7 @@ export class BartersService {
         ...(query.status ? [{ status: query.status }] : []),
         ...(query.unitId ? [{ unitId: query.unitId }] : []),
         ...(query.managerId ? [{ managerId: query.managerId }] : []),
+        ...(query.seasonId ? [{ seasonId: query.seasonId }] : []),
       ],
     };
 
@@ -743,34 +893,27 @@ export class BartersService {
    * registra e monta o rascunho normalmente; ele só não consegue encaminhar — e
    * a mensagem que ele lê nesse momento diz exatamente isso.
    */
-  async create(consultant: User, dto: CreateBarterDto): Promise<BarterDetail> {
+  async create(author: User, dto: CreateBarterDto): Promise<BarterDetail> {
     // A rota já exige a capacidade `barters.register`; aqui a regra é repetida
     // como invariante do DOMÍNIO, e na forma de LISTA DE PERMITIDOS. Enquanto
     // isto perguntava "é admin?", cada papel novo entrava por omissão — gerente,
     // comitê e faturista registrariam permuta sem ninguém ter decidido isso.
-    if (consultant.role !== ROLE.consultant) {
+    //
+    // O ADMIN entrou na lista, e entrou por decisão: ele gera a permuta na mesma
+    // tela do consultor, quando o cliente liga para a central. Ver o passo 2.
+    if (author.role !== ROLE.consultant && author.role !== ROLE.admin) {
       throw new ForbiddenException('Permutas são registradas pelo consultor da carteira');
     }
 
-    // 1. O Barter vigente é o primeiro portão: sem lançamento aberto não existe
+    // 1. A CULTURA escolhida pelo consultor, e o Barter vigente DELA: é o
+    //    primeiro portão. Sem lançamento aberto naquela cultura não existe
     //    tabela de valores, e uma permuta sem tabela seria um acordo sem preço.
-    const version = await this.seasons.requireOpenVersion();
-
-    // 1.5. A CULTURA escolhida pelo consultor, entre as que este lançamento
-    //      aceita. É a primeira decisão da permuta: ela define a cotação que
-    //      converte o custo em sacas, a produtividade que dimensiona o penhor e
-    //      o vencimento da cédula. A recusa nomeia o que ESTÁ aberto, porque é
-    //      isso que o consultor precisa saber para escolher de novo.
-    const grain = version.grains.find((row) => row.grainId === dto.grainId);
-    if (!grain) {
-      const open = version.grains.map((row) => row.grainName).join(' e ');
+    //    A versão define a tabela, a cotação que converte o custo em sacas, a
+    //    produtividade que dimensiona o penhor e o vencimento da cédula.
+    const version = await this.seasons.requireOpenVersion(dto.seasonId);
+    if (version.grainPrice <= 0) {
       throw new UnprocessableEntityException(
-        `O Barter ${version.code} não aceita essa cultura. Ele paga em ${open || 'nenhuma cultura'}`,
-      );
-    }
-    if (grain.price <= 0) {
-      throw new UnprocessableEntityException(
-        `O Barter ${version.code} está sem valor para a saca de ${grain.grainName}`,
+        `O Barter ${version.code} está sem valor para a saca de ${version.season.grainName}`,
       );
     }
     // E SEM PRODUTIVIDADE ESTIMADA TAMBÉM NÃO SE PERMUTA — o portão gêmeo do de
@@ -786,28 +929,37 @@ export class BartersService {
     // permuta ainda não existe, ninguém digitou cédula nenhuma, e quem resolve é
     // o admin em um campo só. É também por causa dela que `pledgeYield` 0 pode
     // significar "permuta antiga" sem ambiguidade — ver o campo no schema.
-    if (grain.estimatedYield <= 0) {
+    if (version.estimatedYield <= 0) {
       throw new UnprocessableEntityException(
-        `O Barter ${version.code} está sem produtividade estimada de ${grain.grainName} — ` +
+        `O Barter ${version.code} está sem produtividade estimada de ${version.season.grainName} — ` +
           `sem ela não há como dimensionar a área do penhor. Peça ao administrador para informá-la no lançamento`,
       );
     }
 
-    // 2. O produtor precisa estar na carteira de QUEM REGISTRA. A carteira é
-    //    compartilhável (o mesmo produtor é atendido por vários consultores,
-    //    ver ProducerConsultant), então a pergunta é de pertencimento à lista —
-    //    e não mais igualdade com um dono único. A permuta continua sendo de um
-    //    consultor só: o que a registrou.
-    const producer = await this.prisma.producer.findUnique({
-      where: { id: dto.producerId },
-      include: {
-        consultants: { where: { consultantId: consultant.id }, select: { consultantId: true } },
-      },
-    });
+    // 2. O produtor precisa estar na carteira de QUEM REGISTRA.
+    //
+    // Quando quem registra é o ADMIN, a carteira é a do produtor: o consultor da
+    // permuta é o CONSULTOR DO PRODUTOR, e não quem apertou o botão. É ele quem
+    // segue com ela — escreve o parecer, preenche a cédula e a encaminha ao
+    // gerente dele —, e uma permuta em nome do admin não teria gerente para
+    // quem ir. Quem a gerou fica na linha do tempo, no evento do registro.
+    const producer = await this.prisma.producer.findUnique({ where: { id: dto.producerId } });
     if (!producer) {
       throw new UnprocessableEntityException('Produtor não encontrado');
     }
-    if (producer.consultants.length === 0) {
+    let consultant = author;
+    if (author.role === ROLE.admin) {
+      const owner =
+        producer.consultantId === null
+          ? null
+          : await this.prisma.user.findUnique({ where: { id: producer.consultantId } });
+      if (!owner || owner.role !== ROLE.consultant) {
+        throw new UnprocessableEntityException(
+          `${producer.name} está sem consultor na carteira. Designe um consultor antes de gerar a permuta`,
+        );
+      }
+      consultant = owner;
+    } else if (producer.consultantId !== author.id) {
       throw new ForbiddenException('Este produtor não pertence à sua carteira');
     }
 
@@ -819,17 +971,29 @@ export class BartersService {
       throw new UnprocessableEntityException('Escolha uma unidade de retirada válida');
     }
 
-    // 3.5. O SEGURO, quando o Barter desta versão leva seguro: a taxa da praça
-    //      do produtor, cotada agora e congelada no registro. A recusa por praça
-    //      sem taxa acontece AQUI, pelo mesmo motivo da recusa por versão sem
+    // 3.5. O SEGURO: a escolha que a política da versão permite (obrigatório,
+    //      opcional ou sem seguro) e, quando leva, a taxa do MUNICÍPIO que o
+    //      consultor escolheu (o do cadastro do produtor, se ele não escolheu),
+    //      cotada agora e congelada no registro. A recusa por praça sem taxa
+    //      acontece AQUI, pelo mesmo motivo da recusa por versão sem
     //      produtividade — aqui ela é grátis.
-    const insurance = await this.insuranceFor(version, producer);
+    const { choice, quote: insurance } = await this.insuranceFor(
+      version,
+      insuranceCityOf(dto.insuranceCity, producer.city),
+      dto.insurance,
+    );
 
     // 4, 5 e 6 — a precificação e as travas — em um lugar só, porque a
     // ALTERAÇÃO de um rascunho passa exatamente pelas mesmas (ver
     // `replaceInputs`): mudar um insumo é refazer a permuta inteira contra as
     // mesmas regras, e duas cópias delas divergiriam no primeiro ajuste.
-    const items = await this.pricedItemsFor(version, grain, producer, dto.inputs, [], insurance);
+    const area = { areaHa: dto.plantedAreaHa };
+    const items = await this.pricedItemsFor(version, area, dto.inputs, [], insurance);
+
+    // 7. O TETO DO PENHOR: a garantia exigida não pode passar da lavoura que
+    //    existe. Com a margem da credora de HOJE — a que vai ficar congelada.
+    const pledgeMarginPercent = (await this.creditor.get()).pledgeMarginPercent;
+    assertPledgeFits(items, version.estimatedYield, pledgeMarginPercent, dto.plantedAreaHa);
 
     // A FORMA de recolhimento: a do CADASTRO do produtor, que é onde a opção
     // formal dele mora (ver `Producer.taxRegime`). O corpo ainda pode dizer
@@ -845,10 +1009,13 @@ export class BartersService {
       consultantBranch: consultant.branch ?? '',
       producerId: producer.id,
       producerName: producer.name,
-      // A ÁREA congelada, pelo mesmo motivo do preço do item: ela é o
-      // denominador do investimento por hectare, e o produtor arrenda mais terra
-      // na safra seguinte. Ver `producerAreaHa` no schema.
-      producerAreaHa: producer.areaHa,
+      // A SAFRA DA CULTURA, congelada: é a cultura da permuta, fixa daqui em
+      // diante. O nome vai no comprovante e na CPR.
+      seasonId: version.seasonId,
+      seasonName: version.season.name,
+      // A ÁREA PLANTADA da cultura que esta permuta cobre — a régua do seguro,
+      // dos mínimos, do investimento e do penhor. Ver `plantedAreaHa` no schema.
+      plantedAreaHa: dto.plantedAreaHa,
       unitId: unit.id,
       unitName: unit.name,
       // O IMPOSTO DA ENTREGA: a forma escolhida no fechamento, e a alíquota que
@@ -862,10 +1029,11 @@ export class BartersService {
       // revê o apetite de risco —, e lidas na hora de conferir fariam esta
       // permuta passar a exigir mais área do que as lavouras que o consultor já
       // anotou, sem que nada nela tivesse mudado. Mesmo argumento de `taxRate`.
-      pledgeYield: grain.estimatedYield,
-      pledgeMarginPercent: (await this.creditor.get()).pledgeMarginPercent,
-      // O SEGURO congelado: a praça que o precificou e a taxa dela HOJE. Vazio
-      // e zero quando o Barter não leva seguro — ver `Barter.insuranceCity`.
+      pledgeYield: version.estimatedYield,
+      pledgeMarginPercent,
+      // O SEGURO congelado: como ele chegou (`insuranceChoice`), a praça que o
+      // precificou e a taxa dela HOJE. Vazio e zero quando a permuta não leva.
+      insuranceChoice: choice,
       insuranceCity: insurance?.city ?? '',
       insuranceRatePerHa: insurance?.ratePerHa ?? 0,
       // Sem `managerId`: o destinatário é gravado no ENVIO, e o envio é o
@@ -878,39 +1046,56 @@ export class BartersService {
       items: { create: items },
       // O PRIMEIRO EVENTO da linha do tempo nasce junto com a permuta, na mesma
       // transação — não existe permuta sem o registro de que ela foi registrada.
+      //
+      // O ATOR é quem REGISTROU, e não o dono da carteira: gerada pelo admin, a
+      // permuta é do consultor do produtor, e é este evento que guarda que foi
+      // o admin quem a criou — com a frase que diz em nome de quem.
       events: {
-        create: [this.eventOf(consultant, BARTER_ACTION.register, null, BARTER_STATUS.draft)],
+        create: [
+          this.eventOf(
+            author,
+            BARTER_ACTION.register,
+            null,
+            BARTER_STATUS.draft,
+            author.id === consultant.id
+              ? null
+              : `Gerada pelo administrador ${author.fullName} para a carteira de ${consultant.fullName}`,
+          ),
+        ],
       },
     });
   }
 
   /**
-   * O SEGURO DESTA PERMUTA — a praça do produtor e a taxa dela, ou `null`
-   * quando o Barter não leva seguro.
+   * O SEGURO DESTA PERMUTA — a escolha que a política da versão permite e,
+   * quando a permuta leva seguro, a praça escolhida e a taxa dela. A praça
+   * chega resolvida (ver `insuranceCityOf`).
    *
-   * Quem decide se leva é o LANÇAMENTO (`BarterVersion.insuranceRequired`), e
-   * não o consultor nem o produtor: contratar seguro é decisão comercial da
-   * safra, e deixá-la permuta a permuta faria o mesmo Barter ser vendido de dois
-   * jeitos na mesma praça, no mesmo dia, conforme quem atendeu.
+   * Quem decide a POLÍTICA é o lançamento (`BarterVersion.insurancePolicy`).
+   * Quando ela é opcional, quem decide a permuta é o consultor com o produtor
+   * (`wanted`); o pedido que contradiz a política é recusado — ver
+   * `insuranceChoiceFor`.
    *
-   * AS DUAS RECUSAS são o ponto deste método, e elas acontecem no REGISTRO de
-   * propósito — o lugar mais barato para elas: a permuta ainda não existe,
-   * ninguém retirou nada, e quem resolve é o admin num campo de cadastro. A
-   * alternativa seria deixar a permuta nascer sem a linha do seguro, e aí o que
-   * se descobre semanas depois é uma permuta sem seguro dentro de uma safra que
-   * tem seguro — com o insumo já na fazenda.
+   * AS DUAS RECUSAS de praça acontecem no REGISTRO de propósito — o lugar mais
+   * barato para elas: a permuta ainda não existe, ninguém retirou nada, e quem
+   * resolve é o admin num campo de cadastro. No OPCIONAL a tela já mostra a
+   * opção bloqueada antes; chegar aqui pedindo seguro sem taxa é a mesma recusa.
    *
    * Elas dizem coisas DIFERENTES porque mandam fazer coisas diferentes: falta a
    * praça na base de seguros, ou falta o município no cadastro do produtor. Ver
    * `insurance-rate.ts`, onde as duas frases moram.
    */
   private async insuranceFor(
-    version: VersionWithPrices,
-    producer: { city: string | null; areaHa: number },
-  ): Promise<InsuranceQuote | null> {
-    if (!version.insuranceRequired) return null;
+    version: { insurancePolicy: string },
+    city: string,
+    wanted: boolean | undefined,
+  ): Promise<{ choice: InsuranceChoice; quote: InsuranceQuote | null }> {
+    const decided = insuranceChoiceFor(version.insurancePolicy, wanted);
+    if ('refusal' in decided) {
+      throw new UnprocessableEntityException(decided.refusal);
+    }
+    if (!choiceInsures(decided.choice)) return { choice: decided.choice, quote: null };
 
-    const city = producer.city?.trim() ?? '';
     if (!city) {
       throw new UnprocessableEntityException(MISSING_CITY_REFUSAL);
     }
@@ -922,10 +1107,8 @@ export class BartersService {
 
     // A PRAÇA GRAVADA é a do CADASTRO DA BASE, e não a do produtor: as duas são
     // o mesmo lugar (é o que a chave canônica garante), e a da base é a grafia
-    // que o admin escolheu. É ela que sai na linha do comprovante, e ler
-    // "Seguro agrícola — maringa / pr" num documento seria expor ao produtor a
-    // digitação de outra pessoa.
-    return { city: rate.city, ratePerHa: rate.valuePerHa };
+    // que o admin escolheu. É ela que sai na linha do comprovante.
+    return { choice: decided.choice, quote: { city: rate.city, ratePerHa: rate.valuePerHa } };
   }
 
   /**
@@ -945,11 +1128,9 @@ export class BartersService {
    * hoje); a alteração usa a DA PERMUTA (o acordo foi fechado nela, e a gestão
    * seguinte não reescreve o que já foi combinado).
    *
-   * A CULTURA é parâmetro pelo mesmo motivo, e com uma diferença que importa: no
-   * registro ela é a que o consultor ESCOLHEU; na alteração ela é a que a
-   * permuta JÁ TEM — lida da linha do grão, com a cotação congelada lá. Trocar a
-   * cultura de um rascunho é, por isso, refazer a linha do grão, e não editar um
-   * campo: ver `setCulture`.
+   * A CULTURA vem com a versão — ela é a safra dela, e a cotação da saca e a
+   * produtividade são dela. A ÁREA é parâmetro: no registro é a que o consultor
+   * informou; na alteração, a da permuta (ou a nova, quando ele a corrige).
    *
    * OS ITENS DE FORA DO BARTER entram por `granted`, e entram por um caminho
    * separado de propósito (ver `product-request.ts`): eles somam CUSTO — foram
@@ -967,7 +1148,6 @@ export class BartersService {
    */
   private async pricedItemsFor(
     version: VersionWithPrices,
-    grain: VersionGrain,
     producer: { areaHa: number },
     inputs: BarterInputDto[],
     granted: GrantedRequest[] = [],
@@ -1015,8 +1195,8 @@ export class BartersService {
       throw new UnprocessableEntityException('Quantidades de insumo devem ser maiores que zero');
     }
 
-    // 4. Insumos com exigência por hectare são obrigatórios para a área do
-    //    produtor — mas só os que ESTÃO na versão: exigir o que o Barter não
+    // 4. Insumos com exigência por hectare são obrigatórios para a área
+    //    plantada — mas só os que ESTÃO na versão: exigir o que o Barter não
     //    lançou travaria toda permuta da gestão.
     const requiredProducts = (
       await this.prisma.product.findMany({
@@ -1052,24 +1232,27 @@ export class BartersService {
       );
     }
 
-    // 6. Converte o custo em sacas do grão da safra — o coração do escambo. O
+    // 6. Converte o custo em sacas do grão da cultura — o coração do escambo. O
     //    que veio de fora do Barter e o SEGURO entram AQUI, e só aqui: os dois
     //    são custo adiantado como qualquer outro, e as sacas pagam a permuta
     //    inteira.
     const insuranceCost = insurance ? insuranceCostFor(producer.areaHa, insurance.ratePerHa) : 0;
-    const sacks = sacksToCover(totalCost + offBarterCost(granted) + insuranceCost, grain.price);
+    const sacks = sacksToCover(
+      totalCost + offBarterCost(granted) + insuranceCost,
+      version.grainPrice,
+    );
 
     return [
       {
-        productId: grain.grainId,
+        productId: version.season.grainId,
         kind: 'grain',
-        productName: grain.grainName,
-        // O grão não leva código: quem o identifica é a cultura do lançamento, e
-        // o item existe para dizer quantas sacas pagam a permuta — não para ser
-        // separado no balcão, que é a pergunta a que o código do insumo responde.
-        unit: grain.grainUnit,
+        productName: version.season.grainName,
+        // O grão não leva código: quem o identifica é a safra, e o item existe
+        // para dizer quantas sacas pagam a permuta — não para ser separado no
+        // balcão, que é a pergunta a que o código do insumo responde.
+        unit: version.season.grainUnit,
         quantity: sacks,
-        unitValue: grain.price,
+        unitValue: version.grainPrice,
       },
       ...products.map((product) => ({
         productId: product.id,
@@ -1137,6 +1320,11 @@ export class BartersService {
    * dois pela leitura e o segundo sobrescreveria a decisão do primeiro em
    * silêncio. Com ele, o segundo não encontra a linha (P2025) e recebe a mesma
    * resposta de quem chega tarde — que é o que de fato aconteceu com ele.
+   *
+   * `client` é a transação de quem chama, quando o ato grava mais alguma coisa
+   * que precisa cair junto com ele — a apólice, cujo arquivo não pode ficar
+   * gravado se o passo for recusado. A recusa (P2025) vira o mesmo 422 aqui
+   * dentro e desfaz a transação inteira.
    */
   private async applyStep(
     barter: Barter,
@@ -1145,9 +1333,10 @@ export class BartersService {
     to: BarterStatus,
     fields: Prisma.BarterUncheckedUpdateInput,
     note?: string | null,
+    client: Prisma.TransactionClient = this.prisma,
   ): Promise<BarterDetail> {
     try {
-      return await this.prisma.barter.update({
+      return await client.barter.update({
         where: { id: barter.id, status: barter.status },
         data: {
           ...fields,
@@ -1246,7 +1435,7 @@ export class BartersService {
     // SÓ AS PENDÊNCIAS DELE são cobradas (ver `consultantCprGaps`): a nota
     // fiscal não existe antes do faturamento, o vencimento é da safra e o número
     // da cédula é do emissor. Exigi-los aqui travaria a esteira num impossível.
-    await this.requireCprFilledBy(consultant, barter);
+    await this.requireCprFilledBy(barter, 'antes de encaminhá-la ao gerente');
 
     // O DESTINATÁRIO. O cadastro do consultor exige um gerente, então isto só
     // acontece quando o gerente dele foi excluído depois — e nesse caso a
@@ -1291,7 +1480,7 @@ export class BartersService {
    * está na tela da cédula, que é onde ela se resolve — e é para lá que a frase
    * manda ir.
    */
-  private async requireCprFilledBy(consultant: User, barter: Barter): Promise<void> {
+  private async requireCprFilledBy(barter: Barter, before: string): Promise<void> {
     const cpr = await this.loadCpr(barter.id);
     // AS SACAS SÃO LIDAS AGORA, e não do que veio com a permuta: este portão
     // confere a garantia contra a dívida que a permuta tem NESTE INSTANTE. Entre
@@ -1306,6 +1495,7 @@ export class BartersService {
       cpr ?? EMPTY_CPR,
       cpr?.areas ?? [],
       this.pledgeOf(barter, grain?.quantity ?? 0),
+      requirementsFrom(barter),
     );
     if (missing.length === 0) return;
 
@@ -1313,7 +1503,7 @@ export class BartersService {
     const primeiras = missing.slice(0, MOSTRADAS).join(', ');
     const resto = missing.length - MOSTRADAS;
     throw new UnprocessableEntityException(
-      `Preencha a cédula (CPR) desta permuta antes de encaminhá-la ao gerente — ` +
+      `Preencha a cédula (CPR) desta permuta ${before} — ` +
         `falta ${primeiras}${resto > 0 ? ` e mais ${resto} campo(s)` : ''}.`,
     );
   }
@@ -1371,9 +1561,11 @@ export class BartersService {
   }
 
   /**
-   * Grava a permuta reservando o próximo código público.
+   * Grava a permuta reservando o próximo código público e o próximo número de
+   * CPR — os dois no mesmo ato, porque a cédula tem número desde o registro
+   * (ver `Barter.cprNumber`).
    *
-   * O código é decidido lendo o maior já usado e somando um, e entre a leitura
+   * Cada um é decidido lendo o maior já usado e somando um, e entre a leitura
    * e a gravação existe uma fresta: dois registros simultâneos podem escolher
    * o mesmo número.
    *
@@ -1382,20 +1574,24 @@ export class BartersService {
    * escolhem o mesmo número, e com mais de uma instância da API isso deixa de
    * depender de sorte.
    *
-   * Quem resolve não é o banco, é este par: o índice único em `code` transforma
-   * a colisão numa falha limpa (P2002), e o laço abaixo a trata como "pegue o
-   * próximo". Cinco tentativas cobrem uma concorrência muito acima da real —
+   * Quem resolve não é o banco, é este par: os índices únicos em `code` e em
+   * `cprNumber` transformam a colisão numa falha limpa (P2002), e o laço abaixo
+   * a trata como "pegue o próximo". Cinco tentativas cobrem uma concorrência muito acima da real —
    * permuta é registrada por gente, uma de cada vez.
    */
   private async createWithCode(
-    data: Omit<Prisma.BarterUncheckedCreateInput, 'code'>,
+    data: Omit<Prisma.BarterUncheckedCreateInput, 'code' | 'cprNumber'>,
   ): Promise<BarterDetail> {
     const MAX_ATTEMPTS = 5;
     for (let attempt = 1; ; attempt++) {
       try {
         return await this.prisma.$transaction(async (tx) =>
           tx.barter.create({
-            data: { ...data, code: await this.nextCode(tx) },
+            data: {
+              ...data,
+              code: await this.nextCode(tx),
+              cprNumber: await this.nextCprNumber(tx),
+            },
             include: BARTER_DETAIL_INCLUDE,
           }),
         );
@@ -1405,13 +1601,19 @@ export class BartersService {
     }
   }
 
-  /** Violação do índice único de `code` (P2002) — outra permuta chegou antes. */
+  /**
+   * Violação do índice único de `code` ou de `cprNumber` (P2002) — outra
+   * permuta chegou antes.
+   */
   private isDuplicateCode(error: unknown): boolean {
     const known = error as { code?: string; meta?: { target?: unknown } };
     if (known?.code !== 'P2002') return false;
     const target = known.meta?.target;
     const fields = Array.isArray(target) ? target : [target];
-    return fields.some((field) => typeof field === 'string' && field.includes('code'));
+    return fields.some(
+      (field) =>
+        typeof field === 'string' && (field.includes('code') || field.includes('cprNumber')),
+    );
   }
 
   /**
@@ -1426,39 +1628,36 @@ export class BartersService {
    * diferentes de propósito: quem chega antes precisa saber com quem a permuta
    * está parada, não que "já foi decidida" — quem lê isso vai procurar uma
    * decisão que ninguém tomou. Quem escreve as mensagens é a máquina de estados.
+   *
+   * AS EXIGÊNCIAS não são escritas aqui: elas vêm antes, em `require`. A
+   * aprovação as MANTÉM — a decisão foi tomada contando com elas, e a cédula
+   * continua cobrando o avalista até a emissão. A negativa as apaga.
+   *
+   * PARA ONDE a aprovação vai é do SEGURO da permuta, e não do comitê: com
+   * seguro, a seguradora; sem, o faturista (ver `reviewOutcomeFor`). O DTO
+   * continua dizendo só o desfecho.
    */
   async review(committee: User, code: string, dto: ReviewBarterDto): Promise<BarterDetail> {
     const barter = await this.requireBarter(committee, code, BARTER_ACTION.review);
 
     const note = dto.note?.trim() ? dto.note.trim() : null;
-    // AS EXIGÊNCIAS só sobrevivem na APROVAÇÃO, e são zeradas na negativa: pedir
-    // avalista de uma permuta negada é pedir garantia para um negócio que não
-    // vai acontecer, e a exigência ficaria pendurada na tela de quem levou a
-    // negativa ao produtor. Não é conferência do DTO porque não é erro de quem
-    // chama — é o desfecho que decide o que a decisão carrega.
-    const requirements = {
-      requiresGuarantor: dto.status !== BARTER_STATUS.denied && dto.requiresGuarantor === true,
-      requiresCollateral: dto.status !== BARTER_STATUS.denied && dto.requiresCollateral === true,
-      requiresInsurance: dto.status !== BARTER_STATUS.denied && dto.requiresInsurance === true,
-    };
     const reviewed = await this.applyStep(
       barter,
       BARTER_ACTION.review,
       committee,
-      dto.status,
+      reviewOutcomeFor(dto.status, barter),
       {
         reviewNote: note,
         reviewedBy: committee.fullName,
         reviewedById: committee.id,
         reviewedAt: new Date(),
-        ...requirements,
+        // A NEGATIVA apaga as exigências: pedir avalista de uma permuta negada é
+        // pedir garantia para um negócio que não vai acontecer, e a exigência
+        // ficaria pendurada na tela de quem levou a negativa ao produtor. O que
+        // o comitê pediu antes continua na linha do tempo, no evento `require`.
+        ...(dto.status === BARTER_STATUS.denied ? NO_REQUIREMENTS : {}),
       },
-      // AS EXIGÊNCIAS ENTRAM NO EVENTO junto com o texto, e não só nas colunas
-      // da permuta: a linha do tempo é o que sobrevive a uma alteração (ver
-      // `CLEARED_BY_CHANGE`, que apaga a decisão atual quando a permuta volta a
-      // rascunho). Sem elas ali, "o que o comitê exigiu da primeira vez?" não
-      // teria onde ser respondido depois de a permuta ser decidida de novo.
-      noteWithRequirements(note, requirements),
+      note,
     );
 
     // A permuta já guarda `reviewedBy`, e a linha do tempo dela já guarda o
@@ -1482,6 +1681,94 @@ export class BartersService {
 
     await this.closeBarterIfGoalReached(committee, reviewed);
     return reviewed;
+  }
+
+  /**
+   * AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos antes de
+   * decidir. A permuta volta ao CONSULTOR, e o GERENTE dela é avisado.
+   *
+   * Elas SE ACUMULAM: a coluna recebe o que já estava OU o que foi pedido
+   * agora. O comitê que recebe o avalista e, na segunda leitura, pede também a
+   * hipoteca está somando uma exigência — e não dispensando o aval que a cédula
+   * já tem. Dispensar não é ato deste fluxo: a exigência cumprida simplesmente
+   * fica cumprida.
+   *
+   * O TEXTO vai para o evento, e não para `reviewNote`: este ato não decide, e
+   * gravá-lo nos campos da decisão faria a permuta dizer "decidida por Comitê"
+   * enquanto espera o consultor. Quem quer saber o que o comitê pediu lê a
+   * linha do tempo — é lá que cada rodada fica, com as caixas por extenso.
+   *
+   * Sem trilha de AUDITORIA, como o encaminhamento: exigir não decide dinheiro.
+   * A decisão que vier depois entra nela.
+   */
+  async require(committee: User, code: string, dto: RequireBarterDto): Promise<BarterDetail> {
+    const barter = await this.requireBarter(committee, code, BARTER_ACTION.require);
+
+    const asked: CprRequirements = {
+      requiresGuarantor: dto.requiresGuarantor === true,
+      requiresCollateral: dto.requiresCollateral === true,
+    };
+    if (requirementsOf(asked).length === 0) {
+      throw new UnprocessableEntityException(NO_REQUIREMENT_MESSAGE);
+    }
+
+    const note = dto.note.trim();
+    const required = requirementsOf(asked).join(', ').toLowerCase();
+    return this.applyStep(
+      barter,
+      BARTER_ACTION.require,
+      committee,
+      BARTER_STATUS.awaitingRequirements,
+      {
+        requiresGuarantor: barter.requiresGuarantor || asked.requiresGuarantor,
+        requiresCollateral: barter.requiresCollateral || asked.requiresCollateral,
+        ...noticeToManager(
+          barter,
+          `A permuta ${barter.code}, de ${barter.consultantName}, voltou ao consultor: ` +
+            `o comitê exigiu ${required}. Ela volta direto ao comitê quando ele cumprir — ` +
+            `não há parecer a refazer.`,
+        ),
+      },
+      // As caixas vão POR EXTENSO no evento, como sempre foram: a linha do tempo
+      // é o que conta, daqui a dois anos, o que cada rodada pediu.
+      noteWithRequirements(note, asked),
+    );
+  }
+
+  /**
+   * O CUMPRIMENTO DAS EXIGÊNCIAS — o consultor devolve a permuta ao comitê.
+   *
+   * Ela volta a `pending` DIRETO, sem passar pelo gerente: o parecer dele foi
+   * sobre a negociação, e a negociação não mudou. Ele é AVISADO.
+   *
+   * O PORTÃO é a cédula, e é o mesmo do encaminhamento (`requireCprFilledBy`):
+   * as exigências viraram pendências do consultor (ver `cprGapsOf`), e uma
+   * permuta que voltasse ao comitê sem o avalista que ele pediu voltaria para
+   * ser devolvida de novo.
+   */
+  async fulfill(
+    consultant: User,
+    code: string,
+    dto: FulfillRequirementsDto,
+  ): Promise<BarterDetail> {
+    const barter = await this.requireBarter(consultant, code, BARTER_ACTION.fulfill);
+
+    await this.requireCprFilledBy(barter, 'antes de devolvê-la ao comitê');
+
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const required = requirementsOf(barter).join(', ').toLowerCase();
+    return this.applyStep(
+      barter,
+      BARTER_ACTION.fulfill,
+      consultant,
+      BARTER_STATUS.pending,
+      noticeToManager(
+        barter,
+        `A permuta ${barter.code}, de ${barter.consultantName}, voltou ao comitê: ` +
+          `o consultor cumpriu as exigências (${required}).`,
+      ),
+      note,
+    );
   }
 
   /**
@@ -1520,6 +1807,97 @@ export class BartersService {
         error instanceof Error ? error.stack : undefined,
       );
     }
+  }
+
+  /**
+   * A APÓLICE — o ato da seguradora: o documento anexado e o número informado.
+   *
+   * Só alcança a permuta aprovada COM SEGURO, e as maneiras de não estar nesse
+   * ponto têm frases próprias, todas da máquina de estados: a permuta sem
+   * seguro não passa por aqui (`skipped`), a que ainda está no comitê aguarda a
+   * decisão, e a que já tem apólice diz isso.
+   *
+   * ARQUIVO E NÚMERO NA MESMA TRANSAÇÃO, e é o ponto do ato: a apólice anexada
+   * sem número é um PDF que a cédula não tem como citar, e o número sem a
+   * apólice é afirmação sem prova — que é o que ele foi enquanto o consultor o
+   * digitava. Se o passo for recusado (outra pessoa da seguradora informou
+   * primeiro), o arquivo não fica gravado.
+   *
+   * A permuta volta ao SEU par de aprovação (`policyOutcomeFor`): a aprovada
+   * vai ao faturista como aprovada, e a ressalva continua sendo ressalva.
+   */
+  async insure(
+    insurer: User,
+    code: string,
+    dto: InsureBarterDto,
+    file: UploadedAttachment,
+  ): Promise<BarterDetail> {
+    const barter = await this.requireBarter(insurer, code, BARTER_ACTION.insure);
+    const contentType = this.requireAttachable(file);
+
+    // O DTO só garante que veio texto; espaço em branco não é número de apólice.
+    const policyNumber = dto.policyNumber.trim();
+    if (!policyNumber) throw new UnprocessableEntityException(POLICY_NUMBER_MESSAGE);
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+
+    // O TEXTO DO EVENTO é a apólice por extenso, como no registro da cédula: quem
+    // lê a linha do tempo quer saber sob que número a lavoura está segurada.
+    const timeline = [`Apólice ${policyNumber}`, ...(note ? [note] : [])].join(' — ');
+
+    const insured = await this.prisma.$transaction(async (tx) => {
+      const stored = await tx.barterFile.create({
+        data: this.fileDataOf(insurer, file, contentType),
+      });
+      return this.applyStep(
+        barter,
+        BARTER_ACTION.insure,
+        insurer,
+        policyOutcomeFor(barter.status),
+        {
+          insurancePolicyNumber: policyNumber,
+          insurancePolicyFileId: stored.id,
+          insuredBy: insurer.fullName,
+          insuredById: insurer.id,
+          insuredAt: new Date(),
+          insuranceNote: note,
+        },
+        timeline,
+        tx,
+      );
+    });
+
+    await this.audit.record({
+      actor: insurer,
+      action: AUDIT_ACTION.barterInsured,
+      targetType: 'barter',
+      targetId: insured.id,
+      targetLabel: insured.code,
+      detail: `apólice ${policyNumber} informada (${file.originalname})${
+        note ? `: ${summarize(note)}` : ''
+      }`,
+    });
+    return insured;
+  }
+
+  /**
+   * O ARQUIVO DA APÓLICE — para quem alcança a permuta, como o da nota.
+   *
+   * É o que permite ao emissor conferir a apólice que a cédula cita, e ao
+   * consultor mostrá-la ao produtor, sem pedir o PDF à seguradora.
+   */
+  async policyFile(viewer: User, code: string): Promise<StoredFile> {
+    const barter = await this.findFor(viewer, code);
+    const file = barter.insurancePolicyFileId
+      ? await this.prisma.barterFile.findUnique({ where: { id: barter.insurancePolicyFileId } })
+      : null;
+    if (!file) {
+      throw new NotFoundException(
+        insuredOf(barter)
+          ? 'Esta permuta ainda não tem a apólice anexada'
+          : 'Esta permuta não tem seguro',
+      );
+    }
+    return file;
   }
 
   /**
@@ -1872,10 +2250,10 @@ export class BartersService {
     const refusal = changeRequestRefusal(barter);
     if (refusal) throw new UnprocessableEntityException(refusal);
 
-    // A CULTURA: a alteração atravessa versões, e não atravessa culturas. Ela é
-    // conferida já no PEDIDO, e não só na remontagem, para o consultor não
+    // A CULTURA: a alteração atravessa versões, e não o fim da venda da cultura.
+    // Ela é conferida já no PEDIDO, e não só na remontagem, para o consultor não
     // esperar a resposta do admin por um caminho que termina fechado.
-    await this.requireSameCulture(barter);
+    await this.requireOpenCulture(barter);
 
     const note = dto.note.trim();
     const requested = await this.applyChange(
@@ -1965,6 +2343,13 @@ export class BartersService {
           },
           note,
         );
+
+    // A APÓLICE de uma permuta que voltou a rascunho sai junto com o resto da
+    // etapa (ver `CLEARED_BY_CHANGE`). O vínculo já foi zerado acima; aqui vai o
+    // arquivo, que sem ele seria um anexo sem dono no banco.
+    if (dto.accept && barter.insurancePolicyFileId !== null) {
+      await this.prisma.barterFile.deleteMany({ where: { id: barter.insurancePolicyFileId } });
+    }
 
     await this.audit.record({
       actor: admin,
@@ -2430,10 +2815,12 @@ export class BartersService {
    * - a VERSÃO é a DA PERMUTA, e não a vigente. O acordo foi fechado naquela
    *   tabela, e a gestão seguinte não reescreve preço combinado — é o mesmo
    *   motivo de o item guardar o preço em vez de lê-lo;
-   * - a ÁREA é a CONGELADA no registro (`producerAreaHa`), e não a do cadastro
-   *   de hoje. Ela é o denominador dos mínimos por hectare e do investimento, e
-   *   trocá-la aqui faria a alteração de um insumo mudar em silêncio a régua
-   *   pela qual a permuta inteira é medida.
+   * - a ÁREA PLANTADA e o SEGURO OPCIONAL são os da permuta, a menos que o
+   *   consultor os corrija junto (ver `ReplaceBarterInputsDto`). Mudar a área
+   *   muda a régua de tudo — mínimos, seguro, penhor —, e por isso ela entra
+   *   na mesma remontagem, contra as mesmas travas;
+   * - o seguro ACEITO volta com a taxa CONGELADA no registro; o que passa a ser
+   *   aceito agora é cotado agora — não havia taxa congelada para ele.
    *
    * Sem evento na linha do tempo, como em `saveNote` e pelo mesmo motivo: o
    * rascunho é a bancada do consultor, e o ato que o processo registra é o
@@ -2446,7 +2833,7 @@ export class BartersService {
   ): Promise<BarterDetail> {
     const barter = await this.requireBarter(consultant, code, BARTER_ACTION.forward);
 
-    const { version, grain } = await this.requireSameCulture(barter);
+    const { version } = await this.requireOpenCulture(barter);
 
     // OS ITENS DE FORA DO BARTER voltam para a lista, porque eles não estão na
     // lista que o consultor manda: ele escolhe do catálogo, e um item que não é
@@ -2462,14 +2849,52 @@ export class BartersService {
     // cadastro. A taxa foi congelada no registro (ver `Barter.insuranceCity`), e
     // relê-la da base faria uma correção de quantidade reprecificar o seguro
     // pela cotação de hoje, num rascunho que o produtor já viu.
+    //
+    // A ESCOLHA só muda quando o consultor a manda, e só no opcional: é a
+    // versão DA PERMUTA que diz se o seguro era opcional quando ela nasceu.
+    const plantedAreaHa = dto.plantedAreaHa ?? barter.plantedAreaHa;
+    //
+    // O MUNICÍPIO também só reprecifica quando MUDA: o consultor que corrige a
+    // praça do seguro (a lavoura é em outro município) cota a nova pela base de
+    // hoje; o que reenvia a mesma praça mantém a taxa congelada.
+    let choice = barter.insuranceChoice as InsuranceChoice;
+    let insurance = insuranceOf(barter);
+    const hadIt = choiceInsures(choice);
+    const wantedNow = dto.insurance ?? hadIt;
+    const cityChanged =
+      wantedNow &&
+      dto.insuranceCity !== undefined &&
+      dto.insuranceCity.trim() !== '' &&
+      !sameCity(dto.insuranceCity, barter.insuranceCity);
+    if (wantedNow !== hadIt || cityChanged) {
+      const producer =
+        dto.insuranceCity?.trim() || !barter.producerId
+          ? null
+          : await this.prisma.producer.findUnique({ where: { id: barter.producerId } });
+      const decided = await this.insuranceFor(
+        version,
+        insuranceCityOf(dto.insuranceCity, producer?.city ?? null),
+        wantedNow,
+      );
+      choice = decided.choice;
+      insurance = decided.quote;
+    } else if (dto.insurance === false && choice === INSURANCE_CHOICE.required) {
+      // `required` com `false`: a mesma recusa do registro.
+      await this.insuranceFor(version, '', false);
+    }
+
     const items = await this.pricedItemsFor(
       version,
-      grain,
-      { areaHa: barter.producerAreaHa },
+      { areaHa: plantedAreaHa },
       dto.inputs,
       granted,
-      insuranceOf(barter),
+      insurance,
     );
+    // O TETO DO PENHOR, com a margem CONGELADA no registro: a remontagem não
+    // ganha a margem de hoje, como não ganha a cotação de hoje.
+    if (barter.pledgeYield > 0) {
+      assertPledgeFits(items, barter.pledgeYield, barter.pledgeMarginPercent, plantedAreaHa);
+    }
 
     // Os itens antigos SAEM e os novos entram, na mesma transação: a permuta é
     // um conjunto, e um instante em que ela esteja sem insumos (ou com os dois
@@ -2484,98 +2909,12 @@ export class BartersService {
         this.prisma.barterItem.deleteMany({ where: { barterId: barter.id } }),
         this.prisma.barter.update({
           where: { id: barter.id, status: BARTER_STATUS.draft },
-          data: { items: { create: items } },
-        }),
-      ]);
-    } catch (error) {
-      if ((error as { code?: string })?.code === 'P2025') {
-        throw new UnprocessableEntityException(BARTER_STEPS[BARTER_ACTION.forward].done);
-      }
-      throw error;
-    }
-
-    return this.findFor(consultant, code);
-  }
-
-  /**
-   * TROCA A CULTURA de um rascunho — a permuta passa a ser paga em outro grão.
-   *
-   * Ela existe porque a cultura é a PRIMEIRA decisão da permuta e nem sempre é a
-   * primeira a ficar pronta: o consultor monta os insumos com o produtor, e o
-   * produtor decide na conversa que aquele talhão vai de milho, e não de soja.
-   * Sem esta porta, a saída seria apagar o rascunho e digitar tudo de novo.
-   *
-   * SÓ O RASCUNHO, e é `refusalFor(forward)` quem diz isso — a mesma porta de
-   * `replaceInputs` e `saveNote`, com a mesma frase para quem chega tarde.
-   * Depois do encaminhamento a permuta está na mesa de alguém, e trocar a
-   * cultura por baixo mudaria o negócio que aquela pessoa está analisando: o
-   * caminho de lá é o pedido de alteração.
-   *
-   * O QUE MUDA: as sacas (a cotação da cultura nova converte o mesmo custo) e a
-   * produtividade com que o penhor é dimensionado. O QUE NÃO MUDA: os insumos, o
-   * custo em R$, o seguro e os itens de fora do Barter — trocar de cultura não é
-   * refazer a permuta, é trocar a moeda com que ela é paga.
-   *
-   * A permuta é REMONTADA por inteiro (`pricedItemsFor`) em vez de ter a linha do
-   * grão reescrita: é o mesmo caminho da alteração de insumos, e é ele que
-   * garante que as regras de mínimo continuem valendo depois da troca.
-   */
-  async setCulture(consultant: User, code: string, grainId: number): Promise<BarterDetail> {
-    const barter = await this.requireBarter(consultant, code, BARTER_ACTION.forward);
-    const { version } = await this.requireSameCulture(barter);
-
-    // A CULTURA NOVA precisa estar nas duas pontas: na versão DA PERMUTA (é ela
-    // que precifica, e foi nela que o acordo foi fechado) e no Barter ABERTO
-    // hoje (trocar para uma cultura que a praça não vende mais seria registrar
-    // um negócio que não existe). A conferência da segunda é a mesma de
-    // `requireSameCulture`, feita antes da troca em vez de depois dela.
-    const grain = version.grains.find((row) => row.grainId === grainId);
-    if (!grain) {
-      const offered = version.grains.map((row) => row.grainName).join(' e ');
-      throw new UnprocessableEntityException(
-        `O Barter ${version.code} não aceita essa cultura. Ele paga em ${offered}`,
-      );
-    }
-    const open = await this.seasons.requireOpenVersion();
-    const refusal = cultureRefusal({ grainId, grainName: grain.grainName }, open);
-    if (refusal) throw new UnprocessableEntityException(refusal);
-
-    if (grain.estimatedYield <= 0) {
-      throw new UnprocessableEntityException(
-        `O Barter ${version.code} está sem produtividade estimada de ${grain.grainName} — ` +
-          `sem ela não há como dimensionar a área do penhor. Peça ao administrador para informá-la no lançamento`,
-      );
-    }
-
-    // OS INSUMOS ATUAIS, relidos da própria permuta: a troca não pede a lista de
-    // novo ao app. O que entra em `inputs` é só o insumo de catálogo — o que veio
-    // de fora do Barter e o seguro voltam pelos caminhos próprios deles, como em
-    // `replaceInputs`.
-    const current = await this.prisma.barterItem.findMany({ where: { barterId: barter.id } });
-    const inputs = current
-      .filter((item) => item.kind === 'input' && !item.offBarter && !item.insurance)
-      .map((item) => ({ productId: item.productId!, quantity: item.quantity }));
-
-    const items = await this.pricedItemsFor(
-      version,
-      grain,
-      { areaHa: barter.producerAreaHa },
-      inputs,
-      await this.grantedRequestsOf(barter.id),
-      insuranceOf(barter),
-    );
-
-    try {
-      await this.prisma.$transaction([
-        this.prisma.barterItem.deleteMany({ where: { barterId: barter.id } }),
-        this.prisma.barter.update({
-          where: { id: barter.id, status: BARTER_STATUS.draft },
           data: {
             items: { create: items },
-            // A PRODUTIVIDADE congelada troca junto: ela é da cultura, e deixá-la
-            // como estava dimensionaria o penhor do milho pela estimativa da
-            // soja — um erro que só apareceria na hora de conferir as matrículas.
-            pledgeYield: grain.estimatedYield,
+            plantedAreaHa,
+            insuranceChoice: choice,
+            insuranceCity: insurance?.city ?? '',
+            insuranceRatePerHa: insurance?.ratePerHa ?? 0,
           },
         }),
       ]);
@@ -2614,75 +2953,29 @@ export class BartersService {
   }
 
   /**
-   * A CULTURA DESTA PERMUTA — o grão que a paga, lido da LINHA DE PAGAMENTO.
+   * A GESTÃO EM QUE A PERMUTA FOI FECHADA, conferida contra a venda da cultura
+   * dela HOJE: a safra precisa estar aberta e com uma versão aceitando permuta.
    *
-   * A permuta não tem campo de cultura, e isso é deliberado (ver `Barter` no
-   * schema): a linha de `kind: "grain"` já guarda o produto, o nome e a cotação
-   * congelados no registro. Ela é a resposta, e ter uma coluna ao lado seria um
-   * segundo lugar dizendo o mesmo.
-   *
-   * `null` nas permutas anteriores ao item de pagamento — elas não dizem em que
-   * são pagas, e é quem chama que decide o que fazer com isso.
+   * Devolve a versão DA PERMUTA — é ela que reprecifica a remontagem (foi nela
+   * que o acordo foi fechado). Ver `cultureRefusal` em `change-request.ts`, onde
+   * a regra mora e está explicada.
    */
-  private async cultureOf(barter: Barter): Promise<BarterCulture | null> {
-    const item = await this.prisma.barterItem.findFirst({
-      where: { barterId: barter.id, kind: 'grain' },
-      select: { productId: true, productName: true },
-    });
-    if (!item) return null;
-    return { grainId: item.productId, grainName: item.productName };
-  }
-
-  /**
-   * A GESTÃO EM QUE A PERMUTA FOI FECHADA, conferida contra a que está aberta
-   * hoje: a aberta precisa AINDA ACEITAR a cultura desta permuta.
-   *
-   * Devolve a versão da permuta e a cultura dela DENTRO dessa versão — a versão
-   * reprecifica a remontagem (foi nela que o acordo foi fechado) e a cultura diz
-   * por qual cotação o custo vira sacas. Ver `cultureRefusal` em
-   * `change-request.ts`, onde a regra mora e está explicada.
-   */
-  private async requireSameCulture(
-    barter: Barter,
-  ): Promise<{ version: VersionWithPrices; grain: VersionGrain }> {
+  private async requireOpenCulture(barter: Barter): Promise<{ version: VersionWithPrices }> {
     if (!barter.versionCode) {
       throw new UnprocessableEntityException(
         'Esta permuta é anterior ao lançamento por versões e não pode ser alterada',
       );
     }
-    const culture = await this.cultureOf(barter);
-    if (!culture) {
-      throw new UnprocessableEntityException(
-        'Esta permuta é anterior à linha de pagamento e não pode ser alterada',
-      );
-    }
-
     const version = await this.seasons.findVersion(barter.versionCode);
-    // `requireOpenVersion` é quem recusa quando não há Barter aberto, com a
-    // frase do lançamento: sem gestão aberta não há com o que comparar, e
-    // remontar uma permuta fora de qualquer gestão aberta não é alteração, é
-    // reabrir a praça por conta própria.
-    const open = await this.seasons.requireOpenVersion();
 
-    const refusal = cultureRefusal(culture, open);
+    const season = barter.seasonId
+      ? await this.prisma.season.findUnique({ where: { id: barter.seasonId } })
+      : null;
+    const open = season ? await this.seasons.openVersionOf(season.id) : null;
+    const refusal = cultureRefusal(season, open);
     if (refusal) throw new UnprocessableEntityException(refusal);
 
-    // A CULTURA DENTRO DA VERSÃO DA PERMUTA. Ela existe por construção — a
-    // permuta nasceu de uma das culturas daquela versão, e culturas não somem de
-    // uma versão publicada —, e a recusa aqui é a rede contra o banco mexido à
-    // mão, não um caminho que a operação alcance.
-    const grain =
-      version.grains.find((row) => row.grainId === culture.grainId) ??
-      version.grains.find(
-        (row) => row.grainName.trim().toLowerCase() === culture.grainName.trim().toLowerCase(),
-      );
-    if (!grain) {
-      throw new UnprocessableEntityException(
-        `O Barter ${version.code} não tem mais a cultura ${culture.grainName} desta permuta`,
-      );
-    }
-
-    return { version, grain };
+    return { version };
   }
 
   /**
@@ -2777,7 +3070,12 @@ export class BartersService {
       // exatamente a mesma coisa sobre o que falta.
       creditor: await this.creditor.get(),
       gaps: cprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? [], context),
-      consultantGaps: consultantCprGaps(cpr ?? EMPTY_CPR, cpr?.areas ?? [], context.pledge),
+      consultantGaps: consultantCprGaps(
+        cpr ?? EMPTY_CPR,
+        cpr?.areas ?? [],
+        context.pledge,
+        context.requirements,
+      ),
       // O PENHOR MEDIDO, ao lado da lista de pendências: a lista diz que falta
       // área, este bloco diz quanta e contra o quê. É o que o formulário desenha
       // no cabeçalho das lavouras enquanto o consultor acrescenta matrículas.
@@ -2790,7 +3088,7 @@ export class BartersService {
       // consultor escreveu, o que está na tela é dele, e oferecer por cima o
       // texto de uma cédula antiga é a maneira mais fácil de sobrescrever uma
       // correção que alguém acabou de fazer.
-      suggestion: cpr ? {} : suggestFrom(producer, await this.previousCpr(barter.producerId)),
+      suggestion: cpr ? {} : await this.suggestionFor(barter, producer, culture),
     };
   }
 
@@ -2801,7 +3099,7 @@ export class BartersService {
    * São AVISOS e não pendências, e a diferença é de autoridade. `cprGaps`
    * responde "dá para emitir?", e a resposta dela recusa atos: tudo o que entra
    * lá precisa ser verdade sem exceção. Estes dois não são — há arrendamento
-   * legítimo que a área cultivável do cadastro não reflete, e há matrícula grande
+   * legítimo que a área plantada informada não reflete, e há matrícula grande
    * cuja lavoura foi repartida de boa-fé entre duas permutas. Travar por eles
    * recusaria operação boa; calar sobre eles é deixar passar a operação que a
    * feature existe para pegar. O meio-termo é dizer, e deixar a decisão com quem
@@ -2813,11 +3111,10 @@ export class BartersService {
    *    dois arrendatários apontam para a fazenda do mesmo dono — e é invisível
    *    para quem olha uma cédula por vez, que é como todo mundo olha.
    *
-   * 2. A SOMA PASSANDO DA ÁREA CULTIVÁVEL DO PRODUTOR. A área da lavoura é
+   * 2. A SOMA PASSANDO DA ÁREA PLANTADA DA PERMUTA. A área da lavoura é
    *    digitada à mão e virou um portão: quem precisa de 40 ha e tem 30 anotados
-   *    tem agora um motivo para escrever 40. O cadastro (`producerAreaHa`,
-   *    congelado no registro) é a única segunda fonte que existe sobre quanta
-   *    terra esse produtor tem.
+   *    tem agora um motivo para escrever 40. A área plantada informada no
+   *    registro (`plantedAreaHa`) é a segunda fonte sobre quanta lavoura existe.
    *
    * A busca da matrícula ignora as permutas NEGADAS e os rascunhos dos outros —
    * as primeiras não garantem nada e os segundos ainda não estão na mesa de
@@ -2841,7 +3138,12 @@ export class BartersService {
           cpr: {
             barter: {
               id: { not: barter.id },
-              versionCode: barter.versionCode,
+              // A MESMA SAFRA, e não a mesma versão: a soja da versão 01 e a da
+              // 03 disputam a mesma lavoura. A safra seguinte (ou o trigo de
+              // inverno) plantam de novo na mesma matrícula, e aí ela é legítima.
+              ...(barter.seasonId
+                ? { seasonId: barter.seasonId }
+                : { versionCode: barter.versionCode }),
               status: { notIn: [BARTER_STATUS.denied, BARTER_STATUS.draft] },
             },
           },
@@ -2860,7 +3162,7 @@ export class BartersService {
       for (const [key, codes] of shared) {
         warnings.push(
           `a matrícula ${registries.get(key)} também está em penhor na(s) permuta(s) ` +
-            `${[...codes].sort().join(', ')} desta mesma gestão — confira se a lavoura não está ` +
+            `${[...codes].sort().join(', ')} desta mesma safra — confira se a lavoura não está ` +
             `sendo dada em garantia duas vezes`,
         );
       }
@@ -2868,11 +3170,11 @@ export class BartersService {
 
     const pledged =
       Math.round(areas.reduce((total, area) => total + (area.areaHa || 0), 0) * 100) / 100;
-    if (barter.producerAreaHa > 0 && pledged > barter.producerAreaHa + AREA_EPSILON) {
+    if (barter.plantedAreaHa > 0 && pledged > barter.plantedAreaHa + AREA_EPSILON) {
       warnings.push(
         `as lavouras somam ${pledged.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ha, ` +
-          `acima dos ${barter.producerAreaHa.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ha ` +
-          `de área cultivável registrados para o produtor — confira as áreas ou o cadastro`,
+          `acima dos ${barter.plantedAreaHa.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ha ` +
+          `de área plantada informados na permuta — confira as áreas`,
       );
     }
 
@@ -2880,12 +3182,11 @@ export class BartersService {
   }
 
   /**
-   * A SAFRA em que a permuta foi fechada — quem sabe o VENCIMENTO da cédula.
+   * A VERSÃO em que a permuta foi fechada — quem sabe o VENCIMENTO da cédula — e
+   * a safra da cultura, que dá o nome à cédula ("Soja 26/27").
    *
-   * Ela é lida pela versão (`versionCode`), e não pela safra aberta hoje, pelo
-   * mesmo motivo de tudo o mais nesta permuta: o acordo foi fechado naquela
-   * gestão, e a safra seguinte não reescreve o vencimento do que já foi
-   * combinado.
+   * Lida pela versão DA PERMUTA (`versionCode`), e não pela vigente, pelo mesmo
+   * motivo de tudo o mais nesta permuta: o acordo foi fechado naquela gestão.
    *
    * `null` nas permutas anteriores ao lançamento por versões e nas cujas gestões
    * sumiram do banco. Não é erro: `cprGaps` cobra o vencimento, e a frase manda
@@ -2895,24 +3196,16 @@ export class BartersService {
     if (!barter.versionCode) return null;
     const version = await this.prisma.barterVersion.findUnique({
       where: { code: barter.versionCode },
-      include: { season: true, grains: true },
+      include: { season: { include: { grain: true } } },
     });
     if (!version) return null;
 
-    const culture = await this.cultureOf(barter);
-    const grain =
-      version.grains.find((row) => row.grainId === culture?.grainId) ??
-      version.grains.find(
-        (row) => row.grainName.trim().toLowerCase() === culture?.grainName.trim().toLowerCase(),
-      );
-
     return {
       seasonName: version.season.name,
-      grainName: grain?.grainName ?? culture?.grainName ?? '',
-      // O VENCIMENTO da CULTURA desta permuta. Ele era da safra, quando a safra
-      // era a cultura; hoje a mesma gestão tem soja vencendo em abril e milho em
-      // agosto, e é a linha do grão da permuta que diz qual das duas vale aqui.
-      cprDueDate: grain?.cprDueDate ?? null,
+      grainName: version.season.grainName,
+      versionCode: version.code,
+      cprDueDate: version.cprDueDate,
+      grainModel: version.season.grain ? grainCprModelOf(version.season.grain) : null,
     };
   }
 
@@ -2930,9 +3223,32 @@ export class BartersService {
       // A CULTURA entra no contexto por causa de UMA frase: a do vencimento que
       // falta. Com duas culturas no mesmo Barter, "defina-o na safra" não diz em
       // qual delas — e quem lê a pendência é quem vai resolvê-la.
-      grainName: culture?.grainName ?? '',
+      versionCode: culture?.versionCode ?? '',
       pledge: this.pledgeOf(barter, sacksOf(barter.items)),
+      requirements: requirementsFrom(barter),
     };
+  }
+
+  /**
+   * A SUGESTÃO da última cédula do produtor, SEM os avalistas quando o comitê
+   * não os exigiu.
+   *
+   * Eles vinham sempre, e eram o bloco mais caro de digitar. Mas o avalista só
+   * entra na cédula quando o comitê o pede (ver `saveCpr`), e a sugestão chega
+   * justamente no primeiro preenchimento, antes de qualquer decisão: oferecê-los
+   * ali seria pôr no formulário um bloco que o servidor vai recusar.
+   */
+  private async suggestionFor(
+    barter: Barter,
+    producer: { city: string } | null,
+    culture: CprCulture | null,
+  ) {
+    const { guarantors, ...suggestion } = suggestFrom(
+      producer,
+      await this.previousCpr(barter.producerId),
+      culture?.grainModel ?? null,
+    );
+    return barter.requiresGuarantor && guarantors ? { ...suggestion, guarantors } : suggestion;
   }
 
   /**
@@ -2976,7 +3292,24 @@ export class BartersService {
     const barter = await this.findFor(consultant, code);
     this.requireCprWritable(barter);
 
-    const { areas, guarantors, issuedAt, scrConsultedAt, ...fields } = dto;
+    const { areas, guarantors, mortgages, issuedAt, scrConsultedAt, deliveryUnitId, ...fields } =
+      dto;
+
+    // AVALISTA E HIPOTECA SÓ ENTRAM QUANDO O COMITÊ OS PEDE. Eles saíram do
+    // preenchimento inicial: a maioria das permutas não tem nenhum dos dois, e
+    // coletá-los de todo mundo era pedir ao produtor um aval que ninguém ia
+    // exigir. Mandar a lista VAZIA (ou a hipoteca em branco) continua valendo —
+    // é limpar, e limpar o que não foi pedido não fere regra nenhuma.
+    if (guarantors && guarantors.length > 0 && !barter.requiresGuarantor) {
+      throw new UnprocessableEntityException(
+        'O comitê não exigiu avalista nesta permuta — o avalista só entra na cédula quando ele pede',
+      );
+    }
+    if (mortgages && mortgages.length > 0 && !barter.requiresCollateral) {
+      throw new UnprocessableEntityException(
+        'O comitê não exigiu hipoteca nesta permuta — a hipoteca só entra na cédula quando ele pede',
+      );
+    }
 
     // Datas chegam como texto ISO (é o que o DTO valida) e viram Date aqui. A
     // ausência do campo mantém o que está gravado — apagar uma data já escrita
@@ -2999,6 +3332,7 @@ export class BartersService {
     const written = {
       ...fields,
       ...dates,
+      ...(await this.deliveryOf(deliveryUnitId)),
       filledBy: consultant.fullName,
       filledById: consultant.id,
     };
@@ -3010,15 +3344,12 @@ export class BartersService {
         update: written,
       });
 
-      // Os AVALISTAS seguem a mesma regra das lavouras — lista inteira
-      // substitui, ausência preserva —, e pelo mesmo motivo: são editados como
-      // um todo na tela e não têm identidade fora da cédula.
-      if (guarantors) {
-        await tx.cprGuarantor.deleteMany({ where: { cprId: saved.id } });
-        for (const [position, guarantor] of guarantors.entries()) {
-          await tx.cprGuarantor.create({ data: { cprId: saved.id, position, ...guarantor } });
-        }
-      }
+      // Os AVALISTAS e os BENS EM HIPOTECA seguem a regra das lavouras — a
+      // lista inteira descreve a que fica, a ausência preserva —, mas com uma
+      // diferença: eles têm ANEXO, e por isso têm identidade. Ver
+      // `syncGuarantors`.
+      if (guarantors) await this.syncGuarantors(tx, saved.id, guarantors);
+      if (mortgages) await this.syncMortgages(tx, saved.id, mortgages);
 
       if (!areas) return;
       // Apagar e recriar, e não casar linha a linha: as lavouras não têm
@@ -3064,10 +3395,104 @@ export class BartersService {
       // pessoal por um registro que ninguém apaga. O que ela precisa dizer é
       // que a cédula foi mexida, por quem, e em que pé ela ficou.
       detail:
-        `CPR ${desk.cpr?.number || 'sem número'}: ` +
+        `CPR ${desk.known.cprNumber}: ` +
         (desk.gaps.length === 0 ? 'completa' : `faltam ${desk.gaps.length} campo(s)`),
     });
     return desk;
+  }
+
+  /**
+   * O LOCAL DA ENTREGA escolhido na lista — a unidade e o nome dela, que é o
+   * que a cláusula imprime.
+   *
+   * O nome é COPIADO aqui, e não lido da unidade na hora de imprimir, pelo
+   * motivo de `Barter.unitName`: a cédula é documento, e renomear ou excluir a
+   * filial não pode mudar o que ela diz. Como a cédula só se grava até ser
+   * emitida, a cópia congela junto com o resto.
+   *
+   * Ausente, fica como estava (a regra de `saveCpr`); `null` desfaz a escolha.
+   */
+  private async deliveryOf(
+    unitId: number | null | undefined,
+  ): Promise<{ deliveryUnitId?: number | null; deliveryPlace?: string }> {
+    if (unitId === undefined) return {};
+    if (unitId === null) return { deliveryUnitId: null, deliveryPlace: '' };
+    const unit = await this.prisma.unit.findUnique({ where: { id: unitId } });
+    if (!unit) {
+      throw new UnprocessableEntityException(
+        'A filial escolhida como local da entrega não existe mais — escolha outra',
+      );
+    }
+    return { deliveryUnitId: unit.id, deliveryPlace: unit.name };
+  }
+
+  /**
+   * OS AVALISTAS como a tela os devolveu — CASADOS PELO ID, e não apagados e
+   * recriados como as lavouras.
+   *
+   * A diferença é o SCR: ele mora no avalista, e recriar a lista a cada
+   * "Salvar" levaria o anexo junto. O avalista que volta com o id que tinha é
+   * ATUALIZADO (e o SCR fica); o que vem sem id — ou com o id de outra cédula,
+   * que é o caso da sugestão — é CRIADO; o que não voltou é REMOVIDO, e o SCR
+   * dele vai junto, para não ficar arquivo órfão no banco.
+   */
+  private async syncGuarantors(
+    tx: Prisma.TransactionClient,
+    cprId: number,
+    guarantors: CprGuarantorDto[],
+  ): Promise<void> {
+    const existing = await tx.cprGuarantor.findMany({
+      where: { cprId },
+      select: { id: true, scrFileId: true },
+    });
+    const kept = new Set<number>();
+    for (const [position, { id, ...fields }] of guarantors.entries()) {
+      if (id !== undefined && !kept.has(id) && existing.some((row) => row.id === id)) {
+        kept.add(id);
+        await tx.cprGuarantor.update({ where: { id }, data: { position, ...fields } });
+      } else {
+        await tx.cprGuarantor.create({ data: { cprId, position, ...fields } });
+      }
+    }
+    const gone = existing.filter((row) => !kept.has(row.id));
+    await tx.cprGuarantor.deleteMany({ where: { id: { in: gone.map((row) => row.id) } } });
+    await this.deleteFiles(
+      tx,
+      gone.map((row) => row.scrFileId),
+    );
+  }
+
+  /** Os BENS EM HIPOTECA, pela mesma regra dos avalistas — ver `syncGuarantors`. */
+  private async syncMortgages(
+    tx: Prisma.TransactionClient,
+    cprId: number,
+    mortgages: CprMortgageDto[],
+  ): Promise<void> {
+    const existing = await tx.cprMortgage.findMany({
+      where: { cprId },
+      select: { id: true, documentFileId: true },
+    });
+    const kept = new Set<number>();
+    for (const [position, { id, ...fields }] of mortgages.entries()) {
+      if (id !== undefined && !kept.has(id) && existing.some((row) => row.id === id)) {
+        kept.add(id);
+        await tx.cprMortgage.update({ where: { id }, data: { position, ...fields } });
+      } else {
+        await tx.cprMortgage.create({ data: { cprId, position, ...fields } });
+      }
+    }
+    const gone = existing.filter((row) => !kept.has(row.id));
+    await tx.cprMortgage.deleteMany({ where: { id: { in: gone.map((row) => row.id) } } });
+    await this.deleteFiles(
+      tx,
+      gone.map((row) => row.documentFileId),
+    );
+  }
+
+  /** Apaga os arquivos que ficaram sem dono — os `null` são ignorados. */
+  private async deleteFiles(tx: Prisma.TransactionClient, ids: (number | null)[]): Promise<void> {
+    const files = ids.filter((id): id is number => id !== null);
+    if (files.length > 0) await tx.barterFile.deleteMany({ where: { id: { in: files } } });
   }
 
   /**
@@ -3131,6 +3556,121 @@ export class BartersService {
   }
 
   /**
+   * O SCR DE UM AVALISTA — o mesmo relatório do Banco Central que se pede do
+   * emitente, agora de quem garante a dívida com o próprio patrimônio.
+   *
+   * Mesmas portas do SCR do emitente (consultor e emissor anexam), e o avalista
+   * precisa EXISTIR na cédula: a tela salva o formulário antes, e é o id que
+   * volta dele que endereça o anexo.
+   */
+  async saveGuarantorScr(
+    actor: User,
+    code: string,
+    guarantorId: number,
+    file: UploadedAttachment,
+  ): Promise<CprDesk> {
+    const barter = await this.findFor(actor, code);
+    this.requireCprWritable(barter);
+    const contentType = this.requireAttachable(file);
+
+    await this.prisma.$transaction(async (tx) => {
+      const guarantor = await tx.cprGuarantor.findFirst({
+        where: { id: guarantorId, cpr: { barterId: barter.id } },
+        select: { id: true, scrFileId: true },
+      });
+      if (!guarantor) throw new NotFoundException('Avalista não encontrado nesta cédula');
+
+      const stored = await tx.barterFile.create({
+        data: this.fileDataOf(actor, file, contentType),
+      });
+      await tx.cprGuarantor.update({ where: { id: guarantor.id }, data: { scrFileId: stored.id } });
+      // O ANTERIOR SAI depois de o novo estar no lugar — ver `attachToCpr`.
+      await this.deleteFiles(tx, [guarantor.scrFileId]);
+    });
+
+    await this.audit.record({
+      actor,
+      action: AUDIT_ACTION.barterCprSaved,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `SCR de avalista anexado à CPR (${file.originalname})`,
+    });
+    return this.cprFor(actor, code);
+  }
+
+  /**
+   * O DOCUMENTO DE UM BEM EM HIPOTECA — a matrícula atualizada, a certidão de
+   * ônus. É o que transforma "hipoteca da sede" em um imóvel que alguém pode
+   * conferir no cartório.
+   */
+  async saveMortgageDocument(
+    actor: User,
+    code: string,
+    mortgageId: number,
+    file: UploadedAttachment,
+  ): Promise<CprDesk> {
+    const barter = await this.findFor(actor, code);
+    this.requireCprWritable(barter);
+    const contentType = this.requireAttachable(file);
+
+    await this.prisma.$transaction(async (tx) => {
+      const mortgage = await tx.cprMortgage.findFirst({
+        where: { id: mortgageId, cpr: { barterId: barter.id } },
+        select: { id: true, documentFileId: true },
+      });
+      if (!mortgage) throw new NotFoundException('Bem em hipoteca não encontrado nesta cédula');
+
+      const stored = await tx.barterFile.create({
+        data: this.fileDataOf(actor, file, contentType),
+      });
+      await tx.cprMortgage.update({
+        where: { id: mortgage.id },
+        data: { documentFileId: stored.id },
+      });
+      await this.deleteFiles(tx, [mortgage.documentFileId]);
+    });
+
+    await this.audit.record({
+      actor,
+      action: AUDIT_ACTION.barterCprSaved,
+      targetType: 'barter',
+      targetId: barter.id,
+      targetLabel: barter.code,
+      detail: `documento de bem em hipoteca anexado à CPR (${file.originalname})`,
+    });
+    return this.cprFor(actor, code);
+  }
+
+  /** O ARQUIVO do SCR de um avalista — mesma porta do SCR do emitente. */
+  async guarantorScrFile(viewer: User, code: string, guarantorId: number): Promise<StoredFile> {
+    const barter = await this.findFor(viewer, code);
+    const guarantor = await this.prisma.cprGuarantor.findFirst({
+      where: { id: guarantorId, cpr: { barterId: barter.id } },
+      include: { scrFile: true },
+    });
+    if (!guarantor) throw new NotFoundException('Avalista não encontrado nesta cédula');
+    if (!guarantor.scrFile) {
+      throw new NotFoundException('Este avalista ainda não tem o SCR anexado');
+    }
+    return guarantor.scrFile;
+  }
+
+  /** O ARQUIVO do documento de um bem em hipoteca. */
+  async mortgageDocumentFile(viewer: User, code: string, mortgageId: number): Promise<StoredFile> {
+    const barter = await this.findFor(viewer, code);
+    const mortgage = await this.prisma.cprMortgage.findFirst({
+      where: { id: mortgageId, cpr: { barterId: barter.id } },
+      include: { documentFile: true },
+    });
+    if (!mortgage) throw new NotFoundException('Bem em hipoteca não encontrado nesta cédula');
+    if (!mortgage.documentFile) {
+      throw new NotFoundException('Este bem ainda não tem o documento anexado');
+    }
+    return mortgage.documentFile;
+  }
+
+  /**
    * O ARQUIVO DO SCR, com os bytes. Mesma porta do anexo da nota: quem alcança a
    * permuta alcança os documentos dela — é assim que o emissor confere o SCR na
    * hora de emitir, sem pedir o PDF a ninguém.
@@ -3155,19 +3695,6 @@ export class BartersService {
    */
   async issueCpr(emitter: User, code: string, dto: IssueCprDto): Promise<BarterDetail> {
     const barter = await this.requireBarter(emitter, code, BARTER_ACTION.cprIssue);
-
-    // O NÚMERO, quando ele vem no ato. É a única escrita do emissor na cédula, e
-    // ela acontece ANTES da conferência de propósito: o número que ele acabou de
-    // informar precisa contar como preenchido, senão a emissão recusaria por
-    // uma pendência que o próprio pedido resolve.
-    const number = dto.number?.trim();
-    if (number) {
-      await this.prisma.barterCpr.upsert({
-        where: { barterId: barter.id },
-        create: { barterId: barter.id, number, filledBy: emitter.fullName, filledById: emitter.id },
-        update: { number },
-      });
-    }
 
     const desk = await this.cprFor(emitter, code);
     const missingCreditor = creditorGaps(desk.creditor);
@@ -3203,7 +3730,7 @@ export class BartersService {
       targetType: 'barter',
       targetId: issued.id,
       targetLabel: issued.code,
-      detail: `CPR ${desk.cpr?.number || 'sem número'} emitida${note ? `: ${summarize(note)}` : ''}`,
+      detail: `CPR ${desk.known.cprNumber} emitida${note ? `: ${summarize(note)}` : ''}`,
     });
     return issued;
   }
@@ -3368,6 +3895,7 @@ export class BartersService {
     { claimsFilling }: { claimsFilling: boolean },
   ): Promise<void> {
     const contentType = this.requireAttachable(file);
+    const grainModel = (await this.cprCultureOf(barter))?.grainModel;
 
     await this.prisma.$transaction(async (tx) => {
       const existing = await tx.barterCpr.findUnique({
@@ -3390,8 +3918,18 @@ export class BartersService {
             : { registryFileId: stored.id };
 
       if (!existing) {
+        // A cédula que NASCE de um anexo nasce também com o padrão do grão:
+        // depois dela existir, a sugestão não vem mais (ver `cprFor`), e o
+        // modelo do grão ficaria de fora justamente da cédula que começou pelo
+        // SCR.
         await tx.barterCpr.create({
-          data: { barterId: barter.id, filledBy: actor.fullName, filledById: actor.id, ...link },
+          data: {
+            barterId: barter.id,
+            filledBy: actor.fullName,
+            filledById: actor.id,
+            ...(grainModel ?? {}),
+            ...link,
+          },
         });
         return;
       }
@@ -3488,11 +4026,10 @@ export class BartersService {
    * ESTE ARQUIVO PODE SER ANEXADO? — tipo e tamanho, nesta ordem.
    *
    * O TAMANHO é conferido aqui além do multer porque as duas travas respondem a
-   * coisas diferentes: o multer corta a requisição (e devolve um erro de
-   * transporte, sem língua nenhuma), e esta diz à pessoa, em pt-BR, qual é o
-   * limite e quanto o arquivo dela tem. Uma sem a outra é ou uma recusa que
-   * ninguém entende, ou um upload de 40 MB recebido inteiro para ser recusado no
-   * fim.
+   * coisas diferentes: o multer corta a requisição no limite (e o controller
+   * traduz o corte — ver `AttachmentUpload`), e esta cobre o anexo que chegue
+   * sem passar por ele, dizendo quanto o arquivo tem. Sem o corte, um upload de
+   * 40 MB seria recebido inteiro para ser recusado no fim.
    *
    * O TIPO vem do que o cliente declara, com a EXTENSÃO como segunda opinião
    * quando ele não declara nada de útil (ver `attachmentTypeOf`). Não é trava de
@@ -3514,9 +4051,8 @@ export class BartersService {
       );
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1).replace('.', ',');
       throw new UnprocessableEntityException(
-        `O anexo passa do limite: ${mb(file.size)} MB, e o máximo é ${mb(MAX_ATTACHMENT_BYTES)} MB`,
+        `O anexo passa do limite: ${megabytes(file.size)} MB, e o máximo é ${megabytes(MAX_ATTACHMENT_BYTES)} MB`,
       );
     }
     if (file.size === 0) {
@@ -3590,11 +4126,15 @@ export class BartersService {
       document,
       sackWeightKg,
       { name: culture?.seasonName ?? '', cprDueDate: culture?.cprDueDate ?? null },
-      barter.invoices.map((invoice) => ({
-        number: invoice.number,
-        series: invoice.series,
-        duplicateNumber: invoice.duplicateNumber,
-      })),
+      // A CÉDULA cita as notas na ordem em que foram emitidas: ela é documento,
+      // e não a lista da tela, que vem do mais recente para o mais antigo.
+      [...barter.invoices]
+        .sort((a, b) => a.id - b.id)
+        .map((invoice) => ({
+          number: invoice.number,
+          series: invoice.series,
+          duplicateNumber: invoice.duplicateNumber,
+        })),
     );
   }
 
@@ -3670,19 +4210,45 @@ export class BartersService {
    * Roda dentro da transação de criação para evitar corrida.
    */
   private async nextCode(tx: Prisma.TransactionClient): Promise<string> {
-    const year = new Date().getFullYear();
-    const prefix = `PRM-${year}-`;
+    const prefix = `PRM-${new Date().getFullYear()}-`;
     const rows = await tx.barter.findMany({
       where: { code: { startsWith: prefix } },
       select: { code: true },
     });
-    let max = 0;
-    for (const row of rows) {
-      const sequence = Number.parseInt(row.code.slice(prefix.length), 10);
-      if (Number.isFinite(sequence) && sequence > max) {
-        max = sequence;
-      }
-    }
-    return `${prefix}${String(max + 1).padStart(3, '0')}`;
+    return nextInSequence(
+      prefix,
+      rows.map((row) => row.code),
+    );
   }
+
+  /**
+   * Próximo número de CPR no formato CPR-<ano>-NNN, sequencial dentro do ano.
+   *
+   * Sequência PRÓPRIA, e não a do `code`: as permutas anteriores à numeração
+   * herdaram o número que o emissor tinha informado, e o maior deles é o ponto
+   * de partida — inclusive quando ele está à frente do código da permuta.
+   */
+  private async nextCprNumber(tx: Prisma.TransactionClient): Promise<string> {
+    const prefix = `CPR-${new Date().getFullYear()}-`;
+    const rows = await tx.barter.findMany({
+      where: { cprNumber: { startsWith: prefix } },
+      select: { cprNumber: true },
+    });
+    return nextInSequence(
+      prefix,
+      rows.map((row) => row.cprNumber),
+    );
+  }
+}
+
+/** `<prefixo>NNN` com o maior NNN já usado entre `taken`, mais um. */
+function nextInSequence(prefix: string, taken: string[]): string {
+  let max = 0;
+  for (const value of taken) {
+    const sequence = Number.parseInt(value.slice(prefix.length), 10);
+    if (Number.isFinite(sequence) && sequence > max) {
+      max = sequence;
+    }
+  }
+  return `${prefix}${String(max + 1).padStart(3, '0')}`;
 }

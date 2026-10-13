@@ -4,8 +4,10 @@ import '../theme/app_theme.dart';
 import '../models/barter_simulation.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/policy_dialog.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
 import 'invoicing_screen.dart';
@@ -57,6 +59,40 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   late TabController _tabController;
   String _search = '';
 
+  /// O CONSULTOR escolhido no seletor do gerente; null é "Todos".
+  String? _consultantFilter;
+
+  /// A SAFRA DA CULTURA escolhida no filtro; null é "Todas". O filtro só
+  /// aparece quando a lista tem permutas de mais de uma safra.
+  String? _seasonFilter;
+
+  /// As safras presentes nas permutas desta tela — ver [seasonsOf].
+  List<({String id, String name})> get _seasonOptions => seasonsOf(AppData.barters);
+
+  /// O filtro de safra EM VIGOR — a escolha que deixou de existir volta a
+  /// "Todas", pelo mesmo motivo de [_activeConsultant].
+  String? get _activeSeason =>
+      _seasonFilter != null && _seasonOptions.any((s) => s.id == _seasonFilter) ? _seasonFilter : null;
+
+  /// A tela é a do GERENTE: a lista é a do time dele, e um time tem vários
+  /// consultores — daí o seletor. O admin, que vê a operação inteira, não passa
+  /// [BartersScreen.opinionManagerId] e não ganha o seletor; para ele a busca
+  /// por nome já resolve.
+  bool get _filtersByConsultant => widget.opinionManagerId != null;
+
+  /// As opções do seletor — ver [consultantsOf].
+  List<({String id, String name})> get _consultantOptions => consultantsOf(AppData.barters);
+
+  /// O filtro EM VIGOR. A escolha pode ter deixado de existir (a lista foi
+  /// recarregada e aquele consultor não tem mais permuta aqui): nesse caso o
+  /// recorte volta a ser "Todos", em vez de esvaziar a lista sem explicação e
+  /// deixar o seletor com um valor que não está nas opções.
+  String? get _activeConsultant => _consultantFilter != null &&
+          _filtersByConsultant &&
+          _consultantOptions.any((c) => c.id == _consultantFilter)
+      ? _consultantFilter
+      : null;
+
   /// A aba de simulações só existe para o consultor logado — ver
   /// [BartersScreen.consultant].
   bool get _hasSimulations => widget.consultant != null;
@@ -78,27 +114,56 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   ///
   /// Quem decide o recorte continua sendo o servidor; esta lista só evita
   /// desenhar o que ele não vai responder.
-  late final List<BarterStatus?> _statuses = AppData.can(Capability.bartersReadIssuance)
+  ///
+  /// Quem ENXERGA TUDO (`barters.readAll` — admin e comitê) fica com a linha
+  /// inteira, mesmo acumulando os escopos estreitos: o admin tem todas as
+  /// capacidades, e cair no recorte do emissor esconderia dele o resto da
+  /// operação.
+  late final List<BarterStatus?> _statuses = _readsAll
+      ? _fullLine
+      : AppData.can(Capability.bartersReadIssuance)
       ? const [BarterStatus.invoiced, BarterStatus.cprIssued]
+      // A SEGURADORA enxerga as permutas COM SEGURO da mesa dela em diante (o
+      // escopo dela no servidor é `lineFrom(insure)`). A fila dela abre a lista,
+      // e as abas seguintes recolhem o que já passou por ela — sem elas, a
+      // permuta cuja apólice ela acabou de informar sumiria da tela.
+      : AppData.can(Capability.bartersReadInsurance)
+      ? const [
+          BarterStatus.awaitingPolicy,
+          BarterStatus.approved,
+          BarterStatus.invoiced,
+          BarterStatus.cprRegistered,
+        ]
       : AppData.can(Capability.bartersReadInvoicing)
       // O FATURISTA ganhou "Concluídas" pelo mesmo motivo de quem acompanha, e
       // com um agravante: o escopo dele no servidor (`lineFrom(invoice)`) traz
       // as permutas até o registro, e sem esta aba a registrada não caía em
       // nenhuma das duas — sumia da tela, sem "Todas" para recolhê-la.
       ? const [BarterStatus.approved, BarterStatus.invoiced, BarterStatus.cprRegistered]
-      : [
+      : _fullLine;
+
+  bool get _readsAll => AppData.can(Capability.bartersReadAll);
+
+  List<BarterStatus?> get _fullLine => [
           null,
           // O RASCUNHO abre a lista de quem registra, e só a dele: é o único
           // estado em que o consultor tem o que fazer, e a permuta pela metade
           // não é fila de mais ninguém. Para a retaguarda a aba nem existe — o
           // servidor não devolveria nada nela.
-          if (AppData.can(Capability.bartersRegister)) BarterStatus.draft,
+          if (AppData.can(Capability.bartersRegister) && !_readsAll) BarterStatus.draft,
           // Na ordem da LINHA DE PRODUÇÃO: consultor → gerente → comitê →
           // faturamento. A lista lida da esquerda para a direita conta o caminho
           // da permuta, e é por isso que "Negadas" fica no fim: ela é saída
           // lateral, não um degrau adiante.
           BarterStatus.sentToManager,
           BarterStatus.pending,
+          // DEVOLVIDAS COM EXIGÊNCIAS, logo depois da mesa do comitê: é o mesmo
+          // ponto da linha, com o consultor. Para ele é trabalho; para quem
+          // acompanha, é a resposta a "por que esta não foi decidida ainda?".
+          BarterStatus.awaitingRequirements,
+          // NA SEGURADORA, entre a decisão e o faturista: só as permutas com
+          // seguro param aqui.
+          BarterStatus.awaitingPolicy,
           BarterStatus.approved,
           BarterStatus.invoiced,
           // CONCLUÍDAS fecha a linha, e é o que faltava para ela ter FIM na
@@ -117,13 +182,20 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// para quem acompanha (admin, comitê, gerente, consultor), a pergunta é
   /// "onde está a permuta?", e a resposta é o TRECHO inteiro do emissor —
   /// emitida e assinada ainda estão com ele.
-  bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance);
+  bool get _worksIssuance => AppData.can(Capability.bartersReadIssuance) && !_readsAll;
+
+  /// O mesmo para a seguradora: para ela a aba é a FILA ("A informar apólice");
+  /// para quem acompanha, é onde a permuta está ("Na seguradora").
+  bool get _worksInsurance => AppData.can(Capability.bartersReadInsurance) && !_readsAll;
 
   String _tabLabel(BarterStatus? status) => switch (status) {
         null => 'Todas',
         BarterStatus.draft => 'Rascunhos',
         BarterStatus.sentToManager => 'No gerente',
         BarterStatus.pending => 'No comitê',
+        BarterStatus.awaitingRequirements => 'Exigências',
+        BarterStatus.awaitingPolicy || BarterStatus.awaitingPolicyWithConditions =>
+          _worksInsurance ? 'A informar apólice' : 'Na seguradora',
         BarterStatus.approved || BarterStatus.approvedWithConditions => 'A faturar',
         BarterStatus.invoiced => _worksIssuance ? 'A emitir CPR' : 'No emissor',
         // Os degraus intermediários da cédula sob UMA aba: para quem varre a
@@ -161,13 +233,19 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     final offset = _hasSimulations ? 1 : 0;
     if (_hasSimulations && AppData.mySimulations.isNotEmpty) return 0;
 
+    // Quem acumula os postos (o admin) entra em "Todas": a fila de cada um já
+    // está na aba Filas.
+    if (AppData.can(Capability.usersManage)) return offset;
+
     final BarterStatus? mine = widget.opinionManagerId != null
         ? BarterStatus.sentToManager
         : AppData.can(Capability.bartersReview)
             ? BarterStatus.pending
-            : AppData.can(Capability.bartersInvoice)
-                ? BarterStatus.approved
-                : null;
+            : AppData.can(Capability.bartersInsure)
+                ? BarterStatus.awaitingPolicy
+                : AppData.can(Capability.bartersInvoice)
+                    ? BarterStatus.approved
+                    : null;
     // A posição vem da LISTA de abas, e não de um número contado à mão: quem
     // tem menos abas continua entrando na etapa dele.
     final at = _statuses.indexOf(mine);
@@ -219,6 +297,7 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   /// exata — é a fila dele, e o que já andou está na aba ao lado. Ver
   /// [_worksIssuance].
   bool _inTab(BarterModel barter, BarterStatus tab) => switch (tab) {
+        BarterStatus.awaitingPolicy => barter.awaitsPolicy,
         BarterStatus.approved => barter.awaitsInvoice,
         BarterStatus.invoiced when !_worksIssuance =>
           barter.wasInvoiced && !barter.isCprRegistered,
@@ -229,7 +308,11 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
   List<BarterModel> _filtered(BarterStatus? status) {
     var list = widget.isAdmin
         ? List<BarterModel>.from(AppData.barters)
-        : AppData.barters.where((b) => b.consultantId == widget.consultantId).toList();
+        : ofConsultant(AppData.barters, widget.consultantId!);
+    final consultant = _activeConsultant;
+    if (consultant != null) list = ofConsultant(list, consultant);
+    final season = _activeSeason;
+    if (season != null) list = ofSeason(list, season);
     if (status != null) list = list.where((b) => _inTab(b, status)).toList();
     if (_search.isNotEmpty) {
       final q = _search.toLowerCase();
@@ -246,9 +329,36 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
     return list;
   }
 
+  /// O ADMIN GERA PERMUTA — na mesma tela de montagem do consultor, em nome do
+  /// consultor do produtor escolhido. Gerada, ela abre no detalhe: é lá que o
+  /// admin confere o que acabou de registrar.
+  Future<void> _generateBarter(UserModel admin) async {
+    final barter = await Navigator.push<BarterModel>(
+      context,
+      MaterialPageRoute(builder: (_) => NewBarterScreen(consultant: admin)),
+    );
+    if (barter == null || !mounted) return;
+    setState(() {});
+    widget.onChanged?.call();
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BarterDetailScreen(barter: barter, isAdmin: true)),
+    );
+    if (mounted) setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
+    final me = AppData.currentUser;
+    final admin = widget.isAdmin && me != null && me.role == UserRole.admin ? me : null;
     return Scaffold(
+      floatingActionButton: admin == null
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _generateBarter(admin),
+              icon: const Icon(Icons.add),
+              label: Text('Gerar ${brand.copy.barterTitle.toLowerCase()}'),
+            ),
       appBar: AppBar(
         title: Text(
           widget.isAdmin ? brand.copy.barterPluralTitle : 'Minhas ${brand.copy.barterPluralTitle}',
@@ -274,16 +384,64 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
           if (_hasSimulations) const OfflineBanner(),
           Padding(
             padding: const EdgeInsets.all(12),
-            child: TextField(
-              onChanged: (v) => setState(() => _search = v),
-              decoration: InputDecoration(
-                hintText: 'Buscar por código ou produtor...',
-                prefixIcon: const Icon(Icons.search, size: 20),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              ),
+            // O seletor ao LADO da busca quando cabe, e embaixo dela no celular:
+            // dividir 360px entre os dois cortaria o nome do consultor e o texto
+            // da busca ao mesmo tempo.
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final search = TextField(
+                  onChanged: (v) => setState(() => _search = v),
+                  decoration: InputDecoration(
+                    hintText: 'Buscar por código ou produtor...',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  ),
+                );
+                if (!_filtersByConsultant) return search;
+                final selector = _ConsultantSelector(
+                  options: _consultantOptions,
+                  selected: _activeConsultant,
+                  onChanged: (id) => setState(() => _consultantFilter = id),
+                );
+                if (constraints.maxWidth < 560) {
+                  return Column(children: [search, const SizedBox(height: 8), selector]);
+                }
+                return Row(
+                  children: [
+                    Expanded(child: search),
+                    const SizedBox(width: 8),
+                    SizedBox(width: 260, child: selector),
+                  ],
+                );
+              },
             ),
           ),
+          // O FILTRO POR CULTURA: cada safra é um Barter à parte, e a pergunta
+          // "como está a soja?" se responde aqui sem ler a lista inteira.
+          if (_seasonOptions.length > 1)
+            SizedBox(
+              height: 40,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                children: [
+                  ChoiceChip(
+                    label: const Text('Todas as safras'),
+                    selected: _activeSeason == null,
+                    onSelected: (_) => setState(() => _seasonFilter = null),
+                  ),
+                  for (final option in _seasonOptions) ...[
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      label: Text(option.name),
+                      selected: _activeSeason == option.id,
+                      onSelected: (_) => setState(() => _seasonFilter = option.id),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           Expanded(
             child: TabBarView(
               controller: _tabController,
@@ -305,6 +463,53 @@ class _BartersScreenState extends State<BartersScreen> with SingleTickerProvider
             ),
           ),
         ],
+        ),
+      ),
+    );
+  }
+}
+
+/// O SELETOR DE CONSULTOR do gerente: "Todos" e um item por consultor que tem
+/// permuta na mesa dele.
+///
+/// É um DropdownButton controlado (e não um DropdownButtonFormField) porque o
+/// valor pode ser trocado por fora — a tela volta para "Todos" quando a escolha
+/// some da lista — e o campo de formulário só lê o valor inicial.
+class _ConsultantSelector extends StatelessWidget {
+  final List<({String id, String name})> options;
+  final String? selected;
+  final ValueChanged<String?> onChanged;
+
+  const _ConsultantSelector({
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: const InputDecoration(
+        prefixIcon: Icon(Icons.person_outline, size: 20),
+        isDense: true,
+        contentPadding: EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          key: const ValueKey('consultant-selector'),
+          value: selected,
+          isExpanded: true,
+          isDense: true,
+          style: TextStyle(fontSize: 14, color: AppColors.textDark),
+          items: [
+            const DropdownMenuItem<String?>(value: null, child: Text('Todos')),
+            for (final c in options)
+              DropdownMenuItem<String?>(
+                value: c.id,
+                child: Text(c.name, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: onChanged,
         ),
       ),
     );
@@ -389,45 +594,13 @@ class _BarterCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Text(
-                    barter.id,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textDark,
-                    ),
-                  ),
-                  const Spacer(),
-                  StatusBadge(status: barter.status),
-                ],
-              ),
-              if (isAdmin) ...[
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Icon(Icons.person_outline, size: 14, color: AppColors.textLight),
-                    const SizedBox(width: 4),
-                    Text(
-                      barter.producerName,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textMedium,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Vend.: ${barter.consultantName}',
-                        style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+              // A IDENTIFICAÇÃO traz o INVESTIMENTO POR HECTARE, e a lista é
+              // onde ele mais serve: as duas pílulas abaixo dizem o TAMANHO
+              // desta permuta, e o tamanho sozinho não distingue R$ 400 mil numa
+              // fazenda de 2.000 ha de R$ 400 mil numa de 300. No detalhe ele
+              // também está, mas lá há uma permuta só na tela — e uma régua
+              // sem régua ao lado não compara nada.
+              BarterIdentity(barter: barter, trailing: StatusBadge(status: barter.status)),
               const SizedBox(height: 10),
               // Linha de troca: insumos retirados -> grãos que pagam
               Row(
@@ -456,41 +629,6 @@ class _BarterCard extends StatelessWidget {
                   ),
                 ],
               ),
-              // O INVESTIMENTO POR HECTARE fica AQUI, na lista, porque é aqui
-              // que se compara: as duas pílulas acima dizem o TAMANHO desta
-              // permuta, e o tamanho sozinho não distingue R$ 400 mil numa
-              // fazenda de 2.000 ha de R$ 400 mil numa de 300. No detalhe ele
-              // também está, mas lá há uma permuta só na tela — e uma régua
-              // sem régua ao lado não compara nada.
-              //
-              // Ele só chega a quem pode compará-lo (admin, comitê e faturista):
-              // para os outros o campo nem vem no JSON, e a linha não existe.
-              if (barter.sacksPerHa != null) ...[
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.straighten, size: 13, color: AppColors.textLight),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Investimento ',
-                      style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                    ),
-                    Text(
-                      formatSacksPerHa(barter.sacksPerHa!),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    if (barter.producerAreaHa != null && barter.producerAreaHa! > 0)
-                      Text(
-                        ' • ${formatQty(barter.producerAreaHa!)} ha',
-                        style: TextStyle(fontSize: 12, color: AppColors.textMedium),
-                      ),
-                  ],
-                ),
-              ],
               // O IMPOSTO DA ENTREGA na própria lista.
               //
               // Ele já estava no detalhe, e chegar lá custa um toque por
@@ -640,6 +778,23 @@ class _BarterCard extends StatelessWidget {
                       ),
                     ),
                   ],
+                ),
+              ],
+              // A APÓLICE, direto do cartão: a fila da seguradora é esta aba.
+              if (AppData.can(Capability.bartersInsure) && barter.awaitsPolicy) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () =>
+                        informBarterPolicy(context, barter, onInsured: (_) => onChanged()),
+                    icon: const Icon(Icons.upload_file_outlined, size: 16),
+                    label: const Text('Anexar apólice', style: TextStyle(fontSize: 13)),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.atInsurer,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
                 ),
               ],
               if (AppData.can(Capability.bartersInvoice) && barter.awaitsInvoice) ...[

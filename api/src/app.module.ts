@@ -7,6 +7,7 @@ import { AuditModule } from './audit/audit.module';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthModule } from './auth/auth.module';
 import { BartersModule } from './barters/barters.module';
+import { NoticesModule } from './notices/notices.module';
 import { ClassesModule } from './classes/classes.module';
 import { CreditorModule } from './creditor/creditor.module';
 import { EnvelopeInterceptor } from './common/envelope.interceptor';
@@ -38,6 +39,7 @@ import { UsersModule } from './users/users.module';
     CreditorModule,
     InsuranceModule,
     BartersModule,
+    NoticesModule,
   ],
   controllers: [AppController],
   providers: [

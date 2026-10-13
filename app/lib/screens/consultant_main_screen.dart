@@ -3,9 +3,11 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/dashboard_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_screen.dart';
 
@@ -114,14 +116,20 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList()
+    // AS PERMUTAS DELE. O recorte por consultor é da TELA (é o painel dele), e
+    // a contagem é de `services/dashboard_stats.dart`: "faturada ainda conta
+    // como aprovada" é a mesma regra dos outros painéis, e ela não pode ser
+    // reescrita uma vez por tela.
+    final myBarters = ofConsultant(AppData.barters, consultant.id)
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-    final approved = myBarters.where((b) => b.wasApproved).toList();
-    final pending = myBarters.where((b) => b.status == BarterStatus.pending).length;
+    final stats = statsOf(myBarters);
     // OS RASCUNHOS dele: registrados, e ainda esperando o parecer que ele tem de
     // escrever. É a única fila da tela que é DELE.
-    final myDrafts = myBarters.where((b) => b.isDraft).toList();
-    final sacksDelivered = approved.fold<double>(0, (s, b) => s + b.totalGrainQty);
+    final myDrafts = stats.drafts;
+    // AS DEVOLVIDAS PELO COMITÊ, com exigências: a outra fila que é DELE. O
+    // comitê não decide enquanto ele não trouxer o que foi pedido.
+    final myRequirements = myBarters.where((b) => b.awaitsRequirements).toList();
+    final sacksDelivered = stats.sacksReceivable;
 
     return Scaffold(
       appBar: AppBar(
@@ -153,35 +161,67 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
             icon: Icons.agriculture_outlined,
           ),
           const SizedBox(height: 16),
-          AdaptiveCardGrid(
-            children: [
-              SummaryCard(
-                title: 'Minhas ${brand.copy.barterPluralTitle}',
-                value: myBarters.length.toString(),
-                icon: Icons.swap_horiz,
-                color: AppColors.primary,
+          // O PAINEL DELE NUM OLHAR: cada número com o desdobramento ao lado —
+          // o total com as fases, a área com o investimento, as sacas com as
+          // safras, os produtores com quem mais compra.
+          KpiGrid(maxColumns: 4, tiles: [
+            KpiTile(
+              icon: Icons.swap_horiz,
+              color: AppColors.primary,
+              label: 'Minhas ${brand.copy.barterPluralTitle}',
+              value: '${myBarters.length}',
+              caption: 'por status',
+              onTap: () => onNavigate(1),
+              child: _presentPhases(myBarters).isEmpty
+                  ? null
+                  : PhaseBreakdown(
+                      counts: phaseCounts(myBarters),
+                      phases: _presentPhases(myBarters),
+                      dense: true,
+                    ),
+            ),
+            KpiTile(
+              icon: Icons.landscape_outlined,
+              color: AppColors.primary,
+              label: 'Área total',
+              value: areaLabelOf(stats.area),
+              caption: 'em permutas aprovadas',
+              // O INVESTIMENTO é as sacas ÷ a área, ponderado pelo número de
+              // cada permuta — ver `investmentPerHaOf`.
+              child: KpiFacts(facts: [
+                KpiFact('Investimento médio', formatInvestment(stats.investmentPerHa)),
+                if (stats.investmentPerHa != null)
+                  KpiFact('Conta', investmentBasisOf(stats.closed)),
+                KpiFact('Área média', areaLabelOf(stats.averageArea)),
+              ]),
+            ),
+            KpiTile(
+              icon: Icons.grass,
+              color: AppColors.grain,
+              label: 'Sacas entregues',
+              value: formatSacks(sacksDelivered),
+              caption: 'ticket médio ${formatSacks(stats.averageSacks)}',
+              child: seasonSacksBars(myBarters, take: 3),
+            ),
+            KpiTile(
+              icon: Icons.agriculture,
+              color: AppColors.primaryAccent,
+              label: 'Meus produtores',
+              value: '${stats.activeProducers}',
+              // A CARTEIRA ao lado: "3 de 12" diz quanto dela ainda não fechou
+              // nada. Sem a carteira carregada, o número fica sozinho — "3 de 0"
+              // seria uma conta errada.
+              caption: AppData.producersForConsultant(consultant.id).isEmpty
+                  ? 'com permuta aprovada'
+                  : 'de ${AppData.producersForConsultant(consultant.id).length} na carteira, com permuta aprovada',
+              child: rankingBars(
+                sacksByProducer(stats.closed),
+                format: formatSacks,
+                color: AppColors.primaryAccent,
+                empty: 'Nenhum produtor com permuta aprovada.',
               ),
-              SummaryCard(
-                title: 'Sacas Entregues',
-                value: formatQty(sacksDelivered),
-                icon: Icons.grass,
-                color: AppColors.grain,
-                subtitle: 'em permutas aprovadas',
-              ),
-              SummaryCard(
-                title: 'Aprovadas',
-                value: approved.length.toString(),
-                icon: Icons.check_circle_outline,
-                color: AppColors.approved,
-              ),
-              SummaryCard(
-                title: 'No Comitê',
-                value: pending.toString(),
-                icon: Icons.hourglass_top,
-                color: AppColors.pending,
-              ),
-            ],
-          ),
+            ),
+          ]),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -220,6 +260,40 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
                       child: Text(
                         '${myDrafts.length} permuta(s) em rascunho: escreva o seu parecer '
                         'e encaminhe ao gerente.',
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.draft),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, size: 20, color: AppColors.draft),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+          ],
+
+          // AS EXIGÊNCIAS DO COMITÊ vêm logo depois do rascunho, e pelo mesmo
+          // motivo: é trabalho parado esperando o consultor. Uma permuta
+          // devolvida que ele não vê é uma decisão que não acontece.
+          if (myRequirements.isNotEmpty) ...[
+            InkWell(
+              onTap: () => onNavigate(1),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.draftBg,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.draft.withValues(alpha: 0.30)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.assignment_return_outlined, size: 20, color: AppColors.draft),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${myRequirements.length} permuta(s) com exigências do comitê: '
+                        'complete a cédula e devolva ao comitê.',
                         style: TextStyle(
                             fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.draft),
                       ),
@@ -296,13 +370,20 @@ class _ConsultantDashboardTabState extends State<_ConsultantDashboardTab> {
   }
 }
 
+/// As fases em que o consultor TEM permuta — a carteira dele passa por todas,
+/// e nove rótulos com zero esconderiam os dois que importam.
+List<BarterPhase> _presentPhases(List<BarterModel> barters) {
+  final counts = phaseCounts(barters);
+  return [for (final phase in BarterPhase.values) if (counts[phase]! > 0) phase];
+}
+
 class _ConsultantProfileTab extends StatelessWidget {
   final UserModel consultant;
   const _ConsultantProfileTab({required this.consultant});
 
   @override
   Widget build(BuildContext context) {
-    final myBarters = AppData.barters.where((b) => b.consultantId == consultant.id).toList();
+    final myBarters = ofConsultant(AppData.barters, consultant.id);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Meu Perfil'),

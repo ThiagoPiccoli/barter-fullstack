@@ -7,7 +7,8 @@ vocabulário. Nenhuma tela conhece um hex ou um nome comercial.
 lib/branding/
   brand.dart            contratos: Brand, BrandIdentity, BrandPalette, BrandCopy, BrandShape
   active_brand.dart     A CHAVE DE TROCA — aponta para o cliente ativo
-  brand_wordmark.dart   logotipo bicolor (monograma + nome + assinatura)
+  brand_mark.dart       símbolo (vagem + espiga), traçado do SVG oficial
+  brand_wordmark.dart   logotipo bicolor (símbolo + nome + assinatura)
   brands/
     agrobarter.dart     marca padrão do produto
     _template.dart      molde documentado para copiar
@@ -63,7 +64,7 @@ máquinas, e na suíte padrão ele viraria um teste instável.
 | Campo | Onde aparece |
 |---|---|
 | `identity.wordmarkPrefix` / `wordmarkSuffix` | Logotipo bicolor, cabeçalho do PDF |
-| `identity.monogram` | Ladrilho quadrado ao lado do nome |
+| `brand_mark.dart` | Símbolo ao lado do nome, no PDF e nos ícones do app |
 | `identity.tagline` | Login, tela de abertura, cabeçalho do PDF |
 | `identity.appTitle` | Título da janela / aba do navegador |
 | `identity.legalName` | Rodapé de copyright |

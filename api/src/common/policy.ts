@@ -24,30 +24,47 @@ import { ROLE, ROLES, type Role } from './roles';
 export const CAPABILITY = {
   /** Provisionar, editar, resetar senha e excluir usuários. */
   usersManage: 'users.manage',
-  /** Cadastrar/editar/excluir produtores e definir a carteira de cada um. */
+  /**
+   * Alcançar QUALQUER produtor: editar o de qualquer carteira, excluir e
+   * definir a carteira de cada um — quem atende quem.
+   */
   producersManage: 'producers.manage',
   /**
-   * EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — sem cadastrar, sem
-   * excluir e sem mexer em quem o atende.
+   * CADASTRAR um produtor novo.
+   *
+   * É do CONSULTOR também, e por isso é separada de `producersManage`: quem
+   * conhece o cliente novo é quem foi até a fazenda, e mandá-lo pedir o
+   * cadastro ao admin antes de poder registrar a primeira permuta transformava
+   * cada cliente novo num chamado.
+   *
+   * O que ela NÃO dá é a escolha da carteira. O produtor que o consultor
+   * cadastra nasce na carteira DELE, e só na dele — o service ignora qualquer
+   * outra e recusa a tentativa (ver `ownerOnCreate`). O admin, que tem
+   * `producersManage`, continua escolhendo o consultor no cadastro.
+   *
+   * A unicidade do CPF/CNPJ vale para os dois: o consultor que tenta cadastrar
+   * um cliente que já existe — dele ou de um colega — é barrado, e a mensagem
+   * diz o que fazer sem lhe mostrar a carteira alheia.
+   */
+  producersRegister: 'producers.register',
+  /**
+   * EDITAR os dados de um produtor da PRÓPRIA CARTEIRA — todos eles, menos quem
+   * o atende.
    *
    * É do CONSULTOR, e é a leitura literal de quem gerencia os dados do produtor
    * na prática: quem visita a fazenda, sabe que o telefone mudou, que o cliente
-   * passou a plantar noutro município e que o nome da fazenda saiu errado no
-   * cadastro é ele. Enquanto isso foi do admin, a correção de um telefone virava
-   * um chamado — e o cadastro ficava velho em silêncio, que é pior do que ficar
-   * errado com alguém sabendo.
+   * arrendou mais terra para esta safra, que fez a opção pela folha e que o
+   * CPF saiu com um dígito trocado no cadastro é ele.
    *
-   * Ela é SEPARADA de `producersManage`, e a separação é o desenho: cadastrar,
-   * excluir e definir a carteira continuam do admin. Os três não são "dados do
-   * produtor", são decisões sobre o cadastro — quem entra na base, quem sai dela
-   * e quem atende quem. A carteira em especial: ela é a lista inteira num campo
-   * só, e um consultor que a escrevesse poderia se remover do próprio cliente
-   * (ou remover um colega) sem que ninguém decidisse isso.
+   * O REGIME DE FUNRURAL já foi do admin, e saiu de lá: quem traz a opção do
+   * produtor da fazenda é o consultor. O que já foi registrado não se mexe — a
+   * permuta congela a alíquota que usou (`Barter.taxRate`). A ÁREA nem mora mais
+   * no cadastro: ela é a área plantada de cada permuta (`Barter.plantedAreaHa`),
+   * informada pelo consultor no registro.
    *
-   * O QUE ELA NÃO ALCANÇA, dentro da própria edição, está em `producers.service`
-   * (ver `assertEditable`): o documento, a área cultivável e o regime de
-   * Funrural. Os três não são contato nem endereço — são a identidade do
-   * cadastro e as duas réguas que medem toda permuta dele.
+   * O que ela NÃO alcança é a CARTEIRA (ver `assertEditable`): um consultor que
+   * a escrevesse poderia passar o próprio cliente adiante sem que ninguém
+   * decidisse isso. Excluir também continua em `producersManage`.
    */
   producersEdit: 'producers.edit',
   /**
@@ -83,6 +100,20 @@ export const CAPABILITY = {
    * operação inteira — e a tela não tinha como dar ênfase ao que era dele.
    */
   bartersReadTeam: 'barters.readTeam',
+  /**
+   * Enxergar as permutas COM SEGURO que chegaram à apólice — as aprovadas que
+   * esperam a seguradora e as que já passaram por ela.
+   *
+   * É o escopo da SEGURADORA, e tem um recorte que os outros não têm: além do
+   * trecho da linha (`lineFrom(insure)`), ele exige que a permuta TENHA seguro.
+   * A aprovada sem seguro pula a etapa e vai direto ao faturista — ela nunca foi
+   * trabalho deste posto, e mostrá-la aqui encheria a tela de quem cria apólice
+   * com permutas sobre as quais não há apólice nenhuma a criar.
+   *
+   * Pelo mesmo motivo do faturista, o que está no gerente ou no comitê fica de
+   * fora: negociação em aberto não é assunto de quem segura a lavoura.
+   */
+  bartersReadInsurance: 'barters.readInsurance',
   /**
    * Enxergar as permutas QUE CHEGARAM AO FATURAMENTO — as aprovadas e as já
    * faturadas.
@@ -189,6 +220,21 @@ export const CAPABILITY = {
    * (`barters/barter-workflow.ts`).
    */
   bartersReview: 'barters.review',
+  /**
+   * INFORMAR A APÓLICE da permuta aprovada com seguro: anexar o documento e
+   * escrever o número dela.
+   *
+   * É da SEGURADORA, e só dela (e do admin, que tem tudo). O número saiu da
+   * cédula, onde o consultor o digitava: ele é o produto do posto que cria a
+   * apólice, como a nota é o produto do faturamento, e enquanto foi um campo do
+   * formulário de outra pessoa a cédula afirmava um seguro que ninguém tinha
+   * conferido contra documento nenhum.
+   *
+   * Arquivo e número andam JUNTOS no mesmo ato, pela mesma razão da nota
+   * fiscal: o número sem a apólice é afirmação sem prova, e a apólice sem o
+   * número é um PDF que a cédula não tem como citar.
+   */
+  bartersInsure: 'barters.insure',
   /**
    * FATURAR a permuta aprovada e ANEXAR as notas fiscais que saíram dela.
    *
@@ -300,8 +346,8 @@ export const CAPABILITY = {
    * insumo em dívida; a taxa do seguro acrescenta custo à dívida antes da
    * conversão.
    *
-   * NÃO foi fundida com `barterManage` — que é quem liga o seguro no lançamento
-   * (ver `BarterVersion.insuranceRequired`) — pelo mesmo motivo de
+   * NÃO foi fundida com `barterManage` — que é quem decide a política de seguro
+   * do lançamento (ver `BarterVersion.insurancePolicy`) — pelo mesmo motivo de
    * `pledgePolicyManage` não ter sido: são dois atos com donos possivelmente
    * diferentes. Publicar a tabela de valores é decisão comercial da safra;
    * manter a base de seguros é transcrever a cotação que a seguradora mandou, e
@@ -372,18 +418,20 @@ export const CAPABILITY = {
   pricesRead: 'prices.read',
   /**
    * Ver o INVESTIMENTO POR HECTARE da permuta — quantas sacas do grão a lavoura
-   * está comprometendo por hectare de área cultivável (sc/ha).
+   * está comprometendo por hectare plantado (sc/ha).
    *
    * É a única medida que compara duas permutas de tamanhos diferentes: R$ 400
    * mil numa fazenda de 2.000 ha e R$ 400 mil numa de 300 ha são negócios
-   * distintos, e o total sozinho não diz qual é qual. Quem decide, quem
-   * administra e quem fatura leem esse número; o consultor e o gerente não —
-   * não por sigilo, mas porque para eles a permuta é UMA, e uma régua de
-   * comparação sem com quem comparar é ruído na tela.
+   * distintos, e o total sozinho não diz qual é qual.
    *
-   * Ela é SEPARADA de `pricesRead` de propósito: sc/ha não é R$, e o dia em que
-   * o gerente precisar comparar as permutas do time dele é esta linha que muda —
-   * sem lhe dar de carona a tabela de valores do fornecedor.
+   * O consultor e o gerente ficaram de fora enquanto, para eles, a permuta era
+   * UMA — uma régua sem com quem comparar é ruído. Os painéis mudaram isso: o
+   * consultor lê o investimento médio da própria carteira, e o gerente compara
+   * os consultores do time na aba Análise. Só a SEGURADORA continua sem ela —
+   * o trecho dela é a apólice, e a área já chega a todo mundo.
+   *
+   * Ela é SEPARADA de `pricesRead` de propósito: sc/ha não é R$, e dar a régua
+   * ao consultor não lhe dá de carona a tabela de valores do fornecedor.
    */
   bartersInvestmentPerHa: 'barters.investmentPerHa',
 } as const;
@@ -397,57 +445,21 @@ export const CAPABILITIES = Object.values(CAPABILITY) as Capability[];
  * compila até alguém escrever, aqui, o que ele pode — que é exatamente a
  * decisão que não pode passar batida.
  *
- * Os QUATRO POSTOS da linha de produção estão escritos abaixo, um por papel: o
- * gerente dá o parecer técnico, o comitê decide, o faturista fatura e o emissor
- * emite a cédula. Cada um escreve UMA coisa, e nenhum escreve a do outro — é o
- * que faz a etapa ter dono. A ordem em que elas acontecem não está aqui: quem
+ * Os CINCO POSTOS da linha de produção estão escritos abaixo, um por papel: o
+ * gerente dá o parecer técnico, o comitê decide, a seguradora informa a apólice
+ * (só das permutas com seguro), o faturista fatura e o emissor emite a cédula.
+ * Cada um escreve UMA coisa, e nenhum escreve a do outro — é o que faz a etapa
+ * ter dono. A ordem em que elas acontecem não está aqui: quem
  * guarda o caminho é `barters/barter-workflow.ts`, e esta tabela só responde
  * quem pode agir.
  *
- * Repare no que o admin PERDEU: `bartersReview`. Ele administra o sistema e
- * enxerga tudo, mas não decide permuta — ver o comentário da capacidade.
+ * O ADMIN tem TODAS as capacidades do sistema — é o responsável final, e
+ * acumula também as etapas da esteira (parecer, decisão, apólice, faturamento,
+ * emissão) além da administração. `CAPABILITIES` é `Object.values(CAPABILITY)`
+ * logo acima: uma capacidade nova nasce automaticamente concedida ao admin.
  */
 export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
-  [ROLE.admin]: [
-    CAPABILITY.usersManage,
-    CAPABILITY.producersManage,
-    // A EDIÇÃO também, ao lado do cadastro: quem pode o mais pode o menos, e a
-    // rota de edição pede esta capacidade. Sem ela aqui, o admin perderia a
-    // caneta do cadastro que ele mesmo abre.
-    CAPABILITY.producersEdit,
-    CAPABILITY.unitsManage,
-    CAPABILITY.catalogManage,
-    CAPABILITY.barterManage,
-    CAPABILITY.producersReadAll,
-    CAPABILITY.bartersReadAll,
-    CAPABILITY.creditorManage,
-    // A MARGEM DE SEGURANÇA DO PENHOR — só do admin. Ver a capacidade: ela mora
-    // no cadastro da credora e NÃO entra por `creditorManage`, que o emissor
-    // também tem. Timbre é uma coisa; quanta terra se exige em garantia é outra.
-    CAPABILITY.pledgePolicyManage,
-    // A CÉDULA em segunda via: ler e gerar o documento do que já foi faturado.
-    // Não vem com `bartersInvoice` junto — o admin não fatura permuta, e
-    // preencher a cédula continua sendo de quem apura a matrícula.
-    CAPABILITY.bartersCprRead,
-    CAPABILITY.auditRead,
-    CAPABILITY.pricesRead,
-    CAPABILITY.bartersInvestmentPerHa,
-    // A BASE DE SEGUROS POR MUNICÍPIO — a outra metade do custo que o admin
-    // lança. Ver `insuranceManage`, e repare que ela é separada de
-    // `barterManage`, que é quem LIGA o seguro na versão.
-    CAPABILITY.insuranceManage,
-    // O DOSSIÊ do comitê, em LEITURA. Ele não anexa nada (ver
-    // `bartersCreditAttach`): quem junta prova a uma decisão é quem decide, e a
-    // leitura do admin existe justamente para auditar isso.
-    CAPABILITY.bartersCreditRead,
-    // O caminho de VOLTA da esteira. Ele não é decisão de negócio — é o admin
-    // dizendo se o trabalho já feito pelos outros postos vai ser refeito. Ver
-    // `bartersChangeReview`, e repare que `bartersReview` continua fora daqui.
-    CAPABILITY.bartersChangeReview,
-    // O PEDIDO DE FORA DO BARTER, do outro lado: quem publica a tabela de
-    // valores é quem diz por quanto entra o que ficou fora dela.
-    CAPABILITY.bartersProductReview,
-  ],
+  [ROLE.admin]: CAPABILITIES,
   // O gerente é o único com escopo de TIME: ele enxerga as permutas
   // endereçadas a ele, e não a operação inteira. Repare que `bartersReadAll`
   // NÃO está aqui — foi removida de propósito, não esquecida.
@@ -459,6 +471,9 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     CAPABILITY.bartersReadTeam,
     CAPABILITY.bartersOpinion,
     CAPABILITY.pricesRead,
+    // O sc/ha é a régua da aba Análise: é com ela que ele compara os
+    // consultores do time. Ver `bartersInvestmentPerHa`.
+    CAPABILITY.bartersInvestmentPerHa,
   ],
   // O COMITÊ decide. É a única instância que aprova ou nega — e ele o faz sobre
   // o que já chegou pronto das duas etapas anteriores, daí a leitura de tudo
@@ -478,6 +493,19 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     // e-mail entre os integrantes da reunião.
     CAPABILITY.bartersCreditRead,
     CAPABILITY.bartersCreditAttach,
+  ],
+  // A SEGURADORA cria a apólice da permuta aprovada COM SEGURO e a informa —
+  // documento e número. Ela enxerga só o próprio trecho, e só o que tem seguro:
+  // ver `bartersReadInsurance`.
+  //
+  // Ela VÊ R$ (`pricesRead`): a apólice é contratada sobre o valor segurado, e
+  // a taxa por hectare congelada na permuta é o número que ela confere contra a
+  // cotação.
+  [ROLE.insurer]: [
+    CAPABILITY.producersReadAll,
+    CAPABILITY.bartersReadInsurance,
+    CAPABILITY.bartersInsure,
+    CAPABILITY.pricesRead,
   ],
   // O FATURISTA fatura, e é só isso — inclusive no que enxerga. Ele alcança o
   // que CHEGOU ao faturamento e nada antes disso: o parecer que o gerente ainda
@@ -517,9 +545,11 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
   // que ele sabe sobre a lavoura entra no sistema em vez de sair por telefone.
   [ROLE.consultant]: [
     CAPABILITY.bartersRegister,
-    // OS DADOS DO PRODUTOR, dos da própria carteira. Quem visita a fazenda é
-    // quem sabe que o telefone mudou — ver `producersEdit`, inclusive para o
-    // que ela deliberadamente NÃO alcança.
+    // O PRODUTOR, da própria carteira: cadastrar o cliente novo (que nasce na
+    // carteira dele) e manter os dados de quem ele já atende. Quem visita a
+    // fazenda é quem sabe — ver `producersRegister` e `producersEdit`, inclusive
+    // para o que elas deliberadamente NÃO alcançam.
+    CAPABILITY.producersRegister,
     CAPABILITY.producersEdit,
     CAPABILITY.bartersChangeRequest,
     CAPABILITY.bartersProductRequest,
@@ -527,6 +557,9 @@ export const ROLE_CAPABILITIES: Record<Role, readonly Capability[]> = {
     // Quem preenche também lê: o `GET` da mesa da cédula pede esta capacidade, e
     // sem ela o consultor não teria a própria tela.
     CAPABILITY.bartersCprRead,
+    // O sc/ha das PRÓPRIAS permutas — é dele que sai o investimento médio do
+    // painel dele. Em sacas e hectares, e não em R$: não abre `pricesRead`.
+    CAPABILITY.bartersInvestmentPerHa,
   ],
 };
 

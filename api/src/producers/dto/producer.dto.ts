@@ -1,11 +1,7 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayNotEmpty,
-  ArrayUnique,
-  IsArray,
   IsIn,
   IsInt,
-  IsNumber,
   IsOptional,
   IsPositive,
   IsString,
@@ -24,34 +20,23 @@ export class ProducerDto {
   name!: string;
 
   /**
-   * Os consultores que atendem este produtor — a carteira dele, que pode ser
-   * de mais de um (consultores dividem região).
+   * O consultor que atende este produtor — a carteira dele, uma só.
    *
-   * PELO MENOS UM quando ela vem, e é regra de negócio, não formalidade:
-   * produtor sem consultor nenhum não aparece para quem registra permuta, e um
-   * cadastro que ninguém enxerga é um cadastro perdido. (O produtor CHEGA a esse
-   * estado por outro caminho — a exclusão do último consultor vinculado —, e aí
-   * é o admin quem realoca.)
+   * OPCIONAL porque o CONSULTOR também cadastra e edita o produtor, e a carteira
+   * continua sendo decisão do admin (ver `producersRegister` e `producersEdit`
+   * em policy.ts). Na edição, ausente significa "não mexa em quem atende"; no
+   * CADASTRO, quem resolve é o service: o do admin exige o consultor, e o do
+   * consultor nasce na carteira de quem cadastrou.
    *
-   * OPCIONAL desde que o CONSULTOR passou a editar o produtor: a carteira
-   * continua sendo decisão do admin (ver `producersEdit` em policy.ts), e o
-   * formulário do consultor não tem esse campo — mandá-lo obrigatório o
-   * obrigaria a reenviar uma lista que ele não pode mudar. Ausente significa
-   * "não mexa em quem atende", e quem exige a lista no CADASTRO é o service, com
-   * a mesma frase de sempre: um produtor nasce na carteira de alguém.
-   *
-   * `ArrayUnique` porque o vínculo é uma linha só por par: repetir o mesmo id
-   * no payload é engano de quem chama, e aceitá-lo em silêncio esbarraria na
-   * chave primária composta como erro de banco.
+   * Não aceita nulo: tirar o produtor de toda carteira não é uma escolha do
+   * formulário. Ele só chega a esse estado pela exclusão do consultor, e aí o
+   * admin o realoca.
    */
   @IsOptional()
-  @IsArray()
-  @ArrayNotEmpty({ message: 'Escolha pelo menos um consultor para a carteira' })
-  @ArrayUnique({ message: 'O mesmo consultor aparece duas vezes na carteira' })
   @Type(() => Number)
-  @IsInt({ each: true })
-  @IsPositive({ each: true })
-  consultantIds?: number[];
+  @IsInt({ message: 'Escolha um consultor válido para a carteira' })
+  @IsPositive({ message: 'Escolha um consultor válido para a carteira' })
+  consultantId?: number;
 
   /** CPF ou CNPJ. A pontuação é livre; o que importa é a contagem de dígitos. */
   @IsString()
@@ -74,10 +59,9 @@ export class ProducerDto {
   @MaxLength(80)
   city!: string;
 
-  /** Área cultivável (ha): base das exigências mínimas de insumo. */
-  @IsNumber()
-  @IsPositive()
-  areaHa!: number;
+  // A ÁREA não é mais do cadastro: ela é de cada PERMUTA (a área plantada da
+  // cultura que ela cobre — ver `Barter.plantedAreaHa`). A fazenda planta mais de
+  // uma coisa, e um número só para ela media soja contra a terra do trigo.
 
   /**
    * COMO ESTE PRODUTOR RECOLHE o Funrural: `comercializacao` (sobre a receita da
@@ -99,9 +83,8 @@ export class ProducerDto {
 }
 
 /**
- * Filtros da listagem (o filtro por consultor é do admin). Continua no
- * singular, e continua certo: a pergunta é "quem o consultor X atende?", e a
- * resposta agora inclui os produtores que ele divide com outros.
+ * Filtros da listagem (o filtro por consultor é do admin): "quem o consultor X
+ * atende?".
  *
  * Um valor que não é número é RECUSADO: antes ele virava NaN, o filtro sumia
  * do `where` e a resposta trazia todas as carteiras parecendo a carteira

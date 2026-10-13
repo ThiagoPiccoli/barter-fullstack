@@ -4,6 +4,7 @@ import {
   IsArray,
   IsBoolean,
   IsDateString,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -111,12 +112,17 @@ export class CprAreaDto {
 
 /**
  * Um AVALISTA. Todos os campos opcionais, como o resto do rascunho — e a lista
- * inteira substitui a que estava lá, como as lavouras.
+ * inteira descreve a que deve ficar, como as lavouras.
  *
  * O bloco é longo porque a proposta o pede longo: quem se obriga por outro é
  * qualificado com o mesmo rigor de quem deve.
+ *
+ * O `id` é o que distingue EDITAR de TROCAR: o avalista que volta com o id que
+ * tinha é o mesmo, e o SCR anexado a ele fica; o que vem sem id é novo. Sem
+ * isso, cada "Salvar" apagaria os SCRs dos avalistas.
  */
 export class CprGuarantorDto {
+  @IsOptional() @IsInt() id?: number;
   @IsOptional() @IsString() @MaxLength(120) name?: string;
   @IsOptional() @IsString() @MaxLength(40) document?: string;
   @IsOptional() @IsString() @MaxLength(40) rg?: string;
@@ -137,13 +143,27 @@ export class CprGuarantorDto {
   @IsOptional() @IsString() @MaxLength(80) spouseProfession?: string;
 }
 
-export class SaveCprDto {
-  /** O número da cédula, como a credora a numera. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  number?: string;
+/**
+ * UM BEM DADO EM HIPOTECA. Todos os campos opcionais, como o resto do rascunho —
+ * quem cobra o que falta é `cprGaps()`. O documento do bem não está aqui: ele
+ * sobe por rota própria, como o SCR.
+ */
+export class CprMortgageDto {
+  @IsOptional() @IsInt() id?: number;
+  @IsOptional() @IsString() @MaxLength(300) description?: string;
+  @IsOptional() @IsString() @MaxLength(40) registryNumber?: string;
+  @IsOptional() @IsString() @MaxLength(120) registryDistrict?: string;
+  @IsOptional() @IsString() @MaxLength(80) city?: string;
+  @IsOptional() @IsString() @MaxLength(120) ownerName?: string;
+  @IsOptional() @IsString() @MaxLength(40) ownerDocument?: string;
 
+  @IsOptional()
+  @IsNumber()
+  @Min(0, { message: 'O valor de avaliação não pode ser negativo' })
+  appraisedValue?: number;
+}
+
+export class SaveCprDto {
   /**
    * A EMISSÃO ("Aos [DIA] dias do mês de…").
    *
@@ -228,21 +248,30 @@ export class SaveCprDto {
   emitterEmail?: string;
 
   /**
-   * O LOCAL DA ENTREGA do grão (cláusula V, "d") — este SAI no documento, e por
-   * isso é cobrado. Ele é campo, e não a unidade de retirada da permuta:
-   * retirar insumo na Filial 02 não obriga a entregar o grão lá. A unidade vai
-   * como sugestão no formulário.
+   * O LOCAL DA ENTREGA do grão (cláusula V, "d") — uma das FILIAIS cadastradas,
+   * pelo id. Ele SAI no documento, e por isso é cobrado. É campo, e não a
+   * unidade de retirada da permuta: retirar insumo na Filial 02 não obriga a
+   * entregar o grão lá. A unidade de retirada vai como sugestão no formulário.
+   *
+   * O TEXTO não vem mais no corpo: é o servidor quem o escreve, com o nome da
+   * unidade (ver `saveCpr`). `null` desfaz a escolha.
    */
   @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  deliveryPlace?: string;
+  @IsInt()
+  @Min(1)
+  deliveryUnitId?: number | null;
 
-  /** Hipotecas oferecidas, como a proposta as pede: texto livre. */
+  /**
+   * OS BENS DADOS EM HIPOTECA — só quando o comitê exige hipoteca. A lista
+   * inteira descreve a que deve ficar; o `id` preserva o documento anexado a
+   * cada um, como o do avalista.
+   */
   @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  mortgages?: string;
+  @IsArray()
+  @ArrayMaxSize(10, { message: 'Uma cédula não pode ter mais de 10 bens em hipoteca' })
+  @ValidateNested({ each: true })
+  @Type(() => CprMortgageDto)
+  mortgages?: CprMortgageDto[];
 
   // ── Anuência do cônjuge ──────────────────────────────────────────────────
   // Só quem é casado assina acompanhado; o bloco fica vazio no resto das
@@ -328,13 +357,9 @@ export class SaveCprDto {
   @IsDateString({}, { message: 'Data da consulta ao SCR inválida' })
   scrConsultedAt?: string;
 
-  // ── Seguro ───────────────────────────────────────────────────────────────
-
-  /** Apólice do seguro embutido (cláusula XVIII, "j"). Nem toda permuta tem. */
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  insurancePolicy?: string;
+  // A APÓLICE DO SEGURO não é mais campo deste formulário: o número é da
+  // SEGURADORA, informado junto com o documento (ver `InsureBarterDto`), e a
+  // cédula o lê da permuta.
 
   // ── As lavouras do penhor ────────────────────────────────────────────────
 
@@ -373,31 +398,14 @@ export class SaveCprDto {
  * Ela quase não tem corpo, e é o certo: o emissor não escreve a cédula (isso é
  * do consultor) e não decide o negócio (isso é do comitê). O que ele faz é
  * conferir e gerar — e quem diz se dá para gerar é `cprGaps()`, sobre o que está
- * gravado, não um campo deste DTO.
+ * gravado, não um campo deste DTO. Nem o NÚMERO ele informa mais: a cédula o
+ * tem desde o registro da permuta (ver `Barter.cprNumber`).
  *
  * A observação existe para o caso que foge: a cédula saiu em papel timbrado
  * antigo, o produtor pediu duas vias, a conferência achou um detalhe que não
  * trava a emissão mas merece ficar escrito.
  */
 export class IssueCprDto {
-  /**
-   * O NÚMERO DA CÉDULA, informado no ato de emitir.
-   *
-   * Ele é a ÚNICA coisa da cédula que o emissor escreve, e escreve porque é a
-   * única que ele tem: a numeração da CPR é da emissão em papel e vem de fora
-   * deste sistema — cartório, B3, controle interno da credora. O consultor não a
-   * conhece quando visita a fazenda, e cobrá-la dele no encaminhamento travaria
-   * a esteira num número que só existe semanas depois.
-   *
-   * OPCIONAL aqui porque a cédula pode já tê-lo (a credora numera em bloco, e
-   * alguém adiantou). O que não pode é EMITIR sem número — quem cobra isso é
-   * `cprGaps()`, sobre o que ficou gravado, e não este campo.
-   */
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  number?: string;
-
   @IsOptional()
   @IsString()
   @MaxLength(500)

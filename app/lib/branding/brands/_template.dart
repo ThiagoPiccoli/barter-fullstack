@@ -72,6 +72,11 @@ const Brand templateBrand = Brand(
     // distinguível dele à primeira vista na mesma lista.
     approvedWithConditions: Color(0xFF4D7C0F),
     approvedWithConditionsBg: Color(0xFFF4FBE6),
+    // Violeta para a MESA DA SEGURADORA: decidida, mas com outra pessoa — ver
+    // `atInsurer` em BrandPalette. Distinguível do índigo do gerente e do verde
+    // da aprovação na mesma lista.
+    atInsurer: Color(0xFF7E22CE),
+    atInsurerBg: Color(0xFFF5EEFF),
     approved: Color(0xFF15803D),
     pending: Color(0xFFB45309),
     denied: Color(0xFFB91C1C),

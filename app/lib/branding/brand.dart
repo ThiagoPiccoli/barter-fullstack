@@ -99,6 +99,15 @@ class BrandPalette {
   /// fim.
   final Color approvedWithConditions;
   final Color approvedWithConditionsBg;
+
+  /// [atInsurer] é a aprovada COM SEGURO na mesa da SEGURADORA, esperando a
+  /// apólice.
+  ///
+  /// Cor própria pelo motivo de [atManager]: a permuta está decidida, mas a ação
+  /// está com OUTRA pessoa — e pintá-la do verde da aprovação faria a fila do
+  /// faturista parecer conter trabalho que ainda não chegou nele.
+  final Color atInsurer;
+  final Color atInsurerBg;
   final Color pending;
   final Color denied;
   final Color approvedBg;
@@ -180,6 +189,8 @@ class BrandPalette {
     required this.approved,
     required this.approvedWithConditions,
     required this.approvedWithConditionsBg,
+    required this.atInsurer,
+    required this.atInsurerBg,
     required this.pending,
     required this.denied,
     required this.approvedBg,

@@ -37,12 +37,11 @@ void main() {
   }) => ProducerModel(
     id: '10',
     name: 'Antônio Carvalho',
-    consultantIds: const ['2'],
+    consultantId: '2',
     document: document,
     phone: '',
     farmName: 'Fazenda Boa Vista',
     city: 'Mandaguari/PR',
-    areaHa: 120,
     taxRegime: taxRegime,
     avatarInitials: 'AC',
     createdAt: DateTime(2020, 1, 1),
@@ -55,12 +54,15 @@ void main() {
     producerName: 'Antônio Carvalho',
     unitId: '3',
     unitName: 'Filial 02',
-    versionCode: 'B2026.02',
+    versionCode: 'SOJA26/27.02',
     items: const [
       SimulationItem(productId: '5', productName: 'NPK', unit: 'saco 50kg', quantity: 48),
     ],
     simulatedSacks: 48,
+    seasonId: '3',
+    grainId: '1',
     grainName: 'Soja',
+    plantedAreaHa: 120,
     taxRegime: TaxRegime.comercializacao,
     createdAt: DateTime(2026, 3, 1),
     updatedAt: DateTime(2026, 3, 2),
@@ -82,22 +84,18 @@ void main() {
         priceHistory: [],
       ),
     ];
-    AppData.currentVersion = BarterVersionModel(
+    AppData.currentVersions = [BarterVersionModel(
       id: 'v1',
-      code: 'B2026.02',
+      code: 'SOJA26/27.02',
       number: 2,
-      seasonCode: 'B2026',
-      seasonName: 'Barter 2026',
-      grains: const [
-        VersionGrainModel(
-          grainId: '1',
-          grainName: 'Soja',
-          grainUnit: 'saca 60kg',
-          price: 100,
-          estimatedYield: 60,
-        ),
-      ],
-      pricedInGrainId: '1',
+      seasonId: '3',
+      seasonCode: 'SOJA26/27',
+      seasonName: 'Soja 26/27',
+      grainId: '1',
+      grainName: 'Soja',
+      grainUnit: 'saca 60kg',
+      grainPrice: 100,
+      estimatedYield: 60,
       status: 'open',
       isOpen: true,
       startsAt: DateTime(2026, 2, 1),
@@ -109,7 +107,7 @@ void main() {
           perUnit: 100,
         ),
       ],
-    );
+    )];
   });
 
   tearDown(() {
@@ -117,7 +115,7 @@ void main() {
     AppData.producers = [];
     AppData.units = [];
     AppData.inputs = [];
-    AppData.currentVersion = null;
+    AppData.currentVersions = [];
     AppData.classes = [];
   });
 
@@ -165,13 +163,14 @@ void main() {
     expect(find.textContaining('+ 0,8 sc soja'), findsOneWidget);
   });
 
-  /// O CABEÇALHO DO PRODUTOR não pode estourar a linha.
+  /// O CABEÇALHO não pode estourar a linha.
   ///
   /// "1.200 ha • Mandaguari/PR" vinha num `Text` solto dentro de uma `Row`: sem
   /// largura máxima o `ellipsis` não tem onde cortar, e a faixa saía com 127
-  /// pixels de listra vermelha por cima num telefone de 360. O arquivo já tinha
-  /// consertado exatamente isso no rodapé — este teste é para não voltar pela
-  /// terceira porta.
+  /// pixels de listra vermelha por cima num telefone de 360. Hoje a
+  /// identificação é uma linha só, que rola de lado — e com ela compacta os
+  /// insumos aparecem na tela pequena, e a linha da quantidade passou a ser
+  /// conferida também.
   ///
   /// Roda em 320 e em 360: o defeito é de largura, e um teste que só olha o
   /// aparelho grande não veria nenhum dos dois casos.
@@ -179,8 +178,8 @@ void main() {
     testWidgets('a etapa 3 cabe na tela de ${largura.toInt()} sem estourar', (tester) async {
       await abrirEtapa3(tester, largura: largura);
 
-      // Nome longo e cidade longa é o pior caso real, não um inventado.
-      expect(find.textContaining('Mandaguari/PR'), findsOneWidget);
+      // Nome longo é o pior caso real, não um inventado.
+      expect(find.text(AppData.producers.single.name), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   }

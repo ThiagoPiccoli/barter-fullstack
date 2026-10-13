@@ -36,6 +36,9 @@ DateTime? _asDateOrNull(Object? value) =>
 
 String _asText(Object? value) => (value ?? '').toString();
 
+/// Id como o app os guarda (texto), ou null quando o servidor mandou nulo.
+String? _asIdOrNull(Object? value) => value?.toString();
+
 /// UMA NOTA do faturamento, como a cédula a cita: número, série e duplicata.
 ///
 /// É LEITURA, e chega dentro de [CprKnown]: quem as emite é o faturista, e
@@ -61,6 +64,10 @@ class CprInvoiceRef {
 /// A parte que a permuta responde e ninguém digita.
 class CprKnown {
   final String barterCode;
+
+  /// O NÚMERO DA CPR — reservado pelo servidor no registro da permuta. Está
+  /// aqui, entre o que ninguém digita, porque deixou de ser digitado.
+  final String cprNumber;
   final String emitterName;
   final String emitterDocument;
   final String grainName;
@@ -78,6 +85,15 @@ class CprKnown {
 
   /// AS NOTAS FISCAIS do faturamento — a origem da dívida (cláusula VII).
   final List<CprInvoiceRef> invoices;
+
+  /// O NÚMERO DA APÓLICE do seguro (cláusula XVIII, "j") — informado pela
+  /// SEGURADORA, junto com o documento, e lido da permuta.
+  ///
+  /// Leitura, como as notas: enquanto ele foi um campo deste formulário, o
+  /// título citava uma apólice que ninguém tinha anexado. Vazio quando não há —
+  /// a permuta sem seguro, ou a com seguro que ainda não passou pela seguradora
+  /// —, e aí a alínea não sai.
+  final String insurancePolicy;
 
   /// Sacas do grão — a quantidade da cláusula III e a do penhor (cláusula VI).
   final double sacks;
@@ -98,24 +114,32 @@ class CprKnown {
   /// o grão lá. Ela existe porque é o palpite certo na maioria das vezes.
   final String pickupUnit;
 
+  /// A mesma unidade pelo id — é ele que pré-seleciona a filial na lista do
+  /// local da entrega. Null quando a permuta não tem unidade.
+  final String? pickupUnitId;
+
   const CprKnown({
     this.barterCode = '',
+    this.cprNumber = '',
     this.emitterName = '',
     this.emitterDocument = '',
     this.grainName = '',
     this.dueDate,
     this.seasonName = '',
     this.invoices = const [],
+    this.insurancePolicy = '',
     this.sacks = 0,
     this.quantityKg = 0,
     this.sackPrice = 0,
     this.totalValue = 0,
     this.versionCode = '',
     this.pickupUnit = '',
+    this.pickupUnitId,
   });
 
   factory CprKnown.fromJson(Map<String, dynamic> json) => CprKnown(
         barterCode: _asText(json['barterCode']),
+        cprNumber: _asText(json['cprNumber']),
         emitterName: _asText(json['emitterName']),
         emitterDocument: _asText(json['emitterDocument']),
         grainName: _asText(json['grainName']),
@@ -125,12 +149,14 @@ class CprKnown {
             .cast<Map<String, dynamic>>()
             .map(CprInvoiceRef.fromJson)
             .toList(),
+        insurancePolicy: _asText(json['insurancePolicy']),
         sacks: _asDouble(json['sacks']),
         quantityKg: _asDouble(json['quantityKg']),
         sackPrice: _asDouble(json['sackPrice']),
         totalValue: _asDouble(json['totalValue']),
         versionCode: _asText(json['versionCode']),
         pickupUnit: _asText(json['pickupUnit']),
+        pickupUnitId: _asIdOrNull(json['pickupUnitId']),
       );
 }
 
@@ -388,14 +414,26 @@ class CprArea {
 
 /// O AVALISTA — quem garante a obrigação do emitente com o próprio patrimônio.
 ///
-/// Ele vem da PLANILHA DE PROPOSTA, e não do modelo de cédula: o texto que a
-/// operação usa hoje não tem cláusula de aval nem bloco de assinatura para ele.
-/// Por isso é COLETADO e não IMPRESSO — o dado fica guardado, e o documento
-/// continua sendo exatamente o modelo aprovado.
+/// Só existe quando o COMITÊ exige aval, e aí ele ASSINA a cédula: o bloco dele
+/// (e o da anuência do cônjuge, quando casado) sai junto com os do emitente —
+/// ver `CprText.signatures`.
 ///
 /// A forma é a mesma da qualificação do emitente, campo por campo: para o
-/// direito os dois são a mesma coisa — pessoas que se obrigam.
+/// direito os dois são a mesma coisa — pessoas que se obrigam. O SCR também:
+/// quem garante a dívida é avaliado pelo que já deve.
 class CprGuarantor {
+  /// O ID no servidor — null no avalista que ainda não foi salvo.
+  ///
+  /// Ele VOLTA no `toJson`, e é isso que mantém o SCR no avalista certo: o
+  /// servidor casa a lista pelo id, e o avalista que chega sem ele é outro (ver
+  /// `syncGuarantors` na API). Também é por ele que o SCR sobe — por isso o
+  /// anexo só fica disponível depois de salvar.
+  final int? id;
+
+  /// O SCR do avalista, anexado por rota própria. Leitura aqui, como o do
+  /// emitente.
+  final BarterFileModel? scrFile;
+
   final String name;
   final String document;
   final String rg;
@@ -416,6 +454,8 @@ class CprGuarantor {
   final String spouseProfession;
 
   const CprGuarantor({
+    this.id,
+    this.scrFile,
     this.name = '',
     this.document = '',
     this.rg = '',
@@ -437,6 +477,10 @@ class CprGuarantor {
   });
 
   factory CprGuarantor.fromJson(Map<String, dynamic> json) => CprGuarantor(
+        id: (json['id'] as num?)?.toInt(),
+        scrFile: json['scrFile'] == null
+            ? null
+            : BarterFileModel.fromJson((json['scrFile'] as Map).cast<String, dynamic>()),
         name: _asText(json['name']),
         document: _asText(json['document']),
         rg: _asText(json['rg']),
@@ -458,6 +502,7 @@ class CprGuarantor {
       );
 
   Map<String, dynamic> toJson() => {
+        'id': ?id,
         'name': name.trim(),
         'document': document.trim(),
         'rg': rg.trim(),
@@ -506,6 +551,10 @@ class CprGuarantor {
     String? spouseProfession,
   }) =>
       CprGuarantor(
+        // O id e o SCR atravessam a edição: digitar no nome não faz do avalista
+        // outro, e o anexo dele continua dele.
+        id: id,
+        scrFile: scrFile,
         name: name ?? this.name,
         document: document ?? this.document,
         rg: rg ?? this.rg,
@@ -527,6 +576,86 @@ class CprGuarantor {
       );
 }
 
+/// UM BEM DADO EM HIPOTECA — exigido pelo comitê, cadastrado campo por campo e
+/// com o documento anexado (a matrícula atualizada, a certidão de ônus).
+///
+/// Não sai na cédula: o modelo em uso não tem cláusula de hipoteca. Ele é
+/// CONFERIDO — e o servidor cobra cada campo vazio em [CprDesk.consultantGaps].
+/// O [id] cumpre o papel do de [CprGuarantor]: mantém o documento no bem certo.
+class CprMortgage {
+  final int? id;
+  final String description;
+  final String registryNumber;
+  final String registryDistrict;
+  final String city;
+  final String ownerName;
+  final String ownerDocument;
+
+  /// O valor de avaliação (R$). Zero é "não informado".
+  final double appraisedValue;
+
+  /// O documento do bem, anexado por rota própria.
+  final BarterFileModel? documentFile;
+
+  const CprMortgage({
+    this.id,
+    this.description = '',
+    this.registryNumber = '',
+    this.registryDistrict = '',
+    this.city = '',
+    this.ownerName = '',
+    this.ownerDocument = '',
+    this.appraisedValue = 0,
+    this.documentFile,
+  });
+
+  factory CprMortgage.fromJson(Map<String, dynamic> json) => CprMortgage(
+        id: (json['id'] as num?)?.toInt(),
+        description: _asText(json['description']),
+        registryNumber: _asText(json['registryNumber']),
+        registryDistrict: _asText(json['registryDistrict']),
+        city: _asText(json['city']),
+        ownerName: _asText(json['ownerName']),
+        ownerDocument: _asText(json['ownerDocument']),
+        appraisedValue: _asDouble(json['appraisedValue']),
+        documentFile: json['documentFile'] == null
+            ? null
+            : BarterFileModel.fromJson((json['documentFile'] as Map).cast<String, dynamic>()),
+      );
+
+  Map<String, dynamic> toJson() => {
+        'id': ?id,
+        'description': description.trim(),
+        'registryNumber': registryNumber.trim(),
+        'registryDistrict': registryDistrict.trim(),
+        'city': city.trim(),
+        'ownerName': ownerName.trim(),
+        'ownerDocument': ownerDocument.trim(),
+        'appraisedValue': appraisedValue,
+      };
+
+  CprMortgage copyWith({
+    String? description,
+    String? registryNumber,
+    String? registryDistrict,
+    String? city,
+    String? ownerName,
+    String? ownerDocument,
+    double? appraisedValue,
+  }) =>
+      CprMortgage(
+        id: id,
+        documentFile: documentFile,
+        description: description ?? this.description,
+        registryNumber: registryNumber ?? this.registryNumber,
+        registryDistrict: registryDistrict ?? this.registryDistrict,
+        city: city ?? this.city,
+        ownerName: ownerName ?? this.ownerName,
+        ownerDocument: ownerDocument ?? this.ownerDocument,
+        appraisedValue: appraisedValue ?? this.appraisedValue,
+      );
+}
+
 /// O RASCUNHO da cédula — o que o CONSULTOR preencheu até agora.
 ///
 /// Ele é salvável pela metade de propósito: a qualificação o consultor tem da
@@ -534,7 +663,6 @@ class CprGuarantor {
 /// seguinte e o SCR sai depois da consulta. O vazio aqui significa "ainda não
 /// preenchido", e quem diz o que falta é o servidor, em [CprDesk.gaps].
 class CprDraft {
-  final String number;
   final DateTime? issuedAt;
 
   /// O VENCIMENTO gravado na cédula — copiado da SAFRA pelo servidor a cada
@@ -565,16 +693,22 @@ class CprDraft {
   final String emitterMotherName;
   final String emitterEmail;
 
-  /// O LOCAL DA ENTREGA do grão (cláusula V, "d"). Este SAI no documento, e por
-  /// isso É cobrado. É campo próprio, e não a unidade da permuta: retirar
-  /// insumo na Filial 02 não obriga a entregar o grão lá.
+  /// O LOCAL DA ENTREGA do grão (cláusula V, "d") — uma das FILIAIS
+  /// cadastradas. Este SAI no documento, e por isso É cobrado. É campo próprio,
+  /// e não a unidade da permuta: retirar insumo na Filial 02 não obriga a
+  /// entregar o grão lá.
+  ///
+  /// [deliveryUnitId] é a escolha; [deliveryPlace] é o nome dela, que o
+  /// SERVIDOR congela na gravação e é o que a cláusula imprime. A cédula do
+  /// tempo do texto livre tem o texto e não tem unidade.
+  final String? deliveryUnitId;
   final String deliveryPlace;
 
-  /// Hipotecas oferecidas, como a proposta as pede: texto livre. Coletadas, não
-  /// impressas — o modelo não tem cláusula para elas.
-  final String mortgages;
+  /// Os BENS DADOS EM HIPOTECA. SÓ EXISTEM quando o comitê exige hipoteca
+  /// ([BarterModel.requiresCollateral]). Ver [CprMortgage].
+  final List<CprMortgage> mortgages;
 
-  /// Os AVALISTAS. Coletados, não impressos. Ver [CprGuarantor].
+  /// Os AVALISTAS — só quando o comitê exige aval. Ver [CprGuarantor].
   final List<CprGuarantor> guarantors;
 
   /// A ANUÊNCIA DO CÔNJUGE. Vazio é o caso comum, e não uma pendência: só o
@@ -617,7 +751,8 @@ class CprDraft {
   final BarterFileModel? signedFile;
   final BarterFileModel? registryFile;
 
-  final String insurancePolicy;
+  // A APÓLICE não é mais campo deste rascunho: o número é da SEGURADORA, e
+  // chega em [CprKnown.insurancePolicy], lido da permuta.
 
   final List<CprArea> areas;
 
@@ -627,7 +762,6 @@ class CprDraft {
   final DateTime? updatedAt;
 
   const CprDraft({
-    this.number = '',
     this.issuedAt,
     this.dueDate,
     this.emitterNationality = '',
@@ -642,8 +776,9 @@ class CprDraft {
     this.emitterFatherName = '',
     this.emitterMotherName = '',
     this.emitterEmail = '',
+    this.deliveryUnitId,
     this.deliveryPlace = '',
-    this.mortgages = '',
+    this.mortgages = const [],
     this.guarantors = const [],
     this.spouseName = '',
     this.spouseNationality = '',
@@ -659,14 +794,12 @@ class CprDraft {
     this.scrConsultedAt,
     this.signedFile,
     this.registryFile,
-    this.insurancePolicy = '',
     this.areas = const [],
     this.filledBy = '',
     this.updatedAt,
   });
 
   factory CprDraft.fromJson(Map<String, dynamic> json) => CprDraft(
-        number: _asText(json['number']),
         issuedAt: _asDateOrNull(json['issuedAt']),
         dueDate: _asDateOrNull(json['dueDate']),
         emitterNationality: _asText(json['emitterNationality']),
@@ -681,8 +814,12 @@ class CprDraft {
         emitterFatherName: _asText(json['emitterFatherName']),
         emitterMotherName: _asText(json['emitterMotherName']),
         emitterEmail: _asText(json['emitterEmail']),
+        deliveryUnitId: _asIdOrNull(json['deliveryUnitId']),
         deliveryPlace: _asText(json['deliveryPlace']),
-        mortgages: _asText(json['mortgages']),
+        mortgages: ((json['mortgages'] as List?) ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map(CprMortgage.fromJson)
+            .toList(),
         guarantors: ((json['guarantors'] as List?) ?? const [])
             .cast<Map<String, dynamic>>()
             .map(CprGuarantor.fromJson)
@@ -715,7 +852,6 @@ class CprDraft {
         registryFile: json['registryFile'] == null
             ? null
             : BarterFileModel.fromJson((json['registryFile'] as Map).cast<String, dynamic>()),
-        insurancePolicy: _asText(json['insurancePolicy']),
         areas: ((json['areas'] as List?) ?? const [])
             .cast<Map<String, dynamic>>()
             .map(CprArea.fromJson)
@@ -729,12 +865,12 @@ class CprDraft {
   ///
   /// `filledBy` e `updatedAt` não vão: quem preencheu é quem está com a sessão
   /// aberta, e o servidor não pergunta isso ao cliente.
-  /// O corpo do `PUT`. Sem `dueDate` e sem os números das notas: os dois são
-  /// LEITURA agora — o vencimento é da safra e as notas são do faturamento. O
+  /// O corpo do `PUT`. Sem `dueDate`, sem o número da cédula e sem os números
+  /// das notas: os três são LEITURA — o vencimento é da safra, o número é do
+  /// registro da permuta e as notas são do faturamento. O
   /// servidor os descarta se vierem, e mandá-los daqui seria a tela pedindo o
   /// que ela não deveria saber escrever.
-  Map<String, dynamic> toJson() => {
-        'number': number.trim(),
+  Map<String, dynamic> toJson({bool withGuarantors = true, bool withMortgages = true}) => {
         if (issuedAt != null) 'issuedAt': issuedAt!.toUtc().toIso8601String(),
         if (scrConsultedAt != null)
           'scrConsultedAt': scrConsultedAt!.toUtc().toIso8601String(),
@@ -750,9 +886,12 @@ class CprDraft {
         'emitterFatherName': emitterFatherName.trim(),
         'emitterMotherName': emitterMotherName.trim(),
         'emitterEmail': emitterEmail.trim(),
-        'deliveryPlace': deliveryPlace.trim(),
-        'mortgages': mortgages.trim(),
-        'guarantors': guarantors.map((g) => g.toJson()).toList(),
+        // A UNIDADE, e não o texto: o nome é o servidor quem escreve. Sem
+        // escolha, o campo não vai — e a cédula antiga, de texto livre, fica
+        // com o texto que tem em vez de ser apagada por um `null`.
+        if (deliveryUnitId != null) 'deliveryUnitId': int.parse(deliveryUnitId!),
+        if (withMortgages) 'mortgages': mortgages.map((m) => m.toJson()).toList(),
+        if (withGuarantors) 'guarantors': guarantors.map((g) => g.toJson()).toList(),
         'spouseName': spouseName.trim(),
         'spouseNationality': spouseNationality.trim(),
         'spouseProfession': spouseProfession.trim(),
@@ -763,7 +902,6 @@ class CprDraft {
         'maxMoisture': maxMoisture,
         'maxImpurities': maxImpurities,
         'oilContent': oilContent,
-        'insurancePolicy': insurancePolicy.trim(),
         'areas': areas.map((a) => a.toJson()).toList(),
       };
 
@@ -780,7 +918,6 @@ class CprDraft {
   /// SAFRA, escrito pelo servidor. A tela não tem campo para ele, e um parâmetro
   /// aqui seria a porta pela qual ele voltaria a ser digitado.
   CprDraft copyWith({
-    String? number,
     DateTime? issuedAt,
     String? emitterNationality,
     String? emitterMaritalStatus,
@@ -794,8 +931,9 @@ class CprDraft {
     String? emitterFatherName,
     String? emitterMotherName,
     String? emitterEmail,
+    String? deliveryUnitId,
     String? deliveryPlace,
-    String? mortgages,
+    List<CprMortgage>? mortgages,
     List<CprGuarantor>? guarantors,
     String? spouseName,
     String? spouseNationality,
@@ -808,11 +946,9 @@ class CprDraft {
     double? maxImpurities,
     double? oilContent,
     DateTime? scrConsultedAt,
-    String? insurancePolicy,
     List<CprArea>? areas,
   }) =>
       CprDraft(
-        number: number ?? this.number,
         issuedAt: issuedAt ?? this.issuedAt,
         dueDate: dueDate,
         emitterNationality: emitterNationality ?? this.emitterNationality,
@@ -827,6 +963,7 @@ class CprDraft {
         emitterFatherName: emitterFatherName ?? this.emitterFatherName,
         emitterMotherName: emitterMotherName ?? this.emitterMotherName,
         emitterEmail: emitterEmail ?? this.emitterEmail,
+        deliveryUnitId: deliveryUnitId ?? this.deliveryUnitId,
         deliveryPlace: deliveryPlace ?? this.deliveryPlace,
         mortgages: mortgages ?? this.mortgages,
         guarantors: guarantors ?? this.guarantors,
@@ -848,7 +985,6 @@ class CprDraft {
         scrConsultedAt: scrConsultedAt ?? this.scrConsultedAt,
         signedFile: signedFile,
         registryFile: registryFile,
-        insurancePolicy: insurancePolicy ?? this.insurancePolicy,
         areas: areas ?? this.areas,
         filledBy: filledBy,
         updatedAt: updatedAt,
@@ -923,8 +1059,9 @@ class CprDesk {
   /// Esta cédula deixa a permuta ser encaminhada?
   bool get readyToForward => consultantGaps.isEmpty;
 
-  /// A sugestão de preenchimento, vinda da última cédula do mesmo produtor.
-  /// Vazia quando já existe rascunho.
+  /// A sugestão de preenchimento: a qualificação vem da última cédula do mesmo
+  /// produtor, e o padrão do grão vem do MODELO DA CPR do grão (cadastrado na
+  /// aba de grãos). Vazia quando já existe rascunho.
   final CprDraft? suggestion;
 
   const CprDesk({
@@ -968,10 +1105,10 @@ class CprDesk {
     if (cpr != null) return cpr!;
     final base = (suggestion ?? const CprDraft()).copyWith(issuedAt: DateTime.now());
     // O LOCAL DA ENTREGA nasce com a unidade de retirada da permuta. É sugestão
-    // — o campo continua editável, e a cédula anterior não o traz de propósito:
-    // ele é da negociação, não da pessoa.
-    return base.deliveryPlace.isEmpty && known.pickupUnit.isNotEmpty
-        ? base.copyWith(deliveryPlace: known.pickupUnit)
+    // — a lista continua aberta a outra filial, e a cédula anterior não o traz
+    // de propósito: ele é da negociação, não da pessoa.
+    return base.deliveryUnitId == null && known.pickupUnitId != null
+        ? base.copyWith(deliveryUnitId: known.pickupUnitId, deliveryPlace: known.pickupUnit)
         : base;
   }
 }

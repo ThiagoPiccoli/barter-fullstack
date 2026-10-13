@@ -97,10 +97,10 @@ class OfflinePackage {
 
   final Map<String, dynamic>? user;
 
-  /// A versão vigente, ou null. Null AQUI significa "o servidor disse que não há
-  /// Barter aberto", e não "não perguntei": o pacote só existe depois de uma
-  /// sincronização bem-sucedida.
-  final Map<String, dynamic>? version;
+  /// As versões vigentes — uma por cultura aberta. Vazia AQUI significa "o
+  /// servidor disse que não há Barter aberto", e não "não perguntei": o pacote
+  /// só existe depois de uma sincronização bem-sucedida.
+  final List<Map<String, dynamic>> versions;
 
   final List<Map<String, dynamic>> products;
   final List<Map<String, dynamic>> classes;
@@ -120,37 +120,52 @@ class OfflinePackage {
   /// primeira praça.
   final List<Map<String, dynamic>> insuranceRates;
 
+  /// A MESMA BASE em sacas de cada versão vigente (pelo slug) — a lente do
+  /// consultor, que não vê R$, precisa da conversão da cultura em que monta.
+  final Map<String, List<Map<String, dynamic>>> insuranceRatesByVersion;
+
   const OfflinePackage({
     required this.savedAt,
     required this.user,
-    required this.version,
+    required this.versions,
     required this.products,
     required this.classes,
     required this.producers,
     required this.units,
     this.insuranceRates = const [],
+    this.insuranceRatesByVersion = const {},
   });
 
   Map<String, dynamic> toJson() => {
         'savedAt': savedAt.toIso8601String(),
         'user': user,
-        'version': version,
+        'versions': versions,
         'products': products,
         'classes': classes,
         'producers': producers,
         'units': units,
         'insuranceRates': insuranceRates,
+        'insuranceRatesByVersion': insuranceRatesByVersion,
       };
 
   factory OfflinePackage.fromJson(Map<String, dynamic> json) => OfflinePackage(
         savedAt: DateTime.tryParse('${json['savedAt']}') ?? DateTime.now(),
         user: json['user'] as Map<String, dynamic>?,
-        version: json['version'] as Map<String, dynamic>?,
+        // O pacote gravado antes das versões por cultura tinha UMA versão, com
+        // as culturas dentro — formato que o app novo não lê. Ele é descartado
+        // como "sem Barter" até a próxima sincronização, em vez de virar uma
+        // tabela parseada pela metade.
+        versions: _rows(json['versions']),
         products: _rows(json['products']),
         classes: _rows(json['classes']),
         producers: _rows(json['producers']),
         units: _rows(json['units']),
         insuranceRates: _rows(json['insuranceRates']),
+        insuranceRatesByVersion: {
+          if (json['insuranceRatesByVersion'] is Map)
+            for (final entry in (json['insuranceRatesByVersion'] as Map).entries)
+              '${entry.key}': _rows(entry.value),
+        },
       );
 
   static List<Map<String, dynamic>> _rows(dynamic value) => value is List

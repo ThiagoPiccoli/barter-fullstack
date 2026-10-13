@@ -199,11 +199,10 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       await expect(
         post('/api/v1/producers', {
           name: 'Produtor Novo',
-          consultantIds: [2],
+          consultantId: 2,
           document: 'CPF 999.999.999-99',
           farmName: 'Fazenda X',
           city: 'Maringá/PR',
-          areaHa: 10,
         }).then((r) => r.status),
       ).resolves.toBe(403);
 
@@ -296,10 +295,9 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       if (ato === 'invoice') {
         await attachInvoice(app, await asUser(FATURISTA), 'PRM-2026-004');
       }
-      for (const email of [...BACK_OFFICE, ADMIN]) {
+      for (const email of BACK_OFFICE) {
         const response = await atos[ato](await asUser(email));
-        // O ato do dono precisa PASSAR; o dos outros precisa levar 403 — e o
-        // admin está na varredura de propósito: ele não é dono de nenhum.
+        // O ato do dono precisa PASSAR; o dos outros postos precisa levar 403.
         expect([ato, email, response.status]).toEqual([
           ato,
           email,
@@ -307,14 +305,29 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
         ]);
       }
       await resetDb(app);
+
+      // O ADMIN tem todas as capacidades: ele faz qualquer um dos quatro atos,
+      // numa base limpa (o dono já teria movido a permuta de etapa).
+      if (ato === 'invoice') {
+        await attachInvoice(app, await asUser(FATURISTA), 'PRM-2026-004');
+      }
+      const response = await atos[ato](await asUser(ADMIN));
+      expect([ato, ADMIN, response.status]).toEqual([ato, ADMIN, 200]);
+      await resetDb(app);
     }
   });
 
-  it('permuta é ato do consultor da carteira — nem retaguarda nem admin registram', async () => {
+  /**
+   * O ADMIN é a exceção de propósito (ele gera a permuta em nome do consultor
+   * do produtor — ver barters.e2e-spec.ts); os postos da retaguarda continuam
+   * de fora.
+   */
+  it('permuta é ato do consultor da carteira (ou do admin) — a retaguarda não registra', async () => {
     const payload = {
       producerId: 1,
       unitId: UNIT.filial02,
-      grainId: 1,
+      seasonId: 3, // Soja 26/27
+      plantedAreaHa: 120,
       inputs: [
         { productId: 5, quantity: 48 },
         { productId: 6, quantity: 300 },
@@ -322,7 +335,7 @@ describe('RBAC — papéis de retaguarda (e2e)', () => {
       ],
     };
 
-    for (const email of [...BACK_OFFICE, ADMIN]) {
+    for (const email of BACK_OFFICE) {
       const response = await request(app.getHttpServer())
         .post('/api/v1/barters')
         .set('Authorization', await asUser(email))

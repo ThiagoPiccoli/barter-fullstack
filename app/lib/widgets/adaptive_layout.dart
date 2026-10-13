@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../branding/brand_wordmark.dart';
 import '../models/models.dart';
+import '../services/nav_rail_preference.dart';
 import '../theme/app_theme.dart';
 import 'common_widgets.dart';
 
@@ -72,15 +73,21 @@ class AdaptiveDestination {
     this.badgeColor,
   });
 
-  Widget _icon(bool selected) {
-    final child = Icon(selected ? activeIcon : icon);
-    if (badgeCount == 0) return child;
-    return Badge(
-      label: Text('$badgeCount'),
-      backgroundColor: badgeColor ?? AppColors.atManager,
-      textColor: AppColors.onPrimary,
-      child: child,
-    );
+  Widget _icon(bool selected, {bool withTooltip = false}) {
+    Widget child = Icon(selected ? activeIcon : icon);
+    if (badgeCount > 0) {
+      child = Badge(
+        label: Text('$badgeCount'),
+        backgroundColor: badgeColor ?? AppColors.atManager,
+        textColor: AppColors.onPrimary,
+        child: child,
+      );
+    }
+    // Recolhida, o ícone é a ÚNICA pista do destino — e ícone sozinho é
+    // charada para quem não decorou a coluna. A [NavigationRail] não põe
+    // tooltip por conta própria, então ele vem daqui.
+    if (withTooltip) child = Tooltip(message: label, child: child);
+    return child;
   }
 }
 
@@ -90,6 +97,10 @@ class AdaptiveDestination {
 /// ela vira uma coluna lateral de ícones, e a partir de [Breakpoints.expanded]
 /// essa coluna abre com os rótulos. O corpo é o mesmo widget nos três casos —
 /// o que muda é onde ficam os botões, não o que a tela mostra.
+///
+/// Quem usa pode RECOLHER a coluna a só ícones, em qualquer largura que tenha
+/// coluna — o nome passa a tooltip, e a escolha fica no aparelho
+/// ([NavRailPreference]).
 ///
 /// Existe porque os três painéis (admin, retaguarda, consultor) tinham a mesma
 /// [BottomNavigationBar] copiada, e barra de baixo em monitor de 27" é celular
@@ -148,96 +159,160 @@ class AdaptiveNavScaffold extends StatelessWidget {
           );
         }
 
-        final extended = constraints.maxWidth >= Breakpoints.expanded;
-        return Scaffold(
-          body: Row(
-            children: [
-              // O PÉ FICA FORA DA [NavigationRail], e não no `trailing` dela.
-              //
-              // O `trailing` parece o lugar certo e não é: ele entra no MESMO
-              // grupo dos destinos, que a rail alinha ao topo — o rodapé
-              // colava embaixo do último item, no meio da coluna, em vez de
-              // ancorar no fim dela. Empilhar a rail e o pé numa `Column`,
-              // com a rail em `Expanded`, põe cada um onde ele pertence.
-              //
-              // A cor de fundo sai da rail e vem para cá: com o pé fora dela,
-              // é esta caixa que precisa pintar a coluna inteira, senão o
-              // trecho de baixo aparece sobre o fundo da tela.
-              SizedBox(
-                width: extended
-                    ? Breakpoints.railExtendedWidth
-                    : Breakpoints.railWidth,
-                child: ColoredBox(
-                  color: AppColors.surface,
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: NavigationRail(
-                          selectedIndex: selectedIndex,
-                          onDestinationSelected: onSelect,
-                          extended: extended,
-                          // Aberta, a rail já mostra o rótulo ao lado do ícone;
-                          // repetir o rótulo embaixo é proibido pelo próprio widget.
-                          labelType: extended
-                              ? NavigationRailLabelType.none
-                              : NavigationRailLabelType.all,
-                          backgroundColor: Colors.transparent,
-                          indicatorColor: AppColors.primarySurface,
-                          minWidth: Breakpoints.railWidth,
-                          minExtendedWidth: Breakpoints.railExtendedWidth,
-                          // A MARCA no topo. A coluna é a moldura fixa do app no
-                          // computador, e uma moldura sem assinatura é onde o
-                          // espaço vazio começa a incomodar.
-                          leading: _RailHeader(extended: extended),
-                          selectedIconTheme: IconThemeData(color: AppColors.primary),
-                          unselectedIconTheme:
-                              IconThemeData(color: AppColors.textLight),
-                          // Os destinos são o primeiro nível: peso maior que o do
-                          // rodapé, para o olho ter onde pousar.
-                          //
-                          // O CORPO depende do estado, e não é preciosismo:
-                          // fechada, o rótulo fica SOB o ícone numa coluna de
-                          // 72px, e 14 quebrava "Permutas" em duas linhas. Aberta,
-                          // ele fica ao lado, com a largura toda — e aí 14 é o que
-                          // separa um destino de um item de rodapé.
-                          selectedLabelTextStyle: TextStyle(
-                            fontSize: extended ? 14 : 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary,
-                          ),
-                          unselectedLabelTextStyle: TextStyle(
-                            fontSize: extended ? 14 : 12,
-                            fontWeight: FontWeight.w500,
-                            color: AppColors.textMedium,
-                          ),
-                          destinations: [
-                            for (final d in destinations)
-                              NavigationRailDestination(
-                                icon: d._icon(false),
-                                selectedIcon: d._icon(true),
-                                label: Text(d.label),
-                              ),
-                          ],
-                        ),
-                      ),
-                      // A IDENTIDADE e as ações quietas, ancoradas no fim —
-                      // separadas por divisória, menores e mais apagadas que os
-                      // destinos. É a hierarquia de três níveis: o que se visita
-                      // todo dia em cima e forte; conta e saída embaixo e discretas.
-                      if (user != null)
-                        _RailFooter(user: user!, extended: extended),
-                    ],
-                  ),
-                ),
-              ),
-              VerticalDivider(width: 1, thickness: 1, color: AppColors.divider),
-              // A coluna se ANUNCIA ao corpo: é assim que os botões de conta e
-              // saída da barra de título sabem que já estão representados aqui.
-              Expanded(child: RailScope(hasRail: true, child: body)),
-            ],
+        final roomy = constraints.maxWidth >= Breakpoints.expanded;
+        return ValueListenableBuilder<bool>(
+          valueListenable: NavRailPreference.collapsed,
+          builder: (context, collapsed, _) => _railShell(
+            context,
+            // A largura decide se os nomes CABEM ao lado; quem usa decide se
+            // os quer. Recolhida vence sempre — e entre os dois cortes, onde
+            // aberta não cabe, os nomes voltam para baixo do ícone.
+            extended: roomy && !collapsed,
+            collapsed: collapsed,
           ),
         );
       },
+    );
+  }
+
+  Widget _railShell(BuildContext context,
+      {required bool extended, required bool collapsed}) {
+    return Scaffold(
+      body: Row(
+        children: [
+          // O PÉ FICA FORA DA [NavigationRail], e não no `trailing` dela.
+          //
+          // O `trailing` parece o lugar certo e não é: ele entra no MESMO
+          // grupo dos destinos, que a rail alinha ao topo — o rodapé
+          // colava embaixo do último item, no meio da coluna, em vez de
+          // ancorar no fim dela. Empilhar a rail e o pé numa `Column`,
+          // com a rail em `Expanded`, põe cada um onde ele pertence.
+          //
+          // A cor de fundo sai da rail e vem para cá: com o pé fora dela,
+          // é esta caixa que precisa pintar a coluna inteira, senão o
+          // trecho de baixo aparece sobre o fundo da tela.
+          SizedBox(
+            width: extended
+                ? Breakpoints.railExtendedWidth
+                : Breakpoints.railWidth,
+            child: ColoredBox(
+              color: AppColors.surface,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: NavigationRail(
+                      // Uma rail NOVA a cada troca, e não a mesma animando. Ela
+                      // anima a própria largura sozinha, mas a coluna em volta,
+                      // a marca e o pé trocam de largura na hora — e no meio da
+                      // animação os destinos ainda largos estouravam a coluna
+                      // já estreita. Trocar de uma vez mantém tudo em passo.
+                      key: ValueKey(extended),
+                      selectedIndex: selectedIndex,
+                      onDestinationSelected: onSelect,
+                      extended: extended,
+                      // Aberta, a rail já mostra o rótulo ao lado do ícone;
+                      // repetir o rótulo embaixo é proibido pelo próprio widget.
+                      // Recolhida, não há rótulo em lugar nenhum: o nome
+                      // vira tooltip do ícone.
+                      labelType: extended || collapsed
+                          ? NavigationRailLabelType.none
+                          : NavigationRailLabelType.all,
+                      backgroundColor: Colors.transparent,
+                      indicatorColor: AppColors.primarySurface,
+                      minWidth: Breakpoints.railWidth,
+                      minExtendedWidth: Breakpoints.railExtendedWidth,
+                      // A MARCA no topo. A coluna é a moldura fixa do app no
+                      // computador, e uma moldura sem assinatura é onde o
+                      // espaço vazio começa a incomodar.
+                      leading: _RailHeader(extended: extended),
+                      selectedIconTheme: IconThemeData(color: AppColors.primary),
+                      unselectedIconTheme:
+                          IconThemeData(color: AppColors.textLight),
+                      // Os destinos são o primeiro nível: peso maior que o do
+                      // rodapé, para o olho ter onde pousar.
+                      //
+                      // O CORPO depende do estado, e não é preciosismo:
+                      // fechada, o rótulo fica SOB o ícone numa coluna de
+                      // 72px, e 14 quebrava "Permutas" em duas linhas. Aberta,
+                      // ele fica ao lado, com a largura toda — e aí 14 é o que
+                      // separa um destino de um item de rodapé.
+                      selectedLabelTextStyle: TextStyle(
+                        fontSize: extended ? 14 : 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primary,
+                      ),
+                      unselectedLabelTextStyle: TextStyle(
+                        fontSize: extended ? 14 : 12,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textMedium,
+                      ),
+                      destinations: [
+                        for (final d in destinations)
+                          NavigationRailDestination(
+                            icon: d._icon(false, withTooltip: collapsed),
+                            selectedIcon:
+                                d._icon(true, withTooltip: collapsed),
+                            // Fica mesmo recolhida: é o que o leitor de
+                            // tela anuncia.
+                            label: Text(d.label),
+                          ),
+                      ],
+                    ),
+                  ),
+                  // A IDENTIDADE e as ações quietas, ancoradas no fim —
+                  // separadas por divisória, menores e mais apagadas que os
+                  // destinos. É a hierarquia de três níveis: o que se visita
+                  // todo dia em cima e forte; conta e saída embaixo e discretas.
+                  if (user != null)
+                    _RailFooter(user: user!, extended: extended),
+                ],
+              ),
+            ),
+          ),
+          VerticalDivider(width: 1, thickness: 1, color: AppColors.divider),
+          // A coluna se ANUNCIA ao corpo: é assim que os botões de conta e
+          // saída da barra de título sabem que já estão representados aqui.
+          Expanded(
+            child: Stack(
+              children: [
+                RailScope(hasRail: true, child: body),
+                // O botão de recolher fica no canto esquerdo da BARRA DE
+                // TÍTULO da aba, colado na coluna que ele controla. Vem por
+                // cima do corpo, e não como `leading` de cada AppBar, para não
+                // depender de cada aba lembrar de pô-lo — toda aba tem a barra
+                // no topo, com o título centrado e esse canto livre.
+                Positioned(
+                  top: MediaQuery.paddingOf(context).top +
+                      (kToolbarHeight - kMinInteractiveDimension) / 2,
+                  left: 4,
+                  child: _RailToggle(collapsed: collapsed),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A seta que recolhe a coluna aos ícones e a abre de volta.
+///
+/// Só o ícone, com o que ela faz em tooltip: sobre a barra de título, um rótulo
+/// competiria com o nome da tela.
+class _RailToggle extends StatelessWidget {
+  final bool collapsed;
+  const _RailToggle({required this.collapsed});
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: Icon(collapsed
+          ? Icons.keyboard_double_arrow_right
+          : Icons.keyboard_double_arrow_left),
+      color: AppColors.onPrimary,
+      tooltip: collapsed ? 'Expandir menu' : 'Recolher menu',
+      onPressed: () => NavRailPreference.setCollapsed(!collapsed),
     );
   }
 }
@@ -283,11 +358,17 @@ class _RailHeader extends StatelessWidget {
     return _RailBand(
       extended: extended,
       padding: EdgeInsets.fromLTRB(extended ? 20 : 0, 8, extended ? 20 : 0, 8),
-      child: BrandWordmark(
-        size: 30,
-        showLettering: extended,
-        showTagline: false,
-        tone: BrandTone.onSurface,
+      // Fechada, o monograma vai ao CENTRO, no eixo dos ícones. Sem isto a
+      // `Row` do logotipo, esticada à largura da faixa, o encostava na borda
+      // esquerda — fora da linha de tudo o que vem embaixo.
+      child: Align(
+        alignment: extended ? AlignmentDirectional.centerStart : Alignment.center,
+        child: BrandWordmark(
+          size: 30,
+          showLettering: extended,
+          showTagline: false,
+          tone: BrandTone.onSurface,
+        ),
       ),
     );
   }
@@ -350,7 +431,12 @@ class _RailFooter extends StatelessWidget {
               ],
             )
           else
-            _Avatar(user: user),
+            // Fechada, o nome e o cargo saem de vista — e as iniciais sozinhas
+            // não dizem em que conta se está.
+            Tooltip(
+              message: '${user.name} · ${user.role.label}',
+              child: _Avatar(user: user),
+            ),
           const SizedBox(height: 4),
           // Fechada, os dois ícones empilham; aberta, ficam lado a lado com o
           // rótulo. Um `Wrap` resolve as duas sem um `if` a mais.

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../branding/active_brand.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
@@ -52,13 +54,13 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
     }
   }
 
-  /// O produto pode ser corrigido? Só se houver Barter vigente E ele estiver na
-  /// tabela dessa versão (ou for o grão da safra, cuja cotação é a da versão).
-  bool _editableInVersion(ProductModel product) {
-    final version = AppData.currentVersion;
-    if (version == null || !version.isOpen) return false;
-    return version.grainFor(product.id) != null || version.priceOf(product.id) != null;
-  }
+  /// As versões VIGENTES em que o produto pode ser corrigido: as que o têm na
+  /// tabela (ou cujo grão ele é — a cotação da saca é da versão). Um insumo pode
+  /// estar na tabela de mais de uma cultura, e cada uma tem o seu valor.
+  List<BarterVersionModel> _versionsWith(ProductModel product) => AppData.currentVersions
+      .where((version) =>
+          version.isOpen && (version.grainId == product.id || version.priceOf(product.id) != null))
+      .toList();
 
   /// Troca o CÓDIGO do item — único no catálogo e chave da busca.
   Future<void> _editCode(ProductModel product) => _editField(
@@ -128,16 +130,20 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
     }
   }
 
-  Future<void> _correctInVersion(BuildContext context, ProductModel product) {
-    final version = AppData.currentVersion!;
+  Future<void> _correctInVersion(
+    BuildContext context,
+    ProductModel product,
+    BarterVersionModel version,
+  ) {
     final row = version.priceOf(product.id);
     return showVersionPriceDialog(
       context,
+      version: version,
       productId: product.id,
       productName: product.name,
       // O VALOR do produto nesta gestão: o do insumo na tabela, ou a cotação da
-      // CULTURA quando o produto é um grão que o Barter aceita.
-      price: row?.perUnit ?? version.grainFor(product.id)?.price ?? 0,
+      // saca quando o produto é o grão desta versão.
+      price: row?.perUnit ?? (version.grainId == product.id ? version.grainPrice : 0),
       // Corrigir o valor acrescenta um ponto na linha do tempo: a tela precisa
       // do detalhe de novo, não de um rebuild do que já estava em mãos.
       onUpdated: _loadDetail,
@@ -265,14 +271,17 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
               // Corrigir o valor é ato do LANÇAMENTO, não do cadastro: só aparece
               // enquanto houver Barter vigente, e o que ele muda é a tabela da
               // versão — o `currentPrice` acima é o último valor publicado.
-              if (_editableInVersion(product))
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _correctInVersion(context, product),
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    label: Text('Corrigir no Barter ${AppData.currentVersion!.code}'),
-                    style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+              for (final version in _versionsWith(product))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _correctInVersion(context, product, version),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: Text('Corrigir no Barter ${version.code}'),
+                      style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                    ),
                   ),
                 ),
               const SizedBox(height: 20),
@@ -340,6 +349,20 @@ class _ProductReportScreenState extends State<ProductReportScreen> {
                 hint: 'Como o item é vendido: "20 L", "big-bag", "tonelada".',
               ),
             ),
+            // O MODELO DA CPR é do grão — o padrão com que ele é recebido. Ele
+            // mora na aba de grãos; aqui aparece junto do resto do cadastro.
+            if (!isInput) ...[
+              const Divider(height: 20),
+              _registrationRow(
+                icon: Icons.description_outlined,
+                label: 'Modelo da CPR: ${(product.cprModel ?? const GrainCprModel()).summary}',
+                active: (product.cprModel?.undefinedCount ?? 3) == 0,
+                action: 'Editar',
+                // Recarrega o DETALHE, e não só a tela: é dele que este cartão
+                // lê, e o cache que a edição atualiza é o da listagem.
+                onPressed: () => showGrainCprModelDialog(context, product, _loadDetail),
+              ),
+            ],
             if (isInput) ...[
               const Divider(height: 20),
               _registrationRow(
@@ -852,7 +875,6 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
             decoration: const InputDecoration(
               labelText: 'Quantidade por hectare',
               prefixIcon: Icon(Icons.straighten),
-              hintText: 'Ex.: 2,5',
             ),
             autofocus: true,
           ),
@@ -868,7 +890,7 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
         TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
         ElevatedButton(
           onPressed: () async {
-            final value = double.tryParse(ctrl.text.replaceAll(',', '.')) ?? 0;
+            final value = parseNumberOr(ctrl.text);
             try {
               await AppData.updateProductFields(product, {
                 'requiredPerHa': value < 0 ? 0 : value,
@@ -879,6 +901,112 @@ Future<void> showRequiredPerHaDialog(BuildContext context, ProductModel product,
               if (!context.mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                 content: Text('Exigência por hectare atualizada!'),
+                backgroundColor: AppColors.approved,
+              ));
+            } on ApiException catch (e) {
+              if (ctx.mounted) showErrorSnack(ctx, e);
+            }
+          },
+          child: const Text('Salvar'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// O MODELO DA CPR de um GRÃO — o padrão de recebimento que a cédula nova traz
+/// preenchido: peso da saca, umidade e impurezas máximas, teor de óleo.
+///
+/// Percentual vazio é "não definido", e não zero de tolerância: a cédula nasce
+/// com o campo em branco e quem preenche é cobrado por ele. Mudar o modelo não
+/// mexe nas cédulas já começadas — o texto de ajuda diz isso porque é a
+/// primeira pergunta de quem altera um padrão no meio da safra.
+Future<void> showGrainCprModelDialog(
+  BuildContext context,
+  ProductModel grain,
+  VoidCallback onUpdated,
+) {
+  final model = grain.cprModel ?? const GrainCprModel();
+  // O número EXATO, e não o `formatQty` (que arredonda a uma casa): 0,75% de
+  // impureza reaberto como "0,8" seria salvo errado no primeiro "Salvar".
+  String exact(double value) => value == value.roundToDouble()
+      ? value.toStringAsFixed(0)
+      : value.toString().replaceAll('.', ',');
+  String text(double value) => value == 0 ? '' : exact(value);
+  final sackWeight = TextEditingController(text: exact(model.sackWeightKg));
+  final moisture = TextEditingController(text: text(model.maxMoisture));
+  final impurities = TextEditingController(text: text(model.maxImpurities));
+  final oil = TextEditingController(text: text(model.oilContent));
+  final formKey = GlobalKey<FormState>();
+
+  Widget field(TextEditingController controller, String label, {bool percent = true}) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: TextFormField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))],
+          decoration: InputDecoration(
+            labelText: label,
+            suffixText: percent ? '%' : 'kg',
+            isDense: true,
+          ),
+          validator: (value) {
+            final raw = (value ?? '').trim();
+            if (raw.isEmpty) return percent ? null : 'Informe o peso da saca';
+            final parsed = parseNumber(raw);
+            if (parsed == null) return 'Número inválido';
+            if (!percent && parsed <= 0) return 'Maior que zero';
+            if (percent && parsed > 100) return 'Entre 0 e 100';
+            return null;
+          },
+        ),
+      );
+
+  return showDialog(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Modelo da CPR'),
+      content: SingleChildScrollView(
+        child: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(grain.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+              const SizedBox(height: 16),
+              field(sackWeight, 'Peso da saca', percent: false),
+              field(moisture, 'Umidade máxima'),
+              field(impurities, 'Impurezas máximas'),
+              field(oil, 'Teor de óleo'),
+              Text(
+                'A CPR nova deste grão já vem com estes números, e quem preenche '
+                'pode ajustá-los na cédula. As cédulas já começadas não mudam.',
+                style: TextStyle(fontSize: 11, color: AppColors.textLight),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+        ElevatedButton(
+          onPressed: () async {
+            if (!formKey.currentState!.validate()) return;
+            final next = GrainCprModel(
+              sackWeightKg: parseNumberOr(sackWeight.text, fallback: 60),
+              maxMoisture: parseNumberOr(moisture.text),
+              maxImpurities: parseNumberOr(impurities.text),
+              oilContent: parseNumberOr(oil.text),
+            );
+            try {
+              await AppData.updateProductFields(grain, next.toProductFields());
+              if (!ctx.mounted) return;
+              Navigator.pop(ctx);
+              onUpdated();
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Modelo da CPR de ${grain.name} atualizado!'),
                 backgroundColor: AppColors.approved,
               ));
             } on ApiException catch (e) {

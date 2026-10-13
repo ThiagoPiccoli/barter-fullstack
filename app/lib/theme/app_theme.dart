@@ -51,6 +51,10 @@ class AppColors {
   /// Aprovada COM RESSALVA — liberada, com uma exigência a cumprir.
   static Color get approvedWithConditions => brand.palette.approvedWithConditions;
   static Color get approvedWithConditionsBg => brand.palette.approvedWithConditionsBg;
+
+  /// Aprovada COM SEGURO, na mesa da seguradora esperando a apólice.
+  static Color get atInsurer => brand.palette.atInsurer;
+  static Color get atInsurerBg => brand.palette.atInsurerBg;
   static Color get pending => brand.palette.pending;
   static Color get denied => brand.palette.denied;
   static Color get approvedBg => brand.palette.approvedBg;

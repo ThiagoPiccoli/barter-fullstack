@@ -192,10 +192,11 @@ void main() {
   });
 
   group('A versão do Barter', () {
-    test('diz se o lançamento leva seguro', () {
-      Map<String, dynamic> json(bool comSeguro) => {
+    /// A POLÍTICA DE SEGURO é da versão: obrigatório, opcional ou sem seguro.
+    test('diz a política de seguro do lançamento', () {
+      Map<String, dynamic> json(String? policy) => {
             'id': 4,
-            'code': 'S2026.02',
+            'code': 'SOJA26/27.02',
             'number': 2,
             'grainName': 'Soja',
             'grainPrice': 148.5,
@@ -203,13 +204,15 @@ void main() {
             'isOpen': true,
             'startsAt': '2026-01-08T00:00:00.000Z',
             'prices': const [],
-            if (comSeguro) 'insuranceRequired': true,
+            'insurancePolicy': ?policy,
           };
 
-      expect(BarterVersionModel.fromJson(json(true)).insuranceRequired, isTrue);
-      // AUSENTE vale `false`, e é a verdade sobre as versões anteriores ao
-      // campo: elas foram lançadas sem seguro nenhum.
-      expect(BarterVersionModel.fromJson(json(false)).insuranceRequired, isFalse);
+      expect(BarterVersionModel.fromJson(json('required')).insuranceRequired, isTrue);
+      expect(BarterVersionModel.fromJson(json('optional')).insuranceOptional, isTrue);
+      // AUSENTE (ou desconhecida) vale "sem seguro" — é o que não acrescenta
+      // custo a ninguém.
+      expect(BarterVersionModel.fromJson(json(null)).insurancePolicy, InsurancePolicy.none);
+      expect(BarterVersionModel.fromJson(json('talvez')).insurancePolicy, InsurancePolicy.none);
     });
   });
 }

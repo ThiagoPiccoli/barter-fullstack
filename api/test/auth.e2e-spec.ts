@@ -326,7 +326,7 @@ describe('Auth (e2e)', () => {
       await request(app.getHttpServer())
         .post('/api/v1/barters')
         .set(auth)
-        .send({ producerId: 1, grainId: 1, inputs: [{ productId: 5, quantity: 1 }] })
+        .send({ producerId: 1, seasonId: 3, inputs: [{ productId: 5, quantity: 1 }] })
         .expect(403);
     });
 

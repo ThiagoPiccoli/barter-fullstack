@@ -34,22 +34,17 @@ describe('Pedido de alteração da permuta', () => {
   /* ── Quem pede e quem decide ────────────────────────────────────────── */
 
   /**
-   * Os dois lados do desvio têm capacidades DIFERENTES, e nenhum papel tem as
-   * duas: pedir é do consultor, decidir é do admin. Se um dia coincidirem, o
-   * pedido nasce concedido — e o portão vira enfeite.
+   * Pedir é do consultor, decidir é do admin. O admin também pode pedir, por
+   * ter todas as capacidades — o consultor continua sem decidir.
    */
-  it('o consultor pede e o admin decide, e ninguém faz as duas coisas', () => {
-    expect(rolesWith(CAPABILITY.bartersChangeRequest)).toEqual([ROLE.consultant]);
+  it('o consultor pede e o admin decide', () => {
+    expect(rolesWith(CAPABILITY.bartersChangeRequest).sort()).toEqual(
+      [ROLE.admin, ROLE.consultant].sort(),
+    );
     expect(rolesWith(CAPABILITY.bartersChangeReview)).toEqual([ROLE.admin]);
   });
 
-  /**
-   * O admin decide o PROCESSO e continua sem decidir o NEGÓCIO. As duas coisas
-   * juntas na mesma pessoa fariam do "libere e refaça" um caminho para aprovar
-   * o que o comitê negou.
-   */
-  it('quem decide o pedido não decide a permuta', () => {
-    expect(rolesWith(CAPABILITY.bartersReview)).not.toContain(ROLE.admin);
+  it('o comitê decide a permuta, não o pedido de alteração', () => {
     expect(rolesWith(CAPABILITY.bartersChangeReview)).not.toContain(ROLE.committee);
   });
 
@@ -205,7 +200,14 @@ describe('Pedido de alteração da permuta', () => {
       // decidiu.
       requiresGuarantor: false,
       requiresCollateral: false,
-      requiresInsurance: false,
+      // A APÓLICE também: foi contratada sobre a permuta que vai mudar, e a
+      // refeita passa de novo pela seguradora.
+      insurancePolicyNumber: null,
+      insurancePolicyFileId: null,
+      insuredBy: null,
+      insuredById: null,
+      insuredAt: null,
+      insuranceNote: null,
     });
   });
 
@@ -234,13 +236,9 @@ describe('Pedido de alteração da permuta', () => {
     expect(steps.find((step) => step.state === 'current')?.action).toBe('forward');
   });
 
-  /* ── Até onde a alteração alcança: versões sim, culturas não ────────── */
+  /* ── Até onde a alteração alcança: versões sim, cultura encerrada não ── */
 
-  const cultureOf = (grainId: number | null, grainName: string) => ({ grainId, grainName });
-  const versionOf = (code: string, grains: { grainId: number | null; grainName: string }[]) => ({
-    code,
-    grains,
-  });
+  const soja = (status: string) => ({ name: 'Soja 26/27', status });
 
   /**
    * A permuta fechada na PRIMEIRA versão da soja continua alterável com a
@@ -249,48 +247,26 @@ describe('Pedido de alteração da permuta', () => {
    * prazo de validade para as permutas em aberto.
    */
   it('a alteração atravessa versões enquanto a cultura estiver aberta', () => {
-    expect(
-      cultureRefusal(cultureOf(1, 'Soja'), versionOf('B2026.03', [cultureOf(1, 'Soja')])),
-    ).toBeNull();
+    expect(cultureRefusal(soja('open'), { code: 'SOJA26/27.03' })).toBeNull();
   });
 
   /**
-   * E a cultura da permuta pode ser QUALQUER UMA das que o lançamento aceita —
-   * que é o ponto das culturas que coexistem: a permuta de milho e a de soja
-   * são alteráveis no mesmo Barter, sem que uma tenha de esperar a outra fechar.
+   * O que ela não atravessa é o fim da venda DAQUELA cultura — a safra
+   * encerrada, ou a cultura sem versão aceitando permuta (a meta bateu e a
+   * próxima ainda não saiu).
    */
-  it('qualquer cultura do lançamento aberto vale', () => {
-    const aberto = versionOf('B2026.02', [cultureOf(1, 'Soja'), cultureOf(2, 'Milho')]);
-    expect(cultureRefusal(cultureOf(1, 'Soja'), aberto)).toBeNull();
-    expect(cultureRefusal(cultureOf(2, 'Milho'), aberto)).toBeNull();
+  it('a safra encerrada recusa, e a recusa nomeia a safra', () => {
+    const refusal = cultureRefusal(soja('closed'), null);
+    expect(refusal).toContain('Soja 26/27');
+    expect(refusal).toContain('encerrada');
   });
 
-  /**
-   * O que ela não atravessa é a cultura que SAIU do lançamento: sem cotação e
-   * sem produtividade, a permuta seria remontada com a régua de outro grão.
-   */
-  it('a cultura que saiu do lançamento recusa, e a recusa diz o que está aberto', () => {
-    const refusal = cultureRefusal(
-      cultureOf(2, 'Milho'),
-      versionOf('B2026.03', [cultureOf(1, 'Soja')]),
-    );
-    expect(refusal).toContain('Milho');
-    expect(refusal).toContain('Soja');
-    expect(refusal).toContain('B2026.03');
+  it('a cultura sem Barter aberto recusa', () => {
+    expect(cultureRefusal(soja('open'), null)).toContain('Não há Barter aberto para Soja 26/27');
   });
 
-  /**
-   * Grão EXCLUÍDO do catálogo: o FK virou null e sobrou o nome congelado.
-   * Comparar por nome aí é a única comparação possível, e é melhor do que
-   * recusar toda permuta paga naquele grão.
-   */
-  it('sem id do grão, a cultura é comparada pelo nome congelado', () => {
-    expect(
-      cultureRefusal(cultureOf(null, 'Soja'), versionOf('B2026.03', [cultureOf(null, ' soja ')])),
-    ).toBeNull();
-    expect(
-      cultureRefusal(cultureOf(null, 'Soja'), versionOf('B2026.03', [cultureOf(null, 'Milho')])),
-    ).not.toBeNull();
+  it('a permuta anterior às safras por cultura não se altera', () => {
+    expect(cultureRefusal(null, null)).not.toBeNull();
   });
 
   /* ── O registro do desvio ───────────────────────────────────────────── */

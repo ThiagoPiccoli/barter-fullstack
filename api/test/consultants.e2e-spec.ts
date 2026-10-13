@@ -6,6 +6,7 @@ import {
   CONSULTANT,
   JOAO,
   MANAGER,
+  ROBERTO,
   UNIT,
   createTestApp,
   loginAs,
@@ -55,6 +56,57 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
       password: created.body.data.provisionalPassword,
     });
     expect(login.status).toBe(200);
+  });
+
+  /**
+   * O gerente responde por um TIME, não por um consultor. `User.managerId` é a
+   * ponta "muitos" da relação: nada impede dois consultores de apontarem para o
+   * mesmo gerente, e o cadastro de um não tira o outro do time.
+   */
+  it('um gerente responde por vários consultores', async () => {
+    const admin = await asUser(ADMIN);
+    const teamOf = async (managerId: number) => {
+      const list = await request(app.getHttpServer())
+        .get('/api/v1/consultants')
+        .set('Authorization', admin)
+        .expect(200);
+      return list.body.data
+        .filter((c: { managerId: number | null }) => c.managerId === managerId)
+        .map((c: { id: number }) => c.id)
+        .sort((a: number, b: number) => a - b);
+    };
+
+    // O seed já nasce assim: Beatriz com João e Ana.
+    expect(await teamOf(MANAGER.beatriz)).toEqual([CONSULTANT.joao, CONSULTANT.ana]);
+
+    const created = await request(app.getHttpServer())
+      .post('/api/v1/consultants')
+      .set('Authorization', admin)
+      .send({
+        fullName: 'Terceiro do Time',
+        email: 'terceiro.time@agrobarter.com.br',
+        unitId: UNIT.filial02,
+        managerId: MANAGER.beatriz,
+      })
+      .expect(201);
+
+    // Roberto muda de time: entra no da Beatriz sem tirar ninguém de lá.
+    await request(app.getHttpServer())
+      .put(`/api/v1/consultants/${CONSULTANT.roberto}`)
+      .set('Authorization', admin)
+      .send({
+        fullName: 'Roberto Souza',
+        email: ROBERTO,
+        unitId: UNIT.filial34,
+        managerId: MANAGER.beatriz,
+      })
+      .expect(200);
+
+    expect(await teamOf(MANAGER.beatriz)).toEqual(
+      [CONSULTANT.joao, CONSULTANT.ana, CONSULTANT.roberto, created.body.data.id].sort(
+        (a, b) => a - b,
+      ),
+    );
   });
 
   /**
@@ -127,23 +179,13 @@ describe('Consultants — gestão pelo admin (e2e)', () => {
       .set('Authorization', admin)
       .expect(204);
 
-    // Antônio Carvalho (id 1) era atendido só pelo João → fica sem consultor,
-    // esperando realocação. O produtor NÃO é excluído junto: o vínculo é que
-    // some (Cascade em ProducerConsultant).
+    // Antônio Carvalho (id 1) era do João → fica sem consultor, esperando
+    // realocação. O produtor NÃO é excluído junto (SetNull em Producer).
     const producer = await request(app.getHttpServer())
       .get('/api/v1/producers/1')
       .set('Authorization', admin);
     expect(producer.status).toBe(200);
-    expect(producer.body.data.consultantIds).toEqual([]);
-
-    // Joaquim Tavares (id 3) era atendido pelo João E pelo Roberto: perde um
-    // vínculo e segue na carteira do outro. É a diferença que a carteira
-    // compartilhada faz — antes, excluir o consultor deixava o produtor órfão
-    // mesmo havendo outra pessoa atendendo o mesmo cliente.
-    const compartilhado = await request(app.getHttpServer())
-      .get('/api/v1/producers/3')
-      .set('Authorization', admin);
-    expect(compartilhado.body.data.consultantIds).toEqual([CONSULTANT.roberto]);
+    expect(producer.body.data.consultantId).toBeNull();
 
     // A permuta histórica preserva o nome do consultor (snapshot).
     const barter = await request(app.getHttpServer())

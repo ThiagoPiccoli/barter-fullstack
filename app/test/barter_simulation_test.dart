@@ -31,6 +31,7 @@ void main() {
     List<SimulationItem>? items,
     double simulatedSacks = 80,
     TaxRegime taxRegime = TaxRegime.comercializacao,
+    double plantedAreaHa = 120,
     DateTime? updatedAt,
   }) =>
       BarterSimulation(
@@ -49,7 +50,11 @@ void main() {
                   productId: '9', productName: 'Glifosato', unit: 'litro', quantity: 20),
             ],
         simulatedSacks: simulatedSacks,
+        seasonId: '3',
+        seasonName: 'Soja 26/27',
+        grainId: '1',
         grainName: 'Soja',
+        plantedAreaHa: plantedAreaHa,
         taxRegime: taxRegime,
         createdAt: DateTime(2026, 3, 1),
         updatedAt: updatedAt ?? DateTime(2026, 3, 2),
@@ -66,20 +71,15 @@ void main() {
         id: 'v1',
         code: code,
         number: 2,
-        seasonCode: 'B2026',
-        seasonName: 'Barter 2026',
-        // A CULTURA em que esta versão paga. É lista porque elas coexistem —
-        // aqui basta uma, que é o caso dos números deste teste.
-        grains: [
-          VersionGrainModel(
-            grainId: '1',
-            grainName: 'Soja',
-            grainUnit: 'saca 60kg',
-            price: grainPrice,
-            estimatedYield: 60,
-          ),
-        ],
-        pricedInGrainId: '1',
+        seasonId: '3',
+        seasonCode: 'SOJA26/27',
+        seasonName: 'Soja 26/27',
+        // A CULTURA em que esta versão paga — uma por versão.
+        grainId: '1',
+        grainName: 'Soja',
+        grainUnit: 'saca 60kg',
+        grainPrice: grainPrice,
+        estimatedYield: 60,
         status: isOpen ? 'open' : 'closed',
         isOpen: isOpen,
         startsAt: DateTime(2026, 2, 1),
@@ -117,6 +117,11 @@ void main() {
       expect(restored.grainName, 'Soja');
       expect(restored.items.map((i) => i.productName), ['NPK', 'Glifosato']);
       expect(restored.inputQuantities, {'5': 48.0, '9': 20.0});
+      // A CULTURA e a ÁREA PLANTADA viajam com ela até o envio.
+      expect(restored.seasonId, '3');
+      expect(restored.seasonName, 'Soja 26/27');
+      expect(restored.plantedAreaHa, 120);
+      expect(restored.insurance, isNull);
     });
 
     /// A FORMA de recolher o Funrural é escolhida no fechamento e viaja com a
@@ -291,6 +296,22 @@ void main() {
 
       expect(result.canSend, isFalse);
       expect(result.blocker, contains('escolha outra'));
+    });
+
+    /// A ÁREA PLANTADA é obrigatória no registro, e as simulações guardadas antes
+    /// do campo não a têm: o envio pede que o consultor a informe.
+    test('simulação sem área plantada trava e pede a área', () {
+      final result = check(simulation(plantedAreaHa: 0));
+
+      expect(result.canSend, isFalse);
+      expect(result.blocker, contains('área plantada'));
+    });
+
+    /// A refeita sai com a CULTURA da versão vigente — é ela que vai no envio.
+    test('a simulação refeita leva a safra da versão', () {
+      final result = check(simulation());
+      expect(result.rebuilt.seasonId, '3');
+      expect(result.rebuilt.seasonName, 'Soja 26/27');
     });
 
     test('Barter novo: refaz com os mesmos insumos na tabela vigente', () {

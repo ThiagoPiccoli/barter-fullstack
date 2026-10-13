@@ -103,6 +103,46 @@ void main() {
   }
 
   group('abas da lista de permutas', () {
+    /// O ADMIN tem todas as capacidades — inclusive os escopos estreitos do
+    /// faturista e do emissor. Quem enxerga tudo fica com a linha inteira, e não
+    /// com o recorte do emissor.
+    testWidgets('o admin, com todas as capacidades, vê a linha inteira', (tester) async {
+      AppData.currentUser = staff(UserRole.admin, [
+        Capability.usersManage,
+        Capability.bartersReadAll,
+        Capability.bartersReadTeam,
+        Capability.bartersReadInvoicing,
+        Capability.bartersReadIssuance,
+        Capability.bartersRegister,
+        Capability.bartersOpinion,
+        Capability.bartersReview,
+        Capability.bartersInvoice,
+        Capability.bartersCprIssue,
+        Capability.pricesRead,
+      ]);
+      seedLinhaInteira();
+
+      await abrir(
+        tester,
+        const BartersScreen(isAdmin: true, consultantId: null),
+      );
+
+      for (final aba in [
+        'Todas (',
+        'No gerente (',
+        'No comitê (',
+        'Na seguradora (',
+        'A faturar (',
+        'No emissor (',
+        'Concluídas (',
+        'Negadas (',
+      ]) {
+        expect(find.textContaining(aba), findsOneWidget, reason: aba);
+      }
+      expect(find.textContaining('A emitir CPR ('), findsNothing);
+      expect(find.textContaining('Rascunhos ('), findsNothing);
+    });
+
     testWidgets('o faturista só tem as etapas que chegaram nele', (tester) async {
       AppData.currentUser = staff(UserRole.biller, [
         Capability.bartersInvoice,
@@ -231,6 +271,63 @@ void main() {
     });
   });
 
+  /// A SEGURADORA só enxerga as permutas COM SEGURO, da mesa dela em diante. A
+  /// lista dela abre na fila ("A informar apólice") e recolhe o que já passou
+  /// por ela — sem as abas das etapas de antes.
+  group('a seguradora', () {
+    UserModel seguradora() => staff(UserRole.insurer, [
+          Capability.bartersInsure,
+          Capability.bartersReadInsurance,
+          Capability.pricesRead,
+        ]);
+
+    testWidgets('as abas dela começam na apólice e não mostram as etapas de antes',
+        (tester) async {
+      AppData.currentUser = seguradora();
+      AppData.barters = [
+        barter('PRM-2026-010', 'awaitingPolicy'),
+        barter('PRM-2026-011', 'awaitingPolicyWithConditions'),
+        barter('PRM-2026-012', 'approved'),
+      ];
+
+      await abrir(tester, const BartersScreen(isAdmin: true, consultantId: null));
+
+      // As DUAS aprovações esperando a apólice estão na fila dela.
+      expect(find.textContaining('A informar apólice (2)'), findsOneWidget);
+      for (final aba in ['A faturar (', 'No emissor (', 'Concluídas (']) {
+        expect(find.textContaining(aba), findsOneWidget, reason: aba);
+      }
+      for (final aba in ['Todas (', 'No gerente (', 'No comitê (', 'Negadas (']) {
+        expect(find.textContaining(aba), findsNothing, reason: aba);
+      }
+      // O atalho do posto, direto do cartão.
+      expect(find.text('Anexar apólice'), findsNWidgets(2));
+    });
+
+    testWidgets('o painel dela mostra a fila da apólice e o que já foi ao faturista',
+        (tester) async {
+      final pessoa = seguradora();
+      AppData.currentUser = pessoa;
+      AppData.barters = [
+        barter('PRM-2026-010', 'awaitingPolicy'),
+        barter('PRM-2026-012', 'approved'),
+      ];
+
+      await abrir(tester, BackOfficeMainScreen(user: pessoa));
+
+      // OS NÚMEROS DELA: o que espera a apólice, o tempo que ela leva e a área
+      // que já segurou — e não as sacas a receber de quem fatura.
+      expect(find.text('Pendentes de apólice'), findsOneWidget);
+      expect(find.text('Tempo médio'), findsOneWidget);
+      expect(find.text('Área segurada'), findsOneWidget);
+      // A área por cultura mora dentro do cartão da área segurada.
+      expect(find.textContaining('por cultura'), findsOneWidget);
+      expect(find.textContaining('esperando a apólice'), findsWidgets);
+      expect(find.text('No comitê'), findsNothing);
+      expect(find.text('No gerente'), findsNothing);
+    });
+  });
+
   group('painel da retaguarda', () {
     /// A FAIXA DE NÚMEROS conta o que é de quem olha. Para o faturista: o que
     /// espera nota e o que ele já faturou — e nada das etapas de antes.
@@ -280,8 +377,12 @@ void main() {
 
       await abrir(tester, BackOfficeMainScreen(user: emissor));
 
-      expect(find.text('Esperando você'), findsOneWidget);
-      expect(find.text('Registradas'), findsOneWidget);
+      // AS CÉDULAS POR ESTADO — um número por degrau do trecho dele.
+      for (final degrau in ['A emitir', 'Emitidas', 'Assinadas', 'Registradas']) {
+        expect(find.text(degrau), findsOneWidget, reason: degrau);
+      }
+      expect(find.text('Prazos'), findsOneWidget);
+      expect(find.text('Pendências'), findsOneWidget);
       // As etapas de antes não aparecem nem como rótulo de um número zerado.
       expect(find.text('No comitê'), findsNothing);
       expect(find.text('No gerente'), findsNothing);
@@ -323,9 +424,13 @@ void main() {
 
       await abrir(tester, BackOfficeMainScreen(user: comite));
 
-      // Agrupado por pessoa: a Beatriz segura duas, o Gustavo uma.
-      expect(find.text('Beatriz Nogueira'), findsOneWidget);
-      expect(find.text('Gustavo Ramos'), findsOneWidget);
+      // Agrupado por pessoa: a Beatriz segura duas, o Gustavo uma. O nome
+      // aparece também em cada permuta (o comitê vê o gerente de todas), e o
+      // painel é o primeiro lugar em que ele aparece.
+      final beatriz = find.text('Beatriz Nogueira').first;
+      final gustavo = find.text('Gustavo Ramos').first;
+      expect(beatriz, findsOneWidget);
+      expect(gustavo, findsOneWidget);
       expect(find.textContaining('2 permutas'), findsOneWidget);
       expect(find.textContaining('1 permuta •'), findsOneWidget);
 
@@ -336,9 +441,38 @@ void main() {
       // E quem segura há mais tempo vem primeiro: em ordem alfabética, a linha
       // que se quer ler ficaria escondida no meio.
       expect(
-        tester.getTopLeft(find.text('Beatriz Nogueira')).dy,
-        lessThan(tester.getTopLeft(find.text('Gustavo Ramos')).dy),
+        tester.getTopLeft(beatriz).dy,
+        lessThan(tester.getTopLeft(gustavo).dy),
       );
+    });
+
+    /// O COMITÊ LÊ O GERENTE DE CADA PERMUTA: o parecer pesa conforme quem o
+    /// deu, e saber de quem é antes de abrir é parte de decidir. Para quem não
+    /// decide, o gerente não aparece — ele é sempre o mesmo, ou não é assunto.
+    testWidgets('o comitê vê o gerente em cada permuta', (tester) async {
+      final comite = staff(UserRole.committee, [
+        Capability.bartersReview,
+        Capability.pricesRead,
+      ]);
+      AppData.currentUser = comite;
+      AppData.barters = [barter('PRM-2026-002', 'pending', manager: 'Gustavo Ramos')];
+
+      await abrir(tester, BackOfficeMainScreen(user: comite));
+      expect(find.text('Gustavo Ramos'), findsWidgets);
+      expect(find.text('Gerente '), findsWidgets);
+    });
+
+    testWidgets('quem não decide não vê o gerente na permuta', (tester) async {
+      final faturista = staff(UserRole.biller, [
+        Capability.bartersInvoice,
+        Capability.bartersReadInvoicing,
+        Capability.pricesRead,
+      ]);
+      AppData.currentUser = faturista;
+      AppData.barters = [barter('PRM-2026-004', 'approved', manager: 'Gustavo Ramos')];
+
+      await abrir(tester, BackOfficeMainScreen(user: faturista));
+      expect(find.text('Gustavo Ramos'), findsNothing);
     });
 
     /// Vazio, o painel FICA — pelo mesmo motivo do cartão de fila vazia: um

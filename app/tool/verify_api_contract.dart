@@ -72,29 +72,21 @@ Future<void> _run() async {
   check('permutas chegam completas', barters.isNotEmpty, '${barters.length} registro(s)');
   check('produtores chegam completos', producers.isNotEmpty, '${producers.length} registro(s)');
 
-  /* ── A carteira compartilhada ─────────────────────────────────────── */
-  // `consultantIds` é lista, e é o servidor quem decide quem atende quem. O
-  // app parsear um id só (ou um campo `consultantId` que não existe mais)
-  // deixaria a carteira do consultor vazia — ele abriria o app sem produtor
-  // nenhum para permutar, sem erro nenhum na tela.
-  check('a carteira do produtor chega como lista',
-      producers.every((p) => p.consultantIds.isNotEmpty),
+  /* ── A carteira: um consultor por produtor ───────────────────────── */
+  // `consultantId` é um id só, e é o servidor quem decide quem atende quem. O
+  // app parsear o campo errado deixaria a carteira do consultor vazia — ele
+  // abriria o app sem produtor nenhum para permutar, sem erro nenhum na tela.
+  check('todo produtor do dataset chega com o consultor dele',
+      producers.every((p) => p.consultantId != null),
       '${producers.length} registro(s), nenhum sem consultor');
 
-  final compartilhados = producers.where((p) => p.consultantIds.length > 1).toList();
-  check('o dataset traz produtor atendido por mais de um consultor',
-      compartilhados.isNotEmpty,
-      compartilhados.map((p) => '${p.name} (${p.consultantIds.length})').join(' · '));
-
-  // O outro lado da mesma verdade: o produtor compartilhado aparece na lista
-  // escopada de CADA um dos consultores dele. É a rota que o consultor chama
-  // ao abrir o app, com o token dele — não a lista do admin filtrada no cliente.
-  final compartilhado = compartilhados.first;
-  for (final consultantId in compartilhado.consultantIds) {
-    final daCarteira = await api.getAll('/producers', query: {'consultantId': consultantId});
-    check('${compartilhado.name} está na carteira do consultor $consultantId',
-        daCarteira.any((p) => ProducerModel.fromJson(p).id == compartilhado.id));
-  }
+  // O outro lado da mesma verdade: o produtor aparece na lista escopada do
+  // consultor dele — o filtro do servidor e o campo do app dizem o mesmo.
+  final primeiro = producers.first;
+  final daCarteira =
+      await api.getAll('/producers', query: {'consultantId': primeiro.consultantId!});
+  check('${primeiro.name} está na carteira do consultor ${primeiro.consultantId}',
+      daCarteira.any((p) => ProducerModel.fromJson(p).id == primeiro.id));
 
   /* ── Imposto da entrega (Funrural/Senar) ──────────────────────────── */
   // A permuta guarda a FORMA de recolhimento escolhida no fechamento e a
@@ -193,38 +185,37 @@ Future<void> _run() async {
   // tem CULTURA, nem valores, nem sacas. Um campo renomeado aqui deixaria o app
   // achando que o Barter está fechado.
   final program = BarterProgramRepository();
-  final current = await program.current();
-  check('existe Barter vigente', current != null, current?.code ?? 'nenhum');
-  if (current != null) {
-    // AS CULTURAS que este Barter aceita — pelo menos uma, com a cotação e a
-    // produtividade dela. É entre elas que o consultor escolhe em que o cliente
-    // paga, e é a cotação que converte o custo dos insumos em sacas.
+  final versions = await program.current();
+  check('existe Barter vigente', versions.isNotEmpty,
+      versions.isEmpty ? 'nenhum' : versions.map((v) => v.code).join(', '));
+  for (final current in versions) {
+    // A CULTURA desta versão — a safra, o grão, a cotação e a produtividade.
+    // É a cotação que converte o custo dos insumos em sacas.
     check(
-        'a versão traz as culturas com cotação e produtividade',
-        current.grains.isNotEmpty &&
-            current.grains.every((g) => g.grainName.isNotEmpty && g.estimatedYield > 0) &&
+        '${current.code}: traz a safra, o grão, a cotação e a produtividade',
+        current.seasonName.isNotEmpty &&
+            current.grainName.isNotEmpty &&
+            current.estimatedYield > 0 &&
             current.grainPrice > 0,
-        current.grains
-            .map((g) => '${g.grainName} a ${g.price} (${g.estimatedYield} sc/ha)')
-            .join(', '));
-    check('a tabela diz em que cultura ela está convertida',
-        current.pricedInGrainId.isNotEmpty, current.pricedInGrainId);
-    check('a versão traz a tabela de insumos', current.prices.isNotEmpty,
+        '${current.seasonName}: ${current.grainName} a ${current.grainPrice} '
+            '(${current.estimatedYield} sc/ha), seguro ${current.insurancePolicy.label}');
+    check('${current.code}: traz o slug para as rotas', current.slug.isNotEmpty, current.slug);
+    check('${current.code}: traz a tabela de insumos', current.prices.isNotEmpty,
         '${current.prices.length} insumo(s)');
-    check('a permuta aponta a versão em que foi fechada',
-        barters.every((b) => b.versionCode.isNotEmpty));
 
     // O realizado vem sempre; as metas, só as que o admin definiu ao publicar
     // — uma versão sem meta nenhuma é um lançamento legítimo.
-    final detail = await program.findVersion(current.code);
-    check('o detalhe traz o realizado da versão', detail.realizedBarters >= 0,
+    final detail = await program.findVersion(current.slug);
+    check('${current.code}: o detalhe traz o realizado', detail.realizedBarters >= 0,
         '${detail.realizedBarters} permuta(s) aprovada(s), ${detail.goals.length} meta(s)');
   }
+  check('a permuta aponta a versão e a safra em que foi fechada',
+      barters.every((b) => b.versionCode.isNotEmpty && b.seasonName.isNotEmpty));
 
   final seasons = await program.listSeasons();
-  check('safras chegam com as versões',
+  check('safras das culturas chegam com as versões',
       seasons.isNotEmpty && seasons.any((s) => s.versions.isNotEmpty),
-      '${seasons.length} safra(s)');
+      seasons.map((s) => s.name).join(' · '));
 
   /* ── Provisionamento de consultor ─────────────────────────────────── */
   // O cadastro do consultor depende de duas listas que o app carrega: as

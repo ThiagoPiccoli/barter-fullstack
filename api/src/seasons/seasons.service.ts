@@ -1,17 +1,14 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import type {
-  BarterVersion,
-  Prisma,
-  Product,
-  Season,
-  User,
-  VersionGrain,
-  VersionPrice,
-} from '@prisma/client';
+import type { BarterVersion, Prisma, Product, Season, User, VersionPrice } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
+import {
+  INSURANCE_POLICY,
+  INSURANCE_POLICY_LABELS,
+  type InsurancePolicy,
+} from '../insurance/insurance-policy';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeName, slugify } from './product-name';
-import { DEFAULT_SEASON_LETTER, seasonCode, versionCode } from './season-code';
+import { seasonCode, seasonName, slugOf, versionCode } from './season-code';
 import {
   closingReasonOf,
   goalsOf,
@@ -26,25 +23,23 @@ import {
   OpenSeasonDto,
   PublishVersionDto,
   UpdateVersionPriceDto,
-  VersionGrainDto,
-  VersionGrainPatchDto,
   VersionLimitsDto,
+  VersionTermsPatchDto,
 } from './dto/season.dto';
 
-export type SeasonWithVersions = Season & { versions: VersionWithGrains[] };
-
-/**
- * A versão com as CULTURAS que ela aceita. Elas andam junto com a versão em
- * TODA leitura, e isso é deliberado: sem elas a versão não responde à pergunta
- * que ela existe para responder ("por quanto se permuta hoje?"), e um caminho
- * que as esquecesse produziria uma tela de lançamento sem cotação nenhuma.
- */
-export type VersionWithGrains = BarterVersion & { grains: VersionGrain[] };
-export type VersionWithPrices = VersionWithGrains & { season: Season; prices: VersionPrice[] };
+export type SeasonWithVersions = Season & { versions: BarterVersion[] };
+export type VersionWithSeason = BarterVersion & { season: Season };
+export type VersionWithPrices = VersionWithSeason & { prices: VersionPrice[] };
 export type VersionProgress = { realized: Realized; goals: Goal[] };
 
-/** As culturas sempre na mesma ordem: a que o admin lançou primeiro à frente. */
-const GRAINS_INCLUDE = { orderBy: { position: 'asc' } } as const;
+/** A versão como toda leitura a devolve: com a safra (é dela a cultura) e a tabela. */
+const VERSION_INCLUDE = {
+  season: true,
+  prices: { orderBy: { productName: 'asc' } },
+} as const;
+
+/** As versões da safra, da mais recente para a mais antiga. */
+const SEASON_INCLUDE = { versions: { orderBy: { number: 'desc' } } } as const;
 
 /**
  * PRAZO da transação que publica uma versão — explícito porque o padrão do
@@ -65,47 +60,9 @@ const GRAINS_INCLUDE = { orderBy: { position: 'asc' } } as const;
 const PUBLISH_TIMEOUT_MS = 60_000;
 const PUBLISH_MAX_WAIT_MS = 10_000;
 
-/**
- * O que `assertPublishable` precisa ver: a data e a combinação meta × modo de
- * encerramento. Um `Pick` em vez do DTO inteiro porque a conferência acontece
- * antes de a tabela existir, e nos dois caminhos de publicação.
- */
-type PublishableLimits = Pick<
-  VersionLimitsDto,
-  'endsAt' | 'closeOnGoal' | 'targetSales' | 'targetBarters'
->;
-
-/**
- * UMA CULTURA já resolvida contra o catálogo: o produto de grão e as taxas com
- * que ele entra nesta versão.
- *
- * As DUAS TAXAS viajam juntas porque são uma conversão só — `price` leva o custo
- * dos insumos a SACAS e `estimatedYield` leva as sacas aos HECTARES de lavoura
- * que precisam garanti-las —, e não pode haver caminho de publicação que carregue
- * uma e esqueça a outra: é assim que uma cultura nasceria vigente, aceitando
- * permuta e sem conseguir dimensionar o penhor dela.
- */
-export interface ResolvedGrain {
-  product: Product;
-  price: number;
-  estimatedYield: number;
-  cprDueDate: Date | null;
-  targetSacks: number | null;
-}
-
-/**
- * A versão tem alguma meta definida? É o que dá sentido ao `closeOnGoal`.
- *
- * As METAS DE SACAS entram por fora porque elas não são da versão: são de cada
- * cultura (ver `VersionGrain.targetSacks`), e "encerrar ao bater meta" com uma
- * meta de sacas só no milho é uma combinação legítima — o Barter fecha quando o
- * milho enche.
- */
-const hasAnyTarget = (
-  limits: PublishableLimits,
-  sackTargets: (number | null | undefined)[] = [],
-): boolean =>
-  [limits.targetSales, limits.targetBarters, ...sackTargets].some(
+/** A versão tem alguma meta definida? É o que dá sentido ao `closeOnGoal`. */
+const hasAnyTarget = (limits: VersionLimitsDto): boolean =>
+  [limits.targetSales, limits.targetSacks, limits.targetBarters].some(
     (target) => target !== undefined && target !== null && target > 0,
   );
 
@@ -118,17 +75,21 @@ export interface ResolvedPrice {
 }
 
 /**
- * O LANÇAMENTO do Barter: safra, versões e a tabela de valores de cada uma.
+ * O LANÇAMENTO do Barter: as safras das culturas, as versões de cada uma e a
+ * tabela de valores de cada versão.
  *
- * A regra que organiza o arquivo inteiro: **existe no máximo uma safra aberta e,
- * dentro dela, no máximo uma versão vigente**. É isso que faz a pergunta "por
- * quanto se permuta agora?" ter uma resposta só — o consultor não escolhe grão
- * nem tabela, ele registra a permuta e o servidor sabe em qual gestão ela cai.
+ * A regra que organiza o arquivo inteiro: **no máximo uma safra aberta por
+ * grão e, dentro dela, no máximo uma versão vigente**. É isso que faz a pergunta
+ * "por quanto se permuta soja agora?" ter uma resposta só — o consultor escolhe a
+ * CULTURA, e o servidor sabe em qual gestão dela a permuta cai.
  *
- * Publicar a versão seguinte encerra a anterior NA MESMA TRANSAÇÃO. Se as duas
- * ficassem ativas por um instante, uma permuta registrada nesse intervalo
- * poderia nascer na tabela errada — e permuta é registro histórico, não dá para
- * consertar depois sem reescrever o que foi acordado.
+ * AS CULTURAS NÃO SE TOCAM. A soja publica, bate meta, encerra e reabre sem que
+ * a canola perceba: cada uma tem a sua safra, as suas versões e a sua tabela.
+ *
+ * Publicar a versão seguinte encerra a anterior DA MESMA SAFRA na mesma
+ * transação. Se as duas ficassem ativas por um instante, uma permuta registrada
+ * nesse intervalo poderia nascer na tabela errada — e permuta é registro
+ * histórico, não dá para consertar depois sem reescrever o que foi acordado.
  */
 @Injectable()
 export class SeasonsService {
@@ -139,64 +100,75 @@ export class SeasonsService {
 
   /* ── Safra ─────────────────────────────────────────────────────────── */
 
-  /** Todas as safras, da mais recente para a mais antiga, com suas versões. */
+  /**
+   * Todas as safras, com as versões: as abertas primeiro ('open' vem depois de
+   * 'closed' no alfabeto, daí o `desc`), e dentro de cada grupo a mais recente.
+   */
   async listSeasons(): Promise<SeasonWithVersions[]> {
     return this.prisma.season.findMany({
-      include: { versions: { orderBy: { number: 'desc' }, include: { grains: GRAINS_INCLUDE } } },
-      orderBy: [{ year: 'desc' }, { id: 'desc' }],
+      include: SEASON_INCLUDE,
+      orderBy: [{ status: 'desc' }, { startYear: 'desc' }, { grainName: 'asc' }],
     });
   }
 
-  /** A safra aberta (ou null). É a única que aceita versões novas. */
-  async openSeason(): Promise<SeasonWithVersions | null> {
-    return this.prisma.season.findFirst({
-      where: { status: 'open' },
-      include: { versions: { orderBy: { number: 'desc' }, include: { grains: GRAINS_INCLUDE } } },
-    });
-  }
-
-  async findSeason(code: string): Promise<SeasonWithVersions> {
-    const season = await this.prisma.season.findUnique({
-      where: { code },
-      include: { versions: { orderBy: { number: 'desc' }, include: { grains: GRAINS_INCLUDE } } },
+  /**
+   * A safra pelo código. Aceita as duas formas — o `slug` que vai na URL
+   * (`SOJA2627`) e o código que as pessoas leem (`SOJA26/27`) —, porque quem
+   * chama de dentro do servidor costuma ter o segundo na mão.
+   */
+  async findSeason(key: string): Promise<SeasonWithVersions> {
+    const season = await this.prisma.season.findFirst({
+      where: { OR: [{ slug: key }, { code: key }] },
+      include: SEASON_INCLUDE,
     });
     if (!season) throw new NotFoundException('Registro não encontrado.');
     return season;
   }
 
   /**
-   * Abre a safra — o CICLO, e não mais a cultura. Uma de cada vez: enquanto
-   * houver safra aberta, a próxima não entra, do contrário voltaria a existir a
-   * pergunta "em qual delas esta permuta caiu?".
+   * ABRE A SAFRA DE UMA CULTURA.
    *
-   * Repare que essa regra SOBREVIVEU às culturas que coexistem, e é justamente
-   * por causa delas: o motivo de haver duas safras abertas era oferecer dois
-   * grãos, e agora um lançamento só oferece quantos grãos a operação quiser (ver
-   * `VersionGrain`). Ter duas culturas deixou de custar uma segunda gestão.
+   * Uma aberta por grão: enquanto a Soja 26/27 estiver aberta, a 27/28 não
+   * entra — do contrário voltaria a existir a pergunta "em qual delas esta
+   * permuta caiu?". Culturas diferentes abrem à vontade, e é esse o ponto.
+   *
+   * O ANO FINAL é o inicial (cultura anual, `Canola 2027`) ou o seguinte
+   * (cultura que cruza o ano, `Soja 26/27`). Mais longe que isso não é safra, é
+   * erro de digitação — e o código que ele geraria ficaria para sempre nas
+   * permutas.
    */
   async open(admin: User, dto: OpenSeasonDto): Promise<SeasonWithVersions> {
-    const running = await this.openSeason();
-    if (running) {
+    if (dto.endYear !== dto.startYear && dto.endYear !== dto.startYear + 1) {
       throw new UnprocessableEntityException(
-        `A safra ${running.name} ainda está aberta. Encerre-a antes de abrir outra.`,
+        'O ano final da safra precisa ser o mesmo do inicial (cultura anual) ou o seguinte (cultura que cruza o ano)',
       );
     }
 
-    const code = seasonCode(dto.letter ?? DEFAULT_SEASON_LETTER, dto.year);
+    const grain = await this.prisma.product.findUnique({ where: { id: dto.grainId } });
+    if (!grain || grain.type !== 'grain') {
+      throw new UnprocessableEntityException('Escolha um grão do catálogo para a safra');
+    }
+    await this.assertNoOtherOpen(grain.id, grain.name);
+
+    const code = seasonCode(grain.name, dto.startYear, dto.endYear);
     if (await this.prisma.season.findUnique({ where: { code } })) {
-      throw new UnprocessableEntityException(
-        `Já existe a safra ${code}. Use outra letra para diferenciá-la.`,
-      );
+      throw new UnprocessableEntityException(`Já existe a safra ${code}.`);
     }
 
     const season = await this.prisma.season.create({
       data: {
         code,
-        name: dto.name?.trim() || `Barter ${dto.year}`,
-        year: dto.year,
+        slug: slugOf(code),
+        name: seasonName(grain.name, dto.startYear, dto.endYear),
+        grainId: grain.id,
+        grainName: grain.name,
+        grainUnit: grain.unit,
+        startYear: dto.startYear,
+        endYear: dto.endYear,
+        insurancePolicy: dto.insurancePolicy ?? INSURANCE_POLICY.none,
         status: 'open',
       },
-      include: { versions: { include: { grains: GRAINS_INCLUDE } } },
+      include: SEASON_INCLUDE,
     });
 
     await this.audit.record({
@@ -205,30 +177,48 @@ export class SeasonsService {
       targetType: 'season',
       targetId: season.id,
       targetLabel: season.code,
-      // Sem "pagamento em X": quem diz em que se paga é o LANÇAMENTO, e a safra
-      // abre antes dele. A trilha do que se aceita como pagamento é a da
-      // publicação da versão (ver `recordPublication`).
-      detail: season.name,
+      detail: `${season.name}, ${INSURANCE_POLICY_LABELS[season.insurancePolicy as InsurancePolicy]}`,
     });
     return season;
   }
 
-  /** Encerra a safra e, junto, a versão que estiver vigente nela. */
-  async close(admin: User, code: string): Promise<SeasonWithVersions> {
-    const season = await this.findSeason(code);
+  /** Nenhuma outra safra DESTE GRÃO pode estar aberta — a regra de uma por grão. */
+  private async assertNoOtherOpen(grainId: number | null, grainName: string, exceptId?: number) {
+    if (grainId === null) return;
+    const running = await this.prisma.season.findFirst({
+      where: { grainId, status: 'open', ...(exceptId ? { NOT: { id: exceptId } } : {}) },
+    });
+    if (running) {
+      throw new UnprocessableEntityException(
+        `A safra ${running.name} ainda está aberta. Encerre-a antes de abrir outra de ${grainName.toLowerCase()}.`,
+      );
+    }
+  }
+
+  /**
+   * ENCERRA A SAFRA da cultura e, junto, a versão que estiver vigente nela. É o
+   * fim do ciclo daquela cultura: nenhuma versão nova sai nela. As outras
+   * culturas não sentem nada.
+   *
+   * As permutas já registradas seguem a esteira: encerrar o Barter é parar de
+   * vender, e não desfazer o que foi vendido.
+   */
+  async close(admin: User, key: string): Promise<SeasonWithVersions> {
+    const season = await this.findSeason(key);
     if (season.status !== 'open') {
       throw new UnprocessableEntityException('Esta safra já foi encerrada');
     }
 
     const now = new Date();
+    const closed = { closedAt: now, closedBy: admin.fullName, closedById: admin.id };
     await this.prisma.$transaction([
       this.prisma.barterVersion.updateMany({
         where: { seasonId: season.id, status: 'active' },
-        data: { status: 'closed', closedAt: now, closedBy: admin.fullName, closedById: admin.id },
+        data: { status: 'closed', ...closed },
       }),
       this.prisma.season.update({
         where: { id: season.id },
-        data: { status: 'closed', closedAt: now },
+        data: { status: 'closed', ...closed },
       }),
     ]);
 
@@ -240,38 +230,113 @@ export class SeasonsService {
       targetLabel: season.code,
       detail: season.name,
     });
-    return this.findSeason(code);
+    return this.findSeason(season.slug);
+  }
+
+  /**
+   * REABRE uma safra encerrada — volta a permitir versões novas nela.
+   *
+   * A versão que fechou junto CONTINUA FECHADA: reabrir a safra não reabre
+   * tabela nenhuma, e a próxima venda sai de uma versão publicada agora, com os
+   * preços de agora. Reabrir a versão antiga venderia com a tabela de meses
+   * atrás.
+   *
+   * A regra de uma aberta por grão vale aqui também: a Soja 26/27 não reabre
+   * com a 27/28 já aberta.
+   */
+  async reopen(admin: User, key: string): Promise<SeasonWithVersions> {
+    const season = await this.findSeason(key);
+    if (season.status === 'open') {
+      throw new UnprocessableEntityException('Esta safra já está aberta');
+    }
+    await this.assertNoOtherOpen(season.grainId, season.grainName, season.id);
+
+    const { count } = await this.prisma.season.updateMany({
+      where: { id: season.id, status: 'closed' },
+      data: { status: 'open', closedAt: null, closedBy: null, closedById: null },
+    });
+    if (count === 0) {
+      throw new UnprocessableEntityException('Esta safra já está aberta');
+    }
+
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.seasonReopened,
+      targetType: 'season',
+      targetId: season.id,
+      targetLabel: season.code,
+      detail: season.name,
+    });
+    return this.findSeason(season.slug);
+  }
+
+  /**
+   * O SEGURO PADRÃO da safra — o que vem preenchido na próxima versão. Não mexe
+   * na vigente: quem vale para as permutas é a política de cada versão.
+   */
+  async setSeasonInsurance(
+    admin: User,
+    key: string,
+    policy: InsurancePolicy,
+  ): Promise<SeasonWithVersions> {
+    const season = await this.findSeason(key);
+    if (season.insurancePolicy === policy) return season;
+
+    await this.prisma.season.update({
+      where: { id: season.id },
+      data: { insurancePolicy: policy },
+    });
+    await this.audit.record({
+      actor: admin,
+      action: AUDIT_ACTION.seasonInsuranceChanged,
+      targetType: 'season',
+      targetId: season.id,
+      targetLabel: season.code,
+      detail: `padrão: ${INSURANCE_POLICY_LABELS[season.insurancePolicy as InsurancePolicy]} → ${INSURANCE_POLICY_LABELS[policy]}`,
+    });
+    return this.findSeason(season.slug);
   }
 
   /* ── Versão ────────────────────────────────────────────────────────── */
 
   /**
-   * A versão vigente: a ativa da safra aberta. Devolve null quando não há
-   * Barter lançado — o app usa isso para mostrar "Barter fechado" em vez de
-   * uma tela de permuta que o servidor recusaria no envio.
+   * As versões VIGENTES — uma por safra aberta que tenha Barter lançado. É a
+   * lista de culturas que o consultor tem para escolher, e por isso vem com a
+   * tabela de cada uma: ele escolhe a cultura e monta a permuta na tabela dela.
+   *
+   * Lista vazia é uma resposta legítima: "não há Barter aberto" é exatamente o
+   * que a tela do consultor precisa mostrar.
    */
-  async currentVersion(): Promise<VersionWithPrices | null> {
-    const season = await this.openSeason();
-    if (!season) return null;
-    return this.prisma.barterVersion.findFirst({
-      where: { seasonId: season.id, status: 'active' },
-      include: {
-        season: true,
-        grains: GRAINS_INCLUDE,
-        prices: { orderBy: { productName: 'asc' } },
-      },
+  async currentVersions(): Promise<VersionWithPrices[]> {
+    return this.prisma.barterVersion.findMany({
+      where: { status: 'active', season: { status: 'open' } },
+      include: VERSION_INCLUDE,
+      orderBy: { season: { grainName: 'asc' } },
     });
   }
 
   /**
-   * A versão que pode receber permuta AGORA, ou o erro que explica por quê não.
-   * É o portão que o registro de permuta atravessa (barters.service.ts).
+   * A versão que pode receber permuta AGORA naquela safra, ou o erro que explica
+   * por quê não. É o portão que o registro de permuta atravessa
+   * (barters.service.ts), e as frases nomeiam a CULTURA: com várias abertas, "o
+   * Barter está fechado" não diz qual.
    */
-  async requireOpenVersion(now = new Date()): Promise<VersionWithPrices> {
-    const version = await this.currentVersion();
+  async requireOpenVersion(seasonId: number, now = new Date()): Promise<VersionWithPrices> {
+    const season = await this.prisma.season.findUnique({ where: { id: seasonId } });
+    if (!season) {
+      throw new UnprocessableEntityException('Escolha a cultura em que esta permuta será paga');
+    }
+    if (season.status !== 'open') {
+      throw new UnprocessableEntityException(`A safra ${season.name} está encerrada.`);
+    }
+
+    const version = await this.prisma.barterVersion.findFirst({
+      where: { seasonId, status: 'active' },
+      include: VERSION_INCLUDE,
+    });
     if (!version) {
       throw new UnprocessableEntityException(
-        'Não há Barter aberto no momento. Aguarde o próximo lançamento.',
+        `Não há Barter aberto para ${season.name} no momento. Aguarde o próximo lançamento.`,
       );
     }
     if (!isOpenAt(version, now)) {
@@ -282,55 +347,40 @@ export class SeasonsService {
     return version;
   }
 
-  async findVersion(code: string): Promise<VersionWithPrices> {
-    const version = await this.prisma.barterVersion.findUnique({
-      where: { code },
-      include: {
-        season: true,
-        grains: GRAINS_INCLUDE,
-        prices: { orderBy: { productName: 'asc' } },
-      },
+  /**
+   * A versão que aceita permuta AGORA naquela safra, ou `null` — a mesma
+   * pergunta de `requireOpenVersion`, para quem quer a resposta e não o erro
+   * (a alteração de permuta escreve a própria frase; ver `cultureRefusal`).
+   */
+  async openVersionOf(seasonId: number, now = new Date()): Promise<VersionWithPrices | null> {
+    const version = await this.prisma.barterVersion.findFirst({
+      where: { seasonId, status: 'active', season: { status: 'open' } },
+      include: VERSION_INCLUDE,
+    });
+    return version && isOpenAt(version, now) ? version : null;
+  }
+
+  /** A versão pelo código — o `slug` da URL ou o código com barra. */
+  async findVersion(key: string): Promise<VersionWithPrices> {
+    const version = await this.prisma.barterVersion.findFirst({
+      where: { OR: [{ slug: key }, { code: key }] },
+      include: VERSION_INCLUDE,
     });
     if (!version) throw new NotFoundException('Registro não encontrado.');
     return version;
   }
 
-  /**
-   * Metas × realizado das permutas aprovadas da versão.
-   *
-   * As CULTURAS entram na conta por dois caminhos, e os dois são necessários: o
-   * `productId` do item de grão diz de qual cultura são as sacas de cada
-   * permuta, e a lista de culturas da versão diz quais metas existem — inclusive
-   * a da cultura em que ainda não se vendeu nada, que precisa aparecer com a
-   * barra no zero em vez de sumir da tela.
-   */
-  async progressOf(version: BarterVersion & { grains?: VersionGrain[] }): Promise<VersionProgress> {
-    const [barters, grains] = await Promise.all([
-      this.prisma.barter.findMany({
-        where: { versionId: version.id },
-        select: {
-          status: true,
-          items: {
-            select: {
-              kind: true,
-              quantity: true,
-              unitValue: true,
-              productId: true,
-              productName: true,
-            },
-          },
-        },
-      }),
-      version.grains
-        ? Promise.resolve(version.grains)
-        : this.prisma.versionGrain.findMany({
-            where: { versionId: version.id },
-            ...GRAINS_INCLUDE,
-          }),
-    ]);
-
+  /** Metas × realizado das permutas aprovadas da versão. */
+  async progressOf(version: BarterVersion): Promise<VersionProgress> {
+    const barters = await this.prisma.barter.findMany({
+      where: { versionId: version.id },
+      select: {
+        status: true,
+        items: { select: { kind: true, quantity: true, unitValue: true } },
+      },
+    });
     const realized = realizedFrom(barters);
-    return { realized, goals: goalsOf(version, realized, grains) };
+    return { realized, goals: goalsOf(version, realized) };
   }
 
   /**
@@ -344,47 +394,35 @@ export class SeasonsService {
    */
   async publish(
     admin: User,
-    seasonCodeValue: string,
+    seasonKey: string,
     dto: PublishVersionDto,
   ): Promise<VersionWithPrices> {
-    const season = await this.findSeason(seasonCodeValue);
-    this.assertPublishable(
-      season,
-      dto,
-      dto.grains.map((grain) => grain.targetSacks),
-    );
-    const grains = await this.resolveGrains(dto.grains);
+    const season = await this.findSeason(seasonKey);
+    this.assertPublishable(season, dto);
     const prices = await this.resolvePrices(dto.prices);
-    return this.publishResolved(admin, season, prices, grains, dto, null);
+    return this.publishResolved(admin, season, prices, dto, null);
   }
 
   /**
-   * Publica a próxima versão a partir da PLANILHA — o caminho do admin.
-   *
-   * O arquivo é a tabela: o que está nele é permutável na versão nova, o que
-   * não está deixa de ser. `carryOver` existe para o arquivo que traz só o que
-   * mudou: ligado, os insumos ausentes seguem com o valor da versão anterior.
+   * Publica a próxima versão a partir da PLANILHA DA CULTURA — o caminho do
+   * admin. Cada cultura sobe a sua: o arquivo é a tabela daquela safra, o que
+   * está nele é permutável na versão nova, o que não está deixa de ser.
+   * `carryOver` existe para o arquivo que traz só o que mudou: ligado, os
+   * insumos ausentes seguem com o valor da versão anterior desta safra.
    */
   async import(
     admin: User,
-    seasonCodeValue: string,
+    seasonKey: string,
     file: { originalname: string; buffer: Buffer },
     dto: ImportVersionDto,
   ): Promise<VersionWithPrices> {
-    const season = await this.findSeason(seasonCodeValue);
+    const season = await this.findSeason(seasonKey);
 
     // ANTES de tocar no catálogo. O casamento das linhas com o cadastro CRIA
-    // produto e pasta (é o que torna a carga em massa útil), e isso acontece
-    // fora da transação que publica a versão. Enquanto estas conferências
-    // moravam só lá dentro, uma planilha boa recusada por safra encerrada ou
-    // por data de encerramento no passado devolvia 422 — e deixava para trás os
-    // insumos e as pastas que tinha acabado de cadastrar.
-    this.assertPublishable(
-      season,
-      dto,
-      dto.grains.map((grain) => grain.targetSacks),
-    );
-    const grains = await this.resolveGrains(dto.grains);
+    // produto e pasta (é o que torna a carga em massa útil); uma planilha boa
+    // recusada por safra encerrada não pode deixar para trás os insumos que
+    // acabou de cadastrar.
+    this.assertPublishable(season, dto);
 
     let matrix: string[][];
     try {
@@ -404,20 +442,9 @@ export class SeasonsService {
       throw new UnprocessableEntityException(`${shown}${rest}`);
     }
 
-    /*
-     * UMA transação para casar o arquivo com o catálogo E publicar a versão.
-     *
-     * Antes eram duas coisas separadas, e a costura entre elas é que era o
-     * problema: `resolveImported` CRIA produto e pasta, isso acontecia fora de
-     * qualquer transação, e a publicação vinha depois. Falhando a publicação —
-     * por prazo estourado, por preço repetido, pelo que fosse —, os produtos
-     * recém-criados ficavam no catálogo e nenhuma versão saía. O admin via
-     * "Erro inesperado no servidor" e o cadastro dele tinha mudado assim mesmo,
-     * sem nada dizendo o quê.
-     *
-     * Junto, o arquivo passa a ser tudo ou nada: ou existe a versão nova com os
-     * produtos que ela precisou criar, ou o banco está como estava.
-     */
+    // UMA transação para casar o arquivo com o catálogo E publicar a versão: ou
+    // existe a versão nova com os produtos que ela precisou criar, ou o banco
+    // está como estava.
     const created = await this.prisma.$transaction(
       async (tx) => {
         const prices = await this.resolveImported(tx, rows);
@@ -426,7 +453,7 @@ export class SeasonsService {
           await this.carryOverInto(tx, season, prices);
         }
 
-        return this.writeVersion(tx, admin, season, prices, grains, dto, file.originalname);
+        return this.writeVersion(tx, admin, season, prices, dto, file.originalname);
       },
       { timeout: PUBLISH_TIMEOUT_MS, maxWait: PUBLISH_MAX_WAIT_MS },
     );
@@ -436,8 +463,8 @@ export class SeasonsService {
   }
 
   /**
-   * Os insumos da versão anterior que o arquivo NÃO trouxe, mantidos com o
-   * valor que tinham. É o `carryOver`: o fornecedor manda só o que mudou.
+   * Os insumos da versão anterior DESTA SAFRA que o arquivo NÃO trouxe, mantidos
+   * com o valor que tinham. É o `carryOver`: o fornecedor manda só o que mudou.
    */
   private async carryOverInto(
     tx: Prisma.TransactionClient,
@@ -469,22 +496,21 @@ export class SeasonsService {
 
   /**
    * As condições que não dependem da tabela: a safra aceita uma versão nova, e
-   * a vigência pedida faz sentido. Ficam separadas porque são conferíveis ANTES
-   * de resolver as linhas contra o catálogo — e a importação precisa disso, já
-   * que resolver cria produto e pasta.
-   *
-   * Continua sendo chamada de dentro do `publishResolved`: é lá que está o
-   * portão final, e o caminho do corpo JSON não passa por outro lugar. Chamar
-   * duas vezes na importação é barato e mantém a regra num arquivo só.
+   * os termos pedidos fazem sentido. Ficam separadas porque são conferíveis
+   * ANTES de resolver as linhas contra o catálogo — e a importação precisa
+   * disso, já que resolver cria produto e pasta.
    */
-  private assertPublishable(
-    season: Season,
-    limits: PublishableLimits,
-    sackTargets: (number | null | undefined)[] = [],
-  ): void {
+  private assertPublishable(season: Season, limits: VersionLimitsDto): void {
     if (season.status !== 'open') {
       throw new UnprocessableEntityException(
-        'Esta safra está encerrada; abra uma nova safra para lançar um Barter.',
+        `A safra ${season.name} está encerrada; reabra-a ou abra a próxima para lançar um Barter.`,
+      );
+    }
+    // Sem o grão no catálogo não há produto para a linha de pagamento das
+    // permutas — elas nasceriam pagas em "nada".
+    if (season.grainId === null) {
+      throw new UnprocessableEntityException(
+        `O grão da safra ${season.name} saiu do catálogo; abra uma safra com um grão cadastrado.`,
       );
     }
     if (limits.endsAt && new Date(limits.endsAt).getTime() <= Date.now()) {
@@ -492,7 +518,7 @@ export class SeasonsService {
     }
     // Encerrar ao bater meta, sem meta nenhuma, é uma opção ligada que nunca
     // aconteceria — e o admin sairia daqui achando que o Barter se fecha.
-    if (limits.closeOnGoal && !hasAnyTarget(limits, sackTargets)) {
+    if (limits.closeOnGoal && !hasAnyTarget(limits)) {
       throw new UnprocessableEntityException(
         'Defina ao menos uma meta (vendas, sacas ou permutas) para o Barter encerrar ao atingi-la.',
       );
@@ -508,12 +534,11 @@ export class SeasonsService {
     admin: User,
     season: Season,
     prices: ResolvedPrice[],
-    grains: ResolvedGrain[],
     limits: VersionLimitsDto,
     sourceFile: string | null,
   ): Promise<VersionWithPrices> {
     const created = await this.prisma.$transaction(
-      (tx) => this.writeVersion(tx, admin, season, prices, grains, limits, sourceFile),
+      (tx) => this.writeVersion(tx, admin, season, prices, limits, sourceFile),
       { timeout: PUBLISH_TIMEOUT_MS, maxWait: PUBLISH_MAX_WAIT_MS },
     );
     await this.recordPublication(admin, created, sourceFile);
@@ -524,38 +549,23 @@ export class SeasonsService {
    * A GRAVAÇÃO da versão, dentro de uma transação que o chamador abriu.
    *
    * Recebe `tx` em vez de abrir a própria porque a importação precisa que a
-   * criação dos produtos e a publicação caibam na MESMA transação — ver o
-   * comentário em `import`.
+   * criação dos produtos e a publicação caibam na MESMA transação.
    *
-   * Tudo aqui é em LOTE, e isso é o ponto do arquivo. A versão anterior gravava
-   * a linha do tempo com um `tx.product.update` POR PRODUTO, em série: uma
-   * tabela de 20.000 itens virava 20.000 idas e voltas ao banco dentro de uma
-   * transação, o que estourava o prazo dela (P2028 aos 5 s) e devolvia 500 ao
-   * admin. O trabalho é o mesmo; o número de comandos é que não podia ser
-   * proporcional ao tamanho da tabela. Agora são cinco, para qualquer tamanho.
+   * Tudo aqui é em LOTE: uma tabela de 20.000 itens não pode virar 20.000 idas
+   * e voltas ao banco dentro de uma transação. O número de comandos não depende
+   * do tamanho da tabela.
    */
   private async writeVersion(
     tx: Prisma.TransactionClient,
     admin: User,
     season: Season,
     prices: ResolvedPrice[],
-    grains: ResolvedGrain[],
     limits: VersionLimitsDto,
     sourceFile: string | null,
   ): Promise<VersionWithPrices> {
-    this.assertPublishable(
-      season,
-      limits,
-      grains.map((grain) => grain.targetSacks),
-    );
+    this.assertPublishable(season, limits);
     if (prices.length === 0) {
       throw new UnprocessableEntityException('A tabela de valores está vazia');
-    }
-    // Sem CULTURA não há como pagar a tabela que se está publicando. O DTO já
-    // exige pelo menos uma; aqui a regra é repetida como invariante do domínio,
-    // porque quem chama `publishResolved` pode ser outro caminho amanhã.
-    if (grains.length === 0) {
-      throw new UnprocessableEntityException('Escolha ao menos uma cultura para este Barter');
     }
 
     const endsAt = limits.endsAt ? new Date(limits.endsAt) : null;
@@ -568,7 +578,8 @@ export class SeasonsService {
     const number = (previous?.number ?? 0) + 1;
     const code = versionCode(season.code, number);
 
-    // Uma vigente só: a anterior fecha no mesmo instante em que a nova nasce.
+    // Uma vigente por safra: a anterior DESTA CULTURA fecha no mesmo instante
+    // em que a nova nasce. As versões das outras culturas não são tocadas.
     await tx.barterVersion.updateMany({
       where: { seasonId: season.id, status: 'active' },
       data: { status: 'closed', closedAt: now, closedBy: admin.fullName, closedById: admin.id },
@@ -579,37 +590,22 @@ export class SeasonsService {
         seasonId: season.id,
         number,
         code,
+        slug: slugOf(code),
         status: 'active',
+        grainPrice: limits.grainPrice,
+        // A PRODUTIVIDADE ESTIMADA — a taxa que dimensiona a área do penhor das
+        // permutas que nascerem nesta versão. Ver `pledgeAreaFor` em
+        // barters/barter-math.ts.
+        estimatedYield: limits.estimatedYield,
+        cprDueDate: limits.cprDueDate ? new Date(limits.cprDueDate) : null,
+        // O SEGURO desta versão: o que o admin escolheu, ou o padrão da safra.
+        insurancePolicy: limits.insurancePolicy ?? season.insurancePolicy,
         startsAt: now,
         endsAt,
         targetSales: limits.targetSales ?? null,
+        targetSacks: limits.targetSacks ?? null,
         targetBarters: limits.targetBarters ?? null,
-        // AS CULTURAS na mesma criação da versão, e não num `createMany` depois:
-        // uma versão que exista por um instante sem cultura nenhuma é uma versão
-        // que uma leitura concorrente veria sem cotação — e a tela do consultor
-        // não tem o que mostrar nela. A ORDEM da lista é a que o admin lançou:
-        // a primeira cultura é a que aparece escolhida por padrão.
-        grains: {
-          create: grains.map((grain, index) => ({
-            grainId: grain.product.id,
-            grainName: grain.product.name,
-            grainUnit: grain.product.unit,
-            price: grain.price,
-            // A PRODUTIVIDADE ESTIMADA desta cultura — a taxa que dimensiona a
-            // área do penhor das permutas que nascerem nela. Ver
-            // `VersionGrain.estimatedYield` e `pledgeAreaFor` em
-            // barters/barter-math.ts.
-            estimatedYield: grain.estimatedYield,
-            cprDueDate: grain.cprDueDate,
-            targetSacks: grain.targetSacks,
-            position: index,
-          })),
-        },
         closeOnGoal: limits.closeOnGoal ?? false,
-        // ESTE BARTER LEVA SEGURO? Ver `insuranceRequired` no schema: ligado,
-        // toda permuta desta versão nasce com a linha do seguro, cotada pelo
-        // município do produtor.
-        insuranceRequired: limits.insuranceRequired ?? false,
         sourceFile,
         note: limits.note?.trim() || null,
       },
@@ -631,9 +627,7 @@ export class SeasonsService {
     // na mesma lista: a cotação da saca também é um preço que se acompanha.
     const published: { productId: number; price: number }[] = [
       ...prices.map((row) => ({ productId: row.product.id, price: row.price })),
-      // Uma entrada por CULTURA: cada cotação de saca é um preço que se
-      // acompanha, e o relatório do grão é lido por gestão como o do insumo.
-      ...grains.map((grain) => ({ productId: grain.product.id, price: grain.price })),
+      { productId: season.grainId!, price: limits.grainPrice },
     ];
 
     await tx.priceHistoryEntry.createMany({
@@ -663,11 +657,7 @@ export class SeasonsService {
 
     return tx.barterVersion.findUniqueOrThrow({
       where: { id: version.id },
-      include: {
-        season: true,
-        grains: GRAINS_INCLUDE,
-        prices: { orderBy: { productName: 'asc' } },
-      },
+      include: VERSION_INCLUDE,
     });
   }
 
@@ -684,17 +674,11 @@ export class SeasonsService {
       targetId: version.id,
       targetLabel: version.code,
       detail:
-        `${version.prices.length} insumo(s)` +
-        // CADA CULTURA na trilha, com as duas taxas dela. A produtividade entra
-        // ao lado do preço da saca pelo mesmo motivo do modo de encerramento:
-        // ela é decisão do lançamento, e é por ela que se responde "por que esta
-        // permuta exigiu 34 ha de penhor?".
-        `; ${version.grains
-          .map(
-            (grain) =>
-              `${grain.grainName} a ${grain.price.toFixed(2)}, ${grain.estimatedYield} sc/ha`,
-          )
-          .join('; ')}` +
+        `${version.prices.length} insumo(s); ` +
+        // A COTAÇÃO e a PRODUTIVIDADE na trilha: são decisões do lançamento, e é
+        // por elas que se responde "por que esta permuta exigiu 34 ha de penhor?".
+        `${version.season.grainName} a ${version.grainPrice.toFixed(2)}, ${version.estimatedYield} sc/ha; ` +
+        INSURANCE_POLICY_LABELS[version.insurancePolicy as InsurancePolicy] +
         (sourceFile ? `, arquivo ${sourceFile}` : '') +
         // O MODO entra na trilha do lançamento porque ele é uma decisão do
         // lançamento: "por que este Barter fechou sozinho em março?" começa a
@@ -703,17 +687,20 @@ export class SeasonsService {
     });
   }
 
-  /** Encerra a versão vigente sem encerrar a safra (o Barter para, a safra não). */
-  async closeVersion(admin: User, code: string): Promise<VersionWithPrices> {
-    const version = await this.findVersion(code);
+  /**
+   * Encerra a versão vigente sem encerrar a safra: a CULTURA para de vender, e
+   * pode voltar com a próxima versão (outra tabela, outra meta). As outras
+   * culturas seguem.
+   */
+  async closeVersion(admin: User, key: string): Promise<VersionWithPrices> {
+    const version = await this.findVersion(key);
     if (version.status !== 'active') {
       throw new UnprocessableEntityException('Esta versão já foi encerrada');
     }
 
     // Não encontrou a linha ATIVA: entre a leitura e a gravação alguém fechou
     // esta versão — o outro admin, ou a aprovação que bateu a meta. Quem chega
-    // tarde recebe a mesma resposta de quem chegou tarde de qualquer outro jeito,
-    // e não uma trilha dizendo que encerrou o que já estava encerrado.
+    // tarde recebe a mesma resposta de quem chegou tarde de qualquer outro jeito.
     if (!(await this.writeClose(version.id, admin.fullName, admin.id))) {
       throw new UnprocessableEntityException('Esta versão já foi encerrada');
     }
@@ -726,17 +713,17 @@ export class SeasonsService {
       targetLabel: version.code,
       detail: version.season.name,
     });
-    return this.findVersion(code);
+    return this.findVersion(version.slug);
   }
 
   /**
    * A GRAVAÇÃO do encerramento, comum ao manual e ao automático.
    *
-   * O `status` entra no `where`, e não só na conferência de antes, pelo mesmo
-   * motivo de `applyStep` em barters.service.ts: o encerramento automático nasce
-   * de uma aprovação, e duas aprovações no mesmo segundo cruzariam a meta juntas.
-   * Com ele, a segunda não encontra a linha, `count` volta 0 e ninguém escreve
-   * um `closedAt` por cima do que já estava fechado.
+   * O `status` entra no `where`, e não só na conferência de antes: o
+   * encerramento automático nasce de uma aprovação, e duas aprovações no mesmo
+   * segundo cruzariam a meta juntas. Com ele, a segunda não encontra a linha,
+   * `count` volta 0 e ninguém escreve um `closedAt` por cima do que já estava
+   * fechado.
    */
   private async writeClose(
     versionId: number,
@@ -756,13 +743,8 @@ export class SeasonsService {
    * fechar — o caso comum, e não um erro.
    *
    * Chamado DEPOIS de cada aprovação do comitê (barters.service.ts), que é o
-   * único ato capaz de aumentar o realizado. Por isso não existe rotina de
-   * madrugada e por isso o fechamento tem autor: quem aprovou a permuta que
-   * cruzou a meta.
-   *
-   * `closeOnGoal` desligado sai antes de qualquer conta — é o caminho da maioria
-   * das aprovações, e ele não paga por uma funcionalidade que a versão não
-   * ligou.
+   * único ato capaz de aumentar o realizado. Fecha só a versão DESTA CULTURA:
+   * a meta da soja não tem nada a dizer sobre a canola.
    */
   async closeIfGoalReached(
     actor: User,
@@ -786,83 +768,63 @@ export class SeasonsService {
       targetType: 'version',
       targetId: version.id,
       // O ATOR é quem aprovou, e o detalhe diz que o fechamento foi
-      // consequência: a trilha responde "quem mexeu no sistema", e ninguém
-      // mexeu no Barter — alguém aprovou uma permuta, e a regra da versão fez o
-      // resto. Um ator inventado ("Sistema") esconderia justamente o ato que
-      // interessa reencontrar.
+      // consequência: ninguém mexeu no Barter — alguém aprovou uma permuta, e a
+      // regra da versão fez o resto.
       targetLabel: version.code,
       detail: `${version.season.name}: encerrado ao bater a meta, na aprovação de uma permuta`,
     });
 
-    return { version: await this.findVersion(version.code), reason };
+    return { version: await this.findVersion(version.slug), reason };
   }
 
   /**
-   * ACERTA UMA CULTURA de uma versão já publicada: a cotação da saca, a
+   * ACERTA OS TERMOS DA CULTURA numa versão já publicada: a cotação da saca, a
    * produtividade estimada, o vencimento da CPR ou a meta de sacas.
    *
-   * Rota própria pelo mesmo motivo de sempre: esses números nascem no lançamento,
-   * e mudar um deles no meio do Barter obrigaria a republicar a tabela inteira —
-   * o que encerraria a versão vigente e reiniciaria a contagem do realizado por
-   * causa de um campo de dois dígitos.
-   *
    * SÓ A VERSÃO VIGENTE, com UMA exceção: o VENCIMENTO DA CPR. As outras três
-   * taxas valem para o que ainda vai ser registrado, e versão encerrada não
-   * registra mais nada — corrigi-las lá não mudaria permuta nenhuma (todas
-   * congelaram a sua) e só reescreveria a história do que foi acordado. O
-   * vencimento é diferente: ele vale para as CÉDULAS que ainda não saíram, e uma
+   * valem para o que ainda vai ser registrado, e versão encerrada não registra
+   * mais nada. O vencimento vale para as CÉDULAS que ainda não saíram, e uma
    * versão encerrada continua tendo permutas faturadas esperando emissão.
-   * Recusá-lo aqui deixaria essas cédulas sem vencimento para sempre.
    */
-  async setGrain(
+  async setTerms(
     admin: User,
-    code: string,
-    grainId: number,
-    patch: VersionGrainPatchDto,
+    key: string,
+    patch: VersionTermsPatchDto,
   ): Promise<VersionWithPrices> {
-    const version = await this.findVersion(code);
-    const grain = version.grains.find((row) => row.grainId === grainId);
-    if (!grain) {
-      throw new UnprocessableEntityException('Esta cultura não está neste Barter');
-    }
+    const version = await this.findVersion(key);
 
     const changes: string[] = [];
-    const data: Prisma.VersionGrainUncheckedUpdateInput = {};
+    const data: Prisma.BarterVersionUncheckedUpdateInput = {};
 
     // O DE-PARA em cada frase, e não só o valor novo: a pergunta que alguém traz
-    // a esta linha é "mudou quanto?", e a resposta com um número só obriga a
-    // procurar a linha anterior.
-    if (patch.price !== undefined && patch.price !== grain.price) {
-      data.price = patch.price;
-      changes.push(`saca: ${grain.price.toFixed(2)} → ${patch.price.toFixed(2)}`);
+    // a esta linha é "mudou quanto?".
+    if (patch.grainPrice !== undefined && patch.grainPrice !== version.grainPrice) {
+      data.grainPrice = patch.grainPrice;
+      changes.push(`saca: ${version.grainPrice.toFixed(2)} → ${patch.grainPrice.toFixed(2)}`);
     }
-    if (patch.estimatedYield !== undefined && patch.estimatedYield !== grain.estimatedYield) {
+    if (patch.estimatedYield !== undefined && patch.estimatedYield !== version.estimatedYield) {
       data.estimatedYield = patch.estimatedYield;
       changes.push(
-        `produtividade estimada: ${grain.estimatedYield || 'sem taxa'} → ${patch.estimatedYield} sc/ha`,
+        `produtividade estimada: ${version.estimatedYield || 'sem taxa'} → ${patch.estimatedYield} sc/ha`,
       );
     }
     if (patch.cprDueDate !== undefined) {
       const dueDate = new Date(patch.cprDueDate);
-      if (dueDate.getTime() !== grain.cprDueDate?.getTime()) {
+      if (dueDate.getTime() !== version.cprDueDate?.getTime()) {
         data.cprDueDate = dueDate;
         changes.push(`vencimento da CPR em ${dueDate.toLocaleDateString('pt-BR')}`);
       }
     }
-    if (patch.targetSacks !== undefined && patch.targetSacks !== grain.targetSacks) {
+    if (patch.targetSacks !== undefined && patch.targetSacks !== version.targetSacks) {
       data.targetSacks = patch.targetSacks;
-      changes.push(`meta de sacas: ${grain.targetSacks ?? 'sem meta'} → ${patch.targetSacks}`);
+      changes.push(`meta de sacas: ${version.targetSacks ?? 'sem meta'} → ${patch.targetSacks}`);
     }
 
-    // Corpo que não muda nada sai sem gravar e sem trilha: uma linha dizendo que
-    // nada mudou é ruído em cima do registro que existe para ser lido.
+    // Corpo que não muda nada sai sem gravar e sem trilha.
     if (changes.length === 0) return version;
 
-    // A trava da versão ENCERRADA não alcança o vencimento — ver o comentário
-    // acima. A frase nomeia as três que ela alcança, para o admin saber o que
-    // fazer em vez de só saber que não pode.
     const touchesRates =
-      data.price !== undefined ||
+      data.grainPrice !== undefined ||
       data.estimatedYield !== undefined ||
       data.targetSacks !== undefined;
     if (touchesRates && version.status !== 'active') {
@@ -871,13 +833,17 @@ export class SeasonsService {
       );
     }
 
-    await this.prisma.versionGrain.update({ where: { id: grain.id }, data });
+    await this.prisma.barterVersion.update({ where: { id: version.id }, data });
 
     // A COTAÇÃO acertada aqui entra na linha do tempo do grão, como entraria se
-    // viesse pela correção de preço: são o mesmo fato — o valor da saca daquela
-    // cultura mudou nesta gestão —, e o relatório do produto lê os dois.
-    if (data.price !== undefined && grain.grainId) {
-      await this.writePriceHistory(grain.grainId, patch.price!, version.code, admin.id);
+    // viesse pela correção de preço: são o mesmo fato.
+    if (data.grainPrice !== undefined && version.season.grainId) {
+      await this.writePriceHistory(
+        version.season.grainId,
+        patch.grainPrice!,
+        version.code,
+        admin.id,
+      );
     }
 
     await this.audit.record({
@@ -886,10 +852,10 @@ export class SeasonsService {
       targetType: 'version',
       targetId: version.id,
       targetLabel: version.code,
-      detail: `${grain.grainName} — ${changes.join('; ')}`,
+      detail: `${version.season.grainName} — ${changes.join('; ')}`,
     });
 
-    return this.findVersion(code);
+    return this.findVersion(version.slug);
   }
 
   /**
@@ -897,15 +863,10 @@ export class SeasonsService {
    * manual.
    *
    * Ligar com a meta JÁ batida encerra na hora, e isso é a leitura literal da
-   * opção — a alternativa seria uma versão com "encerra ao bater meta" ligado,
-   * meta batida e Barter aberto, esperando uma próxima aprovação que talvez
-   * nunca venha. A tela avisa antes de enviar.
-   *
-   * Versão encerrada não aceita a troca: o modo é sobre o futuro dela, e ela não
-   * tem mais futuro.
+   * opção. Versão encerrada não aceita a troca: o modo é sobre o futuro dela.
    */
-  async setCloseOnGoal(admin: User, code: string, enabled: boolean): Promise<VersionWithPrices> {
-    const version = await this.findVersion(code);
+  async setCloseOnGoal(admin: User, key: string, enabled: boolean): Promise<VersionWithPrices> {
+    const version = await this.findVersion(key);
     if (version.status !== 'active') {
       throw new UnprocessableEntityException(
         'Só a versão vigente pode mudar o modo de encerramento',
@@ -933,44 +894,38 @@ export class SeasonsService {
       });
     }
 
-    // A meta pode já estar batida: ligar a opção agora é dizer "feche quando
-    // bater", e ela bateu. Vale a mesma porta do fechamento por aprovação, para
-    // a trilha e o `closedBy` saírem iguais nos dois caminhos.
     if (enabled) {
       const closed = await this.closeIfGoalReached(admin, version.id);
       if (closed) return closed.version;
     }
-    return this.findVersion(code);
+    return this.findVersion(version.slug);
   }
 
   /**
-   * LIGA ou DESLIGA o seguro agrícola da versão vigente.
+   * A POLÍTICA DE SEGURO da versão vigente: obrigatório, opcional ou sem seguro.
    *
-   * Só a VIGENTE, como o modo de encerramento e pelo mesmo motivo: a opção é
-   * sobre as permutas que ainda vão nascer, e uma versão encerrada não terá
-   * nenhuma. As que já nasceram têm a taxa congelada (ver
-   * `Barter.insuranceRatePerHa`) e não são tocadas aqui — nem as que estão sem
-   * seguro, nem as que estão com ele.
+   * Só a VIGENTE, como o modo de encerramento: a política é sobre as permutas
+   * que ainda vão nascer. As que já nasceram têm a escolha e a taxa congeladas
+   * e não são tocadas aqui.
    *
-   * NÃO confere a base de seguros, e isso é deliberado: ligar o seguro não
-   * conhece os produtores que vão aparecer, e a base muda depois de qualquer
-   * jeito. Quem cobra a praça que falta é o REGISTRO da permuta, com a frase que
-   * nomeia o município (ver `missingRateRefusal`) — e ali a recusa é grátis.
+   * NÃO confere a base de seguros: ligar o seguro não conhece os produtores que
+   * vão aparecer, e a base muda depois de qualquer jeito. Quem cobra a praça que
+   * falta é o REGISTRO da permuta.
    */
-  async setInsuranceRequired(
+  async setVersionInsurance(
     admin: User,
-    code: string,
-    enabled: boolean,
+    key: string,
+    policy: InsurancePolicy,
   ): Promise<VersionWithPrices> {
-    const version = await this.findVersion(code);
+    const version = await this.findVersion(key);
     if (version.status !== 'active') {
-      throw new UnprocessableEntityException('Só a versão vigente pode ligar ou desligar o seguro');
+      throw new UnprocessableEntityException('Só a versão vigente pode mudar o seguro');
     }
-    if (version.insuranceRequired === enabled) return version;
+    if (version.insurancePolicy === policy) return version;
 
     await this.prisma.barterVersion.update({
       where: { id: version.id },
-      data: { insuranceRequired: enabled },
+      data: { insurancePolicy: policy },
     });
     await this.audit.record({
       actor: admin,
@@ -978,47 +933,46 @@ export class SeasonsService {
       targetType: 'version',
       targetId: version.id,
       targetLabel: version.code,
-      detail: enabled
-        ? 'passa a incluir o seguro agrícola nas permutas novas'
-        : 'deixa de incluir o seguro agrícola nas permutas novas',
+      detail: `${INSURANCE_POLICY_LABELS[version.insurancePolicy as InsurancePolicy]} → ${INSURANCE_POLICY_LABELS[policy]} nas permutas novas`,
     });
 
-    return this.findVersion(code);
+    return this.findVersion(version.slug);
   }
 
   /**
    * Corrige um valor DENTRO da versão vigente — a "liberdade de editar um preço
    * em específico" sem precisar republicar a planilha inteira.
    *
-   * OS GRÃOS entram pela mesma porta: o `productId` de uma das culturas da versão
-   * corrige a cotação da saca DAQUELA cultura. Com mais de uma, a rota continua
-   * sendo uma só — quem diz de qual se está falando é o produto apontado, que é
-   * exatamente como o insumo já funcionava.
+   * O GRÃO da safra entra pela mesma porta: o `productId` dele corrige a cotação
+   * da saca, que é exatamente como o insumo já funcionava.
    *
    * Versão encerrada não aceita correção: ela é o registro do que valeu, e as
    * permutas fechadas nela apontam para esses números.
    */
   async updatePrice(
     admin: User,
-    code: string,
+    key: string,
     productId: number,
     dto: UpdateVersionPriceDto,
   ): Promise<VersionWithPrices> {
-    const version = await this.findVersion(code);
+    const version = await this.findVersion(key);
     if (version.status !== 'active') {
       throw new UnprocessableEntityException('Só a versão vigente pode ser corrigida');
     }
 
-    const grain = version.grains.find((row) => row.grainId === productId);
+    const isGrain = version.season.grainId === productId;
     const row = version.prices.find((price) => price.productId === productId);
-    if (!grain && !row) {
+    if (!isGrain && !row) {
       throw new UnprocessableEntityException('Este produto não está na tabela desta versão');
     }
 
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
-      if (grain) {
-        await tx.versionGrain.update({ where: { id: grain.id }, data: { price: dto.price } });
+      if (isGrain) {
+        await tx.barterVersion.update({
+          where: { id: version.id },
+          data: { grainPrice: dto.price },
+        });
       } else {
         await tx.versionPrice.update({ where: { id: row!.id }, data: { price: dto.price } });
       }
@@ -1047,9 +1001,9 @@ export class SeasonsService {
       targetType: 'version',
       targetId: version.id,
       targetLabel: version.code,
-      detail: `${row?.productName ?? grain!.grainName}: ${dto.price.toFixed(2)}`,
+      detail: `${row?.productName ?? version.season.grainName}: ${dto.price.toFixed(2)}`,
     });
-    return this.findVersion(code);
+    return this.findVersion(version.slug);
   }
 
   /* ── Apoio ─────────────────────────────────────────────────────────── */
@@ -1057,10 +1011,10 @@ export class SeasonsService {
   /**
    * UM PONTO na linha do tempo de preços de um produto, com a versão como autor.
    *
-   * Escrito uma vez porque dois caminhos o produzem — a correção de preço e o
-   * acerto da cotação de uma cultura —, e eles são o mesmo fato: o valor daquele
-   * produto mudou dentro daquela gestão. O relatório do produto lê os dois sem
-   * saber por qual porta o admin entrou.
+   * Escrito uma vez porque três caminhos o produzem — a publicação, a correção
+   * de preço e o acerto da cotação da saca —, e eles são o mesmo fato: o valor
+   * daquele produto mudou dentro daquela gestão. O relatório do produto lê os
+   * três sem saber por qual porta o admin entrou.
    */
   private async writePriceHistory(
     productId: number,
@@ -1085,54 +1039,9 @@ export class SeasonsService {
   }
 
   /**
-   * Casa as CULTURAS do lançamento com o catálogo.
-   *
-   * As duas recusas são as que o admin consegue resolver na tela em que ele está:
-   * o produto precisa existir e precisa ser GRÃO. A segunda importa — apontar um
-   * insumo aqui publicaria um Barter que se paga em ureia, e a conta inteira
-   * (custo → sacas → área de penhor) passaria a converter custo em custo.
-   *
-   * A cultura REPETIDA é recusada aqui, com o nome na frase, e não pela chave
-   * única do banco: a mensagem de lá ("Já existe um registro com estes dados")
-   * não diz qual grão veio duas vezes nem em qual linha do formulário ele está.
-   */
-  private async resolveGrains(rows: VersionGrainDto[]): Promise<ResolvedGrain[]> {
-    const ids = rows.map((row) => row.grainId);
-    const repeated = ids.filter((id, index) => ids.indexOf(id) !== index);
-
-    const products = await this.prisma.product.findMany({
-      where: { id: { in: [...new Set(ids)] } },
-    });
-    const byId = new Map(products.map((product) => [product.id, product]));
-
-    if (repeated.length > 0) {
-      const names = [...new Set(repeated)].map((id) => byId.get(id)?.name ?? String(id));
-      throw new UnprocessableEntityException(
-        `A mesma cultura aparece duas vezes neste Barter: ${names.join(', ')}`,
-      );
-    }
-
-    return rows.map((row) => {
-      const product = byId.get(row.grainId);
-      if (!product || product.type !== 'grain') {
-        throw new UnprocessableEntityException(
-          `Escolha um grão válido para a cultura ${product ? product.name : row.grainId}`,
-        );
-      }
-      return {
-        product,
-        price: row.price,
-        estimatedYield: row.estimatedYield,
-        cprDueDate: row.cprDueDate ? new Date(row.cprDueDate) : null,
-        targetSacks: row.targetSacks ?? null,
-      };
-    });
-  }
-
-  /**
-   * Casa as linhas do corpo JSON com o catálogo. Só insumos entram na tabela: os
-   * grãos têm lugar próprio (ver `VersionGrain`) porque eles não são comprados,
-   * são a moeda da permuta.
+   * Casa as linhas do corpo JSON com o catálogo. Só insumos entram na tabela: o
+   * grão tem lugar próprio (a cotação da versão) porque ele não é comprado, é a
+   * moeda da permuta.
    */
   private async resolvePrices(
     rows: { productId: number; price: number; cost?: number }[],
@@ -1163,7 +1072,7 @@ export class SeasonsService {
       }
       if (product.type !== 'input') {
         throw new UnprocessableEntityException(
-          `${product.name} não é um insumo: o grão tem cotação própria, na cultura`,
+          `${product.name} não é um insumo: o grão tem cotação própria, na versão`,
         );
       }
       return { product, price: row.price };

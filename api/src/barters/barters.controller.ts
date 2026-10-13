@@ -1,11 +1,16 @@
 import {
   Body,
+  type CallHandler,
   Controller,
   Delete,
+  type ExecutionContext,
   Get,
   HttpCode,
+  Injectable,
+  type NestInterceptor,
   Param,
   ParseIntPipe,
+  PayloadTooLargeException,
   Post,
   Put,
   Query,
@@ -16,6 +21,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
+import type { Observable } from 'rxjs';
 import type { User } from '@prisma/client';
 import {
   AnyRole,
@@ -25,22 +31,29 @@ import {
 } from '../common/decorators';
 import { CAPABILITY } from '../common/policy';
 import { toBarterJson, toBarterVersionJson, toCprJson } from '../common/serializers';
-import { BartersService, MAX_ATTACHMENT_BYTES, type StoredFile } from './barters.service';
+import {
+  BartersService,
+  MAX_ATTACHMENT_BYTES,
+  megabytes,
+  type StoredFile,
+} from './barters.service';
 import {
   AttachCreditFileDto,
   AttachInvoiceDto,
-  BarterCultureDto,
   BarterOpinionDto,
   ChangeBarterPricesDto,
   CreateBarterDto,
   DecideBarterChangeDto,
   DecideBarterProductDto,
   ForwardBarterDto,
+  FulfillRequirementsDto,
+  InsureBarterDto,
   InvoiceBarterDto,
   ListBartersQuery,
   ReplaceBarterInputsDto,
   RequestBarterChangeDto,
   RequestBarterProductDto,
+  RequireBarterDto,
   ReviewBarterDto,
   SaveBarterNoteDto,
 } from './dto/barter.dto';
@@ -57,12 +70,39 @@ import { IssueCprDto, RegisterCprDto, SaveCprDto, SignCprDto } from './dto/cpr.d
  *
  * O LIMITE é o do service, e não um número solto aqui: quem sabe quanto pesa um
  * anexo aceitável é o domínio. Ele corta a requisição antes de o corpo inteiro
- * ser recebido; o service confere de novo, e é ELE quem escreve a frase que a
- * pessoa lê (ver `requireAttachable`).
+ * ser recebido, e por isso a frase do arquivo grande demais nasce AQUI: o
+ * multer devolve "File too large", em inglês, e era isso que aparecia no aviso
+ * da tela. O service confere de novo (ver `requireAttachable`) para o anexo
+ * que chegue por outro caminho.
+ *
+ * O NOME do arquivo é lido em UTF-8 (`defParamCharset`). É assim que o `http`
+ * do Dart e o navegador o escrevem no multipart, e o padrão do multer é
+ * latin1: "NF março.pdf" era gravado como "NF marÃ§o.pdf", para sempre.
  */
-const ATTACHMENT_UPLOAD = FileInterceptor('file', {
+const MultipartAttachment = FileInterceptor('file', {
   limits: { fileSize: MAX_ATTACHMENT_BYTES },
+  defParamCharset: 'utf8',
 });
+
+@Injectable()
+class AttachmentUpload implements NestInterceptor {
+  private readonly multipart = new MultipartAttachment();
+
+  async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
+    try {
+      return await this.multipart.intercept(context, next);
+    } catch (error) {
+      if (error instanceof PayloadTooLargeException) {
+        throw new PayloadTooLargeException(
+          `O anexo passa do limite de ${megabytes(MAX_ATTACHMENT_BYTES)} MB`,
+        );
+      }
+      throw error;
+    }
+  }
+}
+
+const ATTACHMENT_UPLOAD = AttachmentUpload;
 
 /**
  * Entrega um arquivo guardado como ANEXO (`attachment`), e não inline.
@@ -70,17 +110,18 @@ const ATTACHMENT_UPLOAD = FileInterceptor('file', {
  * `attachment` de propósito: o navegador salva em vez de abrir. Estes arquivos
  * chegaram de fora — quem os enviou foi um usuário —, e abri-los dentro da
  * origem da aplicação é o que transforma um XML enviado por alguém numa página
- * servida pelo nosso domínio. O nome do arquivo vai entre aspas e com as aspas
- * de dentro removidas, que é o que impede um nome de arquivo malicioso de
- * quebrar o cabeçalho.
+ * servida pelo nosso domínio.
+ *
+ * O cabeçalho é montado pelo `attachment` do Express (RFC 6266): o nome vai
+ * escapado em `filename`, para quem só lê latin1, e inteiro em `filename*`, em
+ * UTF-8. Escrito à mão, um travessão no nome derrubava o `setHeader` num 500 —
+ * cabeçalho HTTP não carrega nada acima de latin1. O tipo vem DEPOIS, porque o
+ * `attachment` o adivinha pela extensão, e o que vale é o gravado.
  */
 function sendFile(response: Response, file: StoredFile): void {
+  response.attachment(file.fileName);
   response.setHeader('Content-Type', file.contentType);
   response.setHeader('Content-Length', String(file.size));
-  response.setHeader(
-    'Content-Disposition',
-    `attachment; filename="${file.fileName.replace(/["\\\r\n]/g, '')}"`,
-  );
   response.end(Buffer.from(file.content));
 }
 
@@ -170,25 +211,11 @@ export class BartersController {
    * `@AnyRole` com escopo no service, como o detalhe da permuta: quem alcança a
    * permuta alcança a tabela dela, e nos valores da própria lente (o consultor
    * recebe sacas por unidade, sem R$).
-   *
-   * A CULTURA em que a tabela é convertida é a DESTA PERMUTA (`?grainId=`, que o
-   * app manda com o grão da linha de pagamento): remontar um rascunho de milho
-   * lendo a tabela em sacas de soja mostraria ao produtor um total que o
-   * servidor não gravaria.
    */
   @Get(':code/version')
   @AnyRole()
-  async version(
-    @CurrentUser() user: User,
-    @Param('code') code: string,
-    @Query('grainId') grainId?: string,
-  ) {
-    return toBarterVersionJson(
-      await this.bartersService.versionOf(user, code),
-      undefined,
-      user,
-      Number(grainId) || null,
-    );
+  async version(@CurrentUser() user: User, @Param('code') code: string) {
+    return toBarterVersionJson(await this.bartersService.versionOf(user, code), undefined, user);
   }
 
   /**
@@ -212,27 +239,6 @@ export class BartersController {
     @Body() dto: ReplaceBarterInputsDto,
   ) {
     return toBarterJson(await this.bartersService.replaceInputs(consultant, code, dto), consultant);
-  }
-
-  /**
-   * A TROCA DA CULTURA do rascunho — a permuta passa a ser paga em outro grão
-   * dos que o Barter aceita.
-   *
-   * `PUT` pelo mesmo motivo dos insumos: é um estado que se declara ("esta
-   * permuta é de milho"), e reenviar o mesmo grão dá o mesmo resultado. Mesma
-   * capacidade e mesma porta — é do CONSULTOR, e só alcança o próprio rascunho.
-   */
-  @Put(':code/culture')
-  @RequireCapability(CAPABILITY.bartersRegister)
-  async setCulture(
-    @CurrentUser() consultant: User,
-    @Param('code') code: string,
-    @Body() dto: BarterCultureDto,
-  ) {
-    return toBarterJson(
-      await this.bartersService.setCulture(consultant, code, dto.grainId),
-      consultant,
-    );
   }
 
   /**
@@ -372,6 +378,82 @@ export class BartersController {
     @Body() dto: ReviewBarterDto,
   ) {
     return toBarterJson(await this.bartersService.review(committee, code, dto), committee);
+  }
+
+  /**
+   * AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos antes de
+   * decidir. A permuta volta ao consultor, e o gerente é avisado.
+   *
+   * Mesma capacidade da decisão: exigir é a alternativa a decidir, na mesma
+   * mesa, pela mesma pessoa.
+   */
+  @Post(':code/requirements')
+  @RequireCapability(CAPABILITY.bartersReview)
+  @HttpCode(200)
+  async require(
+    @CurrentUser() committee: User,
+    @Param('code') code: string,
+    @Body() dto: RequireBarterDto,
+  ) {
+    return toBarterJson(await this.bartersService.require(committee, code, dto), committee);
+  }
+
+  /**
+   * O CUMPRIMENTO das exigências — o consultor devolve a permuta ao comitê,
+   * sem passar de novo pelo gerente.
+   *
+   * Capacidade do REGISTRO, como o encaminhamento: é quem montou a permuta
+   * voltando a ela. Que seja a DELE é o escopo, no service.
+   */
+  @Post(':code/requirements/fulfill')
+  @RequireCapability(CAPABILITY.bartersRegister)
+  @HttpCode(200)
+  async fulfill(
+    @CurrentUser() consultant: User,
+    @Param('code') code: string,
+    @Body() dto: FulfillRequirementsDto,
+  ) {
+    return toBarterJson(await this.bartersService.fulfill(consultant, code, dto), consultant);
+  }
+
+  /**
+   * A APÓLICE — o ato da seguradora, com o documento e o número numa requisição
+   * só.
+   *
+   * `multipart/form-data` como a cédula assinada, e pelo mesmo motivo: as duas
+   * metades não fazem sentido separadas. Quem confere que a permuta TEM seguro e
+   * está no ponto é a máquina de estados, no service.
+   */
+  @Post(':code/insure')
+  @RequireCapability(CAPABILITY.bartersInsure)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  @HttpCode(200)
+  async insure(
+    @CurrentUser() insurer: User,
+    @Param('code') code: string,
+    @Body() dto: InsureBarterDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    // Conferido AQUI, e não no DTO: o arquivo não vem no corpo. Ver
+    // `attachInvoice`.
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe a apólice do seguro (campo "file")');
+    }
+    return toBarterJson(await this.bartersService.insure(insurer, code, dto, file), insurer);
+  }
+
+  /**
+   * O ARQUIVO DA APÓLICE. `@AnyRole` com escopo no service, como o da nota:
+   * quem alcança a permuta alcança os documentos dela.
+   */
+  @Get(':code/policy-file')
+  @AnyRole()
+  async policyFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.policyFile(viewer, code));
   }
 
   /**
@@ -604,6 +686,68 @@ export class BartersController {
     @Res() response: Response,
   ) {
     sendFile(response, await this.bartersService.scrFile(viewer, code));
+  }
+
+  /**
+   * O SCR DE UM AVALISTA — exigido junto com o aval. Mesmas portas do SCR do
+   * emitente, nos dois sentidos: anexam o consultor e o emissor; leem quem lê a
+   * cédula e o comitê, que decide contando com o aval.
+   */
+  @Put(':code/cpr/guarantors/:id/scr')
+  @RequireAnyCapability(CAPABILITY.bartersCprFill, CAPABILITY.bartersCprIssue)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  async saveGuarantorScr(
+    @CurrentUser() actor: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o arquivo do SCR do avalista (campo "file")');
+    }
+    return toCprJson(await this.bartersService.saveGuarantorScr(actor, code, id, file));
+  }
+
+  @Get(':code/cpr/guarantors/:id/scr')
+  @RequireAnyCapability(CAPABILITY.bartersCprRead, CAPABILITY.bartersCreditRead)
+  async guarantorScrFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.guarantorScrFile(viewer, code, id));
+  }
+
+  /**
+   * O DOCUMENTO DE UM BEM EM HIPOTECA — a matrícula atualizada, a certidão de
+   * ônus. Quem anexa é quem preenche a cédula; quem lê, como o SCR, inclui o
+   * comitê, que exigiu a hipoteca e decide contando com ela.
+   */
+  @Put(':code/cpr/mortgages/:id/document')
+  @RequireCapability(CAPABILITY.bartersCprFill)
+  @UseInterceptors(ATTACHMENT_UPLOAD)
+  async saveMortgageDocument(
+    @CurrentUser() actor: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) {
+      throw new UnprocessableEntityException('Anexe o documento do bem (campo "file")');
+    }
+    return toCprJson(await this.bartersService.saveMortgageDocument(actor, code, id, file));
+  }
+
+  @Get(':code/cpr/mortgages/:id/document')
+  @RequireAnyCapability(CAPABILITY.bartersCprRead, CAPABILITY.bartersCreditRead)
+  async mortgageDocumentFile(
+    @CurrentUser() viewer: User,
+    @Param('code') code: string,
+    @Param('id', ParseIntPipe) id: number,
+    @Res() response: Response,
+  ) {
+    sendFile(response, await this.bartersService.mortgageDocumentFile(viewer, code, id));
   }
 
   /* ── A EMISSÃO: os três atos do emissor ──────────────────────────────── */

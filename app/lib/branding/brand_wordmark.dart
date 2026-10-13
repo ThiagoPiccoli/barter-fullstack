@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import 'active_brand.dart';
+import 'brand_mark.dart';
+
+/// Família do logotipo, empacotada em `assets/fonts` (ver pubspec).
+const String brandWordmarkFont = 'BricolageGrotesque';
 
 /// Sobre qual fundo o logotipo está sendo desenhado.
 ///
@@ -16,17 +20,17 @@ enum BrandTone {
   onSurface,
 }
 
-/// Logotipo da marca ativa: monograma + assinatura bicolor.
+/// Logotipo da marca ativa: símbolo (vagem + espiga) + assinatura bicolor.
 ///
 /// A quebra de cor entre `wordmarkPrefix` e `wordmarkSuffix` é a assinatura da
 /// marca — em `agroBarter`, `agro` sai no acento e `Barter` no tom de conteúdo.
 /// Nada aqui é literal: outro cliente troca as duas palavras e as cores no seu
 /// arquivo de marca e o logotipo se redesenha.
 class BrandWordmark extends StatelessWidget {
-  /// Lado do quadrado do monograma. Todo o resto escala a partir daqui.
+  /// Altura do símbolo. Todo o resto escala a partir daqui.
   final double size;
 
-  /// Mostra o nome ao lado do monograma. Desligue em espaços apertados.
+  /// Mostra o nome ao lado do símbolo. Desligue em espaços apertados.
   final bool showLettering;
 
   /// Mostra a assinatura sob o nome.
@@ -54,81 +58,47 @@ class BrandWordmark extends StatelessWidget {
   Color get _taglineColor =>
       _onDark ? AppColors.onPrimaryMuted : AppColors.textMedium;
 
-  /// O ladrilho inverte com o fundo, e o monograma inverte junto — é isso que
-  /// mantém a leitura de duas cores nas duas situações.
-  Color get _tileColor => _onDark ? AppColors.onPrimary : AppColors.primary;
-  Color get _tilePrefixColor =>
-      _onDark ? AppColors.accentOnLight : AppColors.primaryAccent;
-  Color get _tileSuffixColor =>
-      _onDark ? AppColors.primary : AppColors.onPrimary;
+  /// A vagem inverte com o fundo; a espiga fica sempre no dourado da marca.
+  Color get _podColor => _onDark ? AppColors.onPrimary : AppColors.primary;
 
   @override
   Widget build(BuildContext context) {
     final id = brand.identity;
-    // O monograma quebra na primeira letra, espelhando a quebra do nome.
-    final mono = id.monogram;
-    final monoHead = mono.isEmpty ? '' : mono.substring(0, 1);
-    final monoTail = mono.length > 1 ? mono.substring(1) : '';
 
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: size,
+        BrandMark(
           height: size,
-          decoration: BoxDecoration(
-            color: _tileColor,
-            borderRadius: AppShape.logoTile,
-          ),
-          child: Center(
-            child: Text.rich(
-              TextSpan(children: [
-                TextSpan(
-                  text: monoHead,
-                  style: TextStyle(color: _tilePrefixColor),
-                ),
-                TextSpan(
-                  text: monoTail,
-                  style: TextStyle(color: _tileSuffixColor),
-                ),
-              ]),
-              style: TextStyle(
-                fontSize: size * 0.42,
-                fontWeight: FontWeight.w900,
-                letterSpacing: -0.5,
-                height: 1,
-              ),
-            ),
-          ),
+          podColor: _podColor,
+          wheatColor: AppColors.primaryAccent,
         ),
         if (showLettering) ...[
-          SizedBox(width: size * 0.25),
+          SizedBox(width: size * 0.17),
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text.rich(
                 TextSpan(children: [
-                  // O prefixo pesa menos: a cor já marca a divisão, e o peso
-                  // menor evita que o nome vire dois blocos concorrentes.
+                  // As duas metades têm o mesmo peso: é só a cor que divide,
+                  // como no desenho oficial.
                   TextSpan(
                     text: id.wordmarkPrefix,
-                    style: TextStyle(
-                      color: _prefixColor,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: TextStyle(color: _prefixColor),
                   ),
                   TextSpan(
                     text: id.wordmarkSuffix,
-                    style: TextStyle(
-                      color: _suffixColor,
-                      fontWeight: FontWeight.w900,
-                    ),
+                    style: TextStyle(color: _suffixColor),
                   ),
                 ]),
+                // Proporções do SVG oficial: corpo de 56 para um símbolo de 75,
+                // espaçamento de -3,5% do corpo.
                 style: TextStyle(
-                  fontSize: size * 0.46,
-                  letterSpacing: -0.2,
+                  fontFamily: brandWordmarkFont,
+                  fontSize: size * 0.62,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -size * 0.62 * 0.035,
                   height: 1.1,
                 ),
               ),

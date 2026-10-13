@@ -1,18 +1,24 @@
 import 'package:flutter/material.dart';
 import '../branding/active_brand.dart';
 import '../data/app_data.dart';
+import '../services/work_post.dart';
+import '../services/dashboard_stats.dart';
 import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/dashboard_widgets.dart';
+import '../widgets/policy_dialog.dart';
 import 'barter_detail_screen.dart';
 import 'cpr_form_screen.dart';
 import 'invoicing_screen.dart';
 import 'barters_screen.dart';
 import 'creditor_screen.dart';
+import 'team_analysis_screen.dart';
 
-/// Casa dos papéis de RETAGUARDA — gerente, comitê, faturista e EMISSOR.
+/// Casa dos papéis de RETAGUARDA — gerente, comitê, SEGURADORA, faturista e
+/// EMISSOR.
 ///
 /// Os três são POSTOS da mesma linha de produção, e é por isso que continuam
 /// numa tela só: o que muda entre eles é a fila que pede ação e a palavra da
@@ -40,7 +46,11 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
       widget.user.can(Capability.bartersOpinion) ? widget.user.id : null;
 
   late final List<Widget> _screens = [
-    _BackOfficeHomeTab(user: widget.user, onQueueChanged: () => setState(() {})),
+    _BackOfficeHomeTab(
+      user: widget.user,
+      onQueueChanged: () => setState(() {}),
+      onNavigate: (i) => setState(() => _selectedIndex = i),
+    ),
     // A retaguarda vê as permutas com valores (isAdmin). QUAIS ela vê é decidido
     // pelo servidor — o gerente recebe só as do time dele —, e o que ela pode
     // fazer, pelas capacidades.
@@ -51,6 +61,8 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
       onChanged: () => setState(() {}),
     ),
   ];
+
+  bool get _hasTeam => widget.user.can(Capability.bartersReadTeam);
 
   @override
   Widget build(BuildContext context) {
@@ -66,7 +78,14 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
       user: widget.user,
       selectedIndex: _selectedIndex,
       onSelect: (i) => setState(() => _selectedIndex = i),
-      body: IndexedStack(index: _selectedIndex, children: _screens),
+      body: IndexedStack(index: _selectedIndex, children: [
+        ..._screens,
+        // A ANÁLISE DO TIME — de quem enxerga um time. Pela capacidade, como
+        // tudo aqui: é `barters.readTeam` que faz alguém ter consultores para
+        // comparar. Criada a cada desenho (o estado, com a ordenação escolhida,
+        // fica): um parecer dado na outra aba precisa já ter andado aqui.
+        if (_hasTeam) TeamAnalysisTab(user: widget.user),
+      ]),
       destinations: [
         const AdaptiveDestination(
           icon: Icons.insights_outlined,
@@ -80,6 +99,12 @@ class _BackOfficeMainScreenState extends State<BackOfficeMainScreen> {
           badgeCount: waiting,
           badgeColor: post?.color,
         ),
+        if (_hasTeam)
+          const AdaptiveDestination(
+            icon: Icons.analytics_outlined,
+            activeIcon: Icons.analytics,
+            label: 'Análise',
+          ),
       ],
     );
   }
@@ -186,18 +211,10 @@ class _Post {
   /// "3 permutas esperando o seu parecer" — a manchete da fila.
   final String Function(int count) headline;
 
-  /// A ETAPA VIZINHA que esta pessoa acompanha, e que vira o segundo número do
-  /// painel.
-  ///
-  /// Vizinha, e nunca uma etapa qualquer: para quem empurra a permuta adiante é
-  /// a SEGUINTE (o gerente vê o que já mandou ao comitê); para o faturista, que
-  /// é o fim da linha, é o que ele já faturou. O comitê é o único que olha para
-  /// TRÁS — o que está no gerente é a fila que vai cair na mesa dele.
-  ///
-  /// Nenhum posto conta aqui uma etapa que ele não enxerga: o painel do
-  /// faturista mostrava "No comitê" enquanto ele lia a operação inteira, e era
-  /// um número que ele não podia abrir, conferir nem fazer nada a respeito.
-  final BarterStatus followStatus;
+  /// QUAL POSTO é este. A regra — fila, etapa vizinha, quem ocupa — mora em
+  /// `services/work_post.dart`; o que está nesta classe é a aparência dela.
+  final WorkPost post;
+
   final String followLabel;
   final IconData followIcon;
   final Color followColor;
@@ -214,11 +231,11 @@ class _Post {
 
   const _Post({
     required this.queue,
+    required this.post,
     required this.color,
     required this.surface,
     required this.icon,
     required this.headline,
-    required this.followStatus,
     required this.followLabel,
     required this.followIcon,
     required this.followColor,
@@ -230,17 +247,28 @@ class _Post {
   });
 
   /// Quantas permutas estão na etapa vizinha, dentro do que esta pessoa enxerga.
-  int get followCount =>
-      AppData.barters.where((b) => b.status == followStatus).length;
+  int get followCount => followCountOf(post, AppData.barters);
 
-  /// O posto desta pessoa — null para quem não tem etapa na linha (o admin, que
-  /// administra o sistema e não decide permuta).
+  /// A APARÊNCIA do posto desta pessoa — null para quem não tem etapa na linha.
+  ///
+  /// Quem responde QUAL é o posto e o que há na fila dele é
+  /// `services/work_post.dart`; este `switch` só veste o que veio de lá.
   static _Post? of(UserModel user) {
-    if (user.can(Capability.bartersOpinion)) {
+    final post = workPostOf(user);
+    if (post == null) return null;
+    return forPost(post, user);
+  }
+
+  /// A aparência de um posto qualquer. [anyManager] troca a fila do parecer
+  /// pela de TODOS os gerentes — a de quem pode opinar em qualquer permuta.
+  static _Post forPost(WorkPost post, UserModel user, {bool anyManager = false}) {
+    switch (post) {
+      case WorkPost.manager:
       return _Post(
+        post: post,
         // A do gerente é a única fila com DESTINATÁRIO: o parecer é dele, e a
         // permuta de outro time não é assunto dele.
-        queue: AppData.opinionQueueFor(user.id),
+        queue: queueOf(post, AppData.barters, managerId: anyManager ? null : user.id),
         color: AppColors.atManager,
         surface: AppColors.atManagerBg,
         icon: Icons.assignment_ind,
@@ -248,7 +276,6 @@ class _Post {
             ? '1 permuta esperando o seu parecer'
             : '$count permutas esperando o seu parecer',
         // Adiante: o que ele já mandou ao comitê.
-        followStatus: BarterStatus.pending,
         followLabel: 'No comitê',
         followIcon: Icons.groups_2_outlined,
         followColor: AppColors.pending,
@@ -259,11 +286,11 @@ class _Post {
         emptyTitle: 'Nenhum parecer pendente',
         emptyText: 'Nada do seu time esperando você agora. Puxe para atualizar.',
       );
-    }
 
-    if (user.can(Capability.bartersReview)) {
+      case WorkPost.committee:
       return _Post(
-        queue: AppData.committeeQueue,
+        post: post,
+        queue: queueOf(post, AppData.barters),
         color: AppColors.pending,
         surface: AppColors.pendingBg,
         icon: Icons.groups_2,
@@ -273,7 +300,6 @@ class _Post {
         // O comitê é o único que olha para TRÁS: o que está no gerente é a fila
         // que vai cair na mesa dele, e saber o tamanho dela antes de ela chegar
         // é o começo de acompanhar a linha.
-        followStatus: BarterStatus.sentToManager,
         followLabel: 'No gerente',
         followIcon: Icons.assignment_ind_outlined,
         followColor: AppColors.atManager,
@@ -286,11 +312,35 @@ class _Post {
         emptyTitle: 'Nenhuma permuta esperando decisão',
         emptyText: 'A fila do comitê está vazia. Puxe para atualizar.',
       );
-    }
 
-    if (user.can(Capability.bartersInvoice)) {
+      // A SEGURADORA — entre a decisão e o faturista, só para as permutas com
+      // seguro.
+      case WorkPost.insurer:
       return _Post(
-        queue: AppData.invoiceQueue,
+        post: post,
+        queue: queueOf(post, AppData.barters),
+        color: AppColors.atInsurer,
+        surface: AppColors.atInsurerBg,
+        icon: Icons.shield_outlined,
+        headline: (count) => count == 1
+            ? '1 permuta aprovada esperando a apólice'
+            : '$count permutas aprovadas esperando a apólice',
+        // Adiante: o que ela já liberou ao faturista e ainda não foi faturado.
+        followLabel: 'A faturar',
+        followIcon: Icons.receipt_long_outlined,
+        followColor: AppColors.approved,
+        actionLabel: 'Apólice',
+        actionIcon: Icons.upload_file_outlined,
+        onAction: (context, barter, onChanged) =>
+            informBarterPolicy(context, barter, onInsured: (_) => onChanged()),
+        emptyTitle: 'Nenhuma apólice pendente',
+        emptyText: 'Nenhuma permuta com seguro esperando a apólice. Puxe para atualizar.',
+      );
+
+      case WorkPost.biller:
+      return _Post(
+        post: post,
+        queue: queueOf(post, AppData.barters),
         color: AppColors.approved,
         surface: AppColors.approvedBg,
         icon: Icons.receipt_long,
@@ -299,7 +349,6 @@ class _Post {
             : '$count permutas aprovadas a faturar',
         // O faturista é fim de linha: não há etapa adiante, e o número que dá
         // tamanho ao trabalho dele é o que ele já faturou.
-        followStatus: BarterStatus.invoiced,
         followLabel: 'Faturadas',
         followIcon: Icons.receipt_long_outlined,
         followColor: AppColors.invoiced,
@@ -310,18 +359,12 @@ class _Post {
         emptyTitle: 'Nada a faturar',
         emptyText: 'Nenhuma permuta aprovada esperando faturamento. Puxe para atualizar.',
       );
-    }
 
-    // O EMISSOR — o posto que vem depois do faturamento.
-    //
-    // A fila dele tem os TRÊS degraus da cédula, e não só o primeiro: emitir,
-    // colher assinaturas e registrar acontecem em dias diferentes, e uma fila
-    // que mostrasse só "a emitir" esconderia dele as cédulas assinadas paradas
-    // esperando cartório — que é justamente o que estava invisível enquanto este
-    // posto não existia.
-    if (user.can(Capability.bartersCprIssue)) {
+      // O EMISSOR — o posto que vem depois do faturamento.
+      case WorkPost.emitter:
       return _Post(
-        queue: AppData.issuanceQueue,
+        post: post,
+        queue: queueOf(post, AppData.barters),
         color: AppColors.invoiced,
         surface: AppColors.invoicedBg,
         icon: Icons.description_outlined,
@@ -331,7 +374,6 @@ class _Post {
         // O número que dá tamanho ao trabalho dele é o que já foi REGISTRADO:
         // é o fim da linha, e o único estado em que a garantia vale contra
         // terceiros.
-        followStatus: BarterStatus.cprRegistered,
         followLabel: 'Registradas',
         followIcon: Icons.verified_outlined,
         followColor: AppColors.approved,
@@ -344,8 +386,6 @@ class _Post {
             'Puxe para atualizar.',
       );
     }
-
-    return null;
   }
 
   static Future<void> _openDetail(
@@ -368,7 +408,14 @@ class _BackOfficeHomeTab extends StatefulWidget {
 
   /// Avisa a casca quando a fila muda, para o selo da navegação acompanhar.
   final VoidCallback onQueueChanged;
-  const _BackOfficeHomeTab({required this.user, required this.onQueueChanged});
+
+  /// Leva a outra aba — é para onde os cartões de número se abrem.
+  final ValueChanged<int> onNavigate;
+  const _BackOfficeHomeTab({
+    required this.user,
+    required this.onQueueChanged,
+    required this.onNavigate,
+  });
 
   @override
   State<_BackOfficeHomeTab> createState() => _BackOfficeHomeTabState();
@@ -377,13 +424,17 @@ class _BackOfficeHomeTab extends StatefulWidget {
 class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
   UserModel get user => widget.user;
 
+  /// Sobe a cada "puxar para atualizar" — é o que faz o cartão de avisos
+  /// buscar de novo, junto com o resto da tela.
+  int _refreshes = 0;
+
   Future<void> _refresh() async {
     try {
       await AppData.refreshAll();
     } on ApiException catch (e) {
       if (mounted) showErrorSnack(context, e);
     }
-    if (mounted) setState(() {});
+    if (mounted) setState(() => _refreshes++);
     widget.onQueueChanged();
   }
 
@@ -404,16 +455,13 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
     final total = AppData.barters.length;
     final plural = total == 1 ? 'permuta' : 'permutas';
     if (user.can(Capability.bartersReadTeam)) return '$total $plural do seu time';
+    if (user.can(Capability.bartersReadInsurance)) return '$total $plural com seguro';
     if (user.can(Capability.bartersReadInvoicing)) return '$total $plural no faturamento';
     return '$total $plural na operação';
   }
 
   @override
   Widget build(BuildContext context) {
-    // As SACAS A RECEBER contam as aprovadas E as faturadas: faturar não desfaz
-    // a entrega combinada — a permuta continua devendo as sacas dela.
-    final sacksReceivable =
-        AppData.barters.where((b) => b.wasApproved).fold<double>(0, (s, b) => s + b.totalGrainQty);
     // O POSTO de quem está olhando, e a fila dele. Ver [_Post].
     final post = _Post.of(user);
 
@@ -440,8 +488,23 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
               icon: post?.icon ?? Icons.badge_outlined,
             ),
             const SizedBox(height: 16),
-            _SummaryStrip(post: post, sacks: sacksReceivable),
+            // OS NÚMEROS DO POSTO, cada um com o seu desdobramento ao lado: a
+            // fila com o tamanho dela, a área com o investimento, as sacas com
+            // as safras. É o que cada um precisa saber antes de abrir qualquer
+            // lista — e ficava espalhado em faixas e painéis pela tela.
+            _PostTiles(
+              post: post,
+              user: user,
+              barters: AppData.barters,
+              onNavigate: widget.onNavigate,
+              onChanged: _onQueueChanged,
+            ),
             const SizedBox(height: 20),
+            // OS AVISOS vêm antes da fila: são poucos, são novidade, e somem
+            // quando dispensados. É por aqui que o gerente fica sabendo que o
+            // comitê devolveu uma permuta do time dele ao consultor — e que ela
+            // voltou ao comitê sem passar pela mesa dele.
+            _NoticesCard(refreshes: _refreshes, onChanged: _onQueueChanged),
             // A fila vem ANTES de tudo o mais: é a única coisa desta tela que
             // pede ação de quem está olhando, e o resto é acompanhamento.
             //
@@ -469,7 +532,7 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
             // de hoje sem competir com ela.
             if (user.can(Capability.bartersReview)) ...[
               _UpstreamPanel(
-                atManager: AppData.barters.where((b) => b.awaitsManager).toList(),
+                atManager: statsOf(AppData.barters).atManager,
               ),
               const SizedBox(height: 20),
             ],
@@ -479,6 +542,8 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
               // chegou ao faturamento tem `barters.readInvoicing`.
               user.can(Capability.bartersReadTeam)
                   ? '${brand.copy.barterPluralTitle} do Time'
+                  : user.can(Capability.bartersReadInsurance)
+                  ? '${brand.copy.barterPluralTitle} com Seguro'
                   : user.can(Capability.bartersReadInvoicing)
                       ? '${brand.copy.barterPluralTitle} no Faturamento'
                       : '${brand.copy.barterPluralTitle} Recentes',
@@ -516,10 +581,202 @@ class _BackOfficeHomeTabState extends State<_BackOfficeHomeTab> {
   }
 }
 
+/// OS AVISOS de quem está olhando — o que aconteceu numa permuta que ele
+/// acompanha e não pede ação dele. Ver `Notice` na API.
+///
+/// Some quando não há aviso: é novidade, e um cartão vazio todo dia ensinaria
+/// a pessoa a não olhar para ele. Também some quando a busca falha — é apoio,
+/// não o assunto da tela, e o erro não pode encher de vermelho o painel.
+class _NoticesCard extends StatefulWidget {
+  /// Muda a cada atualização da tela, e aí os avisos são buscados de novo.
+  final int refreshes;
+  final VoidCallback onChanged;
+
+  const _NoticesCard({required this.refreshes, required this.onChanged});
+
+  @override
+  State<_NoticesCard> createState() => _NoticesCardState();
+}
+
+class _NoticesCardState extends State<_NoticesCard> {
+  List<NoticeModel> _notices = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_NoticesCard old) {
+    super.didUpdateWidget(old);
+    if (old.refreshes != widget.refreshes) _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final notices = await AppData.notices();
+      if (mounted) setState(() => _notices = notices);
+    } on ApiException {
+      // Silêncio de propósito — ver a documentação da classe.
+    }
+  }
+
+  Future<void> _dismiss(NoticeModel notice) async {
+    setState(() => _notices = _notices.where((n) => n.id != notice.id).toList());
+    try {
+      await AppData.dismissNotice(notice.id);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      showErrorSnack(context, e);
+      await _load();
+    }
+  }
+
+  /// Abre a permuta do aviso, quando ela está no que esta pessoa enxerga.
+  Future<void> _open(NoticeModel notice) async {
+    BarterModel? barter;
+    for (final b in AppData.barters) {
+      if (b.id == notice.barterCode) barter = b;
+    }
+    if (barter == null) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BarterDetailScreen(barter: barter!, isAdmin: true)),
+    );
+    widget.onChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_notices.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.notifications_active_outlined,
+                        size: 18, color: AppColors.primary),
+                    const SizedBox(width: 8),
+                    Text(
+                      _notices.length == 1 ? '1 aviso' : '${_notices.length} avisos',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              for (final notice in _notices)
+                ListTile(
+                  dense: true,
+                  onTap: () => _open(notice),
+                  title: Text(notice.message, style: const TextStyle(fontSize: 13)),
+                  subtitle: Text(
+                    _formatNoticeDate(notice.createdAt),
+                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                  ),
+                  trailing: IconButton(
+                    tooltip: 'Dispensar',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => _dismiss(notice),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _formatNoticeDate(DateTime d) =>
+    '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')} '
+    '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
 String _todayDate() {
   final now = DateTime.now();
   const months = ['', 'jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
   return '${now.day} ${months[now.month]} ${now.year}';
+}
+
+/// Quantas permutas esperam ação desta pessoa, somando TODOS os postos dela.
+int workQueuesCount(UserModel user) => workPostsOf(user)
+    .map((post) => _Post.forPost(post, user, anyManager: true).queue.length)
+    .fold(0, (a, b) => a + b);
+
+/// AS FILAS DE TODOS OS POSTOS numa tela só — para quem acumula as etapas da
+/// linha (o admin). Cada posto aparece com o mesmo cartão que o seu dono vê no
+/// próprio painel, e a fila do parecer é a de todos os gerentes.
+class WorkQueuesTab extends StatefulWidget {
+  final UserModel user;
+  final VoidCallback? onQueueChanged;
+  const WorkQueuesTab({super.key, required this.user, this.onQueueChanged});
+
+  @override
+  State<WorkQueuesTab> createState() => _WorkQueuesTabState();
+}
+
+class _WorkQueuesTabState extends State<WorkQueuesTab> {
+  Future<void> _refresh() async {
+    try {
+      await AppData.refreshAll();
+    } on ApiException catch (e) {
+      if (mounted) showErrorSnack(context, e);
+    }
+    _onQueueChanged();
+  }
+
+  void _onQueueChanged() {
+    if (mounted) setState(() {});
+    widget.onQueueChanged?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final posts = workPostsOf(widget.user)
+        .map((post) => _Post.forPost(post, widget.user, anyManager: true))
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const MainAppBarTitle('Filas'),
+        actions: [
+          const ChangePasswordButton(),
+          const LogoutButton(),
+          AppBarUserAvatar(user: widget.user),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        color: AppColors.primary,
+        child: BoundedContent(
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              for (final post in posts) ...[
+                if (post.queue.isEmpty)
+                  _EmptyQueueCard(post: post)
+                else
+                  _WorkQueueCard(post: post, onChanged: _onQueueChanged),
+                const SizedBox(height: 16),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// A FILA DO POSTO de quem está olhando — o que espera ação dele.
@@ -672,14 +929,9 @@ class _QueueRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  BarterIdentity(barter: barter),
                   Text(
-                    '${barter.id} • ${barter.producerName}',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    '${barter.consultantName} • retirada em ${barter.unitLabel}',
+                    'Retirada em ${barter.unitLabel}',
                     style: TextStyle(fontSize: 11, color: AppColors.textMedium),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -720,16 +972,6 @@ class _UpstreamPanel extends StatelessWidget {
   final List<BarterModel> atManager;
   const _UpstreamPanel({required this.atManager});
 
-  /// Há quantos dias a mais antiga do grupo espera. A conta é sobre a CRIAÇÃO
-  /// porque a permuta chega ao gerente no instante em que nasce: entre registrar
-  /// e o parecer não há outra etapa que segure o relógio.
-  static int _waitOf(List<BarterModel> barters) {
-    final now = DateTime.now();
-    return barters
-        .map((b) => now.difference(b.createdAt).inDays)
-        .fold(0, (a, b) => a > b ? a : b);
-  }
-
   /// Quanto mais antiga, mais quente — os mesmos cortes do painel do admin.
   static Color _urgencyOf(int days) => days >= 14
       ? AppColors.denied
@@ -742,15 +984,11 @@ class _UpstreamPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final byManager = <String, List<BarterModel>>{};
-    for (final barter in atManager) {
-      byManager.putIfAbsent(barter.managerLabel, () => []).add(barter);
-    }
     // QUEM ESTÁ SEGURANDO HÁ MAIS TEMPO primeiro: a ordem alfabética esconderia
-    // justamente a linha que se quer ler.
-    final groups = byManager.entries.toList()
-      ..sort((a, b) => _waitOf(b.value).compareTo(_waitOf(a.value)));
-    final sacks = atManager.fold<double>(0, (s, b) => s + b.totalGrainQty);
+    // justamente a linha que se quer ler. O agrupamento e a espera são de
+    // `services/dashboard_stats.dart` — a tela desenha a ordem que recebe.
+    final groups = byManagerOldestFirst(atManager);
+    final sacks = sacksOf(atManager);
 
     return Card(
       child: Padding(
@@ -799,8 +1037,8 @@ class _UpstreamPanel extends StatelessWidget {
                 _UpstreamRow(
                   manager: group.key,
                   count: group.value.length,
-                  sacks: group.value.fold<double>(0, (s, b) => s + b.totalGrainQty),
-                  days: _waitOf(group.value),
+                  sacks: sacksOf(group.value),
+                  days: waitingDays(group.value),
                 ),
             ],
           ],
@@ -882,109 +1120,383 @@ class _UpstreamRow extends StatelessWidget {
   }
 }
 
-/// Três números para dar o tamanho do que está na mão de quem olha.
+/// OS NÚMEROS DE CADA POSTO — a grade do topo do painel da retaguarda.
 ///
-/// Todos os três saem do POSTO de quem está olhando (ver [_Post]): o que espera
-/// ação dele, a etapa vizinha que ele acompanha e as sacas a receber. Nenhum
-/// deles conta permuta de uma etapa que a pessoa não enxerga — a faixa trazia
-/// "No comitê" fixo, e no painel do faturista isso era um número de um lugar
-/// onde ele não entra.
-///
-/// Sem posto (o admin, que administra o sistema e não decide permuta) a faixa
-/// volta a ser o retrato da operação: o que espera decisão e o que espera nota.
-class _SummaryStrip extends StatelessWidget {
+/// Cada posto lê a sua: o gerente e o comitê, a fila e a operação (fases,
+/// área, sacas); a seguradora, a apólice; o faturista, a nota; o emissor, a
+/// cédula. Os cartões que eles dividem são os mesmos, e nenhum conta etapa que
+/// quem olha não enxerga — as fases aparecem só quando têm permuta, e o
+/// servidor só entrega o que é do escopo de cada um.
+class _PostTiles extends StatelessWidget {
   final _Post? post;
-  final double sacks;
-  const _SummaryStrip({required this.post, required this.sacks});
+  final UserModel user;
+  final List<BarterModel> barters;
+  final ValueChanged<int> onNavigate;
+  final VoidCallback onChanged;
+
+  const _PostTiles({
+    required this.post,
+    required this.user,
+    required this.barters,
+    required this.onNavigate,
+    required this.onChanged,
+  });
+
+  static String _days(int days) => days == 1 ? '1 dia' : '$days dias';
+
+  /// A FILA de quem olha: quantas, o tamanho delas e há quanto tempo a mais
+  /// antiga espera.
+  Widget _queueTile(_Post post, {String label = 'Esperando você', List<KpiFact> extra = const []}) {
+    final queue = post.queue;
+    final oldest = queue.isEmpty ? 0 : queue.map(daysWaiting).reduce((a, b) => a > b ? a : b);
+    return KpiTile(
+      icon: post.icon,
+      color: post.color,
+      label: label,
+      value: '${queue.length}',
+      caption: queue.isEmpty ? post.emptyTitle : 'a mais antiga espera há ${_days(oldest)}',
+      onTap: () => onNavigate(1),
+      child: KpiFacts(facts: [
+        KpiFact('Sacas na fila', formatSacks(sacksOf(queue))),
+        KpiFact('Área na fila', areaLabelOf(areaOf(queue))),
+        ...extra,
+        KpiFact(post.followLabel, '${post.followCount}', dot: post.followColor),
+      ]),
+    );
+  }
+
+  Widget _statusTile() {
+    final phases = phaseCounts(barters);
+    final visible = backOfficePhases.where((p) => (phases[p] ?? 0) > 0).toList();
+    return KpiTile(
+      icon: Icons.swap_horiz,
+      color: AppColors.primary,
+      label: '${brand.copy.barterPluralTitle} por status',
+      value: '${visible.fold(0, (sum, p) => sum + phases[p]!)}',
+      caption: user.can(Capability.bartersReadTeam) ? 'do seu time' : 'na operação',
+      onTap: () => onNavigate(1),
+      child: visible.isEmpty ? null : PhaseBreakdown(counts: phases, phases: visible, dense: true),
+    );
+  }
+
+  Widget _areaTile(BarterStats stats) => KpiTile(
+        icon: Icons.landscape_outlined,
+        color: AppColors.primary,
+        label: 'Área total',
+        value: areaLabelOf(stats.area),
+        caption: 'em permutas aprovadas',
+        child: KpiFacts(facts: [
+          KpiFact('Investimento médio', formatInvestment(stats.investmentPerHa)),
+          if (stats.investmentPerHa != null) KpiFact('Conta', investmentBasisOf(stats.closed)),
+          KpiFact('Área média', areaLabelOf(stats.averageArea)),
+        ]),
+      );
+
+  Widget _sacksTile(BarterStats stats) => KpiTile(
+        icon: Icons.grass,
+        color: AppColors.grain,
+        label: 'Sacas a receber',
+        value: formatSacks(stats.sacksReceivable),
+        caption: 'ticket médio ${formatSacks(stats.averageSacks)} • por safra',
+        child: seasonSacksBars(barters, take: 3),
+      );
 
   @override
   Widget build(BuildContext context) {
     final post = this.post;
-    final cells = [
-      if (post != null) ...[
-        _SummaryCell(
-          icon: Icons.pending_actions_outlined,
-          color: post.color,
-          value: '${post.queue.length}',
-          label: 'Esperando você',
-        ),
-        _SummaryCell(
-          icon: post.followIcon,
-          color: post.followColor,
-          value: '${post.followCount}',
-          label: post.followLabel,
-        ),
-      ] else ...[
-        _SummaryCell(
-          icon: Icons.hourglass_top,
-          color: AppColors.pending,
-          value: '${AppData.barters.where((b) => b.status == BarterStatus.pending).length}',
-          label: 'No comitê',
-        ),
-        _SummaryCell(
-          icon: Icons.check_circle_outline,
-          color: AppColors.approved,
-          value: '${AppData.barters.where((b) => b.awaitsInvoice).length}',
-          label: 'A faturar',
-        ),
-      ],
-      _SummaryCell(
-        icon: Icons.grass,
-        color: AppColors.grain,
-        value: formatSacks(sacks),
-        label: 'A receber',
-      ),
-    ];
+    final stats = statsOf(barters);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        child: IntrinsicHeight(
-          child: Row(
-            children: [
-              for (var i = 0; i < cells.length; i++) ...[
-                if (i > 0) const VerticalDivider(width: 1, indent: 4, endIndent: 4),
-                Expanded(child: cells[i]),
+    switch (post?.post) {
+      // O GERENTE: a fila do parecer, o time e quem do time mais fecha.
+      case WorkPost.manager:
+        final team = analysisByConsultant(barters)
+          ..sort((a, b) => b.stats.sacksReceivable.compareTo(a.stats.sacksReceivable));
+        return KpiGrid(tiles: [
+          _queueTile(post!),
+          _statusTile(),
+          _areaTile(stats),
+          _sacksTile(stats),
+          KpiTile(
+            icon: Icons.badge_outlined,
+            color: AppColors.primaryAccent,
+            label: 'Consultores do time',
+            value: '${team.length}',
+            caption: 'os que mais fecharam • abra a Análise',
+            onTap: () => onNavigate(2),
+            child: KpiBars(
+              color: AppColors.primaryAccent,
+              empty: 'Nenhuma permuta do time ainda.',
+              bars: [
+                for (final c in team.take(3))
+                  KpiBar(c.name, c.stats.sacksReceivable, formatSacks(c.stats.sacksReceivable),
+                      detail: '${areaLabelOf(c.stats.area)} • ${formatInvestment(c.stats.investmentPerHa)}'),
               ],
-            ],
+            ),
           ),
-        ),
+          // O TEMPO DO TIME em cada etapa — inclusive a dele, o parecer. É o
+          // número que diz se a fila dele está segurando o time.
+          KpiTile(
+            icon: Icons.schedule,
+            color: AppColors.atManager,
+            label: 'Tempo nas etapas',
+            value: formatDays(averageStageDays(barters, BarterStage.opinion)),
+            caption: 'o seu parecer, em média',
+            child: KpiFacts(facts: [
+              for (final stage in const [
+                BarterStage.assembly,
+                BarterStage.opinion,
+                BarterStage.decision,
+              ])
+                KpiFact(stageLabel(stage), formatDays(averageStageDays(barters, stage))),
+            ]),
+          ),
+        ]);
+
+      // O COMITÊ: a fila da decisão e a operação com a régua dos outros painéis.
+      case WorkPost.committee:
+        return KpiGrid(maxColumns: 4, tiles: [
+          _queueTile(post!),
+          _statusTile(),
+          _areaTile(stats),
+          _sacksTile(stats),
+        ]);
+
+      // A SEGURADORA: o que espera a apólice, quanto ela leva e quanta área já
+      // segurou, por cultura.
+      case WorkPost.insurer:
+        final insured = barters.where((b) => b.hasPolicy).toList();
+        final slices = insuredAreaByGrain(barters);
+        return KpiGrid(tiles: [
+          _queueTile(post!, label: 'Pendentes de apólice'),
+          KpiTile(
+            icon: Icons.schedule,
+            color: AppColors.primaryMedium,
+            label: 'Tempo médio',
+            value: formatDays(averageStageDays(barters, BarterStage.policy)),
+            caption: 'da aprovação à apólice',
+            child: KpiFacts(facts: [
+              KpiFact('Apólices informadas', '${insured.length}'),
+              KpiFact('Esperando agora', '${post.queue.length}'),
+            ]),
+          ),
+          KpiTile(
+            icon: Icons.shield_outlined,
+            color: AppColors.approved,
+            label: 'Área segurada',
+            value: areaLabelOf(insured.fold(0.0, (sum, b) => sum + insuredAreaOf(b))),
+            caption: '${insured.length} com apólice • por cultura',
+            child: KpiBars(
+              color: AppColors.approved,
+              colorOf: AppColors.series,
+              empty: 'Nenhuma apólice informada ainda.',
+              bars: [for (final s in slices) KpiBar(s.label, s.value, areaLabelOf(s.value))],
+            ),
+          ),
+        ]);
+
+      // O FATURISTA: o que espera a nota, o que já saiu e quanto vale cada lado.
+      case WorkPost.biller:
+        final invoiced = barters.where((b) => b.wasInvoiced).toList();
+        return KpiGrid(maxColumns: 4, tiles: [
+          _queueTile(post!, extra: [
+            KpiFact('Valor a faturar',
+                formatCompactCurrency(post.queue.fold(0.0, (sum, b) => sum + b.inputCost))),
+          ]),
+          KpiTile(
+            icon: Icons.receipt_long_outlined,
+            color: AppColors.invoiced,
+            label: 'Faturamento',
+            value: formatCompactCurrency(invoiced.fold(0.0, (sum, b) => sum + b.inputCost)),
+            caption: '${invoiced.length} permutas com nota',
+            child: KpiFacts(facts: [
+              KpiFact('Tempo médio até a nota',
+                  formatDays(averageStageDays(barters, BarterStage.invoicing))),
+              KpiFact('Notas anexadas',
+                  '${invoiced.fold(0, (sum, b) => sum + b.invoices.length)}'),
+            ]),
+          ),
+          _areaTile(stats),
+          _sacksTile(stats),
+        ]);
+
+      // O EMISSOR: as cédulas por estado, o tempo de cada ato, os vencimentos
+      // e as que estão paradas.
+      case WorkPost.emitter:
+        final bySeason = openCprsBySeason(barters);
+        final stalled = oldestWaitingFirst(bySeason.expand((g) => g.barters)).take(3).toList();
+        const acts = [BarterStage.cprIssue, BarterStage.cprSignature, BarterStage.cprRegistration];
+        double? total;
+        for (final act in acts) {
+          final days = averageStageDays(barters, act);
+          if (days != null) total = (total ?? 0) + days;
+        }
+        return KpiGrid(maxColumns: 4, tiles: [
+          KpiTile(
+            icon: post!.icon,
+            color: post.color,
+            label: 'Cédulas em aberto',
+            value: '${post.queue.length}',
+            caption: 'por estado',
+            onTap: () => onNavigate(1),
+            child: KpiFacts(facts: [
+              KpiFact('A emitir', '${countWithStatus(barters, BarterStatus.invoiced)}',
+                  dot: AppColors.invoiced),
+              KpiFact('Emitidas', '${countWithStatus(barters, BarterStatus.cprIssued)}',
+                  dot: AppColors.invoiced),
+              KpiFact('Assinadas', '${countWithStatus(barters, BarterStatus.cprSigned)}',
+                  dot: AppColors.invoiced),
+              KpiFact('Registradas', '${countWithStatus(barters, BarterStatus.cprRegistered)}',
+                  dot: AppColors.approved),
+            ]),
+          ),
+          KpiTile(
+            icon: Icons.schedule,
+            color: AppColors.primaryMedium,
+            label: 'Tempo médio por ato',
+            value: formatDays(total),
+            caption: 'da nota ao registro',
+            child: KpiFacts(facts: [
+              for (final act in acts) KpiFact(stageLabel(act), formatDays(averageStageDays(barters, act))),
+            ]),
+          ),
+          KpiTile(
+            icon: Icons.event_outlined,
+            color: AppColors.pending,
+            label: 'Prazos',
+            value: '${bySeason.length}',
+            caption: bySeason.length == 1 ? 'safra com cédula em aberto' : 'safras com cédula em aberto',
+            child: bySeason.isEmpty
+                ? Text('Nenhuma cédula em aberto.',
+                    style: TextStyle(fontSize: 12, color: AppColors.textLight))
+                : Column(
+                    children: [
+                      for (final group in bySeason)
+                        _DeadlineRow(
+                          label: group.label,
+                          open: group.barters.length,
+                          dueDate: AppData.versionForSeason(group.seasonId)?.cprDueDate,
+                        ),
+                    ],
+                  ),
+          ),
+          KpiTile(
+            icon: Icons.report_outlined,
+            color: AppColors.denied,
+            label: 'Pendências',
+            value: stalled.isEmpty ? '0' : 'há ${_days(daysWaiting(stalled.first))}',
+            caption: stalled.isEmpty ? 'nada parado' : 'a mais parada • toque para abrir',
+            child: stalled.isEmpty
+                ? null
+                : Column(
+                    children: [
+                      for (final barter in stalled) _StalledCprRow(barter: barter, onChanged: onChanged),
+                    ],
+                  ),
+          ),
+        ]);
+
+      // Sem posto: a operação.
+      case null:
+        return KpiGrid(tiles: [_statusTile(), _areaTile(stats), _sacksTile(stats)]);
+    }
+  }
+}
+
+/// Uma safra com cédula em aberto e o vencimento dela.
+class _DeadlineRow extends StatelessWidget {
+  final String label;
+  final int open;
+  final DateTime? dueDate;
+  const _DeadlineRow({required this.label, required this.open, required this.dueDate});
+
+  @override
+  Widget build(BuildContext context) {
+    final due = dueDate;
+    final today = DateUtils.dateOnly(DateTime.now());
+    final days = due == null ? null : DateUtils.dateOnly(due).difference(today).inDays;
+    // Vencido em vermelho, a um mês em alerta; sem data, alerta também — é uma
+    // pendência do cadastro da safra, e a cédula não sai sem ela.
+    final color = days == null
+        ? AppColors.pending
+        : days < 0
+            ? AppColors.denied
+            : days <= 30
+                ? AppColors.pending
+                : AppColors.textMedium;
+    final when = days == null
+        ? 'vencimento não informado'
+        : days < 0
+            ? 'venceu há ${-days} dia${days == -1 ? '' : 's'} (${formatDate(due!)})'
+            : days == 0
+                ? 'vence hoje'
+                : 'vence em $days dia${days == 1 ? '' : 's'} (${formatDate(due!)})';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        children: [
+          Icon(Icons.event_outlined, size: 18, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+                Text(when, style: TextStyle(fontSize: 11, color: color)),
+              ],
+            ),
+          ),
+          Text('$open em aberto',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.invoiced)),
+        ],
       ),
     );
   }
 }
 
-class _SummaryCell extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String value;
-  final String label;
-  const _SummaryCell({
-    required this.icon,
-    required this.color,
-    required this.value,
-    required this.label,
-  });
+/// Uma cédula parada: em que degrau ela está e há quanto tempo.
+class _StalledCprRow extends StatelessWidget {
+  final BarterModel barter;
+  final VoidCallback onChanged;
+  const _StalledCprRow({required this.barter, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(height: 6),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(
-            value,
-            maxLines: 1,
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark),
-          ),
+    final days = daysWaiting(barter);
+    final stage = currentStageOf(barter);
+    final urgency = _UpstreamPanel._urgencyOf(days);
+
+    return InkWell(
+      onTap: () => openCprDesk(context, barter, onChanged: (_) => onChanged()),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Container(
+              width: 4,
+              height: 34,
+              decoration: BoxDecoration(color: urgency, borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${barter.cprNumber.isEmpty ? barter.id : barter.cprNumber} • ${barter.producerName}',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textDark)),
+                  Text(stage == null ? barter.statusLabel : stageLabel(stage),
+                      style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(_UpstreamPanel._waitLabel(days),
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: urgency)),
+          ],
         ),
-        const SizedBox(height: 2),
-        Text(label, textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-      ],
+      ),
     );
   }
 }

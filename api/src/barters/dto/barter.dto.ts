@@ -11,6 +11,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -50,45 +51,69 @@ export class BarterInputDto {
  * produtos e quantidades; quem precifica e calcula as sacas é o servidor
  * (campos extras são descartados pelo whitelist do ValidationPipe).
  *
- * Também não há `grainId`: o grão é o da safra, e a versão vigente do Barter é
- * quem diz por quanto vale a saca. Escolher grão era do tempo em que a permuta
- * carregava a própria cotação.
+ * Também não há preço da saca: a CULTURA é escolhida pela safra (`seasonId`),
+ * e a versão vigente dela é quem diz por quanto vale a saca.
  */
-/**
- * A TROCA DA CULTURA de um rascunho.
- *
- * Um campo só, e uma rota própria em vez de um campo dentro da reescrita dos
- * insumos: são dois atos diferentes. Trocar insumo é refazer o que a permuta
- * carrega; trocar cultura é trocar a moeda com que ela é paga — os insumos
- * continuam os mesmos, e o que muda são as sacas e o penhor.
- */
-export class BarterCultureDto {
-  @IsInt()
-  @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
-  grainId!: number;
-}
-
 export class CreateBarterDto {
   @IsInt()
   @IsPositive()
   producerId!: number;
 
   /**
-   * A CULTURA em que esta permuta será paga — soja, milho, o que o Barter
-   * aceitar (ver `VersionGrain`).
+   * A SAFRA DA CULTURA em que esta permuta será paga — "Soja 26/27". A versão
+   * vigente dela é a tabela da permuta.
    *
-   * Ela é a primeira decisão da permuta e é do CONSULTOR, junto com o produtor:
-   * é ele quem sabe o que aquele cliente vai plantar naquele talhão. Antes não
-   * havia o que escolher — a safra tinha um grão só, e o servidor o impunha.
+   * É a primeira decisão da permuta e é do CONSULTOR, junto com o produtor: é
+   * ele quem sabe o que aquele cliente vai plantar naquele talhão. E é FIXA: a
+   * permuta é de uma cultura só, e uma permuta de soja que vira de trigo é outra
+   * permuta, com outra tabela de insumos.
    *
-   * OBRIGATÓRIA de propósito, mesmo quando o Barter tem uma cultura só. Um
-   * padrão silencioso ("se não disser, é a primeira") faria a permuta nascer
-   * numa cultura que ninguém escolheu no dia em que o admin lançasse a segunda —
-   * e o consultor descobriria isso pelo vencimento da cédula.
+   * OBRIGATÓRIA de propósito, mesmo com uma cultura só aberta: um padrão
+   * silencioso faria a permuta nascer numa cultura que ninguém escolheu no dia
+   * em que a segunda abrisse.
    */
   @IsInt()
   @IsPositive({ message: 'Escolha a cultura em que esta permuta será paga' })
-  grainId!: number;
+  seasonId!: number;
+
+  /**
+   * A ÁREA PLANTADA (ha) daquela cultura que esta permuta cobre.
+   *
+   * Ela era a área do cadastro do produtor, e saiu de lá porque a fazenda
+   * planta mais de uma coisa: dos 120 ha, 60 de soja e 60 de trigo. É a régua
+   * do seguro, dos mínimos por hectare, do investimento (sc/ha) e do teto do
+   * penhor. O teto existe para a área não virar um número absurdo que destrave
+   * a régua de tudo.
+   */
+  @IsNumber({}, { message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @IsPositive({ message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @Max(1_000_000, { message: 'A área plantada não pode passar de 1.000.000 ha' })
+  plantedAreaHa!: number;
+
+  /**
+   * O SEGURO, quando a versão o oferece como OPCIONAL: `true` leva, `false`
+   * (ou ausente) não leva. Nas versões em que ele é obrigatório ou não existe,
+   * o campo pode ficar fora — e, se vier contradizendo a política, é recusado.
+   * Ver `insuranceChoiceFor` em insurance/insurance-policy.ts.
+   */
+  @IsOptional()
+  @IsBoolean({ message: 'insurance deve ser true ou false' })
+  insurance?: boolean;
+
+  /**
+   * O MUNICÍPIO DO SEGURO — a praça da base de seguros que o consultor escolheu
+   * na opção do seguro.
+   *
+   * Ele era o do cadastro do produtor, sem escolha, e deixou de ser porque a
+   * lavoura nem sempre fica onde o produtor mora: quem arrenda do outro lado do
+   * rio planta num município e tem endereço noutro, e a seguradora cota a
+   * lavoura. Ausente, vale o do cadastro — que é o que a tela já vem marcando.
+   * Só é lido quando a permuta leva seguro.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  insuranceCity?: string;
 
   /**
    * A UNIDADE em que o produtor vai retirar os insumos.
@@ -198,15 +223,22 @@ export class ForwardBarterDto {
 const REVIEW_NOTE_MESSAGE =
   'Escreva o motivo da decisão (mínimo de 10 caracteres): a ressalva exigida, ou a razão da negativa';
 
+/** A frase de quem pede exigência sem dizer qual. */
+const REQUIREMENT_NOTE_MESSAGE =
+  'Escreva o que o comitê espera (mínimo de 10 caracteres): quem como avalista, qual imóvel em hipoteca';
+
+/** A frase de quem informa a apólice sem o número. Ver `InsureBarterDto`. */
+export const POLICY_NUMBER_MESSAGE = 'Informe o número da apólice do seguro (até 60 caracteres)';
+
 /**
  * A DECISÃO DO COMITÊ. TRÊS saídas, e só elas: aprovar, aprovar COM RESSALVA ou
  * negar. Não há "devolver para o gerente" — o parecer já foi dado, e uma permuta
- * que anda para trás perde o dono da etapa.
+ * que anda para trás perde o dono da etapa. Devolver ao CONSULTOR existe, mas é
+ * outro ato e vem antes da decisão: ver `RequireBarterDto`.
  *
  * O TEXTO é obrigatório em duas delas, e a regra é a mesma nas duas: a decisão
  * que cria trabalho para outra pessoa precisa dizer qual. A ressalva é uma
- * exigência a cumprir (garantia real, seguro, aval) e alguém vai ter de
- * providenciá-la; a negativa é uma resposta que o consultor vai levar ao
+ * exigência a cumprir e alguém vai ter de providenciá-la; a negativa é uma resposta que o consultor vai levar ao
  * produtor. Nos dois casos, "porque sim" manda a pessoa perguntar por telefone —
  * e a resposta não fica no registro.
  *
@@ -231,38 +263,89 @@ export class ReviewBarterDto {
   @MaxLength(1000, { message: 'Escreva o motivo da decisão em até 1000 caracteres' })
   note?: string;
 
-  /**
-   * AS EXIGÊNCIAS: avalista, garantia real e seguro — as três coisas que o
-   * comitê define, agora legíveis por máquina.
-   *
-   * Elas viviam dentro de `note`, em prosa ("exigir aval do cônjuge", "com
-   * avalista", "condicionada a aval"), e isso bastava para quem lia a permuta e
-   * não bastava para mais nada: não havia como listar o que estava pendente de
-   * aval, e o emissor descobria a exigência lendo parágrafo na véspera de
-   * emitir o título.
-   *
-   * SÃO OPCIONAIS, e isso é deliberado em dois sentidos. Primeiro, a aprovação
-   * limpa não exige nada — e a negativa também não: exigir avalista de uma
-   * permuta negada seria pedir garantia para um negócio que não vai acontecer.
-   * Segundo, elas NÃO SUBSTITUEM o texto: `note` continua obrigatório na
-   * ressalva porque as caixas dizem O QUÊ e só ele diz QUAL — qual matrícula,
-   * qual valor segurado, quem se espera como avalista.
-   *
-   * Ausente vale `false`, e não "não mexer": esta é a decisão, e ela é tomada
-   * uma vez. Um cliente que não conheça os campos manda a decisão sem exigência
-   * nenhuma, que é exatamente o que ele quis dizer.
-   */
+  // PARA ONDE a aprovação vai — a seguradora ou o faturista — também não está
+  // aqui: é consequência do seguro da permuta, e quem a resolve é a máquina de
+  // estados (ver `reviewOutcomeFor`). O comitê escolhe o desfecho, não a fila.
+  //
+  // AS EXIGÊNCIAS (avalista, hipoteca) NÃO ESTÃO AQUI, e estiveram:
+  // elas eram caixas marcadas JUNTO com a aprovação, e a permuta seguia para o
+  // faturamento com elas anotadas. Agora elas vêm ANTES da decisão e devolvem a
+  // permuta ao consultor — são outro ato, com outra rota (ver
+  // `RequireBarterDto`). Uma aprovação que as trouxesse seria uma aprovação
+  // condicionada a algo que ninguém foi buscar.
+}
+
+/** A mensagem de quem pede exigência sem marcar nenhuma — ver `RequireBarterDto`. */
+export const NO_REQUIREMENT_MESSAGE =
+  'Marque o que o comitê exige — avalista e/ou hipoteca — para devolver a permuta ao consultor';
+
+/**
+ * AS EXIGÊNCIAS DO COMITÊ — avalista e/ou hipoteca, pedidos ANTES de decidir.
+ * A permuta volta ao consultor, e o gerente dela é avisado.
+ *
+ * As caixas se ACUMULAM, porque a reunião pede duas com frequência, e AO MENOS
+ * UMA é obrigatória — quem confere é o service, que é quem sabe dizer a frase
+ * inteira. Devolver a permuta sem pedir nada seria mandá-la ao consultor para
+ * ele adivinhar o que trazer.
+ *
+ * O TEXTO É OBRIGATÓRIO, pela regra de sempre: a decisão que cria trabalho para
+ * outra pessoa precisa dizer qual. As caixas dizem O QUÊ; só ele diz QUAL —
+ * quem se espera como avalista, qual imóvel vai em hipoteca.
+ *
+ * O SEGURO não é mais uma caixa daqui: a apólice é da seguradora, e o seguro da
+ * permuta é o da versão (ver `REVIEW_REQUIREMENT_LABELS`).
+ */
+export class RequireBarterDto {
   @IsOptional()
   @IsBoolean()
   requiresGuarantor?: boolean;
 
+  /** A HIPOTECA. O nome da coluna ficou de quando a tela dizia "garantia real". */
   @IsOptional()
   @IsBoolean()
   requiresCollateral?: boolean;
 
+  @IsString({ message: REQUIREMENT_NOTE_MESSAGE })
+  @MinLength(MIN_OPINION_LENGTH, { message: REQUIREMENT_NOTE_MESSAGE })
+  @MaxLength(1000, { message: 'Escreva as exigências em até 1000 caracteres' })
+  note!: string;
+}
+
+/**
+ * O CUMPRIMENTO das exigências — o consultor devolve a permuta ao comitê.
+ *
+ * Quase não tem corpo, e é o certo: o que prova o cumprimento é a CÉDULA (o
+ * avalista qualificado, a hipoteca descrita), e não uma declaração
+ * aqui. O texto é opcional e existe para o que foge — "o avalista é o irmão, e
+ * não o pai como a reunião esperava".
+ */
+export class FulfillRequirementsDto {
   @IsOptional()
-  @IsBoolean()
-  requiresInsurance?: boolean;
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
+}
+
+/**
+ * A APÓLICE, informada pela seguradora — o NÚMERO e uma observação. O ARQUIVO
+ * vem no mesmo `multipart` (campo `file`), e quem confere que ele veio é o
+ * controller: nenhum decorator daqui alcança o anexo.
+ *
+ * O número é OBRIGATÓRIO, como o do registro da cédula: é ele que a CPR cita
+ * (cláusula XVIII, "j"), e uma apólice anexada sem número seria um documento que
+ * o título não tem como nomear. As três conferências levam a mesma frase pelo
+ * motivo de sempre — com o campo ausente elas falham juntas.
+ */
+export class InsureBarterDto {
+  @IsString({ message: POLICY_NUMBER_MESSAGE })
+  @MinLength(1, { message: POLICY_NUMBER_MESSAGE })
+  @MaxLength(60, { message: POLICY_NUMBER_MESSAGE })
+  policyNumber!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
 
 /**
@@ -577,10 +660,14 @@ export class DecideBarterProductDto {
  * regra aceita. É o mesmo formato do registro, e de propósito — a tela que
  * monta a permuta é a mesma.
  *
- * Repare no que NÃO está aqui: produtor, unidade e preços. Trocar o produtor
- * seria outra permuta (a área dele é o denominador de tudo e já está congelada
- * no registro); trocar a unidade é logística e não passa por pedido nenhum; e
- * preço nunca veio do cliente.
+ * Junto com os insumos podem vir a ÁREA PLANTADA e a escolha do SEGURO
+ * opcional: as três coisas mudam juntas na conversa com o produtor ("vou plantar
+ * 80 ha, não 60, e quero o seguro"), e são todas régua da mesma remontagem.
+ * Ausentes, ficam como estavam.
+ *
+ * Repare no que NÃO está aqui: produtor, cultura, unidade e preços. Trocar o
+ * produtor ou a cultura seria outra permuta; trocar a unidade é logística e não
+ * passa por pedido nenhum; e preço nunca veio do cliente.
  */
 export class ReplaceBarterInputsDto {
   @IsArray()
@@ -589,6 +676,22 @@ export class ReplaceBarterInputsDto {
   @ValidateNested({ each: true })
   @Type(() => BarterInputDto)
   inputs!: BarterInputDto[];
+
+  @IsOptional()
+  @IsNumber({}, { message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @IsPositive({ message: 'Informe a área plantada (ha) da cultura nesta permuta' })
+  @Max(1_000_000, { message: 'A área plantada não pode passar de 1.000.000 ha' })
+  plantedAreaHa?: number;
+
+  @IsOptional()
+  @IsBoolean({ message: 'insurance deve ser true ou false' })
+  insurance?: boolean;
+
+  /** O município do seguro, quando o consultor o troca. Ver `CreateBarterDto`. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  insuranceCity?: string;
 }
 
 /**
@@ -646,4 +749,11 @@ export class ListBartersQuery extends PaginationQuery {
   @IsInt({ message: 'O filtro "managerId" precisa ser um número inteiro' })
   @IsPositive({ message: 'O filtro "managerId" precisa ser um número positivo' })
   managerId?: number;
+
+  /** As permutas de UMA SAFRA DA CULTURA ("Soja 26/27") — o filtro por cultura. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'O filtro "seasonId" precisa ser um número inteiro' })
+  @IsPositive({ message: 'O filtro "seasonId" precisa ser um número positivo' })
+  seasonId?: number;
 }

@@ -84,6 +84,17 @@ export class ProductsService {
     if (dto.classId !== undefined) {
       await this.ensureClass(dto.classId, product.type);
     }
+    // O modelo da CPR é padrão de RECEBIMENTO de grão. Gravá-lo num insumo não
+    // quebraria nada — e é justamente por isso que é recusado: ficaria um
+    // número sem efeito nenhum, com cara de configuração.
+    const touchesCprModel =
+      dto.cprSackWeightKg !== undefined ||
+      dto.cprMaxMoisture !== undefined ||
+      dto.cprMaxImpurities !== undefined ||
+      dto.cprOilContent !== undefined;
+    if (touchesCprModel && product.type !== 'grain') {
+      throw new UnprocessableEntityException('Apenas grãos têm modelo de CPR');
+    }
     const sku = dto.sku?.trim();
     if (sku) await this.ensureFreeSku(sku, id);
     return this.prisma.product.update({

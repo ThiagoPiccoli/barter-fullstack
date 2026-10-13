@@ -7,6 +7,7 @@ import '../models/models.dart';
 import '../services/api/api_client.dart';
 import '../services/cpr_docx.dart';
 import 'package:file_saver/file_saver.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common_widgets.dart';
 import 'creditor_screen.dart';
@@ -193,19 +194,10 @@ class _CprFormScreenState extends State<CprFormScreen> {
   /// dar o número, quando o ato não se refaz mais.
   bool get _canAttachRegistryFile => _canIssue && _barter.isCprRegistered;
 
-  /// A CÉDULA PODE SER EMITIDA AGORA? — completa, ou faltando só o número.
+  /// A CÉDULA PODE SER EMITIDA AGORA? — completa, com a credora inclusa.
   ///
-  /// O número é a exceção porque ele é o que o próprio diálogo de emissão pede:
-  /// ele vem de fora do sistema (cartório, B3, controle da credora) e só o
-  /// emissor o tem. Travar o botão por ele mandaria o emissor pedir ao consultor
-  /// um dado que o consultor não conhece — e a tela nunca destravaria.
-  bool get _readyToIssue {
-    final desk = _desk;
-    if (desk == null) return false;
-    if (desk.complete) return true;
-    if (desk.creditorGaps.isNotEmpty) return false;
-    return desk.gaps.every((gap) => gap.contains('número da CPR'));
-  }
+  /// O número não entra na conta: ele nasce com a permuta, no registro.
+  bool get _readyToIssue => _desk?.complete ?? false;
 
   /// As lavouras vivem em estado, e não em controllers: elas entram e saem da
   /// lista, e um `TextEditingController` por campo de uma lista que muda de
@@ -218,13 +210,29 @@ class _CprFormScreenState extends State<CprFormScreen> {
   /// de uma remoção.
   List<CprGuarantor> _guarantors = const [];
 
+  /// Os BENS EM HIPOTECA, pelo mesmo motivo — e, como os avalistas, com o id do
+  /// servidor dentro de cada item, que é o que mantém o documento anexado no
+  /// bem certo entre uma gravação e outra.
+  List<CprMortgage> _mortgageList = const [];
+
+  /// A IDENTIDADE de cada linha das duas listas, paralela a elas: é a chave do
+  /// cartão. Ela não pode ser a posição — remover a primeira lavoura faria o
+  /// Flutter reaproveitar os campos dela na segunda —, nem o conteúdo — cada
+  /// letra digitada trocaria a chave, recriaria o campo e o foco iria embora
+  /// a cada caractere.
+  List<int> _areaIds = const [];
+  List<int> _guarantorIds = const [];
+  List<int> _mortgageIds = const [];
+  int _nextRowId = 0;
+
+  List<int> _newRowIds(int count) => List.generate(count, (_) => _nextRowId++);
+
   DateTime? _issuedAt;
 
   /// A DATA DA CONSULTA do SCR. O anexo em si não é campo — ele sobe por rota
   /// própria, e o que a tela guarda dele é o que o servidor devolveu.
   DateTime? _scrConsultedAt;
 
-  final _number = TextEditingController();
   final _nationality = TextEditingController();
   final _maritalStatus = TextEditingController();
   final _profession = TextEditingController();
@@ -237,8 +245,12 @@ class _CprFormScreenState extends State<CprFormScreen> {
   final _fatherName = TextEditingController();
   final _motherName = TextEditingController();
   final _email = TextEditingController();
-  final _deliveryPlace = TextEditingController();
-  final _mortgages = TextEditingController();
+
+  /// O LOCAL DA ENTREGA: a filial escolhida na lista. O texto ao lado é o que
+  /// a cédula tem gravado — numa cédula do tempo do texto livre, ele existe
+  /// sem unidade, e a tela o mostra para quem for escolher a filial.
+  String? _deliveryUnitId;
+  String _deliveryPlace = '';
   final _spouseRg = TextEditingController();
   final _spouseName = TextEditingController();
   final _spouseNationality = TextEditingController();
@@ -249,10 +261,8 @@ class _CprFormScreenState extends State<CprFormScreen> {
   final _moisture = TextEditingController();
   final _impurities = TextEditingController();
   final _oil = TextEditingController();
-  final _insurancePolicy = TextEditingController();
 
   List<TextEditingController> get _all => [
-        _number,
         _nationality,
         _maritalStatus,
         _profession,
@@ -265,8 +275,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
         _fatherName,
         _motherName,
         _email,
-        _deliveryPlace,
-        _mortgages,
         _spouseRg,
         _spouseName,
         _spouseNationality,
@@ -277,7 +285,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
         _moisture,
         _impurities,
         _oil,
-        _insurancePolicy,
       ];
 
   @override
@@ -320,7 +327,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
   /// no mesmo formato do rascunho, e o servidor só a manda quando ainda não há
   /// cédula começada (ver `startingPoint`).
   void _fill(CprDraft draft) {
-    _number.text = draft.number;
     _issuedAt = draft.issuedAt;
     _scrConsultedAt = draft.scrConsultedAt;
     _nationality.text = draft.emitterNationality;
@@ -335,8 +341,8 @@ class _CprFormScreenState extends State<CprFormScreen> {
     _fatherName.text = draft.emitterFatherName;
     _motherName.text = draft.emitterMotherName;
     _email.text = draft.emitterEmail;
-    _deliveryPlace.text = draft.deliveryPlace;
-    _mortgages.text = draft.mortgages;
+    _deliveryUnitId = draft.deliveryUnitId;
+    _deliveryPlace = draft.deliveryPlace;
     _spouseRg.text = draft.spouseRg;
     _spouseName.text = draft.spouseName;
     _spouseNationality.text = draft.spouseNationality;
@@ -347,9 +353,14 @@ class _CprFormScreenState extends State<CprFormScreen> {
     _moisture.text = _number0(draft.maxMoisture);
     _impurities.text = _number0(draft.maxImpurities);
     _oil.text = _number0(draft.oilContent);
-    _insurancePolicy.text = draft.insurancePolicy;
     _areas = draft.areas;
     _guarantors = draft.guarantors;
+    _mortgageList = draft.mortgages;
+    // Identidades NOVAS: os campos das listas guardam o texto que receberam ao
+    // nascer, e só um cartão novo mostra o que o servidor gravou.
+    _areaIds = _newRowIds(draft.areas.length);
+    _guarantorIds = _newRowIds(draft.guarantors.length);
+    _mortgageIds = _newRowIds(draft.mortgages.length);
   }
 
   /// Zero vira campo VAZIO, e não "0": nos percentuais o zero significa "ainda
@@ -361,10 +372,17 @@ class _CprFormScreenState extends State<CprFormScreen> {
       value == value.roundToDouble() ? value.toStringAsFixed(0) : value.toString();
 
   static double _parse(String text) =>
-      double.tryParse(text.trim().replaceAll(',', '.')) ?? 0;
+      parseNumberOr(text);
+
+  /// A filial escolhida, se ela ainda estiver no cadastro.
+  UnitModel? get _deliveryUnit {
+    for (final unit in AppData.units) {
+      if (unit.id == _deliveryUnitId) return unit;
+    }
+    return null;
+  }
 
   CprDraft _collect() => CprDraft(
-        number: _number.text,
         issuedAt: _issuedAt,
         scrConsultedAt: _scrConsultedAt,
         emitterNationality: _nationality.text,
@@ -379,8 +397,10 @@ class _CprFormScreenState extends State<CprFormScreen> {
         emitterFatherName: _fatherName.text,
         emitterMotherName: _motherName.text,
         emitterEmail: _email.text,
-        deliveryPlace: _deliveryPlace.text,
-        mortgages: _mortgages.text,
+        deliveryUnitId: _deliveryUnitId,
+        // O nome é o servidor quem grava; este é só o reflexo local da escolha.
+        deliveryPlace: _deliveryUnit?.name ?? _deliveryPlace,
+        mortgages: _mortgageList,
         guarantors: _guarantors,
         spouseName: _spouseName.text,
         spouseNationality: _spouseNationality.text,
@@ -392,7 +412,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
         maxMoisture: _parse(_moisture.text),
         maxImpurities: _parse(_impurities.text),
         oilContent: _parse(_oil.text),
-        insurancePolicy: _insurancePolicy.text,
         areas: _areas,
       );
 
@@ -400,7 +419,14 @@ class _CprFormScreenState extends State<CprFormScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _saving = true);
     try {
-      final desk = await AppData.saveBarterCpr(_barter.id, _collect());
+      // AVALISTAS E HIPOTECA só viajam quando o comitê os exigiu: fora disso o
+      // servidor os recusa, e o que já estiver gravado fica como está.
+      final desk = await AppData.saveBarterCpr(
+        _barter.id,
+        _collect(),
+        withGuarantors: _barter.requiresGuarantor,
+        withMortgages: _barter.requiresCollateral,
+      );
       if (!mounted) return;
       setState(() {
         _desk = desk;
@@ -547,7 +573,23 @@ class _CprFormScreenState extends State<CprFormScreen> {
           const SizedBox(height: 20),
 
           _section('IDENTIFICAÇÃO DA CÉDULA', Icons.description_outlined),
-          _textField(_number, 'Nº da CPR', hint: 'Como a credora numera'),
+          // O NÚMERO é LEITURA: ele nasce com a permuta, no registro, e nenhum
+          // posto o digita — é o que o mantém sequencial e único.
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Nº da CPR',
+                isDense: true,
+                helperText: 'Gerado no registro da permuta',
+                suffixIcon: Icon(Icons.lock_outline, size: 16, color: AppColors.textLight),
+              ),
+              child: Text(
+                desk.known.cprNumber,
+                style: TextStyle(fontSize: 14, color: AppColors.textDark),
+              ),
+            ),
+          ),
           Row(children: [
             Expanded(
               child: _DateField(
@@ -629,13 +671,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           ],
 
           _section('LOCAL DA ENTREGA', Icons.warehouse_outlined),
-          _textField(
-            _deliveryPlace,
-            'Onde o grão será entregue',
-            hint: desk.known.pickupUnit.isEmpty
-                ? 'Armazém / filial'
-                : 'Retirada da permuta: ${desk.known.pickupUnit}',
-          ),
+          _deliveryField(desk.known),
           const SizedBox(height: 14),
 
           _section('PADRÃO DO GRÃO', Icons.grass_outlined),
@@ -712,7 +748,16 @@ class _CprFormScreenState extends State<CprFormScreen> {
             barterInvoices: _barter.invoices,
           ),
           const SizedBox(height: 12),
-          _textField(_insurancePolicy, 'Nº da apólice (se houver seguro)'),
+          // A APÓLICE é LEITURA, como as notas: quem a informa é a SEGURADORA,
+          // com o documento, na etapa dela. Ela só aparece quando existe — e é
+          // quando existe que a alínea "j" sai na cédula.
+          if (desk.known.insurancePolicy.isNotEmpty) ...[
+            _section('SEGURO (CLÁUSULA XVIII, "J")', Icons.shield_outlined),
+            Text(
+              'Apólice nº ${desk.known.insurancePolicy}, informada pela seguradora.',
+              style: TextStyle(fontSize: 13, color: AppColors.textMedium),
+            ),
+          ],
           const SizedBox(height: 14),
 
           _section('LAVOURAS EM PENHOR', Icons.map_outlined),
@@ -737,6 +782,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           // AVISOS: nenhum deles trava o encaminhamento. Ver `pledgeWarnings`.
           ...desk.pledgeWarnings.map((aviso) => _PledgeWarning(text: aviso)),
           ..._areas.asMap().entries.map((entry) => _AreaCard(
+                key: ValueKey('area-${_areaIds[entry.key]}'),
                 position: entry.key,
                 area: entry.value,
                 onChanged: (updated) => setState(() {
@@ -745,55 +791,101 @@ class _CprFormScreenState extends State<CprFormScreen> {
                   _areas = next;
                 }),
                 onRemove: () => setState(() {
-                  final next = [..._areas]..removeAt(entry.key);
-                  _areas = next;
+                  _areas = [..._areas]..removeAt(entry.key);
+                  _areaIds = [..._areaIds]..removeAt(entry.key);
                 }),
               )),
           const SizedBox(height: 8),
           OutlinedButton.icon(
-            onPressed: () => setState(() => _areas = [..._areas, const CprArea()]),
+            onPressed: () => setState(() {
+              _areas = [..._areas, const CprArea()];
+              _areaIds = [..._areaIds, ..._newRowIds(1)];
+            }),
             icon: const Icon(Icons.add, size: 18),
             label: Text(_areas.isEmpty ? 'Adicionar lavoura' : 'Adicionar outra lavoura'),
           ),
           const SizedBox(height: 20),
 
-          // O AVALISTA e as HIPOTECAS fecham o formulário porque não saem no
-          // documento: eles são da PROPOSTA, e o modelo de cédula em uso não
-          // tem cláusula para nenhum dos dois. Ficam por último para não
-          // empurrar para baixo o que a cédula realmente precisa.
-          _section('AVALISTAS', Icons.handshake_outlined),
-          ..._guarantors.asMap().entries.map((entry) => _GuarantorCard(
-                position: entry.key,
-                guarantor: entry.value,
-                onChanged: (updated) => setState(() {
-                  final next = [..._guarantors];
-                  next[entry.key] = updated;
-                  _guarantors = next;
-                }),
-                onRemove: () => setState(() {
-                  final next = [..._guarantors]..removeAt(entry.key);
-                  _guarantors = next;
-                }),
-              )),
-          OutlinedButton.icon(
-            onPressed: () =>
-                setState(() => _guarantors = [..._guarantors, const CprGuarantor()]),
-            icon: const Icon(Icons.add, size: 18),
-            label: Text(
-                _guarantors.isEmpty ? 'Adicionar avalista' : 'Adicionar outro avalista'),
-          ),
-          const SizedBox(height: 20),
-
-          _section('HIPOTECAS', Icons.account_balance_outlined),
-          TextFormField(
-            controller: _mortgages,
-            maxLines: 3,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              labelText: 'Hipotecas oferecidas em garantia',
-              isDense: true,
+          // O AVALISTA e a HIPOTECA só existem quando o COMITÊ os exige: fora
+          // do preenchimento inicial, porque a maioria das permutas não tem
+          // nenhum dos dois, e coletá-los de todo mundo era pedir ao produtor
+          // um aval que ninguém ia cobrar. Exigidos, eles passam a ser
+          // obrigatórios — o servidor os cobra em `consultantGaps`.
+          //
+          // Fecham o formulário porque não saem no documento: o modelo de
+          // cédula em uso não tem cláusula para nenhum dos dois.
+          if (_barter.requiresGuarantor) ...[
+            _section('AVALISTAS (EXIGIDOS PELO COMITÊ)', Icons.handshake_outlined),
+            ..._guarantors.asMap().entries.map((entry) => _GuarantorCard(
+                  key: ValueKey('aval-${_guarantorIds[entry.key]}'),
+                  position: entry.key,
+                  guarantor: entry.value,
+                  uploading: _uploadingAttachment,
+                  onPickScr: _canAttachScr && entry.value.id != null
+                      ? () => _pickGuarantorScr(entry.value.id!)
+                      : null,
+                  onOpenScr: entry.value.scrFile == null
+                      ? null
+                      : () => _saveAttachment(
+                          () => AppData.downloadGuarantorScr(_barter.id, entry.value.id!)),
+                  onChanged: (updated) => setState(() {
+                    final next = [..._guarantors];
+                    next[entry.key] = updated;
+                    _guarantors = next;
+                  }),
+                  onRemove: () => setState(() {
+                    _guarantors = [..._guarantors]..removeAt(entry.key);
+                    _guarantorIds = [..._guarantorIds]..removeAt(entry.key);
+                  }),
+                )),
+            OutlinedButton.icon(
+              onPressed: () => setState(() {
+                _guarantors = [..._guarantors, const CprGuarantor()];
+                _guarantorIds = [..._guarantorIds, ..._newRowIds(1)];
+              }),
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(
+                  _guarantors.isEmpty ? 'Adicionar avalista' : 'Adicionar outro avalista'),
             ),
-          ),
+            const SizedBox(height: 20),
+          ],
+
+          // A HIPOTECA É UM CADASTRO: cada bem com matrícula, comarca, dono,
+          // valor e o DOCUMENTO anexado. O texto livre de antes não dizia nada
+          // que se pudesse conferir no cartório.
+          if (_barter.requiresCollateral) ...[
+            _section('BENS EM HIPOTECA (EXIGIDOS PELO COMITÊ)', Icons.account_balance_outlined),
+            ..._mortgageList.asMap().entries.map((entry) => _MortgageCard(
+                  key: ValueKey('hipoteca-${_mortgageIds[entry.key]}'),
+                  position: entry.key,
+                  mortgage: entry.value,
+                  uploading: _uploadingAttachment,
+                  onPickDocument: _canEdit && entry.value.id != null
+                      ? () => _pickMortgageDocument(entry.value.id!)
+                      : null,
+                  onOpenDocument: entry.value.documentFile == null
+                      ? null
+                      : () => _saveAttachment(
+                          () => AppData.downloadMortgageDocument(_barter.id, entry.value.id!)),
+                  onChanged: (updated) => setState(() {
+                    final next = [..._mortgageList];
+                    next[entry.key] = updated;
+                    _mortgageList = next;
+                  }),
+                  onRemove: () => setState(() {
+                    _mortgageList = [..._mortgageList]..removeAt(entry.key);
+                    _mortgageIds = [..._mortgageIds]..removeAt(entry.key);
+                  }),
+                )),
+            OutlinedButton.icon(
+              onPressed: () => setState(() {
+                _mortgageList = [..._mortgageList, const CprMortgage()];
+                _mortgageIds = [..._mortgageIds, ..._newRowIds(1)];
+              }),
+              icon: const Icon(Icons.add, size: 18),
+              label: Text(_mortgageList.isEmpty ? 'Adicionar bem' : 'Adicionar outro bem'),
+            ),
+          ],
         ],
       ),
     );
@@ -888,6 +980,124 @@ class _CprFormScreenState extends State<CprFormScreen> {
   Future<void> _downloadScr() => _saveAttachment(
         () => AppData.downloadBarterScr(_barter.id),
       );
+
+  /// ESCOLHE E ANEXA o SCR de um avalista — exigido junto com o aval.
+  ///
+  /// Só o ANEXO do avalista é trocado na tela, e não o formulário: quem sobe o
+  /// arquivo pode estar no meio de uma digitação (ver `_pickScr`).
+  Future<void> _pickGuarantorScr(int guarantorId) => _pickChildAttachment(
+        title: 'SCR do avalista',
+        upload: (filename, bytes) => AppData.saveGuarantorScr(
+          _barter.id,
+          guarantorId,
+          filename: filename,
+          bytes: bytes,
+        ),
+        merge: (desk) {
+          final fromServer = desk.cpr?.guarantors.where((g) => g.id == guarantorId);
+          if (fromServer == null || fromServer.isEmpty) return;
+          _guarantors = [
+            for (final g in _guarantors)
+              g.id == guarantorId ? _withScr(g, fromServer.first.scrFile) : g,
+          ];
+        },
+        done: 'SCR do avalista anexado.',
+      );
+
+  /// ESCOLHE E ANEXA o documento de um bem em hipoteca.
+  Future<void> _pickMortgageDocument(int mortgageId) => _pickChildAttachment(
+        title: 'Documento do bem em hipoteca',
+        upload: (filename, bytes) => AppData.saveMortgageDocument(
+          _barter.id,
+          mortgageId,
+          filename: filename,
+          bytes: bytes,
+        ),
+        merge: (desk) {
+          final fromServer = desk.cpr?.mortgages.where((m) => m.id == mortgageId);
+          if (fromServer == null || fromServer.isEmpty) return;
+          _mortgageList = [
+            for (final m in _mortgageList)
+              m.id == mortgageId ? _withDocument(m, fromServer.first.documentFile) : m,
+          ];
+        },
+        done: 'Documento do bem anexado.',
+      );
+
+  /// O avalista como está na tela, com o SCR que o servidor devolveu.
+  static CprGuarantor _withScr(CprGuarantor g, BarterFileModel? scr) => CprGuarantor(
+        id: g.id,
+        scrFile: scr,
+        name: g.name,
+        document: g.document,
+        rg: g.rg,
+        cnh: g.cnh,
+        nationality: g.nationality,
+        profession: g.profession,
+        maritalStatus: g.maritalStatus,
+        fatherName: g.fatherName,
+        motherName: g.motherName,
+        email: g.email,
+        address: g.address,
+        addressNumber: g.addressNumber,
+        city: g.city,
+        spouseName: g.spouseName,
+        spouseDocument: g.spouseDocument,
+        spouseRg: g.spouseRg,
+        spouseNationality: g.spouseNationality,
+        spouseProfession: g.spouseProfession,
+      );
+
+  /// O bem como está na tela, com o documento que o servidor devolveu.
+  static CprMortgage _withDocument(CprMortgage m, BarterFileModel? document) => CprMortgage(
+        id: m.id,
+        documentFile: document,
+        description: m.description,
+        registryNumber: m.registryNumber,
+        registryDistrict: m.registryDistrict,
+        city: m.city,
+        ownerName: m.ownerName,
+        ownerDocument: m.ownerDocument,
+        appraisedValue: m.appraisedValue,
+      );
+
+  /// O caminho comum dos anexos de um item de lista (avalista, bem): escolher,
+  /// subir, e trocar na tela SÓ o anexo do item — ver `_pickScr`.
+  Future<void> _pickChildAttachment({
+    required String title,
+    required Future<CprDesk> Function(String filename, List<int> bytes) upload,
+    required void Function(CprDesk desk) merge,
+    required String done,
+  }) async {
+    final arquivo = await FilePicker.pickFile(
+      dialogTitle: title,
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'png', 'jpg', 'jpeg'],
+    );
+    if (arquivo == null) return;
+    final bytes = await arquivo.readAsBytes();
+    if (!mounted) return;
+
+    setState(() => _uploadingAttachment = true);
+    try {
+      final desk = await upload(arquivo.name, bytes);
+      if (!mounted) return;
+      setState(() {
+        _desk = desk;
+        _uploadingAttachment = false;
+        merge(desk);
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(done),
+        backgroundColor: AppColors.approved,
+        behavior: SnackBarBehavior.floating,
+      ));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _uploadingAttachment = false);
+      showErrorSnack(context, error);
+    }
+  }
 
   Future<void> _downloadInvoice(String invoiceId) => _saveAttachment(
         () => AppData.downloadBarterInvoiceFile(_barter.id, invoiceId),
@@ -985,66 +1195,39 @@ class _CprFormScreenState extends State<CprFormScreen> {
     if (desk == null) return;
 
     final noteCtrl = TextEditingController();
-    // O NÚMERO DA CÉDULA é informado AQUI quando ela ainda não o tem — é a única
-    // coisa da cédula que o emissor escreve, e escreve porque é a única que ele
-    // tem: a numeração vem de fora do sistema (cartório, B3, controle da
-    // credora). O consultor não a conhece quando visita a fazenda.
-    final numberCtrl = TextEditingController(text: desk.cpr?.number ?? '');
-    final precisaNumero = (desk.cpr?.number ?? '').trim().isEmpty;
-    final formKey = GlobalKey<FormState>();
     final confirmado = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Emitir a cédula'),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${_barter.id} • ${_barter.producerName}',
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-              const SizedBox(height: 6),
-              Text(
-                'Emitir é CONFERIR: você afirma que a qualificação, as matrículas e '
-                'a origem da dívida estão corretas. Depois disso a cédula não se '
-                'reescreve — a correção passa a ser de papel.',
-                style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.35),
+        title: Text('Emitir a CPR ${desk.known.cprNumber}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            BarterIdentity(barter: _barter),
+            const SizedBox(height: 6),
+            Text(
+              'Emitir é CONFERIR: você afirma que a qualificação, as matrículas e '
+              'a origem da dívida estão corretas. Depois disso a cédula não se '
+              'reescreve — a correção passa a ser de papel.',
+              style: TextStyle(fontSize: 12, color: AppColors.textMedium, height: 1.35),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: noteCtrl,
+              maxLength: 500,
+              maxLines: 2,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Observação (opcional)',
+                hintText: 'Duas vias impressas, papel timbrado…',
               ),
-              const SizedBox(height: 12),
-              if (precisaNumero)
-                TextFormField(
-                  controller: numberCtrl,
-                  autofocus: true,
-                  textCapitalization: TextCapitalization.characters,
-                  decoration: const InputDecoration(
-                    labelText: 'Nº da CPR',
-                    hintText: 'Como a credora a numera',
-                    isDense: true,
-                  ),
-                  validator: (v) =>
-                      (v ?? '').trim().isEmpty ? 'Informe o número da cédula' : null,
-                ),
-              if (precisaNumero) const SizedBox(height: 10),
-              TextField(
-                controller: noteCtrl,
-                maxLength: 500,
-                maxLines: 2,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  labelText: 'Observação (opcional)',
-                  hintText: 'Duas vias impressas, papel timbrado…',
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           ElevatedButton(
-            onPressed: () {
-              if (formKey.currentState?.validate() ?? true) Navigator.pop(ctx, true);
-            },
+            onPressed: () => Navigator.pop(ctx, true),
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.invoiced),
             child: const Text('Emitir'),
           ),
@@ -1054,11 +1237,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
     if (confirmado != true || !mounted) return;
 
     await _runIssuanceStep(
-      () => AppData.issueBarterCpr(
-        _barter.id,
-        number: numberCtrl.text,
-        note: noteCtrl.text,
-      ),
+      () => AppData.issueBarterCpr(_barter.id, note: noteCtrl.text),
       'Cédula emitida. Agora é a coleta de assinaturas.',
     );
     // O DOCUMENTO sai na sequência: é para isso que a emissão existe, e pedir um
@@ -1207,8 +1386,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${_barter.id} • ${_barter.producerName}',
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                BarterIdentity(barter: _barter),
                 const SizedBox(height: 6),
                 Text(
                   explanation,
@@ -1221,7 +1399,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
                     textCapitalization: TextCapitalization.characters,
                     decoration: const InputDecoration(
                       labelText: 'Nº do registro',
-                      hintText: 'R-4 / 18.442',
                       isDense: true,
                     ),
                   ),
@@ -1231,7 +1408,6 @@ class _CprFormScreenState extends State<CprFormScreen> {
                     textCapitalization: TextCapitalization.words,
                     decoration: const InputDecoration(
                       labelText: 'Onde (opcional)',
-                      hintText: 'CRI Maringá/PR, B3…',
                       isDense: true,
                     ),
                   ),
@@ -1486,6 +1662,67 @@ class _CprFormScreenState extends State<CprFormScreen> {
         ]),
       );
 
+  /// O LOCAL DA ENTREGA como lista suspensa das FILIAIS cadastradas.
+  ///
+  /// Era texto livre, e a mesma filial saía escrita de três jeitos em três
+  /// cédulas. A unidade de retirada da permuta vem pré-selecionada (ver
+  /// [CprDesk.startingPoint]) e a lista continua aberta a outra filial.
+  ///
+  /// Uma filial que saiu do cadastro não pode ser o valor do campo (o
+  /// [DropdownButtonFormField] exige que ele esteja entre os itens): o campo
+  /// abre vazio e o texto gravado aparece embaixo, para a escolha ser feita
+  /// sabendo o que a cédula dizia.
+  Widget _deliveryField(CprKnown known) {
+    final units = AppData.units;
+    final selected = _deliveryUnit?.id;
+    final helper = selected == null && _deliveryPlace.trim().isNotEmpty
+        ? 'Na cédula hoje: ${_deliveryPlace.trim()} — escolha a filial na lista'
+        : known.pickupUnit.isEmpty
+            ? null
+            : 'Retirada da permuta: ${known.pickupUnit}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DropdownButtonFormField<String>(
+        // A chave acompanha a escolha: o `initialValue` só é lido na criação,
+        // e o rascunho recarregado do servidor precisa aparecer no campo.
+        key: ValueKey('delivery-$selected'),
+        initialValue: selected,
+        isExpanded: true,
+        decoration: InputDecoration(
+          labelText: 'Filial onde o grão será entregue',
+          helperText: helper,
+          helperMaxLines: 2,
+          isDense: true,
+        ),
+        disabledHint: Text(
+          units.isEmpty ? 'Nenhuma filial cadastrada ainda.' : (_deliveryUnit?.name ?? '—'),
+          style: const TextStyle(fontSize: 14),
+        ),
+        items: [
+          for (final unit in units)
+            DropdownMenuItem(
+              value: unit.id,
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: unit.name),
+                  if (unit.city.isNotEmpty)
+                    TextSpan(
+                      text: '  ·  ${unit.city}',
+                      style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                    ),
+                ]),
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+        ],
+        onChanged: _canEdit && units.isNotEmpty
+            ? (id) => setState(() => _deliveryUnitId = id)
+            : null,
+      ),
+    );
+  }
+
   /// `caps` desligado onde a maiúscula automática atrapalha: e-mail e números
   /// de documento não são nomes próprios.
   Widget _textField(
@@ -1520,7 +1757,7 @@ class _CprFormScreenState extends State<CprFormScreen> {
           validator: (value) {
             final text = (value ?? '').trim();
             if (text.isEmpty) return null;
-            final parsed = double.tryParse(text.replaceAll(',', '.'));
+            final parsed = parseNumber(text);
             if (parsed == null) return 'Número inválido';
             if (percent && (parsed < 0 || parsed > 100)) return 'Entre 0 e 100';
             return null;
@@ -2155,7 +2392,14 @@ class _KnownCard extends StatelessWidget {
           ]),
           const SizedBox(height: 10),
           _line('Emitente', '${known.emitterName} • ${known.emitterDocument}'),
-          _line('Produto', '${known.grainName} • safra ${known.versionCode}'),
+          // A SAFRA DA CULTURA ("Soja 26/27") e a versão em que a permuta foi
+          // fechada — é a safra que a cédula nomeia.
+          _line(
+            'Produto',
+            known.seasonName.isNotEmpty
+                ? '${known.grainName} • safra ${known.seasonName} (${known.versionCode})'
+                : '${known.grainName} • safra ${known.versionCode}',
+          ),
           _line('Quantidade',
               '${formatSacks(known.sacks)} sacas • ${formatQty(known.quantityKg)} kg'),
           _line('Preço da saca', formatCurrency(known.sackPrice)),
@@ -2367,7 +2611,8 @@ class _SuggestionNote extends StatelessWidget {
       const SizedBox(width: 8),
       Expanded(
         child: Text(
-          'Campos preenchidos a partir da última cédula deste produtor. '
+          'Campos preenchidos a partir da última cédula deste produtor, quando há, '
+          'e do modelo da CPR do grão. '
           'Confira antes de salvar: o que mudou desde então é você quem sabe.',
           style: TextStyle(fontSize: 11.5, color: AppColors.textLight, height: 1.35),
         ),
@@ -2494,18 +2739,54 @@ class _PledgeWarning extends StatelessWidget {
 /// Ela se redesenha a cada tecla a partir do estado da tela (sem controllers
 /// próprios) porque a lista muda de tamanho: com um controller por campo,
 /// remover a primeira área deixaria o texto dela colado na segunda.
-class _AreaCard extends StatelessWidget {
+class _AreaCard extends StatefulWidget {
   final int position;
   final CprArea area;
   final ValueChanged<CprArea> onChanged;
   final VoidCallback onRemove;
 
   const _AreaCard({
+    super.key,
     required this.position,
     required this.area,
     required this.onChanged,
     required this.onRemove,
   });
+
+  @override
+  State<_AreaCard> createState() => _AreaCardState();
+}
+
+class _AreaCardState extends State<_AreaCard> {
+  /// A identidade de cada PROPRIETÁRIO, pelo mesmo motivo das lavouras na
+  /// tela (ver `_areaIds`): a lista muda de tamanho, e a chave não pode ser a
+  /// posição nem o texto. Mora aqui porque só este cartão mexe nela.
+  late List<int> _ownerIds;
+  int _nextOwnerId = 0;
+
+  int get position => widget.position;
+  CprArea get area => widget.area;
+  ValueChanged<CprArea> get onChanged => widget.onChanged;
+  VoidCallback get onRemove => widget.onRemove;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownerIds = _newOwnerIds(widget.area.owners.length);
+  }
+
+  @override
+  void didUpdateWidget(_AreaCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Só este cartão acrescenta e remove proprietários, e ele acerta as
+    // identidades na hora. Se o tamanho divergir mesmo assim, a lista veio de
+    // fora — e campos novos são o certo para mostrá-la.
+    if (_ownerIds.length != widget.area.owners.length) {
+      _ownerIds = _newOwnerIds(widget.area.owners.length);
+    }
+  }
+
+  List<int> _newOwnerIds(int count) => List.generate(count, (_) => _nextOwnerId++);
 
   @override
   Widget build(BuildContext context) {
@@ -2569,15 +2850,21 @@ class _AreaCard extends StatelessWidget {
             (v) => onChanged(area.copyWith(registryDistrict: v))),
         // "Dentro de uma área maior" muda a frase do documento: é a diferença
         // entre penhorar a lavoura e parecer penhorar a fazenda inteira.
-        CheckboxListTile(
-          value: area.withinLargerArea,
-          onChanged: (v) => onChanged(area.copyWith(withinLargerArea: v ?? false)),
-          title: Text('O plantio ocupa parte de uma área maior',
-              style: TextStyle(fontSize: 12.5, color: AppColors.textMedium)),
-          controlAffinity: ListTileControlAffinity.leading,
-          contentPadding: EdgeInsets.zero,
-          visualDensity: VisualDensity.compact,
-          dense: true,
+        //
+        // O `Material` transparente é exigência do ListTile: sem ele, o fundo
+        // do cartão cobre o realce do toque, e o Flutter acusa isso em debug.
+        Material(
+          type: MaterialType.transparency,
+          child: CheckboxListTile(
+            value: area.withinLargerArea,
+            onChanged: (v) => onChanged(area.copyWith(withinLargerArea: v ?? false)),
+            title: Text('O plantio ocupa parte de uma área maior',
+                style: TextStyle(fontSize: 12.5, color: AppColors.textMedium)),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            dense: true,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
@@ -2595,7 +2882,7 @@ class _AreaCard extends StatelessWidget {
           style: TextStyle(fontSize: 11, color: AppColors.textLight),
         ),
         const SizedBox(height: 8),
-        ...area.owners.asMap().entries.map((entry) => Row(children: [
+        ...area.owners.asMap().entries.map((entry) => Row(key: ValueKey(_ownerIds[entry.key]), children: [
               Expanded(
                 flex: 3,
                 child: _field('Nome', entry.value.name, (v) {
@@ -2617,6 +2904,7 @@ class _AreaCard extends StatelessWidget {
                 tooltip: 'Remover proprietário',
                 onPressed: () {
                   final owners = [...area.owners]..removeAt(entry.key);
+                  _ownerIds = [..._ownerIds]..removeAt(entry.key);
                   onChanged(area.copyWith(owners: owners));
                 },
                 icon: Icon(Icons.close, size: 17, color: AppColors.textLight),
@@ -2624,8 +2912,10 @@ class _AreaCard extends StatelessWidget {
               ),
             ])),
         TextButton.icon(
-          onPressed: () =>
-              onChanged(area.copyWith(owners: [...area.owners, const CprOwner()])),
+          onPressed: () {
+            _ownerIds = [..._ownerIds, ..._newOwnerIds(1)];
+            onChanged(area.copyWith(owners: [...area.owners, const CprOwner()]));
+          },
           icon: const Icon(Icons.add, size: 16),
           label: const Text('Adicionar proprietário'),
           style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
@@ -2639,10 +2929,10 @@ class _AreaCard extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: TextFormField(
-          // A chave amarra o campo à POSIÇÃO na lista: sem ela, remover a
-          // primeira lavoura faria o Flutter reaproveitar o campo de texto e o
-          // conteúdo apareceria na linha seguinte.
-          key: ValueKey('$label-$position-${value.hashCode}'),
+          // SEM CHAVE, e de propósito: quem amarra o campo à lavoura certa é a
+          // chave do CARTÃO (e a da linha, nos proprietários). Uma chave com o
+          // conteúdo mudava a cada letra, recriava o campo e tirava o foco de
+          // quem estava digitando.
           initialValue: value,
           onChanged: onChanged,
           keyboardType:
@@ -2671,11 +2961,21 @@ class _GuarantorCard extends StatelessWidget {
   final ValueChanged<CprGuarantor> onChanged;
   final VoidCallback onRemove;
 
+  /// O SCR do avalista: anexar (null quando não pode — inclusive antes de
+  /// salvar, porque o anexo sobe pelo id) e baixar.
+  final bool uploading;
+  final VoidCallback? onPickScr;
+  final VoidCallback? onOpenScr;
+
   const _GuarantorCard({
+    super.key,
     required this.position,
     required this.guarantor,
     required this.onChanged,
     required this.onRemove,
+    required this.uploading,
+    required this.onPickScr,
+    required this.onOpenScr,
   });
 
   @override
@@ -2795,6 +3095,15 @@ class _GuarantorCard extends StatelessWidget {
                     (v) => onChanged(guarantor.copyWith(spouseProfession: v)))),
           ]),
         ],
+        // O SCR DO AVALISTA — obrigatório, pelo mesmo motivo do do emitente.
+        _ItemAttachment(
+          file: guarantor.scrFile,
+          saved: guarantor.id != null,
+          missing: 'SCR do avalista ainda não anexado',
+          uploading: uploading,
+          onPick: onPickScr,
+          onOpen: onOpenScr,
+        ),
       ]),
     );
   }
@@ -2804,9 +3113,8 @@ class _GuarantorCard extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.only(bottom: 10),
         child: TextFormField(
-          // A chave amarra o campo à POSIÇÃO na lista — sem ela, remover o
-          // primeiro avalista faria o texto dele reaparecer no segundo.
-          key: ValueKey('aval-$label-$position-${value.hashCode}'),
+          // SEM CHAVE: quem amarra o campo ao avalista certo é a chave do
+          // cartão. Ver `_AreaCard._field`.
           initialValue: value,
           onChanged: onChanged,
           textCapitalization:
@@ -2814,6 +3122,191 @@ class _GuarantorCard extends StatelessWidget {
           decoration: InputDecoration(labelText: label, isDense: true),
         ),
       );
+}
+
+/// UM BEM DADO EM HIPOTECA — o cadastro campo por campo e o documento anexado.
+class _MortgageCard extends StatelessWidget {
+  final int position;
+  final CprMortgage mortgage;
+  final ValueChanged<CprMortgage> onChanged;
+  final VoidCallback onRemove;
+  final bool uploading;
+  final VoidCallback? onPickDocument;
+  final VoidCallback? onOpenDocument;
+
+  const _MortgageCard({
+    super.key,
+    required this.position,
+    required this.mortgage,
+    required this.onChanged,
+    required this.onRemove,
+    required this.uploading,
+    required this.onPickDocument,
+    required this.onOpenDocument,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Expanded(
+            child: Text('${position + 1}º bem em hipoteca',
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
+          ),
+          IconButton(
+            tooltip: 'Remover bem',
+            onPressed: onRemove,
+            icon: Icon(Icons.delete_outline, size: 19, color: AppColors.textLight),
+            visualDensity: VisualDensity.compact,
+          ),
+        ]),
+        _f('Descrição do bem', mortgage.description,
+            (v) => onChanged(mortgage.copyWith(description: v)),
+            hint: 'Imóvel rural — Fazenda Boa Vista, 120 ha'),
+        Row(children: [
+          Expanded(
+              child: _f('Matrícula', mortgage.registryNumber,
+                  (v) => onChanged(mortgage.copyWith(registryNumber: v)),
+                  caps: false)),
+          const SizedBox(width: 10),
+          Expanded(
+              child: _f('Comarca do registro', mortgage.registryDistrict,
+                  (v) => onChanged(mortgage.copyWith(registryDistrict: v)))),
+        ]),
+        Row(children: [
+          Expanded(
+              child: _f('Município/UF', mortgage.city,
+                  (v) => onChanged(mortgage.copyWith(city: v)))),
+          const SizedBox(width: 10),
+          Expanded(
+              child: _f(
+                  'Valor de avaliação (R\$)',
+                  mortgage.appraisedValue == 0 ? '' : _decimalOf(mortgage.appraisedValue),
+                  (v) => onChanged(mortgage.copyWith(appraisedValue: parseNumberOr(v))),
+                  caps: false,
+                  numeric: true)),
+        ]),
+        Row(children: [
+          Expanded(
+              child: _f('Proprietário', mortgage.ownerName,
+                  (v) => onChanged(mortgage.copyWith(ownerName: v)))),
+          const SizedBox(width: 10),
+          Expanded(
+              child: _f('CPF/CNPJ do proprietário', mortgage.ownerDocument,
+                  (v) => onChanged(mortgage.copyWith(ownerDocument: v)),
+                  caps: false)),
+        ]),
+        // O DOCUMENTO DO BEM — a matrícula atualizada, a certidão de ônus.
+        _ItemAttachment(
+          file: mortgage.documentFile,
+          saved: mortgage.id != null,
+          missing: 'Documento do bem ainda não anexado (matrícula atualizada)',
+          uploading: uploading,
+          onPick: onPickDocument,
+          onOpen: onOpenDocument,
+        ),
+      ]),
+    );
+  }
+
+  static String _decimalOf(double value) =>
+      value == value.roundToDouble() ? value.toStringAsFixed(0) : value.toString();
+
+  Widget _f(String label, String value, ValueChanged<String> onChanged,
+          {bool caps = true, bool numeric = false, String? hint}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: TextFormField(
+          // SEM CHAVE: quem amarra o campo ao bem certo é a chave do cartão.
+          initialValue: value,
+          onChanged: onChanged,
+          keyboardType:
+              numeric ? const TextInputType.numberWithOptions(decimal: true) : null,
+          textCapitalization: caps ? TextCapitalization.sentences : TextCapitalization.none,
+          decoration: InputDecoration(labelText: label, hintText: hint, isDense: true),
+        ),
+      );
+}
+
+/// O ANEXO de um item de lista — o SCR do avalista, o documento do bem.
+///
+/// Diz três coisas diferentes, e a terceira é a que se esquece: anexado (com o
+/// nome e o botão de baixar), faltando, e "salve antes" — o anexo sobe pelo id
+/// do item no servidor, e o item recém-acrescentado ainda não tem um.
+class _ItemAttachment extends StatelessWidget {
+  final BarterFileModel? file;
+  final bool saved;
+  final String missing;
+  final bool uploading;
+  final VoidCallback? onPick;
+  final VoidCallback? onOpen;
+
+  const _ItemAttachment({
+    required this.file,
+    required this.saved,
+    required this.missing,
+    required this.uploading,
+    required this.onPick,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final anexado = file != null;
+    final cor = anexado ? AppColors.approved : AppColors.pending;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: anexado ? AppColors.approvedBg : AppColors.pendingBg,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: cor.withValues(alpha: 0.35)),
+      ),
+      child: Row(children: [
+        Icon(anexado ? Icons.picture_as_pdf_outlined : Icons.upload_file_outlined,
+            size: 18, color: cor),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            anexado
+                ? file!.fileName
+                : saved
+                    ? missing
+                    : '$missing — salve a cédula para poder anexar',
+            style: TextStyle(fontSize: 12, color: AppColors.textDark),
+          ),
+        ),
+        if (anexado && onOpen != null)
+          IconButton(
+            tooltip: 'Baixar',
+            onPressed: onOpen,
+            icon: const Icon(Icons.download_outlined, size: 18),
+            visualDensity: VisualDensity.compact,
+          ),
+        if (onPick != null)
+          uploading
+              ? const Padding(
+                  padding: EdgeInsets.all(10),
+                  child: SizedBox(
+                      width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                )
+              : IconButton(
+                  tooltip: anexado ? 'Substituir' : 'Anexar',
+                  onPressed: onPick,
+                  icon: Icon(anexado ? Icons.autorenew : Icons.attach_file, size: 18),
+                  visualDensity: VisualDensity.compact,
+                ),
+      ]),
+    );
+  }
 }
 
 class _Retry extends StatelessWidget {

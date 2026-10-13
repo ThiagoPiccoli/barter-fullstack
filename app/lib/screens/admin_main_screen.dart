@@ -3,13 +3,16 @@ import '../branding/active_brand.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
+import '../services/dashboard_stats.dart';
 import '../services/api/api_client.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
+import '../widgets/dashboard_widgets.dart';
 import 'barters_screen.dart';
 import 'barter_detail_screen.dart';
 import 'prices_screen.dart';
 import 'consultants_screen.dart';
+import 'back_office_main_screen.dart';
 
 class AdminMainScreen extends StatefulWidget {
   final UserModel admin;
@@ -28,7 +31,10 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
     super.initState();
     _screens = [
       _AdminDashboardTab(admin: widget.admin, onNavigate: (i) => setState(() => _selectedIndex = i)),
-      const BartersScreen(isAdmin: true, consultantId: null),
+      // As filas dos quatro postos da linha: o admin tem todas as capacidades,
+      // e age em qualquer etapa.
+      WorkQueuesTab(user: widget.admin, onQueueChanged: () => setState(() {})),
+      BartersScreen(isAdmin: true, consultantId: null, onChanged: () => setState(() {})),
       const PricesScreen(),
       const ConsultantsScreen(),
     ];
@@ -46,6 +52,12 @@ class _AdminMainScreenState extends State<AdminMainScreen> {
           icon: Icons.dashboard_outlined,
           activeIcon: Icons.dashboard,
           label: 'Dashboard',
+        ),
+        AdaptiveDestination(
+          icon: Icons.inbox_outlined,
+          activeIcon: Icons.inbox,
+          label: 'Filas',
+          badgeCount: workQueuesCount(widget.admin),
         ),
         AdaptiveDestination(
           icon: Icons.swap_horiz_outlined,
@@ -92,65 +104,15 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
 
   @override
   Widget build(BuildContext context) {
-    // Aprovadas E faturadas: os totais do painel são sobre negócio FECHADO, e
-    // faturar não desfaz a aprovação (ver BarterModel.wasApproved).
-    final approvedList = AppData.barters.where((b) => b.wasApproved).toList();
-    // Pendentes da mais antiga para a mais nova: são a fila de "ação necessária".
-    final pendingList = AppData.barters.where((b) => b.status == BarterStatus.pending).toList()
-      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    // O total de FECHADAS (aprovadas + faturadas): é ele que os números em R$ e
-    // em sacas descrevem, e é o mesmo recorte de `approvedList`.
-    final approved = approvedList.length;
-    // A BARRA DE STATUS é a outra pergunta — ela conta os POSTOS da linha, um a
-    // um. Aqui "a faturar" e "faturadas" andam separadas de propósito: somadas,
-    // esconderiam justamente o que ainda tem trabalho pela frente.
-    final toInvoice = AppData.barters.where((b) => b.awaitsInvoice).length;
-    final invoiced = AppData.barters.where((b) => b.isInvoiced).length;
-    final pending = pendingList.length;
-    final denied = AppData.barters.where((b) => b.status == BarterStatus.denied).length;
-    // Ainda na mesa do gerente: não está no comitê nem aprovada, e somá-la a
-    // qualquer uma das duas contaria como decidido o que ninguém decidiu.
-    final atManager = AppData.barters.where((b) => b.awaitsManager).length;
-
-    // Sacas a receber: o grão que os produtores entregarão pelas permutas
-    // aprovadas — o "a receber" da empresa, em saca, na colheita.
-    final sacksReceivable = approvedList.fold<double>(0, (s, b) => s + b.totalGrainQty);
-    final grainValue = approvedList.fold<double>(0, (s, b) => s + b.grainCredit);
-    final inputsValue = approvedList.fold<double>(0, (s, b) => s + b.inputCost);
-    // Sacas ainda no comitê (potencial a entrar se aprovadas).
-    final pendingSacks = pendingList.fold<double>(0, (s, b) => s + b.totalGrainQty);
-    // Produtores distintos com permuta aprovada.
-    final activeProducers = approvedList.map((b) => b.producerId).toSet().length;
-
-    // Sacas a receber agrupadas por grão de pagamento (soja, milho, trigo...).
-    final byGrain = <String, double>{};
-    for (final b in approvedList) {
-      final name = b.referenceGrainName.isEmpty ? 'sem grão' : b.referenceGrainName;
-      byGrain[name] = (byGrain[name] ?? 0) + b.totalGrainQty;
-    }
-    final grainEntries = byGrain.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-    // Volume (sacas) por filial do consultor.
-    final byBranch = <String, double>{};
-    for (final b in approvedList) {
-      byBranch[b.consultantBranch] = (byBranch[b.consultantBranch] ?? 0) + b.totalGrainQty;
-    }
-    final branchEntries = byBranch.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-
-    // Insumos mais retirados (R$) nas permutas aprovadas — o lado insumo da
-    // história, que origina o custo e, por consequência, as sacas.
-    final byInput = <String, double>{};
-    for (final b in approvedList) {
-      for (final it in b.inputs) {
-        byInput[it.productName] = (byInput[it.productName] ?? 0) + it.total;
-      }
-    }
-    final topInputs = (byInput.entries.toList()..sort((a, b) => b.value.compareTo(a.value)))
-        .take(5)
-        .toList();
-
-    // Ticket médio em sacas por permuta aprovada.
-    final avgSacks = approved > 0 ? sacksReceivable / approved : 0.0;
+    // OS NÚMEROS DO PAINEL saem de `services/dashboard_stats.dart`, e não
+    // daqui: quem conta como negócio fechado, como as permutas se agrupam e há
+    // quanto tempo a fila espera são decisões de DOMÍNIO — "faturada ainda
+    // conta como aprovada" é regra, não layout. Dentro do `build` elas eram
+    // reescritas a cada mudança de tela e não tinham teste fora do widget.
+    final stats = statsOf(AppData.barters);
+    final phases = phaseCounts(AppData.barters);
+    final visible = backOfficePhases.where((p) => (phases[p] ?? 0) > 0).toList();
+    final total = visible.fold(0, (sum, p) => sum + phases[p]!);
 
     return Scaffold(
       appBar: AppBar(
@@ -175,112 +137,121 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
             ),
             const SizedBox(height: 16),
 
-            // Estrela do painel: o compromisso de entrega de grãos das aprovadas.
-            _ReceivableHero(
-              sacks: sacksReceivable,
-              value: grainValue,
-              approvedCount: approved,
-              pendingSacks: pendingSacks,
-              pendingCount: pending,
+            // Estrela do painel: a ÁREA FEITA — a lavoura que as permutas
+            // fechadas cobrem — e o investimento médio por hectare dela. As
+            // sacas a receber continuam no cartão, como a outra ponta da conta.
+            _AreaHero(
+              stats: stats,
+              pendingArea: areaOf(stats.pending),
               onTapPending: () => onNavigate(1),
             ),
             const SizedBox(height: 16),
 
-            _InsightStrip(
-              insumosValue: inputsValue,
-              activeProducers: activeProducers,
-              avgSacks: avgSacks,
-            ),
-            const SizedBox(height: 20),
-
-            // Os dois lados da mesma história — o insumo retirado, que origina o
-            // custo, e a saca que vai cobri-lo. Lidos juntos quando a tela
-            // permite; empilhados quando não permite.
-            if (topInputs.isNotEmpty || grainEntries.isNotEmpty) ...[
-              AdaptiveColumns(
-                children: [
-                  if (topInputs.isNotEmpty)
-                    _DashboardSection(
-                      title: '${brand.copy.inputPluralTitle} Mais Retirados',
-                      child: _RankingBars(
-                          entries: topInputs,
-                          formatValue: formatCurrency,
-                          color: AppColors.input),
-                    ),
-                  if (grainEntries.isNotEmpty)
-                    _DashboardSection(
-                      title: 'Sacas a Receber por ${brand.copy.grainTitle}',
-                      child: _GrainBreakdownCard(
-                          entries: grainEntries, total: sacksReceivable),
-                    ),
-                ],
+            // A OPERAÇÃO NUM OLHAR: cada número com o seu desdobramento ao lado.
+            // Os rankings (insumos, safras, filiais) e as fases moravam em
+            // blocos espalhados pelo painel, e quem lia "R$ 293 mil em insumos"
+            // tinha de rolar até achar QUAIS insumos.
+            KpiGrid(tiles: [
+              KpiTile(
+                icon: Icons.swap_horiz,
+                color: AppColors.primary,
+                label: '${brand.copy.barterPluralTitle} por status',
+                value: '$total',
+                caption: 'na linha de produção',
+                onTap: () => onNavigate(2),
+                child: visible.isEmpty
+                    ? null
+                    : PhaseBreakdown(counts: phases, phases: visible, dense: true),
               ),
-              const SizedBox(height: 20),
-            ],
-
-            Text('${brand.copy.barterPluralTitle} por Status',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-            const SizedBox(height: 12),
-            _StatusBreakdownCard(
-              atManager: atManager,
-              pending: pending,
-              toInvoice: toInvoice,
-              invoiced: invoiced,
-              denied: denied,
-            ),
-            const SizedBox(height: 20),
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // O ADMIN NÃO DECIDE MAIS: esta lista era a fila de ação dele e
-                // passou a ser acompanhamento — quem decide é o comitê. Ela fica
-                // porque continua sendo a pergunta do painel ("o que está
-                // parado, e há quanto tempo?"), mas o título não pode chamar de
-                // ação de quem está olhando o que é trabalho de outra pessoa.
-                Text('No Comitê, Esperando Decisão',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                TextButton(
-                  onPressed: () => onNavigate(1),
-                  child: Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
+              KpiTile(
+                icon: Icons.science_outlined,
+                color: AppColors.input,
+                label: '${brand.copy.inputPluralTitle} liberados',
+                value: formatCompactCurrency(stats.inputsValue),
+                caption: 'em ${stats.closedCount} permutas aprovadas',
+                child: rankingBars(
+                  topInputs(stats.closed),
+                  format: formatCompactCurrency,
+                  color: AppColors.input,
+                  empty: 'Nenhum insumo liberado ainda.',
                 ),
-              ],
+              ),
+              KpiTile(
+                icon: Icons.agriculture,
+                color: AppColors.primary,
+                label: 'Produtores ativos',
+                value: '${stats.activeProducers}',
+                caption: 'com permuta aprovada • os que mais devem',
+                child: rankingBars(
+                  sacksByProducer(stats.closed),
+                  format: formatSacks,
+                  color: AppColors.primaryAccent,
+                  empty: 'Nenhum produtor com permuta aprovada.',
+                ),
+              ),
+              KpiTile(
+                icon: Icons.grass,
+                color: AppColors.grain,
+                label: 'Ticket médio',
+                value: formatSacks(stats.averageSacks),
+                caption: 'por permuta aprovada',
+                child: KpiFacts(facts: [
+                  KpiFact('Área média', areaLabelOf(stats.averageArea)),
+                  KpiFact('Insumos por permuta', formatCompactCurrency(stats.averageInputsValue)),
+                  KpiFact('Investimento médio', formatInvestment(stats.investmentPerHa)),
+                  KpiFact('No comitê', '${stats.pendingCount} • ${formatSacks(stats.pendingSacks)}'),
+                ]),
+              ),
+              KpiTile(
+                icon: Icons.eco_outlined,
+                color: AppColors.grain,
+                label: 'Sacas a receber por safra',
+                value: formatSacks(stats.sacksReceivable),
+                caption: '≈ ${formatCompactCurrency(stats.grainValue)} na colheita',
+                child: seasonSacksBars(AppData.barters),
+              ),
+              KpiTile(
+                icon: Icons.store_outlined,
+                color: AppColors.primaryAccent,
+                label: 'Volume por filial',
+                value: '${sacksByBranch(stats.closed).length}',
+                caption: 'filiais com permuta aprovada',
+                child: rankingBars(
+                  sacksByBranch(stats.closed),
+                  format: formatSacks,
+                  color: AppColors.primaryAccent,
+                  empty: 'Nenhuma permuta aprovada ainda.',
+                ),
+              ),
+            ]),
+            const SizedBox(height: 24),
+
+            // O QUE PEDE AÇÃO fica embaixo dos números, em lista: é para abrir
+            // uma a uma, e não para ler de relance.
+            DashboardSectionTitle(
+              'No Comitê, Esperando Decisão',
+              // "Ver todas" leva à aba Filas, onde o admin também decide.
+              trailing: TextButton(
+                onPressed: () => onNavigate(1),
+                child: Text('Ver todas', style: TextStyle(fontSize: 12, color: AppColors.primaryMedium)),
+              ),
             ),
             const SizedBox(height: 8),
-            if (pendingList.isEmpty)
+            if (stats.pending.isEmpty)
               const _EmptyHint(
                 icon: Icons.check_circle_outline,
                 text: 'Nenhuma permuta esperando o comitê. Tudo em dia!',
               )
             else
-              ...pendingList.map((b) => _PendingActionCard(barter: b)),
+              ...stats.pending.map((b) => _PendingActionCard(barter: b)),
             const SizedBox(height: 20),
 
-            // O rodapé do painel: o volume por filial e o que andou. Nenhum dos
-            // dois pede ação, e é por isso que podem dividir a mesma faixa.
-            AdaptiveColumns(
-              children: [
-                if (branchEntries.isNotEmpty)
-                  _DashboardSection(
-                    title: 'Volume por Filial',
-                    child: _RankingBars(
-                        entries: branchEntries,
-                        formatValue: formatSacks,
-                        color: AppColors.primaryAccent),
-                  ),
-                _DashboardSection(
-                  title: 'Atividade Recente',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: AppData.barters
-                        .where((b) => b.status != BarterStatus.pending)
-                        .take(3)
-                        .map((b) => MiniBarterCard(barter: b, isAdmin: true))
-                        .toList(),
-                  ),
-                ),
-              ],
-            ),
+            DashboardSectionTitle('Atividade Recente'),
+            const SizedBox(height: 12),
+            ...AppData.barters
+                .where((b) => b.status != BarterStatus.pending)
+                .take(3)
+                .map((b) => MiniBarterCard(barter: b, isAdmin: true)),
             const SizedBox(height: 16),
           ],
           ),
@@ -296,56 +267,27 @@ class _AdminDashboardTabState extends State<_AdminDashboardTab> {
   }
 }
 
-/// Um bloco do painel: o título e o que ele apresenta.
+/// Cartão-herói: a ÁREA FEITA — os hectares de lavoura que as permutas
+/// aprovadas cobrem — como número-estrela, com o investimento médio por hectare
+/// ao lado, as sacas a receber embaixo e o que ainda está parado no comitê.
 ///
-/// Existe para o bloco poder virar coluna dentro de [AdaptiveColumns] — solto na
-/// lista, o título e o conteúdo eram dois irmãos separados por um `SizedBox`, e
-/// não havia o que colocar lado a lado.
-class _DashboardSection extends StatelessWidget {
-  final String title;
-  final Widget child;
-  const _DashboardSection({required this.title, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(title,
-            style: TextStyle(
-                fontSize: 15, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-        const SizedBox(height: 12),
-        child,
-      ],
-    );
-  }
-}
-
-/// Cor do grão [i] no painel (soja, milho, trigo, aveia...). A série vem da
-/// marca ativa e é cíclica, então qualquer grão cadastrado ganha cor sem
-/// prender o app à soja — e sem prender o painel à paleta de um cliente.
-Color _grainColor(int i) => AppColors.series(i);
-
-/// Cartão-herói: as sacas a receber (compromisso de entrega das permutas
-/// aprovadas) como número-estrela, com o valor em R$ e o potencial parado no comitê.
-class _ReceivableHero extends StatelessWidget {
-  final double sacks;
-  final double value;
-  final int approvedCount;
-  final double pendingSacks;
-  final int pendingCount;
+/// A área entrou no lugar das sacas porque é a medida que se compara entre
+/// culturas: sacas de soja e de milho não somam, hectares somam. As sacas não
+/// saíram do cartão — são o numerador do investimento, e é por isso que ficam
+/// logo abaixo dele.
+class _AreaHero extends StatelessWidget {
+  final BarterStats stats;
+  final double pendingArea;
   final VoidCallback onTapPending;
-  const _ReceivableHero({
-    required this.sacks,
-    required this.value,
-    required this.approvedCount,
-    required this.pendingSacks,
-    required this.pendingCount,
+  const _AreaHero({
+    required this.stats,
+    required this.pendingArea,
     required this.onTapPending,
   });
 
   @override
   Widget build(BuildContext context) {
+    final perHa = stats.investmentPerHa;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -357,7 +299,7 @@ class _ReceivableHero extends StatelessWidget {
         children: [
           Row(
             children: [
-              Text('Sacas a Receber',
+              Text('Área Total Feita',
                   style: TextStyle(color: AppColors.onPrimaryMuted, fontSize: 13, fontWeight: FontWeight.w600)),
               const Spacer(),
               Container(
@@ -366,22 +308,43 @@ class _ReceivableHero extends StatelessWidget {
                   color: AppColors.onPrimaryOverlay,
                   borderRadius: BorderRadius.circular(20),
                 ),
-                child: Text('$approvedCount aprovadas',
+                child: Text('${stats.closedCount} aprovadas',
                     style: TextStyle(color: AppColors.onPrimary, fontSize: 11, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
           const SizedBox(height: 6),
-          Text.rich(
-            TextSpan(children: [
-              TextSpan(
-                text: formatSacks(sacks),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: 16,
+            runSpacing: 4,
+            children: [
+              Text(
+                areaLabelOf(stats.area),
                 style: TextStyle(color: AppColors.onPrimary, fontSize: 34, fontWeight: FontWeight.w800),
               ),
-            ]),
+              if (perHa != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(formatSacksPerHa(perHa),
+                          style: TextStyle(
+                              color: AppColors.onPrimary, fontSize: 18, fontWeight: FontWeight.w800)),
+                      Text('investimento médio',
+                          style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 11)),
+                    ],
+                  ),
+                ),
+            ],
           ),
-          Text('≈ ${formatCurrency(value)} em grãos na colheita',
-              style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12)),
+          Text(
+            '${formatSacks(stats.sacksReceivable)} a receber '
+            '≈ ${formatCurrency(stats.grainValue)} em grãos na colheita',
+            style: TextStyle(color: AppColors.onPrimarySubtle, fontSize: 12),
+          ),
           const SizedBox(height: 14),
           InkWell(
             onTap: onTapPending,
@@ -398,8 +361,8 @@ class _ReceivableHero extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      pendingCount > 0
-                          ? '$pendingCount no comitê • +${formatSacks(pendingSacks)} se aprovadas'
+                      stats.pendingCount > 0
+                          ? '${stats.pendingCount} no comitê • +${areaLabelOf(pendingArea)} se aprovadas'
                           : 'Nenhuma permuta esperando o comitê',
                       style: TextStyle(color: AppColors.onPrimary, fontSize: 12, fontWeight: FontWeight.w500),
                     ),
@@ -415,219 +378,8 @@ class _ReceivableHero extends StatelessWidget {
   }
 }
 
-/// Mix das sacas a receber por grão: barra empilhada + legenda com sacas e %.
-class _GrainBreakdownCard extends StatelessWidget {
-  final List<MapEntry<String, double>> entries;
-  final double total;
-  const _GrainBreakdownCard({required this.entries, required this.total});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: SizedBox(
-                height: 12,
-                child: Row(
-                  children: [
-                    for (var i = 0; i < entries.length; i++)
-                      Expanded(
-                        flex: (entries[i].value * 100).round().clamp(1, 1 << 30),
-                        child: Container(color: _grainColor(i)),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            for (var i = 0; i < entries.length; i++) ...[
-              if (i > 0) const SizedBox(height: 10),
-              Row(
-                children: [
-                  Container(width: 10, height: 10,
-                      decoration: BoxDecoration(color: _grainColor(i), shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(entries[i].key,
-                        style: TextStyle(fontSize: 13, color: AppColors.textDark, fontWeight: FontWeight.w500)),
-                  ),
-                  Text(formatSacks(entries[i].value),
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 42,
-                    child: Text(
-                      total > 0 ? '${(entries[i].value / total * 100).round()}%' : '0%',
-                      textAlign: TextAlign.end,
-                      style: TextStyle(fontSize: 12, color: AppColors.textLight),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Moeda compacta para faixas estreitas: "R$ 125,2 mil" / "R$ 1,3 mi".
-String _compactCurrency(double v) {
-  String n(double x) => x.toStringAsFixed(1).replaceAll('.', ',');
-  if (v >= 1000000) return 'R\$ ${n(v / 1000000)} mi';
-  if (v >= 1000) return 'R\$ ${n(v / 1000)} mil';
-  return formatCurrency(v);
-}
-
-/// Faixa enxuta de 3 indicadores secundários, separados por divisórias. Substitui
-/// um grid de cards genéricos por algo compacto que não repete o herói/status.
-class _InsightStrip extends StatelessWidget {
-  final double insumosValue;
-  final int activeProducers;
-  final double avgSacks;
-  const _InsightStrip({
-    required this.insumosValue,
-    required this.activeProducers,
-    required this.avgSacks,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-        child: IntrinsicHeight(
-          child: Row(
-            children: [
-              Expanded(
-                child: _StripCell(
-                  icon: Icons.science_outlined,
-                  color: AppColors.input,
-                  value: _compactCurrency(insumosValue),
-                  label: 'Insumos liberados',
-                ),
-              ),
-              const VerticalDivider(width: 1, indent: 4, endIndent: 4),
-              Expanded(
-                child: _StripCell(
-                  icon: Icons.agriculture,
-                  color: AppColors.primary,
-                  value: '$activeProducers',
-                  label: 'Produtores ativos',
-                ),
-              ),
-              const VerticalDivider(width: 1, indent: 4, endIndent: 4),
-              Expanded(
-                child: _StripCell(
-                  icon: Icons.grass,
-                  color: AppColors.grain,
-                  value: formatSacks(avgSacks),
-                  label: 'Ticket médio',
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StripCell extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String value;
-  final String label;
-  const _StripCell({required this.icon, required this.color, required this.value, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 18),
-        const SizedBox(height: 6),
-        FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Text(value,
-              maxLines: 1,
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.textDark)),
-        ),
-        const SizedBox(height: 2),
-        Text(label,
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-      ],
-    );
-  }
-}
-
-/// Ranking genérico (filiais, insumos...) com barra proporcional ao maior valor.
-/// [formatValue] decide se o valor sai em sacas, R$, etc.
-class _RankingBars extends StatelessWidget {
-  final List<MapEntry<String, double>> entries;
-  final String Function(double) formatValue;
-  final Color color;
-  const _RankingBars({required this.entries, required this.formatValue, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final max = entries.first.value;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            for (var i = 0; i < entries.length; i++) ...[
-              if (i > 0) const SizedBox(height: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(entries[i].key,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(formatValue(entries[i].value),
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                    ],
-                  ),
-                  const SizedBox(height: 5),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: max > 0 ? entries[i].value / max : 0,
-                      minHeight: 7,
-                      backgroundColor: AppColors.primarySurface,
-                      valueColor: AlwaysStoppedAnimation(color),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Card de permuta parada no comitê, com o tempo de espera ("há X dias")
 /// destacado. Quanto mais antiga, mais quente a cor.
-///
-/// Para o admin isto é ACOMPANHAMENTO, não fila: ele não decide permuta. O
-/// tempo de espera continua sendo a informação que importa — uma permuta parada
-/// há três semanas é assunto de quem administra a operação, mesmo que a decisão
-/// seja de outro.
 class _PendingActionCard extends StatelessWidget {
   final BarterModel barter;
   const _PendingActionCard({required this.barter});
@@ -652,51 +404,41 @@ class _PendingActionCard extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Row(
+          // O trilho acompanha a altura da identificação, que tem duas ou três
+          // linhas conforme quem lê recebe a área e o investimento.
+          child: IntrinsicHeight(
+            child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Container(
                 width: 4,
-                height: 46,
                 decoration: BoxDecoration(color: urgency, borderRadius: BorderRadius.circular(2)),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
+                child: BarterIdentity(
+                  barter: barter,
+                  trailing: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: urgency.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(barter.id,
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: urgency.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.schedule, size: 11, color: urgency),
-                              const SizedBox(width: 3),
-                              Text(waitLabel,
-                                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: urgency)),
-                            ],
-                          ),
-                        ),
+                        Icon(Icons.schedule, size: 11, color: urgency),
+                        const SizedBox(width: 3),
+                        Text(waitLabel,
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: urgency)),
                       ],
                     ),
-                    const SizedBox(height: 3),
-                    Text('${barter.consultantName} • ${barter.producerName}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-                  ],
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
@@ -710,6 +452,7 @@ class _PendingActionCard extends StatelessWidget {
               ),
               Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
             ],
+            ),
           ),
         ),
       ),
@@ -741,90 +484,3 @@ class _EmptyHint extends StatelessWidget {
     );
   }
 }
-
-class _StatusBreakdownCard extends StatelessWidget {
-  final int atManager, pending, toInvoice, invoiced, denied;
-  const _StatusBreakdownCard({
-    required this.atManager,
-    required this.pending,
-    required this.toInvoice,
-    required this.invoiced,
-    required this.denied,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: SizedBox(
-                height: 12,
-                child: Row(
-                  children: [
-                    // Na ordem do fluxo, e não na do tamanho: a barra lida da
-                    // esquerda para a direita conta o caminho da permuta.
-                    if (atManager > 0)
-                      Expanded(flex: atManager, child: Container(color: AppColors.atManager)),
-                    if (pending > 0) Expanded(flex: pending, child: Container(color: AppColors.pending)),
-                    if (toInvoice > 0)
-                      Expanded(flex: toInvoice, child: Container(color: AppColors.approved)),
-                    if (invoiced > 0)
-                      Expanded(flex: invoiced, child: Container(color: AppColors.invoiced)),
-                    if (denied > 0) Expanded(flex: denied, child: Container(color: AppColors.denied)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              alignment: WrapAlignment.spaceAround,
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                _LegendItem(color: AppColors.atManager, label: 'No Gerente', count: atManager),
-                _LegendItem(color: AppColors.pending, label: 'No Comitê', count: pending),
-                _LegendItem(color: AppColors.approved, label: 'A Faturar', count: toInvoice),
-                _LegendItem(color: AppColors.invoiced, label: 'Faturadas', count: invoiced),
-                _LegendItem(color: AppColors.denied, label: 'Negadas', count: denied),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _LegendItem extends StatelessWidget {
-  final Color color;
-  final String label;
-  final int count;
-  const _LegendItem({required this.color, required this.label, required this.count});
-
-  @override
-  Widget build(BuildContext context) {
-    // `MainAxisSize.min` nos dois eixos, e não por economia: o [Wrap] que
-    // hospeda a legenda entrega a cada item a largura INTEIRA do cartão como
-    // folga. Com o `Row` no padrão (`max`), cada item esticava até a borda,
-    // caía sozinho numa linha e empurrava o número para o meio do cartão —
-    // cinco linhas de legenda no lugar da faixa única que o `spaceAround`
-    // pressupõe.
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-          const SizedBox(width: 4),
-          Text(label, style: TextStyle(fontSize: 11, color: AppColors.textMedium)),
-        ]),
-        const SizedBox(height: 4),
-        Text('$count', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: color)),
-      ],
-    );
-  }
-}
-

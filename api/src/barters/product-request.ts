@@ -102,13 +102,16 @@ export const PRODUCT_REQUEST_LABELS: Record<ProductRequestAction, string> = {
  *
  * Vem da esteira, e não de uma lista escrita à mão, pela razão de sempre: uma
  * etapa nova antes do comitê entra sozinha; uma depois dele fica de fora
- * sozinha. São os três estados anteriores à decisão — e o rascunho é o primeiro
- * deles, não uma exceção.
+ * sozinha. São os estados anteriores à decisão — e o rascunho é o primeiro
+ * deles, não uma exceção. A permuta DEVOLVIDA COM EXIGÊNCIAS também está aqui:
+ * ela ainda não foi decidida, e o comitê vai lê-la inteira de novo quando ela
+ * voltar.
  */
 export const PRODUCT_REQUEST_WINDOW: readonly BarterStatus[] = [
   BARTER_STATUS.draft,
   BARTER_STATUS.sentToManager,
   BARTER_STATUS.pending,
+  BARTER_STATUS.awaitingRequirements,
 ];
 
 /** O bastante de uma permuta para saber se ela aceita um pedido de produto. */

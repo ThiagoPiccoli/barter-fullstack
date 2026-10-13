@@ -65,14 +65,17 @@ Consequências que aparecem no código inteiro:
 - sem Barter aberto, `POST /barters` responde 422 e o app mostra "Barter
   fechado". Não é erro, é estado.
 
-E, uma vez montada, a permuta entra numa **linha de produção de cinco postos**:
+E, uma vez montada, a permuta entra numa **linha de produção de seis postos** —
+o da seguradora só para quem tem seguro:
 
 ```
-Rascunho ──▶ No gerente ──▶ No comitê ──▶ A faturar ──────────▶ Faturada ──▶
-(consultor)  (parecer)      (decide)      (faturista)                      │
-                                ├──▶ Aprovada com ressalva ────┘           │
-                                └──▶ Negada                                │
-     ┌─────────────────────────────────────────────────────────────────────┘
+Rascunho ──▶ No gerente ──▶ No comitê ──┬─(com seguro)─▶ Na seguradora ──┐
+(consultor)  (parecer)      (decide)    │                 (apólice)       ▼
+                                        ├─(sem seguro)──────────────▶ A faturar ──▶ Faturada ──▶
+                                        │                             (faturista)               │
+                                        │   (a ressalva segue o mesmo caminho, como ressalva)   │
+                                        └──▶ Negada                                             │
+     ┌──────────────────────────────────────────────────────────────────────────────────────────┘
      ▼
 CPR emitida ──▶ CPR assinada ──▶ CPR registrada
   (emissor)       (emissor)        (emissor)
@@ -83,7 +86,10 @@ o parecer DELE sobre o próprio cliente e **preenche a cédula** — enquanto n�
 encaminhar, ela é `draft` e não está na mesa de ninguém; o **gerente** conhece o
 produtor e a negociação e escreve o parecer técnico (não decide); o **comitê** lê
 o pedido e os dois pareceres e **decide** — é a única instância que aprova,
-aprova COM RESSALVA ou nega; o **faturista** recebe o que as etapas anteriores
+aprova COM RESSALVA ou nega; a **seguradora** (um setor interno, com várias
+pessoas) recebe a aprovada **com seguro**, cria a apólice, **anexa** o documento
+e **informa o número** — o que a cédula cita na alínea "j" da cláusula XVIII; o
+**faturista** recebe o que as etapas anteriores
 produziram, **fatura** o que foi aprovado e **anexa as notas fiscais**; o
 **emissor** confere a cédula que o consultor preencheu, **emite** o título,
 **colhe as assinaturas** (anexando o papel assinado) e o **leva a registro**.
@@ -130,9 +136,60 @@ saber. No app, o fluxo de criação **emenda na cédula** logo depois de registr
 permuta (em [send_simulation.dart](../app/lib/screens/send_simulation.dart)), e o
 encaminhamento que a cédula barrou é retomado ali mesmo quando ela fecha.
 
+**As exigências do comitê são uma etapa, e a única volta da linha.** Antes de
+decidir, o comitê pode exigir **avalista e/ou hipoteca**
+(`POST /barters/:code/requirements`). A permuta vai para `awaitingRequirements`,
+no MESMO degrau de `pending`, com o CONSULTOR, e o gerente recebe um aviso
+(`Notice`, in-app, em `GET /notices`). Cada exigência abre na cédula o campo
+correspondente: os avalistas (cada um com o **SCR dele** anexado), os **bens em
+hipoteca** (`CprMortgage`: descrição, matrícula, comarca, município, proprietário,
+valor de avaliação e o **documento** do bem anexado). Os
+avalistas **assinam a cédula** — um bloco por avalista, e a anuência do cônjuge
+dele quando casado, no texto e no docx (`CprText.signatures`); os bens são
+conferidos e não impressos, porque o modelo não tem cláusula de hipoteca. Avalista
+e bem têm `id` estável: a gravação os casa pelo id em vez de apagar e recriar,
+porque o anexo mora neles. Fora disso
+avalista e hipoteca nem aparecem no preenchimento inicial, e o servidor recusa
+gravá-los. Exigidos, os campos viram pendência do consultor (`cprGapsOf`): travam
+a devolução (`POST /barters/:code/requirements/fulfill`) e, depois, a emissão.
+Cumpridas, a permuta volta **direto ao comitê, sem segundo parecer do gerente**:
+a negociação não mudou, só a garantia. O gerente é avisado de novo. As
+exigências se acumulam entre rodadas, sobrevivem à aprovação e são apagadas pela
+negativa. A tabela completa dos estados está no topo de
+[barter-workflow.ts](../api/src/barters/barter-workflow.ts).
+
+| estado | com quem | ato que a move | para onde |
+| --- | --- | --- | --- |
+| `draft` | consultor | `forward` | `sentToManager` |
+| `sentToManager` | gerente | `opinion` | `pending` |
+| `pending` | comitê | `review` / `require` | `awaitingPolicy` · `awaitingPolicyWithConditions` (com seguro) · `approved` · `approvedWithConditions` (sem seguro) · `denied` / `awaitingRequirements` |
+| `awaitingRequirements` | consultor | `fulfill` | `pending` (sem passar pelo gerente) |
+| `awaitingPolicy`, `awaitingPolicyWithConditions` | seguradora | `insure` | `approved`, `approvedWithConditions` (cada uma ao seu par) |
+| `approved`, `approvedWithConditions` | faturista | `invoice` | `invoiced` |
+| `invoiced` | emissor | `cprIssue` | `cprIssued` |
+| `cprIssued` | emissor | `cprSign` | `cprSigned` |
+| `cprSigned` | emissor | `cprRegister` | `cprRegistered` (fim) |
+| `denied` | — | — | (fim) |
+
+**A seguradora é a única etapa que nem toda permuta atravessa.** Quem decide é o
+seguro congelado no registro (`insuranceChoice`): obrigatório na versão, ou
+opcional e aceito pelo produtor, a aprovação cai em `awaitingPolicy` (ou
+`awaitingPolicyWithConditions`, que preserva a ressalva); sem seguro — a versão
+não oferecia, ou o produtor recusou —, ela vai direto ao faturista. O comitê
+continua escolhendo só o desfecho; o destino é consequência do seguro
+(`reviewOutcomeFor`). A seguradora informa a apólice em `POST
+/barters/:code/insure` (multipart: o arquivo e o `policyNumber`, juntos), e a
+permuta volta ao seu par de aprovação (`policyOutcomeFor`). O NÚMERO mora na
+permuta (`Barter.insurancePolicyNumber`), e não mais na cédula: o consultor não
+o digita, e a cédula o lê em `known.insurancePolicy` — a alínea "j" só sai
+quando ele existe. O escopo dela (`barters.readInsurance`) é o trecho da linha a
+partir da mesa dela, e só das permutas com seguro. O SEGURO deixou de ser
+exigência do comitê pelo mesmo motivo: quem cria a apólice é a seguradora.
+
 **A ressalva é um estado, e não uma observação.** `approvedWithConditions` está no
 MESMO degrau de `approved` (a mesa do faturista) e leva uma exigência escrita
-junto — garantia real, seguro obrigatório, aval —, obrigatória na decisão. Fosse
+junto, obrigatória na decisão. Avalista e hipoteca deixaram de ser
+ressalva: hoje são a etapa acima. Fosse
 um campo dentro da aprovação, a lista e o cartão diriam "Aprovada — a faturar"
 sobre uma permuta que só anda depois de alguém providenciar um aval, e a única
 maneira de descobrir isso seria abrir a permuta e ler até o fim. Pelo mesmo
@@ -280,7 +337,15 @@ escreve um **parecer técnico** — texto, e só texto: ele não aprova nem nega
 - a permuta guarda **a quem foi enviada** (`Barter.managerId`, gravado no
   ENCAMINHAMENTO — que é onde o envio acontece). Trocar o gerente de um consultor
   vale para as próximas; as que já estão na mesa de alguém continuam lá — o contrário faria uma permuta mudar de
-  mãos sem ninguém ter agido sobre ela.
+  mãos sem ninguém ter agido sobre ela;
+- **cada unidade tem um gerente só** — na LOTAÇÃO dele (`User.unitId`), não na
+  retirada. É conferido no provisionamento (`ensureUnitHasNoOtherManager`, em
+  [user-provisioning.service.ts](../api/src/users/user-provisioning.service.ts)),
+  e não por índice no banco, pelo mesmo motivo da conta única do comitê: é
+  unicidade de um papel dentro da tabela de usuários, e o Prisma não declara
+  índice único parcial. A conferência vale também na edição que não muda a
+  unidade: um gerente gravado antes da regra, dividindo a unidade com outro, é
+  cobrado a sair dela na próxima vez que alguém abrir o cadastro.
 
 **A unidade de retirada não tem nada a ver com isso.** Ela é o lugar onde o
 produtor busca os insumos, escolhido pelo consultor a cada permuta, e pode ser
@@ -385,6 +450,7 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | Capacidade | Quem tem |
 |---|---|
 | `users.manage` · `producers.manage` · `units.manage` · `catalog.manage` · `barter.manage` · `audit.read` | admin |
+| `producers.register` | admin **e consultor** — cadastrar produtor (o do consultor nasce na carteira dele) |
 | `producers.edit` | admin **e consultor** — editar os dados do produtor da própria carteira |
 | `producers.readAll` | admin, gerente, comitê, faturista, emissor |
 | `barters.readAll` | admin, comitê |
@@ -392,7 +458,7 @@ Quem responde "o que cada papel pode" é **uma tabela só**,
 | `barters.readInvoicing` | **faturista** — o que chegou ao faturamento |
 | `barters.readIssuance` | **emissor** — o que chegou à emissão, um degrau adiante |
 | `barters.review` | **comitê** (era do admin) |
-| `barters.investmentPerHa` | admin, comitê, faturista, emissor — o sc/ha, a régua que compara permutas |
+| `barters.investmentPerHa` | todos menos a seguradora — o sc/ha, a régua que compara permutas (o consultor e o gerente a ganharam com os painéis) |
 | `barters.invoice` | **faturista** — faturar e anexar as notas |
 | `barters.cprFill` | **consultor** — preencher a cédula (era do faturista) |
 | `barters.cprIssue` | **emissor** — emitir, colher assinaturas e registrar |
@@ -754,17 +820,19 @@ Duas escolhas dentro dela:
 [barters.service.ts](../api/src/barters/barters.service.ts), método `create`.
 Vale ler linha a linha; a sequência é:
 
-1. **só o consultor registra permuta** (é ato do consultor da carteira; admin e
-   retaguarda levam 403) → a regra é uma *lista de permitidos*, para papel novo
-   não entrar por omissão
+1. **o consultor registra permuta — e o admin gera em nome dele** (a
+   retaguarda leva 403) → a regra é uma *lista de permitidos*, para papel novo
+   não entrar por omissão. Gerada pelo admin, a permuta é do **consultor do
+   produtor** (422 se o produtor está sem consultor), e o evento do registro na
+   linha do tempo guarda o admin como ator
 1b. o consultor **não** precisa ter gerente para REGISTRAR: a permuta nasce
    rascunho, na mão dele. O gerente é lido no ENCAMINHAMENTO, que é onde o envio
    acontece — e é lá que a falta dele recusa o ato, com o rascunho intacto
 2. **precisa haver Barter aberto** (`requireOpenVersion`) → é ele que traz o
    grão da safra e a tabela de valores; sem ele, 422 com "aguarde o próximo
    lançamento"
-3. **produtor precisa estar na carteira de quem registra** → 403 (a carteira é
-   compartilhável: basta ele atender o produtor, não ser o único a atendê-lo)
+3. **produtor precisa estar na carteira de quem registra** → 403 (para o admin,
+   a carteira é a do próprio produtor)
 4. quantidades repetidas no payload são **consolidadas por produto**
 5. preços vêm **da versão** — o payload nem tem campo de preço, e o `whitelist`
    do ValidationPipe descartaria se tivesse; insumo fora da tabela da versão é
@@ -956,7 +1024,8 @@ A regra que organiza o código inteiro é **de onde vem cada lacuna do modelo**:
 | A CULTURA do lançamento | o **vencimento** da entrega — ele muda de um grão para o outro | `VersionGrain.cprDueDate`, escrito pelo admin ao publicar (ou depois) |
 | O FATURAMENTO | os números das **notas fiscais** e das duplicatas (cláusula VII) | `BarterInvoice`, com o arquivo anexado — **leitura** na cédula |
 | A CREDORA | razão social, CNPJ, endereço, foro | CADASTRO ([creditor/](../api/src/creditor/)), do admin **ou do emissor** |
-| A PROPOSTA | CNH, filiação, e-mail, RG do cônjuge, avalistas, hipotecas | coletado e **não impresso** — ver abaixo |
+| A PROPOSTA | CNH, filiação, e-mail, RG do cônjuge | coletado e **não impresso** — ver abaixo |
+| O COMITÊ (quando exige) | avalistas com SCR, bens em hipoteca com documento, nº da apólice | `CprGuarantor` + `CprMortgage` + `BarterFile`; o avalista **assina** a cédula |
 | O CONSULTOR | qualificação civil do emitente, lavouras em penhor, padrão do grão, **SCR do produtor** | `BarterCpr` + `CprArea` + `CprAreaOwner` + `BarterFile` |
 
 **Duas linhas trocaram de lado nesta tabela, e as duas pelo mesmo motivo: pedir a
@@ -1093,19 +1162,33 @@ Três consequências que aparecem no código:
 
 **Coletado e não impresso.** A planilha de proposta que a operação usa
 (*Proposta para CPR Barter*) pede coisas que o modelo de cédula não tem cláusula
-para dizer: CNH, filiação do pai e da mãe, e-mail, RG do cônjuge, um bloco
-completo de **avalista** (com o cônjuge dele) e as **hipotecas** oferecidas. Elas
-são gravadas — o cartório individualiza homônimo pela filiação, a assinatura
-eletrônica chega pelo e-mail, o aval existe no negócio — e **não entram em
-`cprGaps()`**: cobrá-las travaria a geração de um documento que não as usa. A
-pergunta daquela função é "dá para emitir?", e não "o cadastro está cheio?". O dia
-em que a cláusula de aval existir, ela vai encontrar o dado pronto.
+para dizer: CNH, filiação do pai e da mãe, e-mail, RG do cônjuge. Eles são
+gravados — o cartório individualiza homônimo pela filiação, a assinatura
+eletrônica chega pelo e-mail — e **não entram em `cprGaps()`**: cobrá-los
+travaria a geração de um documento que não os usa. A pergunta daquela função é
+"dá para emitir?", e não "o cadastro está cheio?". Avalista e hipoteca saíram
+deste grupo: só existem quando o comitê os exige, e aí são cobrados — ver as
+exigências do comitê, acima.
 
 O **local da entrega** é o contraexemplo, e por isso é cobrado: ele É cláusula
 (V, "d"). Ele é campo próprio, e não a unidade de retirada da permuta, porque as
 duas coisas não são a mesma — retirar insumo na Filial 02 não obriga ninguém a
 entregar o grão lá. A unidade entra como sugestão no formulário, que é o caso
 comum, e quem confirma é quem assina embaixo.
+
+Ele é uma **lista suspensa das filiais** (`Unit`), e não mais texto livre — a
+mesma filial saía escrita de três jeitos em três cédulas. O corpo do `PUT` leva
+`deliveryUnitId`; o servidor congela o nome da unidade em `deliveryPlace`, que é
+o que a cláusula imprime (pelo motivo de `Barter.unitName`: renomear ou excluir a
+filial não muda o documento). As cédulas do tempo do texto livre ficam com o
+texto e sem unidade, e o formulário mostra o texto para quem for escolher.
+
+**O padrão do grão vem do modelo do grão.** Peso da saca, umidade, impurezas e
+teor de óleo têm um **modelo por grão** (`Product.cprSackWeightKg` e
+companhia), editado pelo admin na aba **Grãos**. A cédula nova nasce com ele,
+pela sugestão (`suggestFrom`) — e não mais pela última cédula do produtor, que
+pode ser de outra cultura. A cédula guarda os números dela: mudar o modelo não
+reescreve cédula já começada.
 
 **O que NÃO é campo, por ser derivado:** os quilos (`sacas × peso da saca`), o
 valor total (`sacas × preço da saca`), a quantidade dada em penhor (a mesma da
@@ -1257,14 +1340,13 @@ corrigir um custo hoje reescreveria a margem apurada ontem.
 
 ```
 User ─┬─< AccessToken        (sessões revogáveis)
-      ├─< ProducerConsultant (carteira; Cascade — some o vínculo, não o produtor)
+      ├─< Producer           (carteira; SetNull — o produtor fica sem consultor)
       ├─< User               (time: o gerente e os consultores dele)
       ├─< Barter             (registrou; SetNull)
       └─< Barter             (recebeu para parecer; SetNull)
 Unit ─┬─< User               (lotação)
       └─< Barter             (local de retirada; SetNull, unitName fica)
-Producer ─┬─< ProducerConsultant   (quem o atende — N:N com User)
-          └─< Barter
+Producer ─< Barter
 Season ─< BarterVersion ─┬─< VersionPrice >─ Product   (a tabela de valores)
                          └─< Barter                     (SetNull; versionCode fica)
 ProductClass ─< Product ─┬─< PriceHistoryEntry
@@ -1310,54 +1392,61 @@ contagem de dígitos que diz se o produtor é pessoa física ou jurídica, e dis
 depende a alíquota do Funrural. A outra metade — a forma de recolhimento — é
 escolhida no fechamento da permuta (ver *O imposto da entrega*, em 1.5).
 
-### A carteira é N:N
+### Um consultor por produtor
 
-`ProducerConsultant` liga produtor e consultor, e a carteira deixou de ser uma
-coluna (`Producer.consultantId`) por causa da operação: **consultores dividem
-região e atendem o mesmo produtor**. Com um consultor por produtor, a única
-forma de representar isso era cadastrar o produtor duas vezes — exatamente o
-cadastro em duplicidade do parágrafo acima, com a área contando em dobro e as
-permutas do mesmo cliente partidas entre dois registros.
+A carteira é a coluna `Producer.consultantId`: **cada produtor é atendido por um
+consultor só**. Ela já foi N:N (`ProducerConsultant`, consultores dividindo
+região) e voltou a ser coluna quando a regra passou a ser um consultor por
+produtor — é a coluna que garante o "um só"; com a tabela de vínculos, a regra
+dependeria de toda gravação lembrar de apagar o vínculo anterior.
 
-Os vínculos são **iguais entre si**: não há dono nem principal. Todo consultor
-vinculado enxerga o produtor e registra permuta para ele; quem responde "de
-quem foi esta venda?" é a permuta, que guarda o consultor que a registrou
-(`Barter.consultantId`). Escrever a lista é ato do admin
-(`CAPABILITY.producersManage`) — o consultor não se acrescenta a uma carteira,
-nem tira alguém dela.
+Quem define e troca o consultor é o admin (`CAPABILITY.producersManage`), numa
+lista suspensa no cadastro do produtor. A troca move o **produtor**, não as
+permutas: cada permuta guarda quem a registrou (`Barter.consultantId`), e a
+visibilidade e os atos sobre ela não passam pela carteira. O consultor anterior
+perde o cadastro e a possibilidade de registrar permuta nova para o cliente; as
+que ele já registrou continuam com ele.
 
-**OS DADOS DO PRODUTOR, PORÉM, SÃO GERIDOS PELO CONSULTOR** (`producers.edit`,
-`PUT /producers/:id`). Quem visita a fazenda é quem sabe que o telefone mudou,
-que a propriedade está com o nome errado e que o cliente passou a plantar noutro
-município; enquanto isso foi só do admin, corrigir um telefone virava um chamado
-— e o cadastro envelhecia em silêncio, que é pior do que ficar errado com alguém
-sabendo. Ele alcança os produtores da PRÓPRIA carteira, e quatro campos ficam de
-fora, cada um por um motivo (ver `assertEditable`, em
-[producers.service.ts](../api/src/producers/producers.service.ts)):
+**O PRODUTOR, PORÉM, É GERIDO PELO CONSULTOR** — o cadastro do cliente novo
+(`producers.register`, `POST /producers`) e os dados dos que ele já atende
+(`producers.edit`, `PUT /producers/:id`). Quem visita a fazenda é quem conhece o
+cliente novo, sabe que o telefone mudou, que a área desta cultura é outra e que
+o produtor fez a opção pela folha; enquanto isso foi só do admin, cada um desses
+fatos virava um chamado — e o cadastro envelhecia em silêncio.
 
-| Campo | Por que continua do admin |
-|---|---|
-| CPF/CNPJ | é a IDENTIDADE do cadastro (a unicidade mora nele): trocá-lo transforma o cliente A no cliente B mantendo as permutas do A |
-| área cultivável | é o denominador de toda régua da permuta — mínimos por hectare, custo do seguro, investimento por hectare. Um arrendamento a mais é decisão de crédito, não atualização de contato |
-| regime de Funrural | é a opção formal do produtor perante o fisco, de onde sai a alíquota gravada em cada entrega |
-| a carteira | é a lista inteira num campo só: quem a escrevesse poderia se remover do próprio cliente — ou remover um colega — sem que ninguém decidisse isso |
+- **O cadastro do consultor nasce na carteira dele**, e só na dele (ver
+  `ownerOnCreate`, em
+  [producers.service.ts](../api/src/producers/producers.service.ts)): sem
+  carteira no corpo, vale a dele; o próprio id é aceito; o de outro consultor é
+  recusado (403), e não trocado em silêncio.
+- **Na edição ele altera todos os dados** do produtor da própria carteira — o
+  CPF/CNPJ, a área do Barter e o regime de Funrural inclusive. A área muda de
+  uma cultura para outra, e a permuta já registrada não acompanha: ela congela
+  a área e a alíquota que usou (`Barter.producerAreaHa`, `Barter.taxRate`).
+- **A carteira continua do admin** (ver `assertEditable`): um consultor que a
+  escrevesse poderia passar o próprio cliente adiante sem que ninguém decidisse
+  isso. A recusa é por VALOR e não por presença — o formulário devolve o
+  registro inteiro, com o consultor que já estava lá. Excluir continua em
+  `producers.manage`.
+- **O CPF/CNPJ é único para todo mundo**, no cadastro e na edição
+  (`ensureDocumentIsFree`), e a mensagem depende de quem pergunta: o admin lê o
+  nome de quem já usa o documento; o consultor lê o nome só se o cliente já é
+  dele ("use o cadastro que já existe"); se é de outra carteira, lê que o
+  produtor é atendido por outro consultor e que quem muda isso é o
+  administrador — sem o nome do produtor nem do colega, porque a recusa não
+  pode virar consulta de "quem atende o CPF tal".
 
-A recusa é por VALOR e não por presença (o formulário devolve o registro
-inteiro, e recusar o campo que veio igual travaria toda edição de telefone), e a
-frase diz **a quem pedir**: uma trava que só nega manda o consultor concluir que
-o app está quebrado. Cadastrar e excluir continuam em `producers.manage`.
-
-A exclusão é `Cascade` dos dois lados: sai o consultor, sai o vínculo dele — não
-o produtor. Um produtor pode ficar **sem nenhum** consultor e esperar
-realocação (é o estado que o antigo `SetNull` produzia); até lá, só a retaguarda
-o enxerga. O caminho contrário, criar um produtor sem consultor, é recusado no
-DTO: cadastro que ninguém vê é cadastro perdido.
+Excluir o consultor é `SetNull`: o produtor não some junto, fica **sem
+consultor** e espera realocação; até lá, só a retaguarda o enxerga. O caminho
+contrário, criar um produtor sem consultor, é recusado: cadastro que ninguém vê é
+cadastro perdido.
 
 A migration
-[`20260818141058_produtor_em_varias_carteiras`](../api/prisma/migrations/20260818141058_produtor_em_varias_carteiras/migration.sql)
-copia os vínculos existentes para a tabela nova **antes** de dropar a coluna —
-na ordem inversa da que o `prisma migrate diff` gera, que deixaria todo produtor
-sem consultor nenhum.
+[`20261001120000_um_consultor_por_produtor`](../api/prisma/migrations/20261001120000_um_consultor_por_produtor/migration.sql)
+cria a coluna e a preenche **antes** de dropar a tabela de vínculos. O produtor
+que estava em mais de uma carteira fica com o consultor que registrou a permuta
+mais recente para ele; sem permuta de nenhum deles, com o vínculo mais antigo
+(o dono original); no empate, o menor id.
 
 ## 1.7 Ambiente, seed e primeiro acesso
 
@@ -1758,13 +1847,14 @@ BootstrapScreen ──▶ LoginScreen ──▶ ChangePasswordScreen(forced) ─
 ```
 
 A aba **Barter** do admin é [prices_screen.dart](../app/lib/screens/prices_screen.dart)
-(nome herdado), com quatro abas na ordem da operação:
+(nome herdado), com cinco abas na ordem da operação:
 
 | Aba | O que é |
 |---|---|
 | Lançamento | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) — safra, **vencimento da CPR** da safra, versão vigente, metas, publicar nova versão pela planilha, encerrar |
 | Valores | a tabela da versão vigente: valor da saca + preço/custo/margem de cada insumo, com correção pontual. Filtra por pasta e ordena por preço ou margem (inclusive **menor margem**, que é a pergunta real ao revisar um lançamento) |
-| Histórico | como o valor de cada item andou entre as versões: último valor publicado, variação e quantos pontos tem a linha do tempo. Filtra por grão/insumo e ordena por maior alta, maior queda ou maior valor. Marca quem está **fora do Barter** vigente |
+| Grãos | as culturas, cada uma com o seu **modelo da CPR** (peso da saca, umidade, impurezas, teor de óleo) — o padrão com que a cédula nova daquele grão nasce preenchida. Marca o que falta definir. Saiu de dentro do Histórico quando o grão ganhou configuração |
+| Histórico | como o valor de cada insumo andou entre as versões: último valor publicado, variação e quantos pontos tem a linha do tempo. Ordena por maior alta, maior queda ou maior valor. Marca quem está **fora do Barter** vigente |
 | Classes | as nove classes do negócio, só leitura, com a regra de mínimo de cada uma |
 
 **Histórico é leitura.** O cadastro do item (pasta, exigência/ha, exclusão) mora
@@ -1785,7 +1875,7 @@ safra ser aberta.
 | [barter_screen.dart](../app/lib/screens/barter_screen.dart) | **o construtor de permuta** (a tela mais complexa) |
 | [barters_screen.dart](../app/lib/screens/barters_screen.dart) | listagem com abas por status + busca |
 | [barter_detail_screen.dart](../app/lib/screens/barter_detail_screen.dart) | detalhe (com a versão do Barter), a ação da etapa de quem abre (parecer, decisão ou faturamento), a **linha do tempo** da permuta e o PDF |
-| [prices_screen.dart](../app/lib/screens/prices_screen.dart) | ⚠️ é a aba **Barter** inteira (lançamento, valores, histórico, pastas) |
+| [prices_screen.dart](../app/lib/screens/prices_screen.dart) | ⚠️ é a aba **Barter** inteira (lançamento, valores, grãos, histórico, pastas) |
 | [barter_program_screen.dart](../app/lib/screens/barter_program_screen.dart) | o lançamento: versão vigente, metas, publicação por planilha, encerramento |
 | [product_report_screen.dart](../app/lib/screens/product_report_screen.dart) | relatório de um produto + diálogos de preço/categoria/exigência |
 | [consultants_screen.dart](../app/lib/screens/consultants_screen.dart) | ⚠️ é a aba **Cadastros** (Produtores · Consultores · Gerentes · Unidades) |
@@ -1991,12 +2081,15 @@ multiplicação devolveria os R$ e a conversão não teria servido para nada.
 
 **O sc/ha é um recorte à parte, e não é sigilo.** O investimento por hectare
 (`sacksPerHa`, com a área congelada em `producerAreaHa`) sai sob a capacidade
-`barters.investmentPerHa` — admin, comitê, faturista e emissor —, e o gerente NÃO a tem,
-embora veja R$. A diferença não é confiança: é para que serve o número. Ele é a
-única medida que compara duas permutas de tamanhos diferentes (R$ 400 mil numa
-fazenda de 2.000 ha e numa de 300 ha são negócios distintos), e quem trabalha
-uma permuta de cada vez não tem com quem compará-la — uma régua sem régua ao
-lado é ruído na tela. A área é **snapshot**, pelo mesmo motivo do preço do item:
+`barters.investmentPerHa` — todos os papéis menos a seguradora. Ele é a única
+medida que compara duas permutas de tamanhos diferentes (R$ 400 mil numa fazenda
+de 2.000 ha e numa de 300 ha são negócios distintos). O consultor e o gerente
+ficaram de fora enquanto trabalhavam uma permuta de cada vez; os painéis deram a
+eles com o que comparar (a carteira do consultor, os consultores do time na aba
+Análise do gerente), e a régua foi junto. O consultor a recebe **sem** R$: sc/ha
+é saca e hectare, e não reabre a tabela. Os painéis não refazem a divisão — a
+média de um conjunto é a média ponderada pela área destes números
+(`investmentPerHaOf`), que é o mesmo Σ sacas ÷ Σ área. A área é **snapshot**, pelo mesmo motivo do preço do item:
 o produtor arrenda mais terra na safra seguinte, e quem aprovou 12 sc/ha não pode
 ver 9 no dia da auditoria. Sem área registrada o campo vem `null`, e não zero —
 zero seria afirmar um investimento que ninguém fez.

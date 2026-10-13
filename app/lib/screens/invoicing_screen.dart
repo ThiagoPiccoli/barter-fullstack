@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 
 import '../data/app_data.dart';
 import '../models/models.dart';
+import '../services/barter_pdf.dart';
+import '../services/num_input.dart';
 import '../theme/app_theme.dart';
 import '../widgets/adaptive_layout.dart';
 import '../widgets/common_widgets.dart';
@@ -70,6 +72,11 @@ class _InvoicingScreenState extends State<InvoicingScreen> {
       appBar: AppBar(
         title: Text(_barter.awaitsInvoice ? 'Faturar ${_barter.id}' : 'Notas de ${_barter.id}'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Comprovante da permuta',
+            onPressed: _sharePdf,
+          ),
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: Center(child: StatusBadge(status: _barter.status)),
@@ -326,7 +333,7 @@ class _InvoicingScreenState extends State<InvoicingScreen> {
       series: seriesCtrl.text,
       duplicateNumber: dupCtrl.text,
       issuedAt: emitida,
-      value: double.tryParse(valueCtrl.text.trim().replaceAll('.', '').replaceAll(',', '.')),
+      value: parseNumber(valueCtrl.text),
     );
   }
 
@@ -373,6 +380,23 @@ class _InvoicingScreenState extends State<InvoicingScreen> {
     }
   }
 
+  /// O COMPROVANTE da permuta, o mesmo PDF do detalhe. Com valores em R$: o
+  /// faturista é retaguarda, e fatura em dinheiro — é a regra que o detalhe
+  /// aplica quando é aberto do painel dele.
+  Future<void> _sharePdf() async {
+    try {
+      await BarterPdf.share(
+        _barter,
+        producer: AppData.producerById(_barter.producerId),
+        showValues: true,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Não foi possível gerar o PDF: $error')));
+    }
+  }
+
   Future<void> _download(BarterInvoiceModel nota) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -411,8 +435,7 @@ class _InvoicingScreenState extends State<InvoicingScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('${_barter.id} • ${_barter.producerName}',
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+            BarterIdentity(barter: _barter),
             const SizedBox(height: 4),
             Text(
               '${_barter.invoices.length} nota(s) anexada(s). Depois de faturada, a '

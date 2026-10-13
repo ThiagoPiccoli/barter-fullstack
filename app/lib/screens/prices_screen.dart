@@ -11,18 +11,25 @@ import 'barter_program_screen.dart';
 import 'product_report_screen.dart';
 import 'edit_forms.dart';
 
-/// A tela do BARTER, do lado do admin. Quatro abas, na ordem em que a operação
+/// A tela do BARTER, do lado do admin. Cinco abas, na ordem em que a operação
 /// acontece:
 ///
 /// 1. **Barter** — a safra, a versão vigente e as metas; é onde se publica a
 ///    próxima versão a partir da planilha.
 /// 2. **Valores** — a tabela da versão vigente (preço e custo de cada insumo,
 ///    mais o valor da saca), com correção pontual.
-/// 3. **Histórico** — como o valor de cada item andou ao longo das versões.
+/// 3. **Grãos** — as culturas, cada uma com o seu MODELO DA CPR (o padrão de
+///    recebimento que a cédula nova traz preenchido).
+/// 4. **Histórico** — como o valor de cada insumo andou ao longo das versões.
 ///    Leitura: o cadastro do produto (pasta, exigência, exclusão) mora na tela
 ///    do próprio item, e o valor de hoje se corrige na aba Valores.
-/// 4. **Classes** — a taxonomia que vem da lista de preços, e a regra de
+/// 5. **Classes** — a taxonomia que vem da lista de preços, e a regra de
 ///    mínimo de cada uma.
+///
+/// Os GRÃOS já moraram dentro do Histórico, como um filtro. Saíram para uma aba
+/// própria quando ganharam o modelo da CPR: deixaram de ser só uma linha do
+/// tempo de valores e passaram a ter configuração — e configuração escondida
+/// atrás de um filtro de uma lista de leitura é configuração que ninguém acha.
 ///
 /// Busca e filtros ficam no topo: a busca é do texto, os chips recortam o
 /// conjunto e o menu de ordenação responde "em que ordem". Os três se somam.
@@ -40,7 +47,7 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this)
+    _tabController = TabController(length: 5, vsync: this)
       ..addListener(() => setState(() {}));
   }
 
@@ -58,16 +65,24 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
     switch (_tabController.index) {
       case 1:
         return 'Buscar na tabela de valores...';
-      case 3:
+      case 2:
+        return 'Buscar ${brand.copy.grain.toLowerCase()}...';
+      case 4:
         return 'Buscar classe...';
       default:
-        return 'Buscar grão ou insumo...';
+        return 'Buscar ${brand.copy.input.toLowerCase()}...';
     }
   }
 
   /// Cadastrar produto à mão continua existindo — a planilha cria os insumos,
-  /// mas o GRÃO precisa existir antes para a safra ser aberta. Fica no cabeçalho
-  /// da aba de histórico, e não como botão no meio da lista: é um ato raro.
+  /// mas o GRÃO precisa existir antes, porque é ele que o lançamento oferece
+  /// como cultura (ver `VersionGrain`).
+  ///
+  /// O botão vive no cabeçalho, e o cabeçalho é UM para as quatro abas: ele
+  /// ficava só na do Histórico, e quem precisava dele estava na do LANÇAMENTO —
+  /// descobrindo, com o formulário de publicar aberto, que o grão não existia.
+  /// Um ato raro pode ficar discreto; não pode ficar escondido justamente de
+  /// quem o procura.
   Future<void> _createProduct(ProductType type) async {
     await Navigator.push(
       context,
@@ -83,33 +98,33 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
       appBar: AppBar(
         title: Text(brand.copy.programTitle),
         actions: [
-          if (_tabController.index == 2)
-            PopupMenuButton<ProductType>(
-              tooltip: 'Cadastrar item',
-              icon: const Icon(Icons.add),
-              onSelected: _createProduct,
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: ProductType.grain,
-                  child: Text('Novo ${brand.copy.grain}'),
-                ),
-                PopupMenuItem(
-                  value: ProductType.input,
-                  child: Text('Novo ${brand.copy.input}'),
-                ),
-              ],
-            ),
+          PopupMenuButton<ProductType>(
+            tooltip: 'Cadastrar item',
+            icon: const Icon(Icons.add),
+            onSelected: _createProduct,
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: ProductType.grain,
+                child: Text('Novo ${brand.copy.grain}'),
+              ),
+              PopupMenuItem(
+                value: ProductType.input,
+                child: Text('Novo ${brand.copy.input}'),
+              ),
+            ],
+          ),
           const LogoutButton(),
         ],
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          tabs: const [
-            Tab(icon: Icon(Icons.rocket_launch_outlined, size: 18), text: 'Lançamento'),
-            Tab(icon: Icon(Icons.price_change_outlined, size: 18), text: 'Valores'),
-            Tab(icon: Icon(Icons.history, size: 18), text: 'Histórico'),
-            Tab(icon: Icon(Icons.category_outlined, size: 18), text: 'Classes'),
+          tabs: [
+            const Tab(icon: Icon(Icons.rocket_launch_outlined, size: 18), text: 'Lançamento'),
+            const Tab(icon: Icon(Icons.price_change_outlined, size: 18), text: 'Valores'),
+            Tab(icon: const Icon(Icons.grass_outlined, size: 18), text: brand.copy.grainPluralTitle),
+            const Tab(icon: Icon(Icons.history, size: 18), text: 'Histórico'),
+            const Tab(icon: Icon(Icons.category_outlined, size: 18), text: 'Classes'),
           ],
         ),
       ),
@@ -135,6 +150,7 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
               children: [
                 BarterProgramTab(onChanged: () => setState(() {})),
                 _VersionPriceTable(query: q, onUpdate: () => setState(() {})),
+                _GrainList(query: q, onUpdate: () => setState(() {})),
                 _HistoryList(query: q, onUpdate: () => setState(() {})),
                 _ClassList(query: q, onUpdate: () => setState(() {})),
               ],
@@ -147,9 +163,10 @@ class _PricesScreenState extends State<PricesScreen> with SingleTickerProviderSt
   }
 }
 
-/// A tabela de valores da versão VIGENTE: a saca do grão no topo e um cartão
-/// por insumo, com preço, custo e margem. É a foto do que está valendo agora —
-/// e o único lugar do app onde um valor pode ser corrigido.
+/// A tabela de valores de uma versão VIGENTE — uma por cultura aberta, e o
+/// admin escolhe qual: a saca do grão no topo e um cartão por insumo. É a foto
+/// do que está valendo agora — e o único lugar do app onde um valor pode ser
+/// corrigido.
 class _VersionPriceTable extends StatefulWidget {
   final String query;
   final VoidCallback onUpdate;
@@ -167,6 +184,10 @@ enum _ValueSort { name, priceDesc, priceAsc }
 class _VersionPriceTableState extends State<_VersionPriceTable> {
   /// Quantos itens da lista são cabeçalho (cotação da saca e título).
   static const int _headerCount = 2;
+
+  /// A CULTURA cuja tabela está na tela (a versão vigente dela). Começa na
+  /// primeira; cada cultura tem a própria planilha.
+  String? _versionId;
 
   /// Classe escolhida (null = todas). A tabela da versão não carrega a classe:
   /// ela é atributo do CADASTRO, então vem do catálogo pelo productId.
@@ -226,20 +247,43 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
 
   @override
   Widget build(BuildContext context) {
-    final version = AppData.currentVersion;
-    if (version == null) {
+    final versions = AppData.currentVersions;
+    if (versions.isEmpty) {
       return const _EmptyState(
         icon: Icons.price_change_outlined,
         title: 'Nenhum Barter lançado',
-        text: 'Publique uma versão na aba Lançamento para definir os valores da safra.',
+        text: 'Publique uma versão na aba Lançamento para definir os valores de uma cultura.',
       );
     }
+    final version = versions.firstWhere((v) => v.id == _versionId, orElse: () => versions.first);
 
     final rows = _apply(version.prices);
     final classes = _classesInVersion(version);
 
     return Column(
       children: [
+        // A CULTURA: cada uma tem a sua tabela, e a escolha vem antes do filtro.
+        if (versions.length > 1)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  for (final option in versions)
+                    ChoiceChip(
+                      label: Text(option.seasonName.isNotEmpty ? option.seasonName : option.code),
+                      selected: option.id == version.id,
+                      onSelected: (_) => setState(() {
+                        _versionId = option.id;
+                        _classId = null;
+                      }),
+                    ),
+                ],
+              ),
+            ),
+          ),
         FilterBar(
           chips: [
             FilterChipData(label: 'Todas', selected: _classId == null, onTap: () {
@@ -313,6 +357,7 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
               }
               final row = rows[index - _headerCount];
               return _VersionPriceCard(
+                version: version,
                 row: row,
                 code: _productOf(row.productId)?.sku,
                 productClass: AppData.classById(_classOf(row.productId)),
@@ -338,11 +383,8 @@ class _VersionPriceTableState extends State<_VersionPriceTable> {
   }
 }
 
-/// AS COTAÇÕES DAS CULTURAS — uma por grão que este Barter aceita.
-///
-/// São várias porque as culturas coexistem: o mesmo lançamento paga em soja e
-/// em milho, sobre a MESMA tabela de insumos, e é a cotação de cada uma que
-/// converte o custo em sacas daquele grão. Corrigir uma não toca a outra.
+/// A COTAÇÃO DA SACA da cultura desta versão — o que converte o custo dos
+/// insumos em sacas.
 class _GrainPricesCard extends StatelessWidget {
   final BarterVersionModel version;
   final VoidCallback onUpdate;
@@ -350,17 +392,6 @@ class _GrainPricesCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        for (final grain in version.grains) ...[
-          _card(context, grain),
-          if (grain != version.grains.last) const SizedBox(height: 8),
-        ],
-      ],
-    );
-  }
-
-  Widget _card(BuildContext context, VersionGrainModel grain) {
     return Card(
       color: AppColors.grainBg,
       child: Padding(
@@ -381,26 +412,27 @@ class _GrainPricesCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Saca de ${grain.grainName.toLowerCase()}',
+                  Text('Saca de ${version.grainName.toLowerCase()}',
                       style: TextStyle(
                           fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textDark)),
                   Text(
                       'Cotação do Barter ${version.code}'
-                      '${grain.estimatedYield > 0 ? ' • ${grain.estimatedYield.toStringAsFixed(0)} sc/ha' : ''}',
+                      '${version.estimatedYield > 0 ? ' • ${version.estimatedYield.toStringAsFixed(0)} sc/ha' : ''}',
                       style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
                 ],
               ),
             ),
-            Text(formatCurrency(grain.price),
+            Text(formatCurrency(version.grainPrice),
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.grain)),
-            if (version.isOpen && grain.grainId.isNotEmpty)
+            if (version.isOpen && version.grainId.isNotEmpty)
               IconButton(
                 tooltip: 'Corrigir',
                 onPressed: () => showVersionPriceDialog(
                   context,
-                  productId: grain.grainId,
-                  productName: 'Saca de ${grain.grainName.toLowerCase()}',
-                  price: grain.price,
+                  version: version,
+                  productId: version.grainId,
+                  productName: 'Saca de ${version.grainName.toLowerCase()}',
+                  price: version.grainPrice,
                   onUpdated: onUpdate,
                 ),
                 icon: Icon(Icons.edit_outlined, size: 18, color: AppColors.grain),
@@ -414,6 +446,7 @@ class _GrainPricesCard extends StatelessWidget {
 
 /// Uma linha da tabela: preço, custo e a margem que alimenta a meta de lucro.
 class _VersionPriceCard extends StatelessWidget {
+  final BarterVersionModel version;
   final VersionPriceModel row;
 
   /// Código do item no cadastro — a linha da versão não o guarda.
@@ -424,6 +457,7 @@ class _VersionPriceCard extends StatelessWidget {
   final bool editable;
   final VoidCallback onUpdate;
   const _VersionPriceCard({
+    required this.version,
     required this.row,
     required this.code,
     required this.productClass,
@@ -474,6 +508,7 @@ class _VersionPriceCard extends StatelessWidget {
                   TextButton(
                     onPressed: () => showVersionPriceDialog(
                       context,
+                      version: version,
                       productId: row.productId,
                       productName: row.productName,
                       price: row.perUnit,
@@ -495,9 +530,181 @@ class _VersionPriceCard extends StatelessWidget {
   }
 }
 
-/// O HISTÓRICO de valores por produto: cada item com o último valor publicado e
+/// Os GRÃOS — as culturas permutáveis, cada uma com o seu MODELO DA CPR.
+///
+/// O modelo é o padrão com que o grão é recebido (peso da saca, umidade,
+/// impurezas, teor de óleo), e é com ele que a cédula nova daquele grão nasce
+/// preenchida. Ele fica à vista no cartão, e não escondido na tela do item,
+/// porque a pergunta desta aba é justamente "o modelo de cada grão está
+/// definido?" — e o que falta definir aparece marcado.
+///
+/// Tocar no cartão abre a linha do tempo de valores do grão, como no histórico.
+class _GrainList extends StatelessWidget {
+  final String query;
+  final VoidCallback onUpdate;
+  const _GrainList({required this.query, required this.onUpdate});
+
+  @override
+  Widget build(BuildContext context) {
+    final grains = AppData.grains.where((grain) => grain.matches(query)).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+
+    if (grains.isEmpty) {
+      return _EmptyState(
+        icon: Icons.grass_outlined,
+        title: AppData.grains.isEmpty
+            ? 'Nenhum ${brand.copy.grain.toLowerCase()} cadastrado'
+            : 'Nenhum ${brand.copy.grain.toLowerCase()} encontrado',
+        text: AppData.grains.isEmpty
+            ? 'Cadastre pelo botão + no topo da tela.'
+            : 'Ajuste a busca para ver os outros.',
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      itemCount: grains.length,
+      itemBuilder: (context, index) => _GrainCard(grain: grains[index], onUpdate: onUpdate),
+    );
+  }
+}
+
+/// Um grão: o cadastro em uma linha e, embaixo, o modelo da CPR com o botão de
+/// editá-lo.
+class _GrainCard extends StatelessWidget {
+  final ProductModel grain;
+  final VoidCallback onUpdate;
+  const _GrainCard({required this.grain, required this.onUpdate});
+
+  @override
+  Widget build(BuildContext context) {
+    final model = grain.cprModel ?? const GrainCprModel();
+    final undefined = model.undefinedCount;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => ProductReportScreen(productId: grain.id, type: grain.type),
+            ),
+          );
+          onUpdate();
+        },
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.grain.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.grass, size: 20, color: AppColors.grain),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(grain.name,
+                            style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textDark)),
+                        Row(
+                          children: [
+                            _CodeChip(code: grain.codeLabel),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(grain.unit,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Text(formatCurrency(grain.currentPrice),
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.primary)),
+                  Icon(Icons.chevron_right, size: 18, color: AppColors.textLight),
+                ],
+              ),
+              const Divider(height: 20),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.description_outlined, size: 16, color: AppColors.textMedium),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text('Modelo da CPR',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textDark)),
+                            if (undefined > 0) ...[
+                              const SizedBox(width: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppColors.pending.withValues(alpha: 0.14),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                    undefined == 1 ? '1 número a definir' : '$undefined números a definir',
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.pending)),
+                              ),
+                            ],
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(model.summary,
+                            style: TextStyle(fontSize: 12, color: AppColors.textMedium)),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => showGrainCprModelDialog(context, grain, onUpdate),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      minimumSize: const Size(0, 0),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Editar', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// O HISTÓRICO de valores por INSUMO: cada item com o último valor publicado e
 /// a variação desde o primeiro. Tocar abre a linha do tempo completa (gráfico,
 /// pontos e o cadastro do item).
+///
+/// Os grãos têm aba própria (ver [_GrainList]), e a linha do tempo de cada um
+/// abre de lá.
 ///
 /// É leitura. O valor de hoje se corrige na aba Valores, dentro da versão; o
 /// cadastro (pasta, exigência, exclusão) mora na tela do produto — aqui só se
@@ -514,9 +721,6 @@ class _HistoryList extends StatefulWidget {
 enum _HistorySort { name, price, up, down }
 
 class _HistoryListState extends State<_HistoryList> {
-  /// null = todos; senão, só grãos ou só insumos.
-  ProductType? _type;
-
   /// Só os itens com unidade a revisar — o filtro que resolve a lista de uma
   /// vez depois de uma carga.
   bool _onlyPending = false;
@@ -531,12 +735,7 @@ class _HistoryListState extends State<_HistoryList> {
 
   List<ProductModel> _apply() {
     final query = widget.query;
-    final all = [...AppData.grains, ...AppData.inputs];
-    final filtered = all.where((product) {
-      if (!product.matches(query)) return false;
-      if (_type != null && product.type != _type) return false;
-      return true;
-    }).toList();
+    final filtered = AppData.inputs.where((product) => product.matches(query)).toList();
 
     switch (_sort) {
       case _HistorySort.name:
@@ -558,30 +757,13 @@ class _HistoryListState extends State<_HistoryList> {
   @override
   Widget build(BuildContext context) {
     final products = _apply();
-    final total = AppData.grains.length + AppData.inputs.length;
-    final pendentes = [...AppData.grains, ...AppData.inputs]
-        .where((p) => p.unitPending)
-        .length;
+    final total = AppData.inputs.length;
+    final pendentes = AppData.inputs.where((p) => p.unitPending).length;
 
     return Column(
       children: [
         FilterBar(
           chips: [
-            FilterChipData(
-              label: 'Todos',
-              selected: _type == null,
-              onTap: () => setState(() => _type = null),
-            ),
-            FilterChipData(
-              label: brand.copy.grainPluralTitle,
-              selected: _type == ProductType.grain,
-              onTap: () => setState(() => _type = ProductType.grain),
-            ),
-            FilterChipData(
-              label: brand.copy.inputPluralTitle,
-              selected: _type == ProductType.input,
-              onTap: () => setState(() => _type = ProductType.input),
-            ),
             // Só aparece quando há o que revisar: filtro que devolveria lista
             // vazia é ruído na barra.
             if (pendentes > 0)
@@ -606,7 +788,7 @@ class _HistoryListState extends State<_HistoryList> {
               ? const _EmptyState(
                   icon: Icons.search_off,
                   title: 'Nenhum item encontrado',
-                  text: 'Ajuste a busca ou o filtro para ver o histórico de outros itens.',
+                  text: 'Ajuste a busca ou o filtro para ver o histórico de outros insumos.',
                 )
               // Builder pelo mesmo motivo da tabela de valores: com o catálogo
               // real são 661 cartões, e `children:` os construiria todos na
@@ -677,14 +859,12 @@ class _HistoryCard extends StatelessWidget {
   /// na alta e a de aprovação na queda. É a leitura do lado da cooperativa.
   Color get _trendColor => deltaPct >= 0 ? AppColors.denied : AppColors.approved;
 
-  /// O produto está na tabela do Barter vigente? Fora dela ele existe no
-  /// cadastro mas não é permutável — e isso precisa aparecer aqui, senão o
-  /// admin só descobre quando o consultor reclama.
-  bool get _inCurrentVersion {
-    final version = AppData.currentVersion;
-    if (version == null) return false;
-    return version.grainFor(product.id) != null || version.priceOf(product.id) != null;
-  }
+  /// O produto está na tabela de algum Barter vigente (ou é o grão de algum)?
+  /// Fora deles ele existe no cadastro mas não é permutável — e isso precisa
+  /// aparecer aqui, senão o admin só descobre quando o consultor reclama.
+  bool get _inCurrentVersion => AppData.currentVersions.any(
+        (version) => version.grainId == product.id || version.priceOf(product.id) != null,
+      );
 
   @override
   Widget build(BuildContext context) {

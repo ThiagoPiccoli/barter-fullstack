@@ -3,7 +3,7 @@ import type { User } from '@prisma/client';
 import { AUDIT_ACTION, AuditService } from '../audit/audit.service';
 import { CLEARED_LOCKOUT } from '../auth/lockout';
 import { generateProvisionalPassword, hashPassword } from '../auth/password.util';
-import { ROLE, ROLE_LABELS, isSingleAccount, type ManagedRole } from '../common/roles';
+import { ROLE, ROLE_LABELS, isSingleAccount, type Role } from '../common/roles';
 import { MANAGER_FIELDS, type UserWithManager } from '../common/serializers';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
@@ -44,7 +44,7 @@ export class UserProvisioningService {
     private readonly audit: AuditService,
   ) {}
 
-  async list(role: ManagedRole): Promise<UserWithManager[]> {
+  async list(role: Role): Promise<UserWithManager[]> {
     return this.prisma.user.findMany({
       where: { role },
       include: { manager: MANAGER_FIELDS },
@@ -67,9 +67,10 @@ export class UserProvisioningService {
    * que passasse, seria sobrescrito aqui. É o que impede que `POST /billers`
    * vire uma fábrica de administradores.
    */
-  async create(actor: User, role: ManagedRole, dto: CreateUserDto): Promise<ProvisionedUser> {
+  async create(actor: User, role: Role, dto: CreateUserDto): Promise<ProvisionedUser> {
     await this.ensureSingleAccountIsFree(role);
     await this.ensureEmailIsFree(dto.email);
+    await this.ensureUnitHasNoOtherManager(role, dto.unitId);
 
     const { password, unitId, managerId, ...data } = dto as CreateUserDto & {
       managerId?: number;
@@ -98,14 +99,10 @@ export class UserProvisioningService {
     return { user, provisionalPassword };
   }
 
-  async update(
-    actor: User,
-    role: ManagedRole,
-    id: number,
-    dto: UpdateUserDto,
-  ): Promise<UserWithManager> {
+  async update(actor: User, role: Role, id: number, dto: UpdateUserDto): Promise<UserWithManager> {
     const user = await this.findWithRole(role, id);
     await this.ensureEmailIsFree(dto.email, user.id);
+    await this.ensureUnitHasNoOtherManager(role, dto.unitId, user.id);
     const { unitId, managerId, ...data } = dto as UpdateUserDto & { managerId?: number };
     const updated = await this.prisma.user.update({
       where: { id: user.id },
@@ -145,7 +142,7 @@ export class UserProvisioningService {
    * hipotético — é o mais provável de todos, porque quem procura o admin
    * costuma ser exatamente quem acabou de errar a senha dez vezes.
    */
-  async resetPassword(actor: User, role: ManagedRole, id: number): Promise<ProvisionedUser> {
+  async resetPassword(actor: User, role: Role, id: number): Promise<ProvisionedUser> {
     const target = await this.findWithRole(role, id);
     const provisionalPassword = generateProvisionalPassword();
 
@@ -188,7 +185,7 @@ export class UserProvisioningService {
    * um parecer que ninguém pode dar — sem erro e sem alarme. Reatribuir o time
    * e esvaziar a fila são decisões de gente, e a mensagem diz qual falta.
    */
-  async delete(actor: User, role: ManagedRole, id: number): Promise<void> {
+  async delete(actor: User, role: Role, id: number): Promise<void> {
     // Conta de ÓRGÃO não se exclui: sem ela a linha de produção para, e nenhuma
     // permuta é decidida até alguém reparar. A rota nem existe (ver
     // CommitteeController); isto é a mesma regra como invariante do domínio,
@@ -201,6 +198,7 @@ export class UserProvisioningService {
     }
     const user = await this.findWithRole(role, id);
     if (role === ROLE.manager) await this.ensureManagerIsFree(user.id);
+    if (role === ROLE.admin) await this.ensureAdminCanLeave(actor, user.id);
     await this.prisma.user.delete({ where: { id: user.id } });
 
     await this.audit.record({
@@ -221,7 +219,7 @@ export class UserProvisioningService {
    * erro aqui faria a tela ter de tratar como falha o caso normal do primeiro
    * dia.
    */
-  async findSingle(role: ManagedRole): Promise<UserWithManager | null> {
+  async findSingle(role: Role): Promise<UserWithManager | null> {
     return this.prisma.user.findFirst({
       where: { role },
       include: { manager: MANAGER_FIELDS },
@@ -230,7 +228,7 @@ export class UserProvisioningService {
   }
 
   /** A conta única para quem vai ESCREVER nela — 404 enquanto ela não existe. */
-  async requireSingle(role: ManagedRole): Promise<UserWithManager> {
+  async requireSingle(role: Role): Promise<UserWithManager> {
     const account = await this.findSingle(role);
     if (!account) {
       throw new NotFoundException(`O ${ROLE_LABELS[role]} ainda não tem cadastro.`);
@@ -246,7 +244,7 @@ export class UserProvisioningService {
    * passaria a ter dois órgãos decidindo a mesma coisa — cada um sem saber do
    * outro, e a fila aparecendo inteira para os dois.
    */
-  private async ensureSingleAccountIsFree(role: ManagedRole): Promise<void> {
+  private async ensureSingleAccountIsFree(role: Role): Promise<void> {
     if (!isSingleAccount(role)) return;
     const existing = await this.prisma.user.count({ where: { role } });
     if (existing > 0) {
@@ -281,6 +279,36 @@ export class UserProvisioningService {
   }
 
   /**
+   * UM GERENTE POR UNIDADE: a unidade escolhida não pode ser a lotação de outro
+   * gerente.
+   *
+   * Vale também na EDIÇÃO que não muda a unidade, e de propósito: um gerente
+   * gravado antes desta regra, dividindo a unidade com outro, só se resolve
+   * quando alguém escolhe qual dos dois sai dela — e a recusa diz quem é o
+   * outro, que é o que o admin precisa para decidir.
+   *
+   * Conferida aqui, e não por índice no banco, pelo mesmo motivo da conta única
+   * do comitê: a unicidade é de um PAPEL dentro da tabela de usuários, e o
+   * Prisma não declara índice único parcial (`WHERE role = 'manager'`).
+   */
+  private async ensureUnitHasNoOtherManager(
+    role: Role,
+    unitId: number,
+    ignoreId?: number,
+  ): Promise<void> {
+    if (role !== ROLE.manager) return;
+    const other = await this.prisma.user.findFirst({
+      where: { role: ROLE.manager, unitId, ...(ignoreId ? { id: { not: ignoreId } } : {}) },
+      select: { fullName: true, unit: { select: { name: true } } },
+    });
+    if (!other) return;
+    throw new UnprocessableEntityException(
+      `A unidade ${other.unit?.name ?? ''} já tem gerente: ${other.fullName}. ` +
+        'Cada unidade tem um gerente só — escolha outra unidade, ou mude a dele antes',
+    );
+  }
+
+  /**
    * O gerente do consultor, conferido.
    *
    * Só o CONSULTOR tem gerente. Nos outros papéis o campo nem existe no DTO, e
@@ -293,7 +321,7 @@ export class UserProvisioningService {
    * sairiam de `sentToManager`, porque quem dá parecer é quem tem
    * `barters.opinion` — e ele não tem.
    */
-  private async resolveManager(role: ManagedRole, managerId?: number): Promise<number | null> {
+  private async resolveManager(role: Role, managerId?: number): Promise<number | null> {
     if (role !== ROLE.consultant || managerId === undefined) return null;
 
     const manager = await this.prisma.user.findUnique({ where: { id: managerId } });
@@ -303,6 +331,22 @@ export class UserProvisioningService {
       );
     }
     return manager.id;
+  }
+
+  /**
+   * O sistema nunca fica sem admin: ninguém exclui a própria conta, e o último
+   * admin não sai — sem ele, não há quem crie usuários nem redefina senhas.
+   */
+  private async ensureAdminCanLeave(actor: User, adminId: number): Promise<void> {
+    if (actor.id === adminId) {
+      throw new UnprocessableEntityException(
+        'Você não pode excluir a própria conta. Peça a outro administrador',
+      );
+    }
+    const admins = await this.prisma.user.count({ where: { role: ROLE.admin } });
+    if (admins <= 1) {
+      throw new UnprocessableEntityException('O último administrador não pode ser excluído');
+    }
   }
 
   /** As duas coisas que impedem um gerente de sair — ver `delete`. */
@@ -337,7 +381,7 @@ export class UserProvisioningService {
   }
 
   /** Registro do papel DESTA rota. Papel diferente responde como inexistente. */
-  private async findWithRole(role: ManagedRole, id: number): Promise<User> {
+  private async findWithRole(role: Role, id: number): Promise<User> {
     const user = await this.prisma.user.findFirst({ where: { id, role } });
     if (!user) {
       throw new NotFoundException(`${ROLE_LABELS[role]} não encontrado.`);

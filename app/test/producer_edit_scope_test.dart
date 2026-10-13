@@ -8,20 +8,19 @@ import 'package:agrobarter_app/theme/app_theme.dart';
 
 /// O CADASTRO DO PRODUTOR TEM DOIS DONOS, e a tela diz qual é qual.
 ///
-/// O CONSULTOR passou a gerir os dados do cliente dele: quem visita a fazenda é
-/// quem sabe que o telefone mudou, que a propriedade está com o nome errado e
-/// que o cliente passou a plantar noutro município. Enquanto isso foi só do
-/// admin, corrigir um telefone virava um chamado — e o cadastro envelhecia em
-/// silêncio, que é pior do que ficar errado com alguém sabendo.
+/// O CONSULTOR cadastra o cliente novo e gere todos os dados dos clientes
+/// dele: quem visita a fazenda é quem sabe que o telefone mudou, que o
+/// produtor fez a opção pela folha e que o CPF saiu com um dígito trocado.
 ///
-/// O que ele NÃO alcança é o outro lado da mesma regra: a identidade do cadastro
-/// (o documento), as duas réguas que medem toda permuta dele (a área cultivável
-/// e o regime de Funrural) e a carteira — quem atende quem é decisão de quem
-/// administra. Os quatro ficam VISÍVEIS e travados, porque esconder um campo que
-/// ele acabou de conferir na fazenda o faria procurar o que sumiu.
+/// A ÁREA não está mais aqui: ela é a área plantada de cada permuta, por
+/// cultura — e o cadastro diz isso a quem procurar o campo.
 ///
-/// Quem recusa de verdade é o servidor (`assertEditable`, na API). Estes testes
-/// guardam a tradução da regra na tela.
+/// O que ele NÃO alcança é a CARTEIRA — quem atende quem é decisão de quem
+/// administra. Ela fica VISÍVEL e travada, e no cadastro novo mostra o nome
+/// dele: o produtor que ele cadastra é dele.
+///
+/// Quem recusa de verdade é o servidor (`ownerOnCreate` e `assertEditable`, na
+/// API). Estes testes guardam a tradução da regra na tela.
 void main() {
   UserModel pessoa({
     required String id,
@@ -46,25 +45,28 @@ void main() {
     id: '2',
     nome: 'João Silva',
     papel: UserRole.consultant,
-    capacidades: const {Capability.producersEdit},
+    capacidades: const {Capability.producersRegister, Capability.producersEdit},
   );
 
   UserModel admin() => pessoa(
     id: '1',
     nome: 'Admin',
     papel: UserRole.admin,
-    capacidades: const {Capability.producersManage, Capability.producersEdit},
+    capacidades: const {
+      Capability.producersManage,
+      Capability.producersRegister,
+      Capability.producersEdit,
+    },
   );
 
   ProducerModel produtor() => ProducerModel(
     id: '10',
     name: 'Antônio Carvalho',
-    consultantIds: const ['2'],
+    consultantId: '2',
     document: 'CPF 123.456.789-00',
     phone: '(44) 99999-0000',
     farmName: 'Fazenda Boa Vista',
     city: 'Maringá/PR',
-    areaHa: 120,
     avatarInitials: 'AC',
     createdAt: DateTime(2020, 1, 1),
   );
@@ -81,7 +83,7 @@ void main() {
   /// Tela alta o bastante para o formulário inteiro caber sem rolagem — a
   /// mesma razão do teste da carteira: o que está fora do viewport nem é
   /// construído, e o teste falharia por não achar o que não foi desenhado.
-  Future<void> abrir(WidgetTester tester, UserModel quem) async {
+  Future<void> abrir(WidgetTester tester, UserModel quem, {ProducerModel? p}) async {
     AppData.currentUser = quem;
     tester.view.physicalSize = const Size(1000, 2400);
     tester.view.devicePixelRatio = 1;
@@ -89,7 +91,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp(
       theme: AppTheme.theme,
-      home: EditProducerScreen(producer: produtor()),
+      home: EditProducerScreen(producer: p),
     ));
     await tester.pumpAndSettle();
   }
@@ -97,45 +99,58 @@ void main() {
   /// Um campo é EDITÁVEL quando existe uma caixa de texto com aquele rótulo.
   Finder campo(String rotulo) => find.widgetWithText(TextFormField, rotulo);
 
-  testWidgets('o consultor edita contato e endereço do cliente dele', (tester) async {
-    await abrir(tester, consultor());
+  /// O regime de Funrural é editável quando as opções estão na tela.
+  Finder regimes() => find.byType(RadioListTile<TaxRegime>);
 
-    expect(campo('Nome'), findsOneWidget);
-    expect(campo('Telefone'), findsOneWidget);
-    expect(campo('Propriedade'), findsOneWidget);
-    expect(campo('Município/UF'), findsOneWidget);
-  });
+  testWidgets('o consultor edita todos os dados do cliente dele', (tester) async {
+    await abrir(tester, consultor(), p: produtor());
 
-  /// Os quatro campos do ADMIN aparecem travados — com o valor à vista, porque
-  /// a área cultivável que o consultor acabou de conferir continua sendo a
-  /// informação que ele foi buscar ali.
-  testWidgets('documento, área, Funrural e carteira ficam travados para ele', (tester) async {
-    await abrir(tester, consultor());
-
-    expect(campo('Documento (CPF/CNPJ)'), findsNothing);
+    for (final rotulo in [
+      'Nome',
+      'Documento (CPF/CNPJ)',
+      'Telefone',
+      'Propriedade',
+      'Município/UF',
+    ]) {
+      expect(campo(rotulo), findsOneWidget, reason: rotulo);
+    }
+    expect(regimes(), findsNWidgets(TaxRegime.values.length));
+    // A área saiu do cadastro, e a tela diz onde ela foi parar.
     expect(campo('Área cultivável (ha)'), findsNothing);
-    expect(find.byType(CheckboxListTile), findsNothing);
-
-    // Travado não é escondido: o valor continua na tela, com o cadeado.
-    expect(find.text('CPF 123.456.789-00'), findsOneWidget);
-    expect(find.text('120 ha'), findsOneWidget);
-    expect(find.byIcon(Icons.lock_outline), findsNWidgets(4));
+    expect(find.textContaining('área plantada é informada em cada permuta'), findsOneWidget);
   });
 
-  /// E a tela DIZ a quem pedir: uma trava que não explica manda o consultor
-  /// concluir que o app está quebrado.
-  testWidgets('a tela diz que os quatro são do administrador', (tester) async {
+  /// A CARTEIRA aparece travada — com o nome à vista, porque saber quem atende
+  /// o cliente continua sendo informação.
+  testWidgets('só a carteira fica travada para ele', (tester) async {
+    await abrir(tester, consultor(), p: produtor());
+
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+    expect(find.text('João Silva'), findsOneWidget);
+    expect(find.textContaining('definido pelo administrador'), findsOneWidget);
+  });
+
+  /// O CADASTRO DO CONSULTOR nasce na carteira dele. O nome vem da sessão, e
+  /// não da lista de consultores — que é do admin e pode nem ter sido
+  /// carregada para ele.
+  testWidgets('no cadastro novo, a carteira já é a dele', (tester) async {
+    AppData.consultants = [];
     await abrir(tester, consultor());
 
-    expect(find.textContaining('alterados pelo administrador'), findsOneWidget);
+    expect(find.text('Novo Produtor'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(find.text('João Silva'), findsOneWidget);
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+    expect(campo('Documento (CPF/CNPJ)'), findsOneWidget);
+    expect(regimes(), findsNWidgets(TaxRegime.values.length));
   });
 
-  testWidgets('o admin continua alcançando os quatro', (tester) async {
-    await abrir(tester, admin());
+  testWidgets('o admin escolhe a carteira', (tester) async {
+    await abrir(tester, admin(), p: produtor());
 
     expect(campo('Documento (CPF/CNPJ)'), findsOneWidget);
-    expect(campo('Área cultivável (ha)'), findsOneWidget);
-    expect(find.byType(CheckboxListTile), findsWidgets);
+    expect(find.byType(DropdownButtonFormField<String>), findsOneWidget);
     expect(find.byIcon(Icons.lock_outline), findsNothing);
   });
 }

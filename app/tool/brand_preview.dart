@@ -73,6 +73,10 @@ void main() {
       'Roboto-Regular.ttf', 'Roboto-Medium.ttf', 'Roboto-Bold.ttf', 'Roboto-Black.ttf',
     ]);
     await _loadFont('MaterialIcons', ['MaterialIcons-Regular.otf']);
+    // A família do logotipo vem empacotada no próprio app.
+    final wordmark = FontLoader(brandWordmarkFont)
+      ..addFont(rootBundle.load('assets/fonts/BricolageGrotesque-Bold.ttf'));
+    await wordmark.load();
   });
 
   testWidgets('logotipo nos dois fundos', (tester) async {

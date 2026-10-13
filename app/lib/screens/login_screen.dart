@@ -137,10 +137,9 @@ class _LoginScreenState extends State<LoginScreen> {
                       textInputAction: TextInputAction.next,
                       autofocus: true,
                       onSubmitted: (_) => _passFocus.requestFocus(),
-                      decoration: InputDecoration(
+                      decoration: const InputDecoration(
                         labelText: 'E-mail',
-                        prefixIcon: const Icon(Icons.email_outlined),
-                        hintText: 'admin@${brand.identity.emailDomain}',
+                        prefixIcon: Icon(Icons.email_outlined),
                       ),
                     ),
                     const SizedBox(height: 16),

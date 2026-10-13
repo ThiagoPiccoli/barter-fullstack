@@ -3,6 +3,7 @@ import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../data/app_data.dart';
 import '../services/api/api_client.dart';
+import '../services/num_input.dart';
 import '../services/tax_regime.dart';
 import '../widgets/common_widgets.dart';
 import '../widgets/provisional_password_dialog.dart';
@@ -23,19 +24,17 @@ String initialsFrom(String name) {
 /// novo registro; caso contrário, edita o existente. Salva em [AppData.producers] e
 /// devolve o produtor resultante via Navigator.pop.
 ///
-/// A TELA TEM DOIS DONOS, e o que cada um alcança é diferente.
+/// A TELA TEM DOIS DONOS, e o que separa os dois é UM campo: a carteira.
 ///
-/// O ADMIN cadastra, exclui e edita tudo — inclusive a carteira, a área
-/// cultivável, o documento e o regime de Funrural.
+/// O ADMIN cadastra e edita qualquer produtor, e escolhe quem o atende.
 ///
-/// O CONSULTOR edita os dados de contato e endereço dos clientes da carteira
-/// dele: é ele quem visita a fazenda e sabe que o telefone mudou. Os outros
-/// quatro campos ficam VISÍVEIS e travados, com o porquê ao lado — escondê-los
-/// faria a tela parecer incompleta, e o consultor procuraria a área cultivável
-/// que ele acabou de conferir na fazenda sem entender por que ela sumiu.
+/// O CONSULTOR cadastra o cliente novo e edita os da carteira dele — todos os
+/// dados, o documento, a área do Barter e o Funrural inclusive: é ele quem
+/// visita a fazenda. A carteira fica VISÍVEL e travada, com o nome dele no
+/// cadastro novo: o produtor que ele cadastra é dele, e só dele.
 ///
-/// Quem recusa de verdade é o servidor (ver `assertEditable`, na API): esta tela
-/// é a tradução da regra, não a regra.
+/// Quem recusa de verdade é o servidor (ver `ownerOnCreate` e `assertEditable`,
+/// na API): esta tela é a tradução da regra, não a regra.
 class EditProducerScreen extends StatefulWidget {
   final ProducerModel? producer;
   const EditProducerScreen({super.key, this.producer});
@@ -51,12 +50,10 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   late final TextEditingController _phone;
   late final TextEditingController _farm;
   late final TextEditingController _city;
-  late final TextEditingController _area;
 
-  /// Os consultores que atendem este produtor. PELO MENOS UM: um produtor que
-  /// ninguém atende não aparece para ninguém. Pode ser mais de um — consultores
-  /// dividem região e atendem o mesmo cliente.
-  final Set<String> _consultantIds = {};
+  /// O consultor que atende este produtor — obrigatório: um produtor que
+  /// ninguém atende não aparece para ninguém.
+  String? _consultantId;
 
   /// COMO ELE RECOLHE o Funrural — a opção formal dele perante o fisco.
   ///
@@ -67,24 +64,25 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
 
   bool get _isNew => widget.producer == null;
 
-  /// Quem está com a tela na mão pode mexer no CADASTRO — criar, excluir,
-  /// definir a carteira e corrigir as réguas (documento, área, regime)?
+  /// Quem está com a tela na mão escolhe a CARTEIRA — quem atende o produtor?
   ///
-  /// Falso para o consultor, que edita só o que ele apura na visita. A regra
-  /// mora no servidor; aqui ela desenha a tela.
+  /// Falso para o consultor: o cliente que ele cadastra nasce na carteira dele,
+  /// e a do cliente que ele edita não muda pela mão dele. A regra mora no
+  /// servidor; aqui ela desenha a tela.
   bool get _manages => AppData.can(Capability.producersManage);
 
   @override
   void initState() {
     super.initState();
     final p = widget.producer;
-    // Consultor excluído sai da lista: o vínculo dele já não existe no
-    // servidor, e mostrá-lo marcado prometeria salvar algo que seria recusado.
     if (p != null) {
-      _consultantIds.addAll(
-        p.consultantIds.where((id) => AppData.consultantById(id) != null),
-      );
+      _consultantId = p.consultantId;
       _taxRegime = p.taxRegime;
+    } else if (!_manages) {
+      // O CADASTRO DO CONSULTOR já nasce na carteira dele — é o que o servidor
+      // grava de qualquer jeito, e mandar o próprio id é aceito. Deixar vazio
+      // faria a tela mostrar "sem consultor" para um produtor que vai ser dele.
+      _consultantId = AppData.currentUser?.id;
     }
     _name = TextEditingController(text: p?.name ?? '');
     _document = TextEditingController(text: p?.document ?? '');
@@ -96,13 +94,6 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     _phone = TextEditingController(text: p?.phone ?? '');
     _farm = TextEditingController(text: p?.farmName ?? '');
     _city = TextEditingController(text: p?.city ?? '');
-    _area = TextEditingController(
-      text: p == null
-          ? ''
-          : (p.areaHa == p.areaHa.roundToDouble()
-              ? p.areaHa.toStringAsFixed(0)
-              : p.areaHa.toStringAsFixed(1).replaceAll('.', ',')),
-    );
   }
 
   @override
@@ -112,17 +103,26 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     _phone.dispose();
     _farm.dispose();
     _city.dispose();
-    _area.dispose();
     super.dispose();
   }
 
+  /// Onde a ÁREA foi parar — ela saiu do cadastro, e quem procurar o campo
+  /// precisa saber que agora ela é de cada permuta.
+  static const _areaNote =
+      'A área plantada é informada em cada permuta, por cultura: ela define o seguro, '
+      'os insumos obrigatórios e o teto da garantia daquela permuta.';
+
   /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
+  ///
+  /// O próprio consultor vem de [AppData.currentUser], e não da lista de
+  /// consultores: ela é carregada para o admin escolher a carteira, e na sessão
+  /// do consultor pode nem ter sido.
   String get _walletLabel {
-    final names = _consultantIds
-        .map((id) => AppData.consultantById(id)?.name)
-        .whereType<String>()
-        .toList();
-    return names.isEmpty ? 'sem consultor' : names.join(', ');
+    final id = _consultantId;
+    if (id == null) return 'sem consultor';
+    final me = AppData.currentUser;
+    if (me != null && me.id == id) return me.name;
+    return AppData.consultantById(id)?.name ?? 'sem consultor';
   }
 
   /// Envia o cadastro à API e devolve o registro salvo (com id do servidor).
@@ -133,12 +133,11 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
     final draft = ProducerModel(
       id: old?.id ?? '',
       name: name,
-      consultantIds: _consultantIds.toList(),
+      consultantId: _consultantId,
       document: _document.text.trim(),
       phone: _phone.text.trim(),
       farmName: _farm.text.trim(),
       city: _city.text.trim(),
-      areaHa: double.parse(_area.text.trim().replaceAll(',', '.')),
       taxRegime: _taxRegime,
       avatarInitials: initialsFrom(name),
       createdAt: old?.createdAt ?? DateTime.now(),
@@ -160,13 +159,12 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // A CARTEIRA é do admin: ela é a lista inteira num campo só, e um
-            // consultor que a escrevesse poderia se remover do próprio cliente
-            // (ou remover um colega) sem que ninguém tivesse decidido isso.
+            // A CARTEIRA é do admin: um consultor que a escrevesse poderia
+            // passar o próprio cliente adiante sem que ninguém decidisse isso.
             if (_manages)
-              _ConsultantWalletField(
-                selected: _consultantIds,
-                onChanged: () => setState(() {}),
+              _ConsultantField(
+                value: _consultantId,
+                onChanged: (id) => setState(() => _consultantId = id),
               )
             else
               _LockedNote(
@@ -175,17 +173,10 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
                 value: _walletLabel,
               ),
             _EditField(controller: _name, label: 'Nome', icon: Icons.person_outline, required: true),
-            // O DOCUMENTO é a IDENTIDADE do cadastro (a unicidade mora nele):
-            // trocá-lo transforma o cliente A no cliente B mantendo as permutas
-            // do A.
-            if (_manages)
-              _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true)
-            else
-              _LockedNote(
-                icon: Icons.badge_outlined,
-                label: 'Documento (CPF/CNPJ)',
-                value: _document.text,
-              ),
+            // O DOCUMENTO é a IDENTIDADE do cadastro, e a unicidade mora nele:
+            // o servidor recusa o CPF/CNPJ que já é de outro produtor, no
+            // cadastro e na edição, e a mensagem diz o que fazer.
+            _EditField(controller: _document, label: 'Documento (CPF/CNPJ)', icon: Icons.badge_outlined, required: true),
             _EditField(
               controller: _phone,
               label: 'Telefone',
@@ -194,55 +185,22 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
             ),
             _EditField(controller: _farm, label: 'Propriedade', icon: Icons.agriculture_outlined, required: true),
             _EditField(controller: _city, label: 'Município/UF', icon: Icons.location_on_outlined, required: true),
-            // A ÁREA CULTIVÁVEL é o denominador de toda régua da permuta — os
-            // mínimos por hectare, o custo do seguro, o investimento por
-            // hectare. Um arrendamento a mais muda quanto insumo o Barter exige
-            // daquele cliente: é decisão de crédito, não atualização de contato.
-            if (_manages)
-              _EditField(
-                controller: _area,
-                label: 'Área cultivável (ha)',
-                icon: Icons.straighten,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                required: true,
-                validator: (v) {
-                  final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
-                  if (n == null || n <= 0) return 'Informe uma área válida (maior que 0)';
-                  return null;
-                },
-              )
-            else
-              _LockedNote(
-                icon: Icons.straighten,
-                label: 'Área cultivável',
-                value: '${_area.text} ha',
-              ),
             // O IMPOSTO do produtor, no cadastro dele: é aqui que a opção pela
             // folha mora, porque é uma opção só — feita perante o fisco, valendo
             // para o ano e para todas as entregas. Cada permuta nova nasce com
             // ela e congela a alíquota que ela produziu.
-            if (_manages)
-              _TaxRegimeField(
-                selected: _taxRegime,
-                document: _document.text,
-                onChanged: (regime) => setState(() => _taxRegime = regime),
-              )
-            else
-              _LockedNote(
-                icon: Icons.receipt_long_outlined,
-                label: 'Funrural',
-                value: _taxRegime.label,
-              ),
+            _TaxRegimeField(
+              selected: _taxRegime,
+              document: _document.text,
+              onChanged: (regime) => setState(() => _taxRegime = regime),
+            ),
             const SizedBox(height: 8),
             Text(
               _manages
-                  ? 'A área define os insumos obrigatórios e a quantidade mínima de cada '
-                      'um nas novas permutas deste produtor. O produtor só aparece para os '
-                      'consultores marcados acima.'
-                  : 'O documento, a área cultivável, o Funrural e a carteira são '
-                      'alterados pelo administrador: os três primeiros são as réguas que '
-                      'medem todas as permutas deste cliente, e a carteira é quem o atende. '
-                      'Peça a ele e edite o restante normalmente.',
+                  ? '$_areaNote O produtor só aparece para o consultor escolhido acima; '
+                      'trocá-lo não leva as permutas já registradas, que continuam com quem '
+                      'as fez.'
+                  : '$_areaNote Quem atende o produtor é definido pelo administrador.',
               style: TextStyle(fontSize: 11, color: AppColors.textLight),
             ),
             const SizedBox(height: 20),
@@ -256,11 +214,10 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
 
 /// UM CAMPO QUE ESTA PESSOA NÃO ESCREVE — o valor, visível, com o cadeado.
 ///
-/// Ele existe para o consultor não procurar o que sumiu: a área cultivável que
-/// ele acabou de conferir na fazenda continua na tela, dizendo quanto é, e o
-/// cadeado explica por que ela não se digita ali. Esconder o campo faria a tela
-/// parecer incompleta; deixá-lo editável faria o servidor recusar o que a tela
-/// ofereceu.
+/// Hoje é só a CARTEIRA, para o consultor: ele vê quem atende o cliente (ele
+/// mesmo, no cadastro novo), e o cadeado explica por que isso não se escolhe
+/// ali. Esconder o campo faria a tela parecer incompleta; deixá-lo editável
+/// faria o servidor recusar o que a tela ofereceu.
 class _LockedNote extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -401,129 +358,56 @@ class _TaxRegimeField extends StatelessWidget {
   }
 }
 
-/// A CARTEIRA do produtor: quais consultores o atendem.
+/// A CARTEIRA do produtor: o consultor que o atende, numa lista suspensa.
 ///
-/// Era um dropdown de escolha única, e a mudança para marcação múltipla é a
-/// própria funcionalidade — consultores dividem região e atendem o mesmo
-/// produtor. O dropdown obrigava a escolher um; a única forma de representar
-/// dois era cadastrar o produtor duas vezes, e aí a área cultivável passava a
-/// existir em dobro e as permutas do mesmo cliente se partiam entre dois
-/// registros.
+/// Um consultor por produtor. Já foi marcação múltipla, quando consultores
+/// dividiam o cliente; a regra mudou, e a lista suspensa é a forma da regra —
+/// não há como escolher dois.
 ///
-/// É um [FormField] e não uma lista solta para a exigência de "pelo menos um"
-/// entrar no mesmo `validate()` dos outros campos — em vez de virar um `if`
-/// antes do salvamento, que é o tipo de conferência que se esquece de fazer
-/// quando aparece um segundo botão de salvar.
-class _ConsultantWalletField extends StatelessWidget {
-  /// O conjunto vivo de ids marcados — a tela é dona dele; este campo escreve
-  /// dentro e avisa por [onChanged].
-  final Set<String> selected;
-  final VoidCallback onChanged;
+/// O id de um consultor que não existe mais (excluído com o produtor aberto em
+/// outra tela) não vira o valor inicial: o [DropdownButtonFormField] exige que
+/// o valor esteja entre os itens, e o campo abre vazio, pedindo a realocação.
+class _ConsultantField extends StatelessWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
 
-  const _ConsultantWalletField({required this.selected, required this.onChanged});
+  const _ConsultantField({required this.value, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
     final consultants = AppData.consultants;
+    final initial = consultants.any((c) => c.id == value) ? value : null;
 
-    return FormField<Set<String>>(
-      initialValue: selected,
-      validator: (_) =>
-          selected.isEmpty ? 'Marque pelo menos um consultor para atender este produtor' : null,
-      builder: (state) => Padding(
-        padding: const EdgeInsets.only(bottom: 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: AppShape.field,
-                border: Border.all(
-                  color: state.hasError ? AppColors.denied : AppColors.borderSubtle,
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-                    child: Row(
-                      children: [
-                        Icon(Icons.badge_outlined, size: 20, color: AppColors.textLight),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Consultores que atendem',
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: DropdownButtonFormField<String>(
+        initialValue: initial,
+        isExpanded: true,
+        decoration: const InputDecoration(
+          labelText: 'Consultor que atende',
+          prefixIcon: Icon(Icons.badge_outlined, size: 20),
+        ),
+        disabledHint: const Text('Nenhum consultor cadastrado ainda.',
+            style: TextStyle(fontSize: 14)),
+        items: consultants
+            .map((c) => DropdownMenuItem(
+                  value: c.id,
+                  child: Text.rich(
+                    TextSpan(children: [
+                      TextSpan(text: c.name),
+                      if (c.branch.isNotEmpty)
+                        TextSpan(
+                          text: '  ·  ${c.branch}',
                           style: TextStyle(fontSize: 12, color: AppColors.textLight),
                         ),
-                        const Spacer(),
-                        if (selected.isNotEmpty)
-                          Text(
-                            '${selected.length} marcado(s)',
-                            style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                          ),
-                      ],
-                    ),
+                    ]),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14),
                   ),
-                  if (consultants.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                      child: Text(
-                        'Nenhum consultor cadastrado ainda.',
-                        style: TextStyle(fontSize: 13, color: AppColors.textMedium),
-                      ),
-                    )
-                  else
-                    // Teto de altura, e não a lista inteira: a carteira cresce
-                    // com a operação, e sem isto o formulário viraria uma rolagem
-                    // em que o botão de salvar some conforme a empresa contrata.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 240),
-                      child: ListView.builder(
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.only(bottom: 4),
-                        itemCount: consultants.length,
-                        itemBuilder: (_, i) {
-                          final c = consultants[i];
-                          return CheckboxListTile(
-                            value: selected.contains(c.id),
-                            dense: true,
-                            controlAffinity: ListTileControlAffinity.leading,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                            title: Text(c.name,
-                                style: const TextStyle(fontSize: 14),
-                                overflow: TextOverflow.ellipsis),
-                            subtitle: Text(c.branch,
-                                style: TextStyle(fontSize: 11, color: AppColors.textLight),
-                                overflow: TextOverflow.ellipsis),
-                            onChanged: (marked) {
-                              if (marked == true) {
-                                selected.add(c.id);
-                              } else {
-                                selected.remove(c.id);
-                              }
-                              // O campo revalida na hora: desmarcar o último
-                              // precisa acusar na hora, e não só ao salvar.
-                              state.didChange(selected);
-                              state.validate();
-                              onChanged();
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (state.hasError)
-              Padding(
-                padding: const EdgeInsets.only(left: 12, top: 6),
-                child: Text(
-                  state.errorText!,
-                  style: TextStyle(fontSize: 12, color: AppColors.denied),
-                ),
-              ),
-          ],
-        ),
+                ))
+            .toList(),
+        onChanged: onChanged,
+        validator: (v) => v == null ? 'Escolha o consultor que atende este produtor' : null,
       ),
     );
   }
@@ -571,22 +455,31 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 
   bool get _isNew => widget.user == null;
   bool get _isConsultant => widget.role == UserRole.consultant;
+  bool get _isManager => widget.role == UserRole.manager;
+
+  /// O OUTRO gerente lotado nesta unidade, se houver — cada unidade tem um
+  /// gerente só. Null fora do cadastro de gerente: consultor, faturista e os
+  /// demais dividem unidade normalmente.
+  ///
+  /// Quem recusa de verdade é o servidor; aqui a regra marca a lista e acusa
+  /// antes do envio.
+  UserModel? _otherManagerIn(String? unitId) => !_isManager || unitId == null
+      ? null
+      : AppData.managers
+          .where((m) => m.unitId == unitId && m.id != widget.user?.id)
+          .firstOrNull;
 
   /// O COMITÊ não é uma pessoa: é uma reunião, e o cadastro é um só.
   ///
-  /// Três coisas mudam por causa disso, e todas aparecem na tela: o campo de
-  /// nome pede o nome do ÓRGÃO (não "nome completo"), não há exclusão — sem o
-  /// cadastro nenhuma permuta é decidida — e o texto explica que o acesso é
+  /// Duas coisas mudam por causa disso nesta tela: o campo de nome pede o nome
+  /// do ÓRGÃO (não "nome completo"), e o texto explica que o acesso é
   /// compartilhado por quem participa. O servidor impõe o resto: um segundo
   /// cadastro leva 422 (ver committee.controller.ts).
+  ///
+  /// Senha e exclusão de todos os papéis ficam no PERFIL — o do consultor
+  /// ([ConsultantProfileScreen]) ou o da retaguarda ([StaffProfileScreen]) —,
+  /// e não aqui: este formulário é só o cadastro.
   bool get _isCommittee => widget.role == UserRole.committee;
-
-  bool get _isBiller => widget.role == UserRole.biller;
-
-  /// O EMISSOR — o posto da cédula. Ele compartilha o formulário do faturista
-  /// (pessoa, unidade, sem gerente), e por isso a única coisa que o distingue na
-  /// tela é o rótulo e o rodapé que explica o que ele faz.
-  bool get _isEmitter => widget.role == UserRole.emitter;
 
   String get _roleLabel => widget.role.label;
 
@@ -650,114 +543,27 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
   }
 
   /// A rota vem do PAPEL — o mesmo desenho do servidor, onde cada papel tem a
-  /// sua e o motor de provisionamento é um só. O admin não aparece: ele não se
-  /// cadastra por aqui (ver `ManagedRole` em common/roles.ts), e o consultor não
-  /// chega neste método sem gerente porque o formulário o exige antes.
+  /// sua e o motor de provisionamento é um só. O consultor não chega neste
+  /// método sem gerente porque o formulário o exige antes.
   Future<ProvisionedConsultant> _create(UserModel draft) => switch (widget.role) {
         UserRole.consultant => AppData.createConsultant(draft),
         UserRole.manager => AppData.createManager(draft),
+        UserRole.insurer => AppData.createInsurer(draft),
         UserRole.biller => AppData.createBiller(draft),
         UserRole.emitter => AppData.createEmitter(draft),
         UserRole.committee => AppData.createCommittee(draft),
-        UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
+        UserRole.admin => AppData.createAdmin(draft),
       };
 
   Future<UserModel> _update(UserModel draft) => switch (widget.role) {
         UserRole.consultant => AppData.updateConsultant(draft),
         UserRole.manager => AppData.updateManager(draft),
+        UserRole.insurer => AppData.updateInsurer(draft),
         UserRole.biller => AppData.updateBiller(draft),
         UserRole.emitter => AppData.updateEmitter(draft),
         UserRole.committee => AppData.updateCommittee(draft),
-        UserRole.admin => throw UnsupportedError('Não existe cadastro de administrador'),
+        UserRole.admin => AppData.updateAdmin(draft),
       };
-
-  /// Nova senha de primeira entrada. Derruba as sessões abertas do titular no
-  /// servidor — a confirmação avisa isso antes.
-  Future<void> _resetPassword() async {
-    final user = widget.user;
-    if (user == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: Icon(Icons.lock_reset, color: AppColors.pending, size: 40),
-        title: const Text('Redefinir senha?'),
-        content: Text(
-          _isCommittee
-              // Na conta compartilhada a frase é outra porque o efeito é outro:
-              // a senha circula entre quem participa da reunião, e trocá-la tira
-              // o acesso de TODO MUNDO que estava com a anterior — que é
-              // exatamente o que se quer quando a composição muda.
-              ? 'Uma nova senha provisória será gerada para o ${user.name}, e a atual '
-                  'deixa de valer para todos que a tinham.\n\n'
-                  'Qualquer sessão aberta nesta conta será encerrada.'
-              : 'Uma nova senha provisória será gerada para ${user.name.split(' ').first}, '
-                  'e a senha atual deixa de valer.\n\n'
-                  'Qualquer sessão aberta nesta conta será encerrada.',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, color: AppColors.textMedium),
-        ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pop(ctx, true),
-            icon: const Icon(Icons.lock_reset, size: 18),
-            label: const Text('Redefinir'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
-    try {
-      // O comitê não tem id na rota: o cadastro é um só (ver CommitteeRepository).
-      final provisioned = _isCommittee
-          ? await AppData.resetCommitteePassword()
-          : _isBiller
-              ? await AppData.resetBillerPassword(user.id)
-              : _isEmitter
-                  ? await AppData.resetEmitterPassword(user.id)
-                  : await AppData.resetManagerPassword(user.id);
-      if (mounted) await showProvisionalPassword(context, provisioned, isReset: true);
-    } on ApiException catch (e) {
-      if (mounted) showErrorSnack(context, e);
-    }
-  }
-
-  /// Exclusão de GERENTE, FATURISTA e EMISSOR — as pessoas que este formulário
-  /// cadastra e que podem sair.
-  ///
-  /// No gerente o servidor RECUSA enquanto ele tiver consultores no time ou
-  /// permutas esperando o parecer dele, e a mensagem diz qual dos dois falta — a
-  /// tela só a exibe, em vez de repetir a regra aqui e arriscar divergir dela.
-  /// O faturista e o emissor saem sem trava: o que eles assinaram guarda o nome
-  /// deles no próprio registro, e a fila dos dois é o estado da permuta, não uma
-  /// caixa de entrada.
-  ///
-  /// O COMITÊ não tem este botão, e nem rota: o cadastro é a ETAPA, e sem ele
-  /// nenhuma permuta é decidida. Para tirar o acesso, redefine-se a senha.
-  Future<void> _delete() async {
-    final user = widget.user;
-    if (user == null) return;
-    await confirmDeleteRegistration(
-      context,
-      title: 'Excluir $_roleLabel',
-      name: user.name,
-      barterCount: _isBiller
-          ? AppData.barters.where((b) => b.invoicedBy == user.name).length
-          : _isEmitter
-              ? AppData.barters.where((b) => b.cprEmittedBy == user.name).length
-              : AppData.barters.where((b) => b.managerId == user.id).length,
-      onConfirm: () async {
-        await switch (widget.role) {
-          UserRole.biller => AppData.deleteBiller(user.id),
-          UserRole.emitter => AppData.deleteEmitter(user.id),
-          _ => AppData.deleteManager(user.id),
-        };
-        if (mounted) Navigator.pop(context);
-      },
-    );
-  }
 
   /// O que este cadastro faz no fluxo, em uma frase — a linha que explica ao
   /// admin o que ele está criando, e por que a próxima etapa depende dela.
@@ -776,6 +582,12 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               'por quem participa. É por ele que se aprova ou nega a permuta depois do '
               'parecer do gerente, e a decisão sai assinada pelo comitê. A ata (quem '
               'estava, o que foi acordado) vai na observação da decisão.',
+        UserRole.insurer =>
+          'A seguradora é o setor que cuida dos seguros: quando uma permuta aprovada pelo '
+              'comitê tem seguro (obrigatório, ou opcional aceito pelo produtor), ela cai '
+              'aqui antes do faturista, e a pessoa anexa a apólice e informa o número — o '
+              'que a cédula vai citar. Sem seguro, a permuta vai direto ao faturista. Cada '
+              'pessoa tem o seu acesso, e quem informou cada apólice fica registrado.',
         UserRole.biller =>
           'O faturista fatura o que o comitê aprovou e anexa as notas fiscais da permuta '
               '— são várias, porque a retirada sai em mais de um carregamento. A fila dele '
@@ -786,7 +598,10 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               'emite o título, colhe as assinaturas e o leva a registro. São três etapas '
               'porque acontecem em dias diferentes, e é o status da permuta que diz em que '
               'pé a CPR está. Sem um emissor cadastrado, toda permuta faturada para aí.',
-        UserRole.admin => '',
+        UserRole.admin =>
+          'O administrador é responsável pelo sistema e pode tudo: cadastros, preços, '
+              'e todas as etapas da permuta (parecer, decisão, apólice, faturamento e emissão). '
+              'Ninguém exclui a própria conta, e o último administrador não pode ser excluído.',
       };
 
   @override
@@ -808,9 +623,10 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
             // unidade; o consultor, das duas coisas.
             if (AppData.units.isEmpty || (_isConsultant && AppData.managers.isEmpty)) ...[
               _MissingPrerequisiteHint(
+                forConsultant: _isConsultant,
                 missing: [
-                  if (AppData.units.isEmpty) 'nenhuma unidade cadastrada',
-                  if (_isConsultant && AppData.managers.isEmpty) 'nenhum gerente cadastrado',
+                  if (AppData.units.isEmpty) 'unidade cadastrada',
+                  if (_isConsultant && AppData.managers.isEmpty) 'gerente cadastrado',
                 ],
               ),
               const SizedBox(height: 14),
@@ -848,21 +664,43 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
               child: DropdownButtonFormField<String>(
                 initialValue: _unitId,
                 isExpanded: true,
+                // Acusa no ato da escolha: a unidade ocupada por outro gerente
+                // aparece na hora, e não só ao salvar.
+                autovalidateMode: AutovalidateMode.onUserInteraction,
                 decoration: const InputDecoration(
                   labelText: 'Unidade',
                   prefixIcon: Icon(Icons.store_outlined, size: 20),
                 ),
-                items: AppData.units
-                    .map((u) => DropdownMenuItem(
-                          value: u.id,
-                          child: Text(u.label,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 14)),
-                        ))
-                    .toList(),
+                // No cadastro de gerente, a unidade que já tem gerente diz quem
+                // é: quem escolhe vê a ocupação antes de tropeçar na recusa.
+                items: AppData.units.map((u) {
+                  final other = _otherManagerIn(u.id);
+                  return DropdownMenuItem(
+                    value: u.id,
+                    child: Text.rich(
+                      TextSpan(children: [
+                        TextSpan(text: u.label),
+                        if (other != null)
+                          TextSpan(
+                            text: '  ·  gerente: ${other.name}',
+                            style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                          ),
+                      ]),
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  );
+                }).toList(),
                 onChanged: (v) => setState(() => _unitId = v),
-                validator: (v) =>
-                    v == null ? 'Escolha a unidade ${_isCommittee ? 'em que o comitê se reúne' : 'de trabalho'}' : null,
+                validator: (v) {
+                  if (v == null) {
+                    return 'Escolha a unidade ${_isCommittee ? 'em que o comitê se reúne' : 'de trabalho'}';
+                  }
+                  final other = _otherManagerIn(v);
+                  return other == null
+                      ? null
+                      : 'Esta unidade já tem gerente: ${other.name}. Cada unidade tem um gerente só';
+                },
               ),
             ),
             // Só o consultor tem gerente. Perguntar isso a um gerente criaria
@@ -877,14 +715,30 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
                     labelText: 'Gerente responsável',
                     prefixIcon: Icon(Icons.assignment_ind_outlined, size: 20),
                   ),
-                  items: AppData.managers
-                      .map((m) => DropdownMenuItem(
-                            value: m.id,
-                            child: Text(m.name,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 14)),
-                          ))
-                      .toList(),
+                  // O TAMANHO do time ao lado do nome: um gerente responde por
+                  // vários consultores, e o gerente que já tem time é escolha
+                  // tão válida quanto o que ainda não tem. Este consultor não
+                  // entra na conta — na edição, ele já está no time de alguém.
+                  items: AppData.managers.map((m) {
+                    final team = AppData.consultants
+                        .where((c) => c.managerId == m.id && c.id != widget.user?.id)
+                        .length;
+                    return DropdownMenuItem(
+                      value: m.id,
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(text: m.name),
+                          if (team > 0)
+                            TextSpan(
+                              text: '  ·  $team ${team == 1 ? 'consultor' : 'consultores'} no time',
+                              style: TextStyle(fontSize: 12, color: AppColors.textLight),
+                            ),
+                        ]),
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    );
+                  }).toList(),
                   onChanged: (v) => setState(() => _managerId = v),
                   validator: (v) => v == null ? 'Escolha o gerente deste consultor' : null,
                 ),
@@ -892,40 +746,6 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
             Text(_footerFor(widget.role), style: TextStyle(fontSize: 11, color: AppColors.textLight)),
             const SizedBox(height: 20),
             _SaveButton(onPressed: _save, isNew: _isNew),
-            // Senha e exclusão de quem NÃO tem tela própria: o consultor tem as
-            // dele no perfil, que existe porque ele tem carteira e histórico
-            // para mostrar. Gerente, faturista e comitê não têm — e criar uma
-            // tela só para pendurar dois botões seria pior do que tê-los aqui.
-            if (!_isNew && !_isConsultant) ...[
-              const SizedBox(height: 24),
-              const Divider(),
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: _resetPassword,
-                icon: Icon(Icons.lock_reset, color: AppColors.pending),
-                label: Text('Redefinir senha', style: TextStyle(color: AppColors.pending)),
-                style: OutlinedButton.styleFrom(
-                  side: BorderSide(color: AppColors.pending),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-              // O COMITÊ não se exclui: o cadastro é a ETAPA, e sem ele nenhuma
-              // permuta é decidida. Não há rota para isso no servidor, e a tela
-              // não oferece um botão que levaria a um 422.
-              if (!_isCommittee) ...[
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _delete,
-                  icon: Icon(Icons.delete_outline, color: AppColors.denied),
-                  label: Text('Excluir ${_roleLabel.toLowerCase()}',
-                      style: TextStyle(color: AppColors.denied)),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: AppColors.denied),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ],
-            ],
           ],
         ),
       ),
@@ -934,9 +754,14 @@ class _EditStaffScreenState extends State<EditStaffScreen> {
 }
 
 /// O que falta cadastrar antes de este formulário poder ser concluído.
+///
+/// A explicação depende de QUEM está sendo cadastrado: só o consultor precisa
+/// de gerente. O texto antigo falava do consultor em qualquer cadastro, e o
+/// admin criando o primeiro gerente lia que "o consultor precisa dos dois".
 class _MissingPrerequisiteHint extends StatelessWidget {
   final List<String> missing;
-  const _MissingPrerequisiteHint({required this.missing});
+  final bool forConsultant;
+  const _MissingPrerequisiteHint({required this.missing, required this.forConsultant});
 
   @override
   Widget build(BuildContext context) {
@@ -954,8 +779,10 @@ class _MissingPrerequisiteHint extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'Há ${missing.join(' e ')}. O consultor precisa dos dois: a unidade onde '
-              'trabalha e o gerente que dará o parecer das permutas dele.',
+              'Ainda não há ${missing.join(' nem ')}. '
+              '${forConsultant ? 'O consultor precisa dos dois: a unidade onde trabalha e o '
+                  'gerente que dará o parecer das permutas dele.' : 'Todo cadastro precisa da '
+                  'unidade onde a pessoa trabalha.'}',
               style: TextStyle(fontSize: 12, color: AppColors.textDark),
             ),
           ),
@@ -1117,15 +944,10 @@ class _EditInsuranceRateScreenState extends State<EditInsuranceRateScreen> {
     }
   }
 
-  /// Número como o Brasil escreve — a mesma leitura da planilha da seguradora,
-  /// para quem digita e quem carrega o arquivo não terem regras diferentes.
-  double? _parsed(String raw) {
-    final cleaned = raw.replaceAll(RegExp(r'[^\d,.-]'), '').trim();
-    if (cleaned.isEmpty) return null;
-    final normalized =
-        cleaned.contains(',') ? cleaned.replaceAll('.', '').replaceAll(',', '.') : cleaned;
-    return double.tryParse(normalized);
-  }
+  /// Número como o Brasil escreve — ver `services/num_input.dart`, que é a
+  /// mesma leitura da planilha da seguradora: quem digita e quem carrega o
+  /// arquivo não podem ter regras diferentes.
+  double? _parsed(String raw) => parseNumber(raw);
 
   @override
   Widget build(BuildContext context) {
@@ -1219,7 +1041,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
   }
 
   double _number(TextEditingController c) =>
-      double.tryParse(c.text.trim().replaceAll(',', '.')) ?? 0;
+      parseNumberOr(c.text);
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
@@ -1286,7 +1108,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               required: true,
               validator: (v) {
-                final n = double.tryParse((v ?? '').trim().replaceAll(',', '.'));
+                final n = parseNumber(v ?? '');
                 if (n == null || n <= 0) return 'Informe um valor maior que 0';
                 return null;
               },
@@ -1317,7 +1139,7 @@ class _NewProductScreenState extends State<NewProductScreen> {
                 validator: (v) {
                   final text = (v ?? '').trim();
                   if (text.isEmpty) return null;
-                  final n = double.tryParse(text.replaceAll(',', '.'));
+                  final n = parseNumber(text);
                   if (n == null || n < 0) return 'Informe um número válido (ou deixe vazio)';
                   return null;
                 },
@@ -1405,7 +1227,7 @@ class _EditClassRuleScreenState extends State<EditClassRuleScreen> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     final value = _needsValue
-        ? (double.tryParse(_value.text.trim().replaceAll(',', '.')) ?? 0)
+        ? parseNumberOr(_value.text)
         : 0.0;
     try {
       final saved = await AppData.updateClassRule(ProductClassModel(
@@ -1517,11 +1339,16 @@ class _RuleOption extends StatelessWidget {
 /// Confirma e executa a exclusão de um cadastro via API. As permutas antigas
 /// não são afetadas: elas guardam o nome no próprio registro (snapshot no
 /// servidor). Erros da API viram SnackBar de erro.
+///
+/// [consequence] é o efeito que a exclusão tem FORA das permutas — quem fica
+/// sem unidade, que produtor fica sem taxa de seguro. Ele vai no diálogo, e não
+/// numa trava, porque é decisão do admin: o que ele precisa é saber antes.
 Future<void> confirmDeleteRegistration(
   BuildContext context, {
   required String title,
   required String name,
   required int barterCount,
+  String? consequence,
   required Future<void> Function() onConfirm,
 }) async {
   final ok = await showDialog<bool>(
@@ -1539,6 +1366,12 @@ Future<void> confirmDeleteRegistration(
             Text('As $barterCount permuta(s) já registradas serão mantidas no histórico.',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 12, color: AppColors.textLight)),
+          ],
+          if (consequence != null) ...[
+            const SizedBox(height: 8),
+            Text(consequence,
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: AppColors.pending)),
           ],
         ],
       ),

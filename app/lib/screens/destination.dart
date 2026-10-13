@@ -21,6 +21,9 @@ Widget destinationFor(UserModel user) {
       return AdminMainScreen(admin: user);
     case UserRole.manager:
     case UserRole.committee:
+    // A SEGURADORA também: a fila dela são as aprovadas com seguro esperando a
+    // apólice, e o resto da tela é o mesmo da retaguarda.
+    case UserRole.insurer:
     case UserRole.biller:
     // O EMISSOR é retaguarda como os outros três: ele tem uma fila (as permutas
     // faturadas esperando a cédula) e age sobre ela. A tela é a mesma porque a

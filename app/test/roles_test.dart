@@ -21,7 +21,7 @@ void main() {
       });
 
   group('UserRole', () {
-    test('lê os seis papéis do servidor', () {
+    test('lê os sete papéis do servidor', () {
       expect(UserRole.fromWire('admin'), UserRole.admin);
       expect(UserRole.fromWire('manager'), UserRole.manager);
       expect(UserRole.fromWire('committee'), UserRole.committee);
@@ -29,6 +29,9 @@ void main() {
       // O EMISSOR — o posto da cédula, e o mais novo da esteira.
       expect(UserRole.fromWire('emitter'), UserRole.emitter);
       expect(UserRole.emitter.label, 'Emissor');
+      // A SEGURADORA — o setor que informa a apólice das permutas com seguro.
+      expect(UserRole.fromWire('insurer'), UserRole.insurer);
+      expect(UserRole.insurer.label, 'Seguradora');
       expect(UserRole.fromWire('consultant'), UserRole.consultant);
     });
 
@@ -45,6 +48,7 @@ void main() {
       expect(UserRole.committee.isBackOffice, isTrue);
       expect(UserRole.biller.isBackOffice, isTrue);
       expect(UserRole.emitter.isBackOffice, isTrue);
+      expect(UserRole.insurer.isBackOffice, isTrue);
       expect(UserRole.consultant.isBackOffice, isFalse);
     });
   });
@@ -118,17 +122,20 @@ void main() {
       expect(user('admin').can(Capability.bartersReview), isFalse);
     });
 
-    /// O ADMIN NÃO DECIDE PERMUTA. Ele administra o sistema; quem decide é o
-    /// comitê. Este teste existe do lado do app porque foi aqui que o botão de
-    /// aprovar morava.
-    test('o admin não recebe a capacidade de decidir', () {
+    /// O ADMIN PODE TUDO — mas é o servidor quem diz: o app só mostra o que
+    /// veio na lista de capacidades dele.
+    test('o admin age em qualquer etapa quando o servidor concede', () {
       final admin = withCapabilities('admin', [
         'users.manage',
         'barters.readAll',
         Capability.pricesRead,
+        Capability.bartersOpinion,
+        Capability.bartersReview,
+        Capability.bartersInvoice,
+        Capability.bartersCprIssue,
       ]);
-      expect(admin.can(Capability.bartersReview), isFalse);
-      expect(admin.can(Capability.bartersInvoice), isFalse);
+      expect(admin.can(Capability.bartersReview), isTrue);
+      expect(admin.can(Capability.bartersInvoice), isTrue);
     });
   });
 
@@ -139,6 +146,7 @@ void main() {
       expect(destinationFor(user('committee')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('biller')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('emitter')), isA<BackOfficeMainScreen>());
+      expect(destinationFor(user('insurer')), isA<BackOfficeMainScreen>());
       expect(destinationFor(user('consultant')), isA<ConsultantMainScreen>());
     });
 
@@ -147,7 +155,15 @@ void main() {
     /// faturista, que são os papéis novos e entrariam por um caminho que não
     /// existia quando essa trava foi escrita.
     test('senha provisória segura qualquer papel na troca de senha', () {
-      for (final role in ['admin', 'manager', 'committee', 'biller', 'emitter', 'consultant']) {
+      for (final role in [
+        'admin',
+        'manager',
+        'committee',
+        'insurer',
+        'biller',
+        'emitter',
+        'consultant',
+      ]) {
         expect(
           destinationFor(user(role, mustChangePassword: true)),
           isA<ChangePasswordScreen>(),

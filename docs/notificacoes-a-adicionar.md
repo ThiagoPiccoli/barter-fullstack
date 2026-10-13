@@ -30,11 +30,20 @@ Ao implementar um item, tire-o daqui e leve a explicação para o código.
 - **Exigência de classe:** barra de progresso ao vivo no formulário da permuta
   (`_classProgress` em
   [barter_screen.dart](../app/lib/screens/barter_screen.dart)).
+- **Avisos in-app persistidos (`Notice`)** — o canal (a) já existe: tabela
+  `Notice` (por pessoa, com `readAt`), `GET /notices` e `POST /notices/:id/read`
+  na API ([notices/](../api/src/notices/)), e o cartão de avisos no painel da
+  retaguarda ([back_office_main_screen.dart](../app/lib/screens/back_office_main_screen.dart)).
+  O primeiro uso é o **gerente** sendo avisado quando o comitê devolve uma
+  permuta do time dele ao consultor (exigências) e quando ela volta ao comitê.
+  O aviso nasce na mesma transação do ato (`noticeToManager` em
+  barters.service.ts). Um item novo desta lista em (a) é só mais uma chamada
+  dessas.
 
 ## Pré-requisito comum: escolher o canal
 
-Não existe canal de notificação no projeto — nem `firebase_messaging` no app,
-nem envio de push/e-mail na API. Antes do primeiro item, decidir entre:
+O canal (a) já existe (ver acima). Não há push nem e-mail — nem
+`firebase_messaging` no app, nem envio na API. Para cada item, decidir entre:
 
 - **(a) faixa/badge in-app** — zero infra, aparece quando a pessoa abre a tela;
 - **(b) push (FCM)** — o Firebase já está no projeto para hosting e App
