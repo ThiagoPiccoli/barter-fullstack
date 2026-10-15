@@ -110,7 +110,7 @@ class _EditProducerScreenState extends State<EditProducerScreen> {
   /// precisa saber que agora ela é de cada permuta.
   static const _areaNote =
       'A área plantada é informada em cada permuta, por cultura: ela define o seguro, '
-      'os insumos obrigatórios e o teto da garantia daquela permuta.';
+      'os insumos obrigatórios e o investimento por hectare daquela permuta.';
 
   /// A CARTEIRA em uma linha, para quem não pode escrevê-la.
   ///
