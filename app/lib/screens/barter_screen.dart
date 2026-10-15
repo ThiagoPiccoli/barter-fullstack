@@ -96,7 +96,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   String? _seasonId;
 
   /// A ÁREA PLANTADA (ha) da cultura que a permuta cobre — a régua dos mínimos
-  /// por hectare, do seguro e do teto da garantia.
+  /// por hectare, do seguro e do investimento por hectare.
   final _area = TextEditingController();
 
   /// O SEGURO, quando a versão o oferece como opcional: o que o produtor quis.
@@ -1286,8 +1286,14 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
       children: [
         const OfflineBanner(),
         _buildHeader(version, producer: producer, unit: unit),
+        // A ÁREA PLANTADA vem antes da busca: é ela que define os mínimos que
+        // a lista abaixo aplica, e fica à vista enquanto a lista rola.
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: _buildAreaField(version),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
           child: _searchBox('Buscar insumo ou código...'),
         ),
         _buildInputFilters(),
@@ -1302,10 +1308,10 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
   /// Ela era a área do cadastro do produtor, e saiu de lá porque a fazenda
   /// planta mais de uma coisa: dos 120 ha, 60 de soja e 60 de trigo. Aqui ela é
   /// a área DAQUELA cultura, e é a régua de tudo o que é "por hectare": os
-  /// mínimos dos insumos, o seguro e o teto da garantia.
+  /// mínimos dos insumos, o seguro e o investimento por hectare.
   Widget _buildAreaField(BarterVersionModel version) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 8),
       child: TextField(
         controller: _area,
         onChanged: _onAreaChanged,
@@ -1314,7 +1320,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
           isDense: true,
           prefixIcon: const Icon(Icons.straighten, size: 18),
           labelText: 'Área plantada de ${version.grainName.toLowerCase()} (ha)',
-          helperText: 'Define os mínimos por hectare, o seguro e o teto da garantia.',
+          helperText: 'Define os mínimos por hectare e o seguro.',
           errorText: _plantedAreaHa > 0 || _area.text.isEmpty ? null : 'Informe uma área maior que zero',
         ),
       ),
@@ -1486,6 +1492,14 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
                           ),
                         ]),
                       ),
+                      // O INVESTIMENTO POR HECTARE, debaixo do total: é o número
+                      // que compara esta permuta com as outras da carteira. Some
+                      // sem área, em vez de dizer "0 sc/ha".
+                      if (_plantedAreaHa > 0 && _sacksNeeded > 0)
+                        Text(
+                          formatSacksPerHa(_sacksNeeded / _plantedAreaHa),
+                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppColors.textMedium),
+                        ),
                     ],
                   ),
                 ],
@@ -1677,13 +1691,7 @@ class _NewBarterScreenState extends State<NewBarterScreen> {
     // O cabeçalho (dica + barras de mínimo por classe) só aparece sem busca:
     // quem está procurando um item quer a lista, não a explicação.
     final filtrando = query.isNotEmpty || _classId != null || _onlyChosen;
-    final version = _version;
     final header = <Widget>[
-      // A ÁREA PLANTADA abre a lista — sempre, com ou sem busca: é ela que
-      // define os mínimos que a lista abaixo aplica. Dentro da lista, e não
-      // fixa no alto, porque a tela de um telefone estreito não tem altura
-      // para mais uma faixa fixa.
-      if (version != null) _buildAreaField(version),
       // Com filtro ativo, quantos itens sobraram de quantos — é o que diz se
       // vale continuar rolando ou refinar a busca.
       if (filtrando && inputs.isNotEmpty)
@@ -2244,129 +2252,107 @@ class _InputTileState extends State<_InputTile> {
     super.dispose();
   }
 
+  /// UMA LINHA SÓ: o que identifica o insumo à esquerda e a quantidade à
+  /// direita. Eram duas (as informações em cima, os botões embaixo), e com
+  /// centenas de itens a lista mostrava metade do que cabe na tela.
   @override
   Widget build(BuildContext context) {
+    final chosen = qty > 0;
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
+      margin: const EdgeInsets.only(bottom: 6),
+      // O ESCOLHIDO se destaca pela borda: é o que deixa o consultor revisar a
+      // permuta rolando a lista, sem ler os números um por um.
+      shape: RoundedRectangleBorder(
+        borderRadius: brand.shape.cardRadius,
+        side: chosen
+            ? BorderSide(color: AppColors.input.withValues(alpha: 0.55))
+            : BorderSide.none,
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+        child: Row(
           children: [
-            Row(
-              children: [
-                // A figura é da CLASSE: com centenas de insumos na lista, é ela
-                // que deixa o consultor varrer por bloco (herbicida, adubo) em
-                // vez de ler item por item.
-                ClassAvatar(productClass: AppData.classById(product.classId)),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              product.name,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.textDark,
-                              ),
-                            ),
-                          ),
-                          if (_required) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: AppColors.input.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                'mín. ${formatQty(minQty)} ${product.unit}',
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.input,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      // O CÓDIGO ao lado da unidade, na linha de apoio: a busca
-                      // já aceita procurar por ele, e sem vê-lo escrito o
-                      // consultor não tinha como conferir se o insumo que ele
-                      // achou é mesmo o que o produtor pediu — dois nomes
-                      // parecidos ("Glifosato 480 SL" e "Glifosato 480 WG") só
-                      // se distinguem por aí. Some quando o produto não tem
-                      // código, em vez de imprimir um traço.
-                      Text(
-                        [
-                          if ((product.sku ?? '').isNotEmpty) product.sku!,
-                          _required
-                              ? 'Obrigatório • medido em ${product.unit}'
-                              : 'Medido em ${product.unit}',
-                        ].join(' • '),
-                        style: TextStyle(fontSize: 12, color: AppColors.textLight),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                _StepBtn(
-                  icon: Icons.remove,
-                  color: AppColors.input,
-                  onTap: qty > minQty
-                      ? () => onChanged((qty - 1).clamp(minQty, double.infinity))
-                      : null,
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 64,
-                  child: TextField(
-                    controller: _qtyCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                    decoration: const InputDecoration(
-                      hintText: '0',
-                      contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                      isDense: true,
+            // A figura é da CLASSE: com centenas de insumos na lista, é ela
+            // que deixa o consultor varrer por bloco (herbicida, adubo) em
+            // vez de ler item por item.
+            ClassAvatar(productClass: AppData.classById(product.classId)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    product.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textDark,
                     ),
-                    onSubmitted: (v) => onChanged(parseNumberOr(v)),
-                    onChanged: (v) => onChanged(parseNumberOr(v)),
                   ),
-                ),
-                const SizedBox(width: 8),
-                _StepBtn(icon: Icons.add, color: AppColors.input, onTap: () => onChanged(qty + 1)),
-                const SizedBox(width: 8),
-                // Expanded, e não `Spacer` + texto solto: a unidade longa ("saco
-                // 50kg") não cabia ao lado dos botões num telefone de 320, e o
-                // texto sem largura máxima estourava a linha em vez de cortar.
-                Expanded(
-                  child: qty > 0
-                      ? Text(
-                          '${formatQty(qty)} ${product.unit}',
-                          textAlign: TextAlign.end,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.input,
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-              ],
+                  // O CÓDIGO ao lado da unidade, na linha de apoio: a busca
+                  // já aceita procurar por ele, e sem vê-lo escrito o
+                  // consultor não tinha como conferir se o insumo que ele
+                  // achou é mesmo o que o produtor pediu — dois nomes
+                  // parecidos ("Glifosato 480 SL" e "Glifosato 480 WG") só
+                  // se distinguem por aí. Some quando o produto não tem
+                  // código, em vez de imprimir um traço.
+                  Text.rich(
+                    TextSpan(children: [
+                      TextSpan(
+                        text: [
+                          if ((product.sku ?? '').isNotEmpty) product.sku!,
+                          product.unit,
+                        ].join(' • '),
+                      ),
+                      // O MÍNIMO da área, na mesma linha: ele explica por que o
+                      // botão de menos para de descer.
+                      if (_required)
+                        TextSpan(
+                          text: ' • mín. ${formatQty(minQty)}',
+                          style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.input),
+                        ),
+                    ]),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: AppColors.textLight),
+                  ),
+                ],
+              ),
             ),
+            const SizedBox(width: 8),
+            _StepBtn(
+              icon: Icons.remove,
+              color: AppColors.input,
+              onTap: qty > minQty
+                  ? () => onChanged((qty - 1).clamp(minQty, double.infinity))
+                  : null,
+            ),
+            const SizedBox(width: 4),
+            SizedBox(
+              width: 60,
+              child: TextField(
+                controller: _qtyCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: chosen ? AppColors.input : null,
+                ),
+                decoration: const InputDecoration(
+                  hintText: '0',
+                  contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  isDense: true,
+                ),
+                onSubmitted: (v) => onChanged(parseNumberOr(v)),
+                onChanged: (v) => onChanged(parseNumberOr(v)),
+              ),
+            ),
+            const SizedBox(width: 4),
+            _StepBtn(icon: Icons.add, color: AppColors.input, onTap: () => onChanged(qty + 1)),
           ],
         ),
       ),

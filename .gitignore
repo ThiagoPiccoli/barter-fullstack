@@ -18,3 +18,7 @@ credenciais*.json
 credentials*.json
 acessos*.pdf
 acessos*.html
+
+# Cache local do `firebase deploy` (hash de cada arquivo publicado). Muda a
+# cada deploy e não é código: versionado, vira commit sem relação com o app.
+.firebase/
