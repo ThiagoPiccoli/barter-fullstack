@@ -306,11 +306,24 @@ Future<_SendChoice?> _confirmSend(
                   color: AppColors.primarySurface,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: DialogLine(
-                  'Vai entregar',
-                  '${formatSacks(sim.simulatedSacks)} '
-                      '${sim.grainName.toLowerCase()}',
-                  bold: true,
+                child: Column(
+                  children: [
+                    DialogLine(
+                      'Vai entregar',
+                      '${formatSacks(sim.simulatedSacks)} '
+                          '${sim.grainName.toLowerCase()}',
+                      bold: true,
+                    ),
+                    // O INVESTIMENTO POR HECTARE, a mesma conta que o servidor
+                    // grava (sacas ÷ área plantada). Some sem área: "0 sc/ha"
+                    // seria afirmar um investimento que ninguém fez.
+                    if (sim.plantedAreaHa > 0)
+                      DialogLine(
+                        'Investimento',
+                        '${formatSacksPerHa(sim.simulatedSacks / sim.plantedAreaHa)}'
+                            ' • ${formatQty(sim.plantedAreaHa)} ha',
+                      ),
+                  ],
                 ),
               ),
               const SizedBox(height: 10),
@@ -534,6 +547,12 @@ Future<bool> _showSent(BuildContext context, SendResult result) async {
                       '${barter.referenceGrainName.toLowerCase()}',
                   bold: true,
                 ),
+                if (barter.sacksPerHa != null)
+                  DialogLine(
+                    'Investimento',
+                    '${formatSacksPerHa(barter.sacksPerHa!)}'
+                        '${barter.plantedAreaHa > 0 ? ' • ${formatQty(barter.plantedAreaHa)} ha' : ''}',
+                  ),
               ],
             ),
           ),

@@ -327,10 +327,11 @@ describe('Barters (e2e)', () => {
     });
 
     /**
-     * O TETO DO PENHOR: a garantia exigida não pode passar da lavoura que
-     * existe. 80,4444 sacas ÷ 60 sc/ha × 1,20 = 1,61 ha — mais do que 1 ha.
+     * A GARANTIA NÃO TRAVA O REGISTRO: 80,4444 sacas ÷ 60 sc/ha × 1,20 = 1,61 ha
+     * exigidos sobre 1 ha plantado. A proposta segue; as lavouras em penhor são
+     * pedidas na cédula.
      */
-    it('a área plantada é o teto do penhor', async () => {
+    it('a área do penhor não trava o registro', async () => {
       const response = await request(app.getHttpServer())
         .post('/api/v1/barters')
         .set('Authorization', await asUser(JOAO))
@@ -345,8 +346,7 @@ describe('Barters (e2e)', () => {
           ],
         });
 
-      expect(response.status).toBe(422);
-      expect(response.body.message).toContain('área plantada');
+      expect(response.status).toBe(201);
     });
 
     it('permuta sem área plantada é recusada', async () => {

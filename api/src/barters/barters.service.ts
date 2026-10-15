@@ -30,7 +30,6 @@ import {
   classSpend,
   inputCost,
   minQuantityFor,
-  pledgeAreaFor,
   roundQuantity,
   sacksToCover,
   type PricedInput,
@@ -649,36 +648,6 @@ function insuranceItemOf(
 }
 
 /**
- * O TETO DO PENHOR: a área de garantia que a permuta exige não pode passar da
- * área plantada que ela cobre.
- *
- * É a leitura literal do penhor: a garantia é a lavoura, e uma permuta que pede
- * 70 ha de soja em garantia sobre 60 ha plantados é uma permuta que a lavoura
- * não paga. Descobrir isso na emissão da cédula — onde a soma das matrículas já
- * é conferida contra a mesma área — seria descobrir com o insumo na fazenda.
- *
- * As sacas saem da linha do grão recém-precificada. Versão sem produtividade não
- * chega aqui: o registro já a recusou.
- */
-function assertPledgeFits(
-  items: Prisma.BarterItemUncheckedCreateWithoutBarterInput[],
-  yieldPerHa: number,
-  marginPercent: number,
-  plantedAreaHa: number,
-): void {
-  const sacks = items.find((item) => item.kind === 'grain')?.quantity ?? 0;
-  const required = pledgeAreaFor(sacks, yieldPerHa, marginPercent);
-  if (required > plantedAreaHa + AREA_EPSILON) {
-    const ha = (value: number) =>
-      value.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    throw new UnprocessableEntityException(
-      `Esta permuta exige ${ha(required)} ha de lavoura em garantia, e a área plantada informada é ` +
-        `${ha(plantedAreaHa)} ha. Reduza os insumos ou corrija a área`,
-    );
-  }
-}
-
-/**
  * Um valor em R$ e uma quantidade como a LINHA DO TEMPO os escreve.
  *
  * Em pt-BR, e não em `toFixed`, porque estes dois textos são lidos pelo
@@ -990,10 +959,11 @@ export class BartersService {
     const area = { areaHa: dto.plantedAreaHa };
     const items = await this.pricedItemsFor(version, area, dto.inputs, [], insurance);
 
-    // 7. O TETO DO PENHOR: a garantia exigida não pode passar da lavoura que
-    //    existe. Com a margem da credora de HOJE — a que vai ficar congelada.
+    // 7. A MARGEM DO PENHOR, a da credora de HOJE — a que vai ficar congelada.
+    //    A garantia NÃO é conferida aqui: o registro é a proposta, e as lavouras
+    //    em penhor só são pedidas na cédula (ver `pledgeReadingOf` em cpr.ts),
+    //    que é onde a área exigida trava a emissão.
     const pledgeMarginPercent = (await this.creditor.get()).pledgeMarginPercent;
-    assertPledgeFits(items, version.estimatedYield, pledgeMarginPercent, dto.plantedAreaHa);
 
     // A FORMA de recolhimento: a do CADASTRO do produtor, que é onde a opção
     // formal dele mora (ver `Producer.taxRegime`). O corpo ainda pode dizer
@@ -2890,12 +2860,6 @@ export class BartersService {
       granted,
       insurance,
     );
-    // O TETO DO PENHOR, com a margem CONGELADA no registro: a remontagem não
-    // ganha a margem de hoje, como não ganha a cotação de hoje.
-    if (barter.pledgeYield > 0) {
-      assertPledgeFits(items, barter.pledgeYield, barter.pledgeMarginPercent, plantedAreaHa);
-    }
-
     // Os itens antigos SAEM e os novos entram, na mesma transação: a permuta é
     // um conjunto, e um instante em que ela esteja sem insumos (ou com os dois
     // conjuntos somados) é um instante em que qualquer leitura dela mente.
